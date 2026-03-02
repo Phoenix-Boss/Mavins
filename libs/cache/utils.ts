@@ -1,37 +1,48 @@
 // src/cache/utils.ts
 
-import { createHash } from 'crypto';
+import * as Crypto from 'expo-crypto';
 import { TrackMetadata, TrackIdentifier } from './types';
 
 /**
  * Generate consistent cache key with type safety
+ * (React Native compatible)
  */
-export function generateKey(type: string, value: string): string {
+export async function generateKey(type: string, value: string): Promise<string> {
   const normalized = value.toLowerCase().trim().replace(/\s+/g, ' ');
-  const hash = createHash('sha256').update(normalized).digest('hex').substring(0, 16);
-  return `${type}:${hash}`;
+
+  const hash = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    normalized
+  );
+
+  return `${type}:${hash.substring(0, 16)}`;
 }
 
 /**
  * Search query to cache key
  */
-export function searchKey(query: string): string {
+export async function searchKey(query: string): Promise<string> {
   return generateKey('search', query);
 }
 
 /**
  * Track to cache key (by ISRC or title+artist)
  */
-export function trackKey(track: TrackMetadata | TrackIdentifier): string {
+export async function trackKey(
+  track: TrackMetadata | TrackIdentifier
+): Promise<string> {
   if (track.isrc) {
     return `track:isrc:${track.isrc}`;
   }
+
   if (track.title && track.artist) {
     return generateKey('track', `${track.title} ${track.artist}`);
   }
+
   if (track.id) {
     return `track:id:${track.id}`;
   }
+
   throw new Error('Cannot generate track key: insufficient data');
 }
 
@@ -45,7 +56,7 @@ export function streamKey(trackId: string): string {
 /**
  * Artist key
  */
-export function artistKey(artistName: string): string {
+export async function artistKey(artistName: string): Promise<string> {
   return generateKey('artist', artistName);
 }
 
@@ -67,7 +78,7 @@ export function isExpired(timestamp: number): boolean {
  * Calculate expiry timestamp
  */
 export function expiryTime(secondsFromNow: number): number {
-  return Date.now() + (secondsFromNow * 1000);
+  return Date.now() + secondsFromNow * 1000;
 }
 
 /**
@@ -78,22 +89,19 @@ export function normalizeQuery(query: string): string {
 }
 
 /**
- * Extract artist from query (improved version)
+ * Extract artist from query
  */
 export function extractArtistFromQuery(query: string): string | null {
-  // Pattern: "Song by Artist"
   const byMatch = query.match(/(.+) by (.+)/i);
   if (byMatch) {
     return byMatch[2].trim();
   }
-  
-  // Pattern: "Artist - Song"
+
   const dashMatch = query.match(/(.+)\s*-\s*(.+)/);
   if (dashMatch) {
     return dashMatch[1].trim();
   }
-  
-  // Pattern: "Artist Song" - unreliable, return null
+
   return null;
 }
 
@@ -105,25 +113,30 @@ export function extractSongFromQuery(query: string): string | null {
   if (byMatch) {
     return byMatch[1].trim();
   }
-  
+
   const dashMatch = query.match(/(.+)\s*-\s*(.+)/);
   if (dashMatch) {
     return dashMatch[2].trim();
   }
-  
-  return query; // Assume whole query is song name
+
+  return query;
 }
 
 /**
  * Merge track data (update existing with new)
  */
-export function mergeTrackData(existing: TrackMetadata, newData: Partial<TrackMetadata>): TrackMetadata {
+export function mergeTrackData(
+  existing: TrackMetadata,
+  newData: Partial<TrackMetadata>
+): TrackMetadata {
+  const now = new Date().toISOString();
+
   return {
     ...existing,
     ...newData,
-    lastAccessed: new Date().toISOString(),
+    lastAccessed: now,
     accessCount: (existing.accessCount || 0) + 1,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
 }
 
@@ -144,8 +157,12 @@ export function formatCacheKey(key: string): string {
 /**
  * Parse cache key to get type and identifier
  */
-export function parseCacheKey(key: string): { type: string; identifier: string } {
+export function parseCacheKey(key: string): {
+  type: string;
+  identifier: string;
+} {
   const parts = key.split(':');
+
   return {
     type: parts[0],
     identifier: parts.slice(1).join(':'),

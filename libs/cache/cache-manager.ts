@@ -14,7 +14,7 @@ import {
   CacheStats,
   RelatedTrackInput
 } from './types';
-import { config } from './config';
+
 
 /**
  * Cache Manager - Orchestrates L1 and L2
@@ -34,7 +34,8 @@ export class CacheManager {
    */
   public async getSearch(query: string): Promise<SearchResult | null> {
     console.log(`\n🔍 CacheManager.getSearch: "${query}"`);
-    const key = searchKey(query);
+    // ✅ FIXED: await the promise
+    const key = await searchKey(query);
     console.log('Cache key:', key);
 
     // 1. Try device cache (L1)
@@ -86,8 +87,8 @@ export class CacheManager {
   ): Promise<boolean> {
     console.log(`\n💾 CacheManager.saveSearch: "${query}"`);
     
-    // ✅ FIXED: Renamed from searchKey to cacheKey to avoid naming conflict
-    const cacheKey = searchKey(query);
+    // ✅ FIXED: await the promise
+    const cacheKey = await searchKey(query);
     console.log('Cache key:', cacheKey);
     
     // 1. Save track to Supabase
@@ -177,7 +178,6 @@ export class CacheManager {
 
     try {
       // This will call your API to get related tracks
-      // You need to implement fetchRelatedTracks based on your API
       const relatedTracks = await this.fetchRelatedTracks(artist, currentTitle);
       
       if (relatedTracks && relatedTracks.length > 0) {

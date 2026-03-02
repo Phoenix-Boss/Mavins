@@ -7,14 +7,22 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
-.kotlin/
+# Native - FIXED: More specific patterns to avoid ignoring module android folders
+*/build/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+*.keystore
+*.jks
+*.pem
+
+# Kotlin
+.kotlin/
+**/build/
+**/captures/
 
 # Metro
 .metro-health-check*
@@ -26,17 +34,78 @@ yarn-error.*
 
 # macOS
 .DS_Store
-*.pem
+**/.DS_Store
 
+# Environment and secrets
 .env
+.env.*
+!.env.example
 credentials.json
-android/
-builds/
-build*.ps1
+*.p8
+*.p12
+*.key
 .keys/
 
-# typescript
+# Build outputs - FIXED: Only ignore root-level android folder, not modules/android
+/android/         
+/ios/              
+/build/
+/app/build/
+
+# Generated files
 *.tsbuildinfo
+*.js.map
+*.d.ts.map
 
 # Jest cache
 .jest-cache/
+jest-coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Android specific - FIXED: Only ignore root-level files
+/local.properties
+*.iml
+.gradle/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# iOS specific - FIXED: Only ignore root-level files
+Pods/
+Podfile.lock
+xcuserdata/
+*.xcworkspace/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/
+**/DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock

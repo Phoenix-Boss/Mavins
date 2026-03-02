@@ -1,0 +1,14 @@
+{
+  "name": "mwengine-eq",
+  "version": "1.0.0",
+  "main": "src/MavinEQMWModule.ts",
+  "expo": {
+    "modules": [
+      "./src/MavinEQMWModule.ts"
+    ]
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  }
+}

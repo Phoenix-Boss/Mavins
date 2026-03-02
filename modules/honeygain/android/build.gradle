@@ -1,0 +1,71 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+    id 'expo-module-gradle-plugin'   // modern plugins {} form
+}
+
+android {
+    namespace 'expo.modules.mavin.honeygain'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 24
+        targetSdk 36
+
+        versionCode 1
+        versionName '1.3.1'
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = ['src/main/java']
+            res.srcDirs = ['src/main/res']
+            jniLibs.srcDirs = ['libs']
+        }
+    }
+}
+
+// Updated Expo‑module DSL (no `moduleName`)
+expoModule {
+    // Use the package name of your JS module (e.g., "@mavin/honeygain" or whatever you register in expo-module.config.json)
+    // name = "honeygain-sdk"   // only if the new DSL expects `name`; if you don’t know, comment it out and let Expo infer from package.json
+    // generateExpoModulesPackageRule = true   // only if the plugin you actually use supports this; newer Expo module plugin often auto‑handles this
+}
+
+dependencies {
+    // Honeygain SDK + required deps
+    implementation files('libs/hgsdk.aar')
+    implementation 'org.msgpack:msgpack-core:0.9.11'
+    implementation 'com.google.protobuf:protobuf-javalite:3.25.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Expo Modules Core (same version as your logs)
+    implementation 'expo.modules:expo-modules-core:3.0.29'
+
+    // Kotlin stdlib
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
+}

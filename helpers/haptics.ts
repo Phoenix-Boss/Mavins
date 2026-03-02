@@ -6,33 +6,54 @@
 
 import * as Haptics from "expo-haptics";
 
+type HapticStrength = "light" | "medium" | "heavy";
+
 /**
- * Triggers a haptic feedback impact, which is a short, distinct vibration.
- * This is useful for confirming actions like button presses or successful gestures.
- *
- * @param {Haptics.AndroidHaptics} [type=Haptics.AndroidHaptics.Confirm] - The specific type of
- *   haptic impact to trigger. Defaults to `Confirm`, which is a standard confirmation vibration.
- * @see https://docs.expo.dev/versions/latest/sdk/haptics/#hapticsperformandroidhapticsasynctype
- *   for a full list of available haptic types on Android.
+ * Triggers haptic feedback with a simple string-based API.
+ * 
+ * @param {HapticStrength} [strength="light"] - The intensity of haptic feedback
+ * @example
+ * triggerHaptic("light")   // For subtle feedback (button presses)
+ * triggerHaptic("medium")  // For moderate feedback (swipe actions)
+ * triggerHaptic("heavy")   // For strong feedback (important actions)
  */
-export const triggerHaptic = (
-  type: Haptics.AndroidHaptics = Haptics.AndroidHaptics.Confirm,
+export const triggerHaptic = async (
+  strength: HapticStrength = "light"
 ) => {
-  Haptics.performAndroidHapticsAsync(type);
+  try {
+    const map = {
+      light: Haptics.ImpactFeedbackStyle.Light,
+      medium: Haptics.ImpactFeedbackStyle.Medium,
+      heavy: Haptics.ImpactFeedbackStyle.Heavy,
+    };
+
+    await Haptics.impactAsync(map[strength]);
+  } catch (error) {
+    // Fail silently in development, no user impact
+    if (__DEV__) {
+      console.warn("Haptic feedback unavailable:", error);
+    }
+  }
 };
 
 /**
- * Triggers a notification-style haptic feedback, which is typically a more complex
- * vibration pattern used to signify success, a warning, or an error.
- *
- * @param {Haptics.NotificationFeedbackType} [type=Haptics.NotificationFeedbackType.Success] - The
- *   type of notification feedback to trigger. Defaults to `Success`.
- * @see https://docs.expo.dev/versions/latest/sdk/haptics/#hapticsnotificationasynctype
- *   for the different notification feedback types available.
+ * Triggers a notification-style haptic feedback for status events.
+ * 
+ * @param {Haptics.NotificationFeedbackType} [type=Haptics.NotificationFeedbackType.Success] - 
+ *   The type of notification feedback
+ * @example
+ * triggerNotificationHaptic(Haptics.NotificationFeedbackType.Success)  // For success actions
+ * triggerNotificationHaptic(Haptics.NotificationFeedbackType.Warning)  // For warnings
+ * triggerNotificationHaptic(Haptics.NotificationFeedbackType.Error)    // For errors
  */
-export const triggerNotificationHaptic = (
-  type: Haptics.NotificationFeedbackType = Haptics.NotificationFeedbackType
-    .Success,
+export const triggerNotificationHaptic = async (
+  type: Haptics.NotificationFeedbackType = Haptics.NotificationFeedbackType.Success
 ) => {
-  Haptics.notificationAsync(type);
+  try {
+    await Haptics.notificationAsync(type);
+  } catch (error) {
+    if (__DEV__) {
+      console.warn("Notification haptic error:", error);
+    }
+  }
 };

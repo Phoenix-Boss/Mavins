@@ -1,0 +1,7 @@
+{
+  "name": "honeygain-sdk",
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.mavin.honeygain.HoneygainModule"]
+  }
+}

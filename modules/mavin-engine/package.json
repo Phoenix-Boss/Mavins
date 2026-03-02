@@ -1,0 +1,26 @@
+{
+  "name": "mavin-engine",
+  "version": "0.7.6",
+  "description": "YouTube audio extraction module",
+  "main": "index.ts",
+  "keywords": ["expo", "react-native", "youtube", "audio"],
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*"
+  },
+  "expo": {
+    "modules": [
+      "./android/src/main/java/expo/modules/mavinengine/MavinEngineModule.kt"
+    ],
+    "autolinking": {
+      "android": {
+        "packageName": "expo.modules.mavinengine",
+        "excludeLibraries": []
+      }
+    }
+  },
+  "platforms": ["android"],
+  "scripts": {
+    "android": "cd android && ./gradlew build"
+  }
+}

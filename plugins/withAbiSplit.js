@@ -19,16 +19,15 @@ function addAbiSplit(buildGradle) {
         }
     }`;
 
-  // Avoid duplicating if already present
   if (buildGradle.includes(abiSplitBlock)) {
     return buildGradle;
   }
 
-  // Insert inside the android { ... } block
   return buildGradle.replace(
-    /android\s*{/, // matches android { or android{ with optional spaces
-    `android {\n${abiSplitBlock}`,
+    /android\s*{/,
+    `android {\n${abiSplitBlock}`
   );
 }
 
+// ✅ SINGLE module.exports
 module.exports = withAbiSplit;

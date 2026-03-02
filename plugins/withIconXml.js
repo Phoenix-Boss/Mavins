@@ -4,8 +4,7 @@ const path = require("path");
 
 const ICON_XML_CONTENT = `<resources>
   <drawable name="media3_notification_small_icon">@drawable/notification_icon</drawable>
-</resources>
-`;
+</resources>`;
 
 const withIconXml = (config) => {
   return withDangerousMod(config, [
@@ -22,12 +21,10 @@ const withIconXml = (config) => {
 
       const filePath = path.join(valuesDir, "icon.xml");
 
-      // Ensure directory exists
       if (!fs.existsSync(valuesDir)) {
         fs.mkdirSync(valuesDir, { recursive: true });
       }
 
-      // Write file
       fs.writeFileSync(filePath, ICON_XML_CONTENT, "utf8");
 
       return config;
@@ -35,4 +32,5 @@ const withIconXml = (config) => {
   ]);
 };
 
+// ✅ SINGLE module.exports
 module.exports = withIconXml;

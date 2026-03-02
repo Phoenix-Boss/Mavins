@@ -2,6 +2,7 @@
 import { cache } from '../../../libs/cache';
 import { Source, TrackData, Artist } from '../../types';
 import getRequest from '../request/get';
+import { getYouTubeAudio } from '../../../helpers/youtube'; 
 
 export interface SearchParams {
   query: string;
@@ -69,9 +70,14 @@ export default async function searchGet({
             params = { q: query, limit };
             break;
           case 'youtubeMusic':
-            url = 'https://music.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+            url = 'https://music.youtube.com/youtubei/v1/search';
             params = {
-              context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20250218.00.00' } },
+              context: { 
+                client: { 
+                  clientName: 'WEB_REMIX', 
+                  clientVersion: '1.20250218.00.00' 
+                } 
+              },
               query,
             };
             break;
@@ -129,6 +135,15 @@ export default async function searchGet({
     })
   );
 
+  // Remove duplicates by ID (keep first occurrence)
+  const uniqueTracks = new Map<string, TrackData>();
+  result.tracks.forEach(track => {
+    if (track.id && !uniqueTracks.has(track.id.toString())) {
+      uniqueTracks.set(track.id.toString(), track);
+    }
+  });
+  result.tracks = Array.from(uniqueTracks.values());
+
   // Sort tracks by source priority
   result.tracks = result.tracks
     .sort((a, b) => {
@@ -154,6 +169,57 @@ export default async function searchGet({
       return (priority[a.source as Source] || 99) - (priority[b.source as Source] || 99);
     })
     .slice(0, limit);
+
+  // ============================================
+  // STEP 4: Enrich tracks with YouTube audio
+  // ============================================
+  console.log(`🎧 Enriching ${result.tracks.length} tracks with YouTube audio...`);
+  
+  const enrichedTracks = await Promise.all(
+    result.tracks.map(async (track) => {
+      // Skip if track already has audio (from Deezer/SoundCloud etc)
+      if (track.audio) return track;
+      
+      try {
+        console.log(`🎵 Getting YouTube audio for: ${track.artist.name} - ${track.title}`);
+        
+        const audio = await getYouTubeAudio({
+          artist: track.artist.name,
+          title: track.title,
+          isrc: track.isrc,
+          duration: track.duration
+        });
+        
+        return {
+          ...track,
+          audio: {
+            url: audio.url,
+            expires: audio.expires,
+            quality: audio.quality,
+            source: 'youtube'
+          }
+        };
+      } catch (error) {
+        // Silently fail - just return track without audio
+        return track;
+      }
+    })
+  );
+  
+  result.tracks = enrichedTracks;
+  
+  const withAudio = result.tracks.filter(t => t.audio).length;
+  console.log(`✅ ${withAudio}/${result.tracks.length} tracks have audio`);
+
+  // Debug: Log first track with audio
+  const firstWithAudio = result.tracks.find(t => t.audio);
+  if (firstWithAudio) {
+    console.log('🎉 FIRST TRACK WITH AUDIO:', {
+      title: firstWithAudio.title,
+      artist: firstWithAudio.artist.name,
+      audioUrl: firstWithAudio.audio?.url?.substring(0, 50) + '...'
+    });
+  }
 
   // Save to cache
   if (result.tracks.length > 0) {
@@ -200,6 +266,7 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
               album: item.album?.name,
               image: item.album?.images?.[0]?.url,
               duration: item.duration_ms ? Math.floor(item.duration_ms / 1000) : undefined,
+              isrc: item.external_ids?.isrc,
               source,
             });
           });
@@ -220,13 +287,20 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               album: item.album?.title,
               image: item.album?.cover_medium,
               duration: item.duration,
+              isrc: item.isrc,
               source,
+              audio: item.preview ? { 
+                url: item.preview,
+                expires: new Date(Date.now() + 86400000).toISOString(),
+                quality: 'medium',
+                source: 'deezer'
+              } : undefined
             });
           });
         }
@@ -240,18 +314,19 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             if (!item) return;
             
             const artist: Artist = {
-              id: item.user?.id,
+              id: item.user?.id.toString(),
               name: item.user?.username || 'Unknown Artist',
               image: item.user?.avatar_url
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               album: 'SoundCloud Track',
               image: item.artwork_url?.replace('large', 't500x500'),
               duration: item.duration ? Math.floor(item.duration / 1000) : undefined,
+              isrc: item.isrc,
               source,
             });
           });
@@ -261,26 +336,57 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
 
       case 'youtubeMusic': {
         try {
-          const sections = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
-          if (Array.isArray(sections)) {
-            sections.forEach((section: any) => {
-              const contents = section?.musicShelfRenderer?.contents;
-              if (Array.isArray(contents)) {
-                contents.forEach((item: any) => {
+          const contents = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
+          if (Array.isArray(contents)) {
+            contents.forEach((section: any) => {
+              const items = section?.musicShelfRenderer?.contents;
+              if (Array.isArray(items)) {
+                items.forEach((item: any) => {
                   const renderer = item?.musicResponsiveListItemRenderer;
                   if (!renderer) return;
                   
-                  const artist: Artist = {
-                    name: renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || 'Unknown'
-                  };
+                  // Extract artist name from runs array
+                  let artistName = 'Unknown';
+                  const runs = renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+                  if (Array.isArray(runs) && runs.length > 0) {
+                    artistName = runs[0]?.text || 'Unknown';
+                  }
+                  
+                  const artist: Artist = { name: artistName };
+
+                  // Extract ISRC if available (may be in navigation endpoint)
+                  let isrc;
+                  try {
+                    const params = renderer?.navigationEndpoint?.watchEndpoint?.params;
+                    if (params && typeof params === 'string') {
+                      const match = params.match(/[A-Z0-9]{12,}/);
+                      isrc = match ? match[0] : undefined;
+                    }
+                  } catch {
+                    // ISRC not available
+                  }
+
+                  const videoId = renderer?.playlistItemData?.videoId || renderer?.videoId;
+                  const title = renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || 'Unknown Title';
+                  const durationText = renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[1]?.text || '0:00';
+                  
+                  // Parse duration from MM:SS format
+                  let duration = 0;
+                  const durationParts = durationText.split(':');
+                  if (durationParts.length === 2) {
+                    duration = parseInt(durationParts[0]) * 60 + parseInt(durationParts[1]);
+                  } else if (durationParts.length === 3) {
+                    duration = parseInt(durationParts[0]) * 3600 + parseInt(durationParts[1]) * 60 + parseInt(durationParts[2]);
+                  }
 
                   tracks.push({
-                    id: renderer?.playlistItemData?.videoId || renderer?.videoId,
-                    title: renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || 'Unknown Title',
+                    id: videoId,
+                    title,
                     artist,
                     album: 'YouTube Music',
                     image: renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.[0]?.url,
-                    duration: parseInt(renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[2]?.text) || 0,
+                    duration,
+                    isrc,
                     source,
                   });
                 });
@@ -300,17 +406,18 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             if (!item) return;
             
             const artist: Artist = {
-              id: item.artist?.id,
+              id: item.artist?.id.toString(),
               name: item.artist?.name || 'Unknown',
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               album: item.album?.title,
               duration: item.duration,
               image: item.album?.cover,
+              isrc: item.isrc,
               source,
             });
           });
@@ -329,7 +436,7 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               duration: item.duration,
@@ -347,12 +454,12 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             if (!item) return;
             
             const artist: Artist = {
-              id: item.artists?.[0]?.id,
+              id: item.artists?.[0]?.id.toString(),
               name: item.artists?.[0]?.name || 'Unknown',
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               album: item.albums?.[0]?.title,
@@ -375,7 +482,7 @@ function extractTracksFromResponse(source: Source, response: any): TrackData[] {
             };
 
             tracks.push({
-              id: item.id,
+              id: item.id.toString(),
               title: item.title || 'Unknown Title',
               artist,
               album: item.album?.title,

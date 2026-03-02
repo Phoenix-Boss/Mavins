@@ -1,3 +1,5 @@
+// constants/colors.ts
+
 /**
  * This file defines the color palette used throughout the AudioScape application.
  * It centralizes color definitions to ensure consistency and easy modification of the app's theme.
@@ -32,4 +34,18 @@ export const Colors = {
    * Default color for icons.
    */
   icon: "#9BA1A6",
+  /**
+   * Metallic Brown color scheme for the equalizer and audio controls
+   */
+  metallicBrown: {
+    primary: "#8B7355",
+    secondary: "#A0826D",
+    light: "#B8956A",
+    dark: "#6B5344",
+    glow: "#9C846F",
+    surface: "#121212",
+  },
 };
+
+// Also export METALLIC_BROWN separately for backward compatibility
+export const METALLIC_BROWN = Colors.metallicBrown;

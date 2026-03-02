@@ -1,8 +1,9 @@
 // src/services/api/request/get.ts
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import CookieManager from '@preeternal/react-native-cookie-manager'; // Changed import
-import DeviceInfo from 'react-native-device-info';
+import CookieManager from '@preeternal/react-native-cookie-manager'; 
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import { Platform } from 'react-native';
 import packageJson from '../../../package.json';
@@ -23,6 +24,16 @@ export interface ApiRequestParams {
 
 const APP_VERSION = packageJson.version || '1.0.0';
 const GUEST_TOKEN = 'guest';
+
+// YouTube API keys for rotation
+const YOUTUBE_KEYS = [
+  'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w', // Android Music
+  'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8', // Web
+  'AIzaSyBAETezhkwP0ZWA02RsqT1zuOpxFpe0pIw', // iOS Music
+  'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc', // Android
+  'AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30', // Web alt
+  'AIzaSyDCU8hByM-4DrUqRUxtonOvJ5XGZa7a4tU', // TV
+];
 
 const snakeCase = (str: string): string => {
   return str?.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
@@ -45,37 +56,45 @@ export default async function getRequest<T = any>({
 
   try {
     // ============================================
-    // 1. Get ALL device context in parallel
+    // 1. Get ALL device context using expo-device
     // ============================================
-    const [
-      profileId, 
-      token, 
-      language, 
-      soundCloudClientId,
-      deviceId,
-      userAgent,
-      netInfo,
-      systemName,
-      systemVersion,
-      model,
-      brand
-    ] = await Promise.allSettled([ // Use allSettled to prevent one failure from breaking everything
-      AsyncStorage.getItem('profile_id'),
-      AsyncStorage.getItem('token'),
-      AsyncStorage.getItem('language'),
-      AsyncStorage.getItem('soundcloud_client_id'),
-      DeviceInfo.getUniqueId().catch(() => 'unknown-device-id'),
-      DeviceInfo.getUserAgent().catch(() => Platform.select({
-        ios: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-        android: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36',
-        default: 'Mozilla/5.0 (Unknown)'
-      })),
-      NetInfo.fetch().catch(() => ({ type: 'unknown', isConnected: true, isInternetReachable: true, isConnectionExpensive: false })),
-      DeviceInfo.getSystemName().catch(() => Platform.OS),
-      DeviceInfo.getSystemVersion().catch(() => Platform.Version?.toString() || '1.0'),
-      DeviceInfo.getModel().catch(() => 'Unknown'),
-      DeviceInfo.getBrand().catch(() => 'Unknown')
-    ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : null));
+    
+    // AsyncStorage items
+    const profileId = await AsyncStorage.getItem('profile_id').catch(() => null);
+    const token = await AsyncStorage.getItem('token').catch(() => null);
+    const language = await AsyncStorage.getItem('language').catch(() => null);
+    const soundCloudClientId = await AsyncStorage.getItem('soundcloud_client_id').catch(() => null);
+    
+    // Device info from expo-device (synchronous - no promises!)
+    const deviceId = Device.osInternalBuildId ?? 'unknown-device-id';
+    const systemName = Device.osName ?? Platform.OS;
+    const systemVersion = Device.osVersion ?? String(Platform.Version ?? '1.0');
+    const model = Device.modelName ?? 'Unknown';
+    const brand = Device.brand ?? 'Unknown';
+    
+    // User agent from expo-constants
+    const userAgent = Constants.expoConfig?.name 
+      ? `${Constants.expoConfig.name}/${APP_VERSION} (${Platform.OS} ${systemVersion}; ${model})`
+      : Platform.select({
+          ios: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+          android: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36',
+          default: 'Mozilla/5.0 (Unknown)'
+        });
+    
+    // Network info (still async)
+    let netInfo = { 
+      type: 'unknown' as const, 
+      isConnected: true, 
+      isInternetReachable: true, 
+      isConnectionExpensive: false,
+      carrier: null
+    };
+    try {
+      const networkInfo = await NetInfo.fetch();
+      if (networkInfo) netInfo = networkInfo;
+    } catch (e) {
+      console.warn('Failed to get netInfo:', e);
+    }
 
     // ============================================
     // 2. Extract domain for cookies
@@ -95,20 +114,22 @@ export default async function getRequest<T = any>({
     
     if (domain) {
       try {
-        // For iOS, we might need to use both stores (native and WebKit)
-        const [nativeCookies, webKitCookies] = await Promise.allSettled([
-          CookieManager.get(domain, false), // Native store (NSHTTPCookieStorage)
-          Platform.OS === 'ios' ? CookieManager.get(domain, true) : Promise.resolve({}) // WebKit store (WKHTTPCookieStore)
-        ]);
+        // Get native cookies
+        const nativeCookies = await CookieManager.get(domain, false).catch(() => ({}));
         
-        // Merge cookies from both stores
+        // Get WebKit cookies for iOS
+        let webKitCookies = {};
+        if (Platform.OS === 'ios') {
+          webKitCookies = await CookieManager.get(domain, true).catch(() => ({}));
+        }
+        
         cookies = {
-          ...(nativeCookies.status === 'fulfilled' ? nativeCookies.value : {}),
-          ...(webKitCookies.status === 'fulfilled' ? webKitCookies.value : {})
+          ...nativeCookies,
+          ...webKitCookies
         };
         
         cookieString = Object.values(cookies)
-          .map(cookie => `${cookie.name}=${cookie.value}`)
+          .map((cookie: any) => `${cookie.name}=${cookie.value}`)
           .join('; ');
           
         console.log(`   🍪 Found ${Object.keys(cookies).length} cookies for ${domain}`);
@@ -143,10 +164,12 @@ export default async function getRequest<T = any>({
       finalParams = { ...finalParams, client_id: soundCloudClientId };
     }
 
-    if (url.includes('youtube.com/youtubei')) {
+    // YouTube key rotation
+    if (url.includes('youtube.com/youtubei') || url.includes('youtubei/v1')) {
+      const keyIndex = (url.length + Date.now()) % YOUTUBE_KEYS.length;
       finalParams = {
         ...finalParams,
-        key: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+        key: YOUTUBE_KEYS[keyIndex],
       };
     }
 
@@ -154,31 +177,25 @@ export default async function getRequest<T = any>({
     // 6. Build REAL device headers
     // ============================================
     const headers: Record<string, string> = {
-      // REAL User Agent from device
-      'User-Agent': userAgent || '',
+      'User-Agent': userAgent,
       
-      // Device identification
-      ...(deviceId && { 'X-Device-ID': deviceId }),
-      ...(model && { 'X-Device-Model': model }),
-      ...(brand && { 'X-Device-Brand': brand }),
-      ...(systemName && systemVersion && { 'X-OS': `${systemName} ${systemVersion}` }),
+      'X-Device-ID': deviceId,
+      'X-Device-Model': model,
+      'X-Device-Brand': brand,
+      'X-OS': `${systemName} ${systemVersion}`,
       
-      // Network context
       ...(netInfo?.type && { 'X-Network-Type': netInfo.type }),
       ...(netInfo?.carrier && { 'X-Network-Carrier': netInfo.carrier }),
       'X-Connection-Expensive': String(netInfo?.isConnectionExpensive || false),
       
-      // Standard headers
       'Accept': 'application/json',
       'Accept-Language': language || 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
       'Connection': 'keep-alive',
       
-      // App context
       'X-App-Version': APP_VERSION,
       'X-App-Platform': Platform.OS,
       
-      // Cookies if available
       ...(cookieString && { 'Cookie': cookieString }),
     };
 
@@ -196,7 +213,7 @@ export default async function getRequest<T = any>({
     console.log(`   Method: GET`);
     console.log(`   Path: ${finalUrl.split('?')[0]}`);
     console.log(`   Cookies: ${Object.keys(cookies).length} present`);
-    console.log(`   Device: ${model || 'Unknown'} (${systemName || 'OS'} ${systemVersion || ''})`);
+    console.log(`   Device: ${model} (${systemName} ${systemVersion})`);
     console.log(`   Network: ${netInfo?.type || 'unknown'}${netInfo?.carrier ? ` via ${netInfo.carrier}` : ''}`);
 
     // ============================================
@@ -209,7 +226,7 @@ export default async function getRequest<T = any>({
       headers,
       timeout: 15000,
       validateStatus: (status) => status < 500,
-      withCredentials: true, // Important for cookies!
+      withCredentials: true,
       maxRedirects: 5,
     };
 
@@ -224,10 +241,10 @@ export default async function getRequest<T = any>({
         const setCookieHeader = response.headers['set-cookie'];
         if (Array.isArray(setCookieHeader)) {
           for (const cookieStr of setCookieHeader) {
-            await CookieManager.setFromResponse(domain, cookieStr);
+            await CookieManager.setFromResponse(domain, cookieStr).catch(() => {});
           }
         } else if (typeof setCookieHeader === 'string') {
-          await CookieManager.setFromResponse(domain, setCookieHeader);
+          await CookieManager.setFromResponse(domain, setCookieHeader).catch(() => {});
         }
         console.log(`   🍪 Saved ${Array.isArray(setCookieHeader) ? setCookieHeader.length : 1} new cookies`);
       } catch (e) {
