@@ -1,66 +1,52 @@
 apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
 
 group = 'expo.modules.mavinengine'
 version = '0.7.6'
 
-def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
-apply from: expoModulesCorePlugin
-applyKotlinExpoModulesCorePlugin()
-useCoreDependencies()
-useExpoPublishing()
-
-def useManagedAndroidSdkVersions = false
-if (useManagedAndroidSdkVersions) {
-  useDefaultAndroidSdkVersions()
-} else {
-  buildscript {
-    ext.safeExtGet = { prop, fallback ->
-      rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
-    }
-  }
-  project.android {
-    compileSdkVersion safeExtGet("compileSdkVersion", 36)
-    defaultConfig {
-      minSdkVersion safeExtGet("minSdkVersion", 24)
-      targetSdkVersion safeExtGet("targetSdkVersion", 36)
-    }
-  }
-}
 
 android {
-  namespace "expo.modules.mavinengine"
-  defaultConfig {
-    versionCode 1
-    versionName "0.7.6"
-  }
-  lintOptions {
-    abortOnError false
-  }
-  compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
-  }
-  kotlinOptions {
-    jvmTarget = '17'
-  }
+    namespace "expo.modules.mavinengine"
+
+    defaultConfig {
+        versionCode 1
+        versionName "0.7.6"
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 }
 
 // ✅ Add Kotlin toolchain configuration to align with Java 17
 kotlin {
-  jvmToolchain(17)
+    jvmToolchain(17)
 }
 
 repositories {
-  mavenCentral()
-  maven { url 'https://jitpack.io' }
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
-  implementation project(':expo-modules-core')
-  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.20"
-  
-  // ✅ EAS-ready NewPipe (no desugaring needed)
-  implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.25.2'
-  implementation 'org.mozilla:rhino:1.7.15'
-  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // Kotlin stdlib
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.20"
+
+    // NewPipe extractor + deps
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.25.2'
+    implementation 'org.mozilla:rhino:1.7.15'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // DO NOT add:
+    // implementation project(':expo-modules-core')
+    // expo-modules-core is provided by Expo autolinking / expo package.
 }

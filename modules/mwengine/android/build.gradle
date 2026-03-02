@@ -1,6 +1,3 @@
-// modules/modules/mwengine/android/build.gradle
-// ✅ CMake path: android/mwengine-source/mwengine/CMakeLists.txt
-
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
@@ -10,7 +7,7 @@ version = '1.0.1'
 android {
     namespace "expo.modules.mavin.eq"
     compileSdk 36
-    
+
     defaultConfig {
         minSdk 24
         targetSdk 36
@@ -24,20 +21,20 @@ android {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
     }
-    
+
     lint {
         abortOnError false
     }
-    
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    
+
     kotlinOptions {
         jvmTarget = '17'
     }
-    
+
     // ✅ EXACT PATH TO YOUR CMAKE
     externalNativeBuild {
         cmake {
@@ -45,13 +42,13 @@ android {
             version "3.22.1"
         }
     }
-    
+
     packaging {
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
         }
     }
-    
+
     buildTypes {
         release {
             minifyEnabled false
@@ -70,7 +67,11 @@ repositories {
 }
 
 dependencies {
-    implementation project(':expo-modules-core')
+    // Keep Kotlin stdlib and coroutines
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    // DO NOT use:
+    // implementation project(':expo-modules-core')
+    // expo-modules-core comes in via Expo / autolinking
 }

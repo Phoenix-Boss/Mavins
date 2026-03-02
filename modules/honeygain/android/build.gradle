@@ -1,7 +1,7 @@
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
-    id 'expo-module-gradle-plugin'   // modern plugins {} form
+    id 'expo-module-gradle-plugin'
 }
 
 android {
@@ -48,24 +48,24 @@ android {
     }
 }
 
-// Updated Expo‑module DSL (no `moduleName`)
+// Expo module DSL (no moduleName, no extraProguardRules here)
 expoModule {
-    // Use the package name of your JS module (e.g., "@mavin/honeygain" or whatever you register in expo-module.config.json)
-    // name = "honeygain-sdk"   // only if the new DSL expects `name`; if you don’t know, comment it out and let Expo infer from package.json
-    // generateExpoModulesPackageRule = true   // only if the plugin you actually use supports this; newer Expo module plugin often auto‑handles this
+    // Let Expo derive the name from package.json / expo-module.config.json
+    // name = "honeygain-sdk"   // optional, only if plugin actually supports this
+    // generateExpoModulesPackageRule = true   // usually handled automatically
 }
 
 dependencies {
-    // Honeygain SDK + required deps
+    // Honeygain SDK + required dependencies
     implementation files('libs/hgsdk.aar')
     implementation 'org.msgpack:msgpack-core:0.9.11'
     implementation 'com.google.protobuf:protobuf-javalite:3.25.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
-    // Expo Modules Core (same version as your logs)
-    implementation 'expo.modules:expo-modules-core:3.0.29'
-
     // Kotlin stdlib
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
+
+    // DO NOT manually depend on expo-modules-core in EAS-style builds
+    // Expo provides it via autolinking / expo package
 }
