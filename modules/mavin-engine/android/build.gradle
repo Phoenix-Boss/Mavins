@@ -4,8 +4,9 @@ apply plugin: 'kotlin-android'
 group = 'expo.modules.mavinengine'
 version = '0.7.6'
 
-
 android {
+    compileSdk 36
+
     namespace "expo.modules.mavinengine"
 
     defaultConfig {
