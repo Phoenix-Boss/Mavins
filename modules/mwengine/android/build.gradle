@@ -35,13 +35,14 @@ android {
         jvmTarget = '17'
     }
 
-    // ✅ EXACT PATH TO YOUR CMAKE
-    externalNativeBuild {
-        cmake {
-            path "mwengine-source/mwengine/CMakeLists.txt"
-            version "3.22.1"
-        }
-    }
+    // ❌ REMOVE THIS: do NOT rebuild mwengine native code in mavin-eq
+    // mavin-eq now only uses the compiled output from mwengine-eq
+    // externalNativeBuild {
+    //     cmake {
+    //         path "mwengine-source/mwengine/CMakeLists.txt"
+    //         version "3.22.1"
+    //     }
+    // }
 
     packaging {
         resources {
@@ -71,7 +72,8 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 
-    // ✅ Wire mavin-eq to depend on mwengine-eq so Gradle respects the resource‑generation order
+    // ✅ Wire mavin-eq as a Kotlin wrapper that depends on mwengine-eq
+    // This is the ONLY Android module that should build the native code
     implementation project(':mwengine-eq')
 
     // DO NOT use:
