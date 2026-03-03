@@ -4,7 +4,10 @@ apply from: new File(
 ).asFile()
 useExpoModules()
 
+// Main app
 include ':app'
-include ':mwengine-eq'
 
-project(':mwengine-eq').projectDir = new File(rootDir, '../modules/mwengine/android')
+// Only mavin-eq remains; it now builds the MWEngine native code
+include ':mavin-eq'
+
+project(':mavin-eq').projectDir = new File(rootDir, '../modules/mavin-eq/android')

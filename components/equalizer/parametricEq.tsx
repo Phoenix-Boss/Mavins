@@ -1,16 +1,34 @@
-// components/equalizer/ParametricEQ.tsx
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+// components/equalizer/ParametricEQ.tsx - PROFESSIONAL PARAMETRIC EQ WITH FILTER MENU
+
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Dimensions,
+  Modal,
+  FlatList,
+} from 'react-native';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
 import { Colors } from '@/constants/Colors';
 import { RotaryKnob } from './RotaryKnob';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  interpolate,
+} from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 type FilterType = 'lowpass' | 'highpass' | 'bandpass' | 'lowshelf' | 'highshelf' | 'peaking' | 'notch';
 
 interface ParametricEQProps {
-  enabled: boolean;  // ✅ From parent EQ state
+  enabled: boolean;
   parametricState: {
     selectedFilter: FilterType;
     filterEnabled: boolean;
@@ -27,14 +45,33 @@ interface ParametricEQProps {
   }>) => void;
 }
 
+// Filter definitions with metadata
+const FILTERS: { id: FilterType; name: string; icon: string; category: string; description: string }[] = [
+  { id: 'peaking', name: 'Peaking', icon: '🔔', category: 'Bell', description: 'Boost/cut a frequency band' },
+  { id: 'lowshelf', name: 'Low Shelf', icon: '📉', category: 'Shelf', description: 'Boost/cut low frequencies' },
+  { id: 'highshelf', name: 'High Shelf', icon: '📈', category: 'Shelf', description: 'Boost/cut high frequencies' },
+  { id: 'lowpass', name: 'Low Pass', icon: '⬇️', category: 'Filter', description: 'Remove high frequencies' },
+  { id: 'highpass', name: 'High Pass', icon: '⬆️', category: 'Filter', description: 'Remove low frequencies' },
+  { id: 'bandpass', name: 'Band Pass', icon: '🔲', category: 'Filter', description: 'Pass only a frequency band' },
+  { id: 'notch', name: 'Notch', icon: '❌', category: 'Filter', description: 'Remove a frequency band' },
+];
+
 export const ParametricEQ: React.FC<ParametricEQProps> = ({
   enabled,
   parametricState,
   onUpdate
 }) => {
   const { selectedFilter, filterEnabled, gain, frequency, q } = parametricState;
+  
+  // UI state
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [activePoint, setActivePoint] = useState<'low' | 'mid' | 'high'>('mid');
+  
+  // Animation values
+  const pointScale = useSharedValue(1);
+  const glowOpacity = useSharedValue(0);
 
-  // ✅ Safe frequency conversion (20Hz-20kHz → 0-100 knob range)
+  // Safe conversions
   const freqToKnob = (freq: number): number => {
     const normalized = Math.log10(Math.max(20, Math.min(20000, freq))) - Math.log10(20);
     const range = Math.log10(20000) - Math.log10(20);
@@ -46,229 +83,401 @@ export const ParametricEQ: React.FC<ParametricEQProps> = ({
     return Math.pow(10, normalized + Math.log10(20));
   };
 
-  // ✅ Safe Q conversion (0.1-10 → 0-100)
   const qToKnob = (qVal: number): number => 
     Math.max(0, Math.min(100, ((qVal - 0.1) / (10 - 0.1)) * 100));
+  
   const knobToQ = (knob: number): number => 
     0.1 + (knob / 100) * (10 - 0.1);
 
-  // ✅ Safe Gain conversion (-15/+15 → 0-100)
   const gainToKnob = (gainVal: number): number => 
     Math.max(0, Math.min(100, (gainVal + 15) / 30 * 100));
+  
   const knobToGain = (knob: number): number => 
     ((knob / 100) * 30) - 15;
 
-  const handleFilterChange = (filter: FilterType) => {
-    if (!enabled) return;
-    onUpdate({ selectedFilter: filter });
+  // Calculate curve points (low, mid, high)
+  const getFilterPoints = () => {
+    const points = {
+      low: { x: 10, y: 50 },
+      mid: { x: 50, y: 50 - (gain / 30) * 40 },
+      high: { x: 90, y: 50 },
+    };
+
+    // Adjust based on filter type
+    switch (selectedFilter) {
+      case 'lowpass':
+        points.low.y = 80;
+        points.mid.y = 50;
+        points.high.y = 20;
+        break;
+      case 'highpass':
+        points.low.y = 20;
+        points.mid.y = 50;
+        points.high.y = 80;
+        break;
+      case 'bandpass':
+        points.low.y = 20;
+        points.mid.y = 80;
+        points.high.y = 20;
+        break;
+      case 'lowshelf':
+        points.low.y = 50 - (gain / 30) * 40;
+        points.mid.y = 50;
+        points.high.y = 50;
+        break;
+      case 'highshelf':
+        points.low.y = 50;
+        points.mid.y = 50;
+        points.high.y = 50 - (gain / 30) * 40;
+        break;
+      case 'notch':
+        points.low.y = 50;
+        points.mid.y = 50 - (Math.abs(gain) / 30) * 30;
+        points.high.y = 50;
+        break;
+      default: // peaking
+        points.mid.y = 50 - (gain / 30) * 40;
+        break;
+    }
+
+    return points;
   };
 
-  const toggleFilter = () => {
-    if (!enabled) return;
-    onUpdate({ filterEnabled: !filterEnabled });
+  const points = getFilterPoints();
+
+  // Handle point selection
+  const handlePointPress = (point: 'low' | 'mid' | 'high') => {
+    if (!enabled || !filterEnabled) return;
+    setActivePoint(point);
+    pointScale.value = withSpring(1.3, { damping: 10, stiffness: 200 });
+    glowOpacity.value = withTiming(0.5, { duration: 200 });
+    
+    setTimeout(() => {
+      pointScale.value = withSpring(1, { damping: 15, stiffness: 250 });
+      glowOpacity.value = withTiming(0, { duration: 300 });
+    }, 300);
   };
 
   const createKnobUpdater = (converter: (knob: number) => number, key: keyof typeof parametricState) => 
     (value: number) => {
-      if (!enabled) return;
+      if (!enabled || !filterEnabled) return;
       onUpdate({ [key]: converter(value) } as any);
     };
 
-  // ✅ Dynamic graph position for main control point
-  const controlPointX = freqToKnob(frequency);
-  const controlPointY = verticalScale(150) - gainToKnob(Math.abs(gain)) * 1.2;
+  // Animated styles for points
+  const pointStyle = (point: 'low' | 'mid' | 'high') => useAnimatedStyle(() => ({
+    transform: [{ scale: activePoint === point ? pointScale.value : 1 }],
+    shadowOpacity: activePoint === point ? glowOpacity.value : 0,
+  }));
+
+  // Get current filter display name
+  const currentFilter = FILTERS.find(f => f.id === selectedFilter) || FILTERS[0];
 
   return (
     <View style={styles.container}>
-      <View style={styles.filterGrid}>
-        {FILTER_PRESETS.map((filter) => (
-          <TouchableOpacity
-            key={filter.id}
-            style={[
-              styles.filterButton,
-              selectedFilter === filter.id && styles.filterButtonActive,
-            ]}
-            onPress={() => handleFilterChange(filter.id)}
-            activeOpacity={0.7}
-            disabled={!enabled}
-          >
-            <Text style={styles.filterIcon}>{filter.icon}</Text>
-            <Text style={[
-              styles.filterName,
-              selectedFilter === filter.id && styles.filterNameActive
-            ]}>
-              {filter.name}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {/* Filter Selection Button (Peaking as default) */}
+      <TouchableOpacity
+        style={[
+          styles.filterSelector,
+          !enabled && styles.disabled,
+        ]}
+        onPress={() => setFilterModalVisible(true)}
+        activeOpacity={0.7}
+        disabled={!enabled}
+      >
+        <View style={styles.filterSelectorLeft}>
+          <Text style={styles.filterSelectorIcon}>{currentFilter.icon}</Text>
+          <View>
+            <Text style={styles.filterSelectorName}>{currentFilter.name}</Text>
+            <Text style={styles.filterSelectorCategory}>{currentFilter.category}</Text>
+          </View>
+        </View>
+        <MaterialCommunityIcons name="chevron-down" size={24} color="#fff" />
+      </TouchableOpacity>
 
+      {/* Graph Area with 3 Control Points */}
       <View style={styles.graphContainer}>
-        <View style={[
-          styles.graphBackground, 
-          !enabled && { opacity: 0.3 }
-        ]}>
-          {/* Grid lines - unchanged but now respects enabled */}
-          {[-15, -10, -5, 0, 5, 10, 15].map((value, index) => {
-            const y = verticalScale(90) - (value / 15) * verticalScale(70);
-            return (
-              <View 
-                key={`h-${index}`}
-                style={[
-                  styles.gridLine,
-                  { 
-                    top: y,
-                    backgroundColor: value === 0 ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)',
-                  }
-                ]}
-              />
-            );
-          })}
-
-          {/* Dynamic main control point */}
-          <View style={[
-            styles.controlPoint, 
-            { 
-              left: `${controlPointX}%`, 
-              top: `${controlPointY}px`,
-              backgroundColor: enabled ? Colors.metallicBrown.primary : '#666',
-              opacity: enabled ? 1 : 0.5
-            }
-          ]}>
-            <Text style={styles.pointLabel}>●</Text>
+        <View style={[styles.graph, !enabled && styles.disabled]}>
+          {/* Grid Lines */}
+          <View style={styles.grid}>
+            {[-12, -6, 0, 6, 12].map((value, index) => {
+              const y = (1 - (value + 12) / 24) * 100;
+              return (
+                <View key={`h-${index}`} style={[styles.gridLine, { top: `${y}%` }]}>
+                  <Text style={styles.gridLabel}>{value}dB</Text>
+                </View>
+              );
+            })}
+            {[20, 100, 1000, 10000, 20000].map((freq, index) => {
+              const x = (Math.log10(freq) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * 100;
+              return (
+                <View key={`v-${index}`} style={[styles.gridLineVertical, { left: `${x}%` }]}>
+                  <Text style={styles.gridLabelVertical}>{freq < 1000 ? `${freq}Hz` : `${freq/1000}kHz`}</Text>
+                </View>
+              );
+            })}
           </View>
 
-          {/* Frequency labels */}
-          <View style={styles.xAxisLabels}>
-            <Text style={styles.axisLabel}>20Hz</Text>
-            <Text style={styles.axisLabel}>100Hz</Text>
-            <Text style={styles.axisLabel}>1kHz</Text>
-            <Text style={styles.axisLabel}>10kHz</Text>
-            <Text style={styles.axisLabel}>20kHz</Text>
+          {/* Frequency Response Curve */}
+          <View style={styles.curveContainer}>
+            {/* Low to Mid line */}
+            <View style={[styles.curveLine, {
+              left: `${points.low.x}%`,
+              top: `${points.low.y}%`,
+              width: `${points.mid.x - points.low.x}%`,
+              transform: [{ rotate: `${Math.atan2(points.mid.y - points.low.y, points.mid.x - points.low.x)}rad` }],
+            }]} />
+            
+            {/* Mid to High line */}
+            <View style={[styles.curveLine, {
+              left: `${points.mid.x}%`,
+              top: `${points.mid.y}%`,
+              width: `${points.high.x - points.mid.x}%`,
+              transform: [{ rotate: `${Math.atan2(points.high.y - points.mid.y, points.high.x - points.mid.x)}rad` }],
+            }]} />
+
+            {/* Control Points */}
+            <Animated.View
+              style={[
+                styles.controlPoint,
+                pointStyle('low'),
+                {
+                  left: `${points.low.x}%`,
+                  top: `${points.low.y}%`,
+                  backgroundColor: activePoint === 'low' ? Colors.metallicBrown.primary : '#666',
+                },
+              ]}
+            >
+              <TouchableOpacity
+                onPress={() => handlePointPress('low')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.pointInner}>
+                  <View style={styles.pointCore} />
+                </View>
+              </TouchableOpacity>
+            </Animated.View>
+
+            <Animated.View
+              style={[
+                styles.controlPoint,
+                pointStyle('mid'),
+                {
+                  left: `${points.mid.x}%`,
+                  top: `${points.mid.y}%`,
+                  backgroundColor: activePoint === 'mid' ? Colors.metallicBrown.primary : '#666',
+                },
+              ]}
+            >
+              <TouchableOpacity
+                onPress={() => handlePointPress('mid')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.pointInner}>
+                  <View style={styles.pointCore} />
+                </View>
+              </TouchableOpacity>
+            </Animated.View>
+
+            <Animated.View
+              style={[
+                styles.controlPoint,
+                pointStyle('high'),
+                {
+                  left: `${points.high.x}%`,
+                  top: `${points.high.y}%`,
+                  backgroundColor: activePoint === 'high' ? Colors.metallicBrown.primary : '#666',
+                },
+              ]}
+            >
+              <TouchableOpacity
+                onPress={() => handlePointPress('high')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.pointInner}>
+                  <View style={styles.pointCore} />
+                </View>
+              </TouchableOpacity>
+            </Animated.View>
           </View>
         </View>
       </View>
 
-      <View style={styles.controlsRow}>
-        <View style={styles.knobGroup}>
-          <Text style={styles.knobGroupLabel}>{selectedFilter}</Text>
-        </View>
+      {/* Knobs - Conditionally shown based on filter type */}
+      <View style={styles.knobsRow}>
+        {/* Gain knob - only for filters that use gain */}
+        {(selectedFilter === 'peaking' || selectedFilter === 'lowshelf' || selectedFilter === 'highshelf') && (
+          <RotaryKnob
+            value={gainToKnob(gain)}
+            label="GAIN"
+            onChange={createKnobUpdater(knobToGain, 'gain')}
+            color={Colors.metallicBrown.primary}
+            size={65}
+            enabled={enabled && filterEnabled}
+            showValue={true}
+          />
+        )}
 
-        <RotaryKnob
-          value={gainToKnob(gain)}
-          label="Gain"
-          onChange={createKnobUpdater(knobToGain, 'gain')}
-          color={Colors.metallicBrown.primary}
-          size={70}
-          enabled={enabled && filterEnabled}
-        />
-
+        {/* Frequency knob - all filters use frequency */}
         <RotaryKnob
           value={freqToKnob(frequency)}
-          label="Freq"
+          label="FREQ"
           onChange={createKnobUpdater(knobToFreq, 'frequency')}
           color={Colors.metallicBrown.secondary}
-          size={70}
+          size={65}
           enabled={enabled && filterEnabled}
+          showValue={true}
         />
 
-        <RotaryKnob
-          value={qToKnob(q)}
-          label="Q"
-          onChange={createKnobUpdater(knobToQ, 'q')}
-          color={Colors.metallicBrown.light || '#D4AF37'}
-          size={70}
-          enabled={enabled && filterEnabled}
-        />
+        {/* Q/Resonance knob - for filters that use Q */}
+        {(selectedFilter === 'peaking' || selectedFilter === 'notch' || selectedFilter === 'bandpass' || 
+          selectedFilter === 'lowpass' || selectedFilter === 'highpass') && (
+          <RotaryKnob
+            value={qToKnob(q)}
+            label={selectedFilter === 'lowpass' || selectedFilter === 'highpass' ? 'RES' : 'Q'}
+            onChange={createKnobUpdater(knobToQ, 'q')}
+            color={Colors.metallicBrown.light || '#D4AF37'}
+            size={65}
+            enabled={enabled && filterEnabled}
+            showValue={true}
+          />
+        )}
       </View>
 
-      <TouchableOpacity 
+      {/* Filter Toggle Button */}
+      <TouchableOpacity
         style={[
-          styles.powerButton, 
-          filterEnabled && styles.powerButtonActive
+          styles.powerButton,
+          filterEnabled && styles.powerButtonActive,
+          !enabled && styles.disabled,
         ]}
-        onPress={toggleFilter}
+        onPress={() => onUpdate({ filterEnabled: !filterEnabled })}
         activeOpacity={0.7}
         disabled={!enabled}
       >
         <Text style={[
-          styles.powerButtonText, 
-          filterEnabled && styles.powerButtonTextActive
+          styles.powerButtonText,
+          filterEnabled && styles.powerButtonTextActive,
         ]}>
-          {filterEnabled ? 'ON' : 'OFF'}
+          {filterEnabled ? 'FILTER ON' : 'FILTER OFF'}
         </Text>
       </TouchableOpacity>
+
+      {/* Filter Selection Modal */}
+      <Modal
+        visible={filterModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterModalVisible(false)}
+      >
+        <BlurView intensity={90} style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.modalCloseArea}
+            activeOpacity={1}
+            onPress={() => setFilterModalVisible(false)}
+          />
+          
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>SELECT FILTER TYPE</Text>
+              <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
+                <MaterialCommunityIcons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={FILTERS}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.filterOption,
+                    selectedFilter === item.id && styles.filterOptionSelected,
+                  ]}
+                  onPress={() => {
+                    onUpdate({ selectedFilter: item.id });
+                    setFilterModalVisible(false);
+                  }}
+                >
+                  <View style={styles.filterOptionLeft}>
+                    <Text style={styles.filterOptionIcon}>{item.icon}</Text>
+                    <View>
+                      <Text style={styles.filterOptionName}>{item.name}</Text>
+                      <Text style={styles.filterOptionDesc}>{item.description}</Text>
+                    </View>
+                  </View>
+                  {selectedFilter === item.id && (
+                    <MaterialCommunityIcons name="check" size={20} color={Colors.metallicBrown.primary} />
+                  )}
+                </TouchableOpacity>
+              )}
+              showsVerticalScrollIndicator={false}
+            />
+          </View>
+        </BlurView>
+      </Modal>
     </View>
   );
 };
-
-// Keep FILTER_PRESETS the same...
-const FILTER_PRESETS = [
-  { id: 'lowpass' as FilterType, name: 'Low Pass', icon: '⬇️' },
-  { id: 'highpass' as FilterType, name: 'High Pass', icon: '⬆️' },
-  { id: 'bandpass' as FilterType, name: 'Band Pass', icon: '🔲' },
-  { id: 'lowshelf' as FilterType, name: 'Low Shelf', icon: '📉' },
-  { id: 'highshelf' as FilterType, name: 'High Shelf', icon: '📈' },
-  { id: 'peaking' as FilterType, name: 'Peaking', icon: '🔔' },
-  { id: 'notch' as FilterType, name: 'Notch', icon: '❌' },
-];
-
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     paddingVertical: verticalScale(10),
   },
-  filterGrid: {
+  disabled: {
+    opacity: 0.5,
+  },
+  filterSelector: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: verticalScale(15),
-  },
-  filterButton: {
-    width: (SCREEN_WIDTH - scale(60)) / 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
-    paddingVertical: verticalScale(8),
     alignItems: 'center',
-    marginBottom: verticalScale(8),
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 16,
+    padding: scale(12),
+    marginBottom: verticalScale(15),
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
-  filterButtonActive: {
-    borderColor: Colors.metallicBrown.primary,
-    backgroundColor: 'rgba(139, 115, 85, 0.2)',
+  filterSelectorLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(12),
   },
-  filterIcon: {
-    fontSize: moderateScale(16),
-    marginBottom: verticalScale(2),
+  filterSelectorIcon: {
+    fontSize: moderateScale(24),
   },
-  filterName: {
+  filterSelectorName: {
     color: '#fff',
-    fontSize: moderateScale(9),
-    fontWeight: '500',
+    fontSize: moderateScale(16),
+    fontWeight: '600',
   },
-  filterNameActive: {
-    color: Colors.metallicBrown.primary,
+  filterSelectorCategory: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: moderateScale(11),
   },
   graphContainer: {
+    height: verticalScale(200),
     marginVertical: verticalScale(10),
-    position: 'relative',
-    height: verticalScale(180),
   },
-  graphBackground: {
-    height: verticalScale(150),
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 12,
-    position: 'relative',
+  graph: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
     overflow: 'hidden',
+    position: 'relative',
+  },
+  grid: {
+    ...StyleSheet.absoluteFillObject,
   },
   gridLine: {
     position: 'absolute',
     left: 0,
     right: 0,
     height: 1,
-    width: '100%',
+    backgroundColor: 'rgba(255,255,255,0.05)',
   },
   gridLineVertical: {
     position: 'absolute',
@@ -277,91 +486,75 @@ const styles = StyleSheet.create({
     width: 1,
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  centerLine: {
+  gridLabel: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    left: scale(5),
+    top: -verticalScale(8),
+    color: 'rgba(255,255,255,0.2)',
+    fontSize: moderateScale(8),
+  },
+  gridLabelVertical: {
+    position: 'absolute',
+    bottom: -verticalScale(15),
+    left: -scale(10),
+    color: 'rgba(255,255,255,0.2)',
+    fontSize: moderateScale(8),
+  },
+  curveContainer: {
+    ...StyleSheet.absoluteFillObject,
   },
   curveLine: {
     position: 'absolute',
-    left: scale(20),
-    right: scale(20),
-    top: verticalScale(50),
     height: 2,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: Colors.metallicBrown.primary,
+    backgroundColor: Colors.metallicBrown.primary,
     opacity: 0.5,
+    transformOrigin: 'left',
   },
   controlPoint: {
     position: 'absolute',
+    width: scale(32),
+    height: scale(32),
+    marginLeft: -scale(16),
+    marginTop: -scale(16),
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: Colors.metallicBrown.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 10,
+  },
+  pointInner: {
     width: scale(24),
     height: scale(24),
     borderRadius: 12,
-    backgroundColor: Colors.metallicBrown.primary,
+    backgroundColor: '#1a1a1a',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#fff',
   },
-  pointLabel: {
-    color: '#fff',
-    fontSize: moderateScale(10),
-    fontWeight: '700',
-  },
-  xAxisLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: scale(30),
-    marginTop: verticalScale(5),
-  },
-  yAxisLabels: {
-    position: 'absolute',
-    left: 0,
-    top: verticalScale(20),
-    bottom: verticalScale(30),
-    justifyContent: 'space-between',
-  },
-  axisLabel: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(8),
-  },
-  controlsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    marginTop: verticalScale(10),
-  },
-  knobGroup: {
-    alignItems: 'center',
-  },
-  knobGroupLabel: {
-    color: '#fff',
-    fontSize: moderateScale(11),
-    fontWeight: '600',
-    marginBottom: verticalScale(4),
-  },
-  presetIndicator: {
-    flexDirection: 'row',
-    gap: scale(4),
-  },
-  presetDot: {
+  pointCore: {
     width: scale(8),
     height: scale(8),
     borderRadius: 4,
-    backgroundColor: '#666',
+    backgroundColor: '#fff',
+  },
+  knobsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    marginTop: verticalScale(15),
+    paddingHorizontal: scale(10),
   },
   powerButton: {
     alignSelf: 'center',
-    marginTop: verticalScale(15),
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 20,
-    paddingVertical: verticalScale(8),
+    marginTop: verticalScale(20),
+    paddingVertical: verticalScale(10),
     paddingHorizontal: scale(30),
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   powerButtonActive: {
     backgroundColor: Colors.metallicBrown.primary,
@@ -371,8 +564,64 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: moderateScale(12),
     fontWeight: '600',
+    letterSpacing: 0.5,
   },
   powerButtonTextActive: {
     color: '#000',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalCloseArea: {
+    flex: 1,
+  },
+  modalContent: {
+    backgroundColor: '#1a1a1a',
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    padding: scale(20),
+    maxHeight: SCREEN_HEIGHT * 0.6,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: verticalScale(20),
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: moderateScale(16),
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  filterOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: verticalScale(12),
+    paddingHorizontal: scale(15),
+    borderRadius: 12,
+    marginBottom: verticalScale(5),
+  },
+  filterOptionSelected: {
+    backgroundColor: 'rgba(139, 115, 85, 0.15)',
+  },
+  filterOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(12),
+  },
+  filterOptionIcon: {
+    fontSize: moderateScale(20),
+  },
+  filterOptionName: {
+    color: '#fff',
+    fontSize: moderateScale(14),
+    fontWeight: '600',
+  },
+  filterOptionDesc: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: moderateScale(11),
   },
 });
