@@ -12,6 +12,7 @@ android {
     defaultConfig {
         versionCode 1
         versionName "0.7.6"
+        minSdk 24
     }
 
     lintOptions {
@@ -28,7 +29,6 @@ android {
     }
 }
 
-// ✅ Add Kotlin toolchain configuration to align with Java 17
 kotlin {
     jvmToolchain(17)
 }
@@ -36,18 +36,41 @@ kotlin {
 repositories {
     mavenCentral()
     maven { url 'https://jitpack.io' }
+    google()
 }
 
 dependencies {
-    // Kotlin stdlib
+    // ✅ CRITICAL FIX: Use project reference, NOT Maven coordinate
+    implementation project(':expo-modules-core')
+    
+    // ✅ Kotlin 2.0.20
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.20"
-
-    // NewPipe extractor + deps
+    
+    // ✅ NewPipe
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.25.2'
     implementation 'org.mozilla:rhino:1.7.15'
+    
+    // ✅ OkHttp
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    
+    // ✅ Coroutines
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+    
+    // ✅ Timber
+    implementation 'com.jakewharton.timber:timber:5.0.1'
+    
+    // ✅ AndroidX
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+}
 
-    // DO NOT add:
-    // implementation project(':expo-modules-core')
-    // expo-modules-core is provided by Expo autolinking / expo package.
+android.packaging {
+    resources {
+        excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        excludes += "META-INF/DEPENDENCIES"
+        pickFirsts += listOf(
+            "**/libc++_shared.so",
+            "**/libjsc.so"
+        )
+    }
 }
