@@ -1,15 +1,19 @@
 package expo.modules.mavinengine
 
+import android.content.Context
 import android.util.Log
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.downloader.Downloader
+import org.schabi.newpipe.extractor.downloader.Request as NPRequest
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.exceptions.ExtractionException
 import org.schabi.newpipe.extractor.search.SearchExtractor
@@ -21,28 +25,52 @@ import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
 import org.schabi.newpipe.extractor.channel.ChannelInfoItem
 import org.schabi.newpipe.extractor.kiosk.KioskExtractor
 import org.schabi.newpipe.extractor.InfoItem
+import org.schabi.newpipe.extractor.ListExtractor
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class MavinEngineModule : Module() {
     
+    // ✅ FIXED: Use appContext.reactContext for Expo Modules Core 3.x
+    private val context: Context
+        get() = requireNotNull(appContext.reactContext) {
+            "React context is not available"
+        }
+
     companion object {
         private const val TAG = "MavinEngine"
         private val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
+        
+        // ✅ FIXED: Initialize NewPipe once in companion to avoid re-initialization
+        private var isNewPipeInitialized = false
     }
 
     override fun definition() = ModuleDefinition {
         Name("MavinEngine")
 
+        // ✅ FIXED: Property syntax with explicit generic types for Expo Modules Core 3.x
+        Property("engineVersion")
+            .get<String> { "2.0.0" }
+
+        Property("isInitialized")
+            .get<Boolean> { isNewPipeInitialized }
+
+        Property("newPipeVersion")
+            .get<String> { "v0.25.2" }
+
+        OnCreate {
+            initializeNewPipe()
+        }
+
         AsyncFunction("handleDeepLink") { url: String ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val videoId = extractVideoId(url)
                 val trackInfo = getTrackInfoFromVideoId(videoId)
-                return@AsyncFunction mapOf(
+                mapOf(
                     "success" to true,
                     "videoId" to videoId,
                     "trackInfo" to trackInfo,
@@ -51,269 +79,297 @@ class MavinEngineModule : Module() {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Deep link failed", e)
-                throw CodedException("DEEP_LINK_FAILED: ${e.message}")
+                throw CodedException("DEEP_LINK_FAILED", e.message ?: "Unknown error", e)
             }
         }
 
         AsyncFunction("extractAudio") { artist: String, title: String, isrc: String? ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val query = if (!isrc.isNullOrEmpty()) "ISRC:$isrc" else "$artist $title audio"
                 val streamInfo = searchAndExtract(query)
                 val audioStream = streamInfo.audioStreams
                     .filterNotNull()
-                    .filter { it.content != null }
-                    .maxByOrNull { it.averageBitrate ?: 0 }
-                    ?: throw CodedException("NO_AUDIO: No usable audio stream found")
+                    .filter { !it.content.isNullOrEmpty() }
+                    .maxByOrNull { it.averageBitrate }
+                    ?: throw CodedException("NO_AUDIO", "No usable audio stream found", null)
 
-                return@AsyncFunction mapOf(
+                mapOf(
                     "url" to audioStream.content!!,
-                    "videoId" to extractVideoId(streamInfo.url!!),
+                    "videoId" to extractVideoId(streamInfo.url ?: ""),
                     "title" to (streamInfo.name ?: "Unknown"),
                     "artist" to (streamInfo.uploaderName ?: "Unknown"),
-                    "duration" to (streamInfo.duration ?: 0),
+                    "duration" to (streamInfo.duration),
                     "thumbnail" to (streamInfo.thumbnails?.firstOrNull()?.url ?: ""),
-                    "views" to (streamInfo.viewCount ?: 0L),
-                    "likes" to (streamInfo.likeCount ?: 0L),
+                    "views" to (streamInfo.viewCount),
+                    "likes" to (streamInfo.likeCount),
                     "expires" to (System.currentTimeMillis() + 6 * 60 * 60 * 1000),
                     "quality" to getQualityLabel(audioStream),
                     "success" to true
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Audio extraction failed", e)
-                throw CodedException("EXTRACTION_FAILED: ${e.message}")
+                throw CodedException("EXTRACTION_FAILED", e.message ?: "Extraction failed", e)
             }
         }
 
         AsyncFunction("extractAudioFromVideoId") { videoId: String ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                val result = getTrackInfoFromVideoId(videoId)
-                return@AsyncFunction result
+                getTrackInfoFromVideoId(videoId)
             } catch (e: Exception) {
                 Log.e(TAG, "Video ID extraction failed", e)
-                throw CodedException("EXTRACTION_FAILED: ${e.message}")
+                throw CodedException("EXTRACTION_FAILED", e.message ?: "Extraction failed", e)
             }
         }
 
+        // ✅ FIXED: Updated kiosk usage for NewPipe Extractor v0.25.x
+        // Note: "Trending" kiosk was changed in v0.24.8 - using "Live" as default now
         AsyncFunction("getTrendingMusic") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val kioskList = ServiceList.YouTube.kioskList
                 
+                // ✅ FIXED: Try multiple kiosk IDs as fallback (v0.24.8+ changes)
                 val trendingSongs = try {
-                    val kioskExtractor = kioskList["Trending"] as? KioskExtractor<*>
-                        ?: kioskList["MusicTrending"] as? KioskExtractor<*>
+                    val kioskExtractor = kioskList.getExtractorById("Trending", null)
+                        ?: kioskList.getExtractorById("Live", null)
                         ?: throw Exception("No trending kiosk available")
+                    
                     kioskExtractor.fetchPage()
                     extractStreamItems(kioskExtractor.initialPage.items)
                 } catch (e: Exception) {
+                    Log.w(TAG, "Kiosk failed, using fallback search", e)
                     fallbackSearch("trending music 2026")
                 }
-                return@AsyncFunction trendingSongs.take(20)
+                trendingSongs.take(20)
             } catch (e: Exception) {
                 Log.e(TAG, "Trending failed", e)
-                return@AsyncFunction fallbackSearch("trending music").take(20)
+                fallbackSearch("trending music").take(20)
             }
         }
 
         AsyncFunction("getTopCharts") { chartType: String ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val kioskList = ServiceList.YouTube.kioskList
                 val chartIds = when (chartType) {
-                    "top50" -> listOf("Top50Songs", "GlobalTop50", "Charts")
-                    "viral50" -> listOf("Viral50", "Trending")
-                    else -> listOf("Top50Songs", "GlobalTop50", "Charts")
+                    "top50" -> listOf("Top50Songs", "GlobalTop50", "Charts", "Live")
+                    "viral50" -> listOf("Viral50", "Trending", "Live")
+                    else -> listOf("Top50Songs", "GlobalTop50", "Charts", "Live")
                 }
                 
                 val chartSongs = chartIds.mapNotNull { chartId ->
                     try {
-                        val kioskExtractor = kioskList[chartId] as? KioskExtractor<*>
+                        val kioskExtractor = kioskList.getExtractorById(chartId, null)
                         kioskExtractor?.fetchPage()
                         kioskExtractor?.initialPage?.items?.let { extractStreamItems(it) }
-                    } catch (e: Exception) { null }
-                }.firstOrNull { it?.isNotEmpty() == true } ?: fallbackSearch("top $chartType")
+                    } catch (e: Exception) { 
+                        Log.w(TAG, "Chart $chartId failed", e)
+                        null 
+                    }
+                }.firstOrNull { it.isNotEmpty() } ?: fallbackSearch("top $chartType")
 
-                return@AsyncFunction chartSongs.take(50)
+                chartSongs.take(50)
             } catch (e: Exception) {
                 Log.e(TAG, "Charts failed", e)
-                return@AsyncFunction fallbackSearch("top charts").take(50)
+                fallbackSearch("top charts").take(50)
             }
         }
 
         AsyncFunction("getNewReleases") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                return@AsyncFunction fallbackSearch("new music releases March 2026").take(20)
+                fallbackSearch("new music releases 2026").take(20)
             } catch (e: Exception) {
                 Log.e(TAG, "New releases failed", e)
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getGenreStations") { genre: String ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                val searchHandler = ServiceList.YouTube.getSearchQHFactory()
+                val searchQueryHandler = ServiceList.YouTube.searchQHFactory
                     .fromQuery("$genre music playlist", listOf("playlist"), "")
-                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchHandler)
+                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchQueryHandler)
                 searchExtractor.fetchPage()
                 val genrePlaylists = extractPlaylistsFromSearch(searchExtractor.initialPage.items)
-                return@AsyncFunction genrePlaylists.take(10)
+                genrePlaylists.take(10)
             } catch (e: Exception) {
                 Log.e(TAG, "Genre failed", e)
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getPopularChoice") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                return@AsyncFunction fallbackSearch("popular afrobeats 2026").take(20)
+                fallbackSearch("popular afrobeats 2026").take(20)
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getMonthlyTop") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                val topSongs = fallbackSearch("top songs March 2026").take(10)
-                return@AsyncFunction topSongs.mapIndexed { index, song ->
-                    song + mapOf("position" to (index + 1))
+                val topSongs = fallbackSearch("top songs 2026").take(10)
+                topSongs.mapIndexed { index, song ->
+                    song + ("position" to (index + 1))
                 }
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getEditorPicks") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                return@AsyncFunction fallbackSearch("best afrobeats playlists 2026").take(8)
+                fallbackSearch("best afrobeats playlists 2026").take(8)
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getSponsoredContent") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val trending = fallbackSearch("trending afrobeats").take(10)
-                return@AsyncFunction trending.mapIndexed { index, song ->
+                trending.mapIndexed { index, song ->
                     song + mapOf(
                         "sponsored" to (index < 3),
                         "sponsorName" to if (index < 3) "Mavin Partner" else null
                     )
                 }
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getPodcasts") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                val searchHandler = ServiceList.YouTube.getSearchQHFactory()
+                val searchQueryHandler = ServiceList.YouTube.searchQHFactory
                     .fromQuery("afrobeats podcast", listOf("playlist", "channel"), "")
-                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchHandler)
+                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchQueryHandler)
                 searchExtractor.fetchPage()
-                return@AsyncFunction extractPodcastsFromSearch(searchExtractor.initialPage.items)
+                extractPodcastsFromSearch(searchExtractor.initialPage.items)
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getLiveStations") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                val searchHandler = ServiceList.YouTube.getSearchQHFactory()
+                val searchQueryHandler = ServiceList.YouTube.searchQHFactory
                     .fromQuery("live afrobeats radio", listOf("live"), "")
-                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchHandler)
+                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchQueryHandler)
                 searchExtractor.fetchPage()
-                return@AsyncFunction extractLiveStreams(searchExtractor.initialPage.items)
+                extractLiveStreams(searchExtractor.initialPage.items)
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getCoverSongs") {
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
-                return@AsyncFunction fallbackSearch("afrobeats cover songs").take(15)
+                fallbackSearch("afrobeats cover songs").take(15)
             } catch (e: Exception) {
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("searchMusic") { query: String, filter: String? ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val contentFilter = when (filter) {
                     "song" -> listOf("video")
                     "playlist" -> listOf("playlist")
                     "artist" -> listOf("channel")
                     else -> listOf("video", "playlist", "channel")
                 }
-                val searchHandler = ServiceList.YouTube.getSearchQHFactory()
+                val searchQueryHandler = ServiceList.YouTube.searchQHFactory
                     .fromQuery(query, contentFilter, "")
-                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchHandler)
+                val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchQueryHandler)
                 searchExtractor.fetchPage()
-                return@AsyncFunction extractSearchResults(searchExtractor.initialPage.items)
+                extractSearchResults(searchExtractor.initialPage.items)
             } catch (e: Exception) {
                 Log.e(TAG, "Search failed", e)
-                return@AsyncFunction emptyList()
+                emptyList<Map<String, Any>>()
             }
         }
 
         AsyncFunction("getTrackDetails") { videoId: String ->
+            ensureNewPipeInitialized()
             try {
-                NewPipe.init(ExpoDownloader(client))
                 val url = "https://www.youtube.com/watch?v=$videoId"
+                // ✅ FIXED: Use StreamInfo.getInfo with proper error handling
                 val info = StreamInfo.getInfo(ServiceList.YouTube, url)
                 val audioStream = info.audioStreams
                     .filterNotNull()
-                    .filter { it.content != null }
-                    .maxByOrNull { it.averageBitrate ?: 0 }
+                    .filter { !it.content.isNullOrEmpty() }
+                    .maxByOrNull { it.averageBitrate }
 
-                return@AsyncFunction mapOf(
+                mapOf(
                     "id" to videoId,
                     "title" to (info.name ?: "Unknown"),
                     "artist" to (info.uploaderName ?: "Unknown"),
-                    "duration" to (info.duration ?: 0),
+                    "duration" to info.duration,
                     "thumbnail" to (info.thumbnails?.firstOrNull()?.url ?: ""),
-                    "views" to (info.viewCount ?: 0L),
-                    "likes" to (info.likeCount ?: 0L),
+                    "views" to info.viewCount,
+                    "likes" to info.likeCount,
                     "audioUrl" to (audioStream?.content ?: ""),
                     "audioQuality" to (audioStream?.let { getQualityLabel(it) } ?: "unknown"),
                     "available" to true
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Track details failed", e)
-                throw CodedException("DETAILS_FAILED: ${e.message}")
+                throw CodedException("DETAILS_FAILED", e.message ?: "Failed to get details", e)
             }
+        }
+    }
+
+    // ✅ FIXED: Proper initialization with singleton pattern
+    private fun initializeNewPipe() {
+        if (!isNewPipeInitialized) {
+            synchronized(this) {
+                if (!isNewPipeInitialized) {
+                    NewPipe.init(ExpoDownloader(client))
+                    isNewPipeInitialized = true
+                    Log.d(TAG, "✅ NewPipe Extractor initialized")
+                }
+            }
+        }
+    }
+
+    private fun ensureNewPipeInitialized() {
+        if (!isNewPipeInitialized) {
+            initializeNewPipe()
         }
     }
 
     private fun getTrackInfoFromVideoId(videoId: String): Map<String, Any> {
         val url = "https://www.youtube.com/watch?v=$videoId"
+        // ✅ FIXED: StreamInfo.getInfo is still the correct method in v0.25.x
         val info = StreamInfo.getInfo(ServiceList.YouTube, url)
         val audioStream = info.audioStreams
             .filterNotNull()
-            .filter { it.content != null }
-            .maxByOrNull { it.averageBitrate ?: 0 }
-            ?: throw CodedException("NO_AUDIO: No usable audio stream found")
+            .filter { !it.content.isNullOrEmpty() }
+            .maxByOrNull { it.averageBitrate }
+            ?: throw CodedException("NO_AUDIO", "No usable audio stream found", null)
 
         return mapOf(
             "url" to audioStream.content!!,
             "videoId" to videoId,
             "title" to (info.name ?: "Unknown"),
             "artist" to (info.uploaderName ?: "Unknown"),
-            "duration" to (info.duration ?: 0),
+            "duration" to info.duration,
             "thumbnail" to (info.thumbnails?.firstOrNull()?.url ?: ""),
-            "views" to (info.viewCount ?: 0L),
-            "likes" to (info.likeCount ?: 0L),
+            "views" to info.viewCount,
+            "likes" to info.likeCount,
             "expires" to (System.currentTimeMillis() + 6 * 60 * 60 * 1000),
             "quality" to getQualityLabel(audioStream),
             "success" to true
@@ -322,9 +378,9 @@ class MavinEngineModule : Module() {
     
     private fun fallbackSearch(query: String): List<Map<String, Any>> {
         return try {
-            val searchHandler = ServiceList.YouTube.getSearchQHFactory()
+            val searchQueryHandler = ServiceList.YouTube.searchQHFactory
                 .fromQuery(query, listOf("video"), "")
-            val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchHandler)
+            val searchExtractor = ServiceList.YouTube.getSearchExtractor(searchQueryHandler)
             searchExtractor.fetchPage()
             extractSearchResults(searchExtractor.initialPage.items)
         } catch (e: Exception) {
@@ -334,7 +390,7 @@ class MavinEngineModule : Module() {
     }
 
     private fun searchAndExtract(query: String): StreamInfo {
-        val factory = ServiceList.YouTube.getSearchQHFactory()
+        val factory = ServiceList.YouTube.searchQHFactory
         val handler = factory.fromQuery(query, listOf("video"), "")
         val extractor = ServiceList.YouTube.getSearchExtractor(handler)
         extractor.fetchPage()
@@ -342,25 +398,32 @@ class MavinEngineModule : Module() {
         val firstStream = extractor.initialPage.items
             .filterIsInstance<StreamInfoItem>()
             .firstOrNull() 
-            ?: throw CodedException("NO_STREAM: No valid stream found")
+            ?: throw CodedException("NO_STREAM", "No valid stream found", null)
             
-        return StreamInfo.getInfo(ServiceList.YouTube, firstStream.url!!)
+        // ✅ FIXED: Use StreamInfo.getInfo with service and URL
+        return StreamInfo.getInfo(ServiceList.YouTube, firstStream.url ?: "")
     }
 
-    // ✅ FIXED: Safe regex group access
+    // ✅ FIXED: Safe regex group access using groupValues (index-based)
     private fun extractVideoId(url: String): String {
-        val patterns = listOf("v=([a-zA-Z0-9_-]{11})", "youtu\\.be/([a-zA-Z0-9_-]{11})")
+        val patterns = listOf(
+            "v=([a-zA-Z0-9_-]{11})",
+            "youtu\\.be/([a-zA-Z0-9_-]{11})",
+            "shorts/([a-zA-Z0-9_-]{11})",
+            "live/([a-zA-Z0-9_-]{11})"
+        )
         for (pattern in patterns) {
             val matchResult = Regex(pattern).find(url)
             if (matchResult != null && matchResult.groupValues.size > 1) {
                 return matchResult.groupValues[1]
             }
         }
-        return url
+        // Return original if no match (might already be an ID)
+        return url.takeIf { it.matches(Regex("[a-zA-Z0-9_-]{11}")) } ?: url
     }
 
     private fun getQualityLabel(stream: AudioStream): String {
-        val bitrate = stream.averageBitrate ?: 128000
+        val bitrate = stream.averageBitrate
         return when {
             bitrate >= 256000 -> "Premium (256kbps+)"
             bitrate >= 160000 -> "High (160kbps)"
@@ -376,9 +439,9 @@ class MavinEngineModule : Module() {
                 "videoId" to extractVideoId(item.url ?: ""),
                 "title" to (item.name ?: "Unknown"),
                 "artist" to (item.uploaderName ?: "Unknown"),
-                "duration" to (item.duration ?: 0),
+                "duration" to item.duration,
                 "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                "views" to (item.viewCount ?: 0L)
+                "views" to item.viewCount
             )
         }
     }
@@ -389,7 +452,7 @@ class MavinEngineModule : Module() {
                 "id" to extractPlaylistId(item.url ?: ""),
                 "title" to (item.name ?: ""),
                 "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                "trackCount" to (item.streamCount ?: 0),
+                "trackCount" to (item.streamCount),
                 "uploader" to (item.uploaderName ?: "")
             )
         }
@@ -414,23 +477,23 @@ class MavinEngineModule : Module() {
                     "videoId" to extractVideoId(item.url ?: ""),
                     "title" to (item.name ?: ""),
                     "artist" to (item.uploaderName ?: ""),
-                    "duration" to (item.duration ?: 0),
+                    "duration" to item.duration,
                     "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                    "views" to (item.viewCount ?: 0L)
+                    "views" to item.viewCount
                 )
                 is PlaylistInfoItem -> mapOf(
                     "type" to "playlist",
                     "id" to extractPlaylistId(item.url ?: ""),
                     "title" to (item.name ?: ""),
                     "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                    "trackCount" to (item.streamCount ?: 0)
+                    "trackCount" to item.streamCount
                 )
                 is ChannelInfoItem -> mapOf(
                     "type" to "artist",
                     "id" to (item.url ?: ""),
                     "name" to (item.name ?: ""),
                     "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                    "subscribers" to (item.subscriberCount ?: 0L),
+                    "subscribers" to item.subscriberCount,
                     "verified" to item.isVerified
                 )
                 else -> null
@@ -450,7 +513,7 @@ class MavinEngineModule : Module() {
                     "id" to extractPlaylistId(item.url ?: ""),
                     "title" to (item.name ?: ""),
                     "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                    "episodeCount" to (item.streamCount ?: 0),
+                    "episodeCount" to item.streamCount,
                     "uploader" to (item.uploaderName ?: ""),
                     "type" to "podcast"
                 )
@@ -461,7 +524,7 @@ class MavinEngineModule : Module() {
         return items.filterIsInstance<StreamInfoItem>()
             .filter { item -> 
                 try {
-                    item.getStreamType() == StreamType.LIVE_STREAM
+                    item.streamType == StreamType.LIVE_STREAM
                 } catch (e: Exception) {
                     false
                 }
@@ -473,24 +536,25 @@ class MavinEngineModule : Module() {
                     "title" to (item.name ?: ""),
                     "artist" to (item.uploaderName ?: ""),
                     "thumbnail" to (item.thumbnails?.firstOrNull()?.url ?: ""),
-                    "viewers" to (item.viewCount ?: 0L),
+                    "viewers" to item.viewCount,
                     "type" to "live"
                 )
             }
     }
 }
 
+// ✅ FIXED: Updated Downloader implementation for NewPipe Extractor v0.25.x
 class ExpoDownloader(private val client: OkHttpClient) : Downloader() {
 
     @Throws(IOException::class, ExtractionException::class)
-    override fun execute(request: org.schabi.newpipe.extractor.downloader.Request): Response {
+    override fun execute(request: NPRequest): Response {
         val okRequest = Request.Builder()
             .url(request.url())
             .method(
                 request.httpMethod(),
-                if (request.dataToSend() != null) 
-                    RequestBody.create(null, request.dataToSend()!!) 
-                else null
+                request.dataToSend()?.let { 
+                    RequestBody.create("application/json".toMediaTypeOrNull(), it)
+                }
             )
             .apply { 
                 request.headers().forEach { (key, values) -> 
@@ -508,7 +572,7 @@ class ExpoDownloader(private val client: OkHttpClient) : Downloader() {
         
         return Response(
             response.code,
-            response.message ?: "OK",
+            response.message,
             response.headers.toMultimap(),
             responseBody,
             request.url()

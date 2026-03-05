@@ -13,7 +13,15 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 class HoneygainModule : Module() {
     
-    // ✅ DIRECT ACCESS - NO CUSTOM PROPERTIES
+    // ✅ FIXED: Use appContext.reactContext (not androidContext)
+    private val context: Context
+        get() = requireNotNull(appContext.reactContext) {
+            "React context is not available"
+        }
+    
+    private val activity: Activity?
+        get() = appContext.currentActivity
+    
     private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
@@ -94,43 +102,37 @@ class HoneygainModule : Module() {
             configureSdk(config, promise)
         }
         
-        // ✅ PROPERTIES - CORRECT SYNTAX
-        Property("isRunning") {
-            get { safeValue { HgSdk.isRunning } ?: false }
-        }
+        // ✅ FIXED: Property syntax with explicit types for Expo Modules Core 3.x
+        // Properties must specify explicit types when using get/set
+        Property("isRunning")
+            .get<Boolean> { safeValue { HgSdk.isRunning } ?: false }
         
-        Property("isOptedIn") {
-            get { safeValue { HgSdk.isOptedIn } ?: false }
-        }
+        Property("isOptedIn")
+            .get<Boolean> { safeValue { HgSdk.isOptedIn } ?: false }
         
-        Property("creditBalance") {
-            get { safeValue { HgSdk.balance } ?: 0.0 }
-        }
+        Property("creditBalance")
+            .get<Double> { safeValue { HgSdk.balance } ?: 0.0 }
         
-        Property("isBackground") {
-            get { safeValue { HgSdk.isBackground } ?: false }
-            set { value ->
-                safeExecute { HgSdk.isBackground = value as Boolean }
+        Property("isBackground")
+            .get<Boolean> { safeValue { HgSdk.isBackground } ?: false }
+            .set { value: Boolean ->
+                safeExecute { HgSdk.isBackground = value }
             }
-        }
         
-        Property("launchOnBoot") {
-            get { safeValue { HgSdk.launchOnBoot } ?: false }
-            set { value ->
-                safeExecute { HgSdk.launchOnBoot = value as Boolean }
+        Property("launchOnBoot")
+            .get<Boolean> { safeValue { HgSdk.launchOnBoot } ?: false }
+            .set { value: Boolean ->
+                safeExecute { HgSdk.launchOnBoot = value }
             }
-        }
         
-        Property("enableLogging") {
-            get { safeValue { HgSdk.enableLogging } ?: false }
-            set { value ->
-                safeExecute { HgSdk.enableLogging = value as Boolean }
+        Property("enableLogging")
+            .get<Boolean> { safeValue { HgSdk.enableLogging } ?: false }
+            .set { value: Boolean ->
+                safeExecute { HgSdk.enableLogging = value }
             }
-        }
         
-        Property("version") {
-            get { "1.3.1" }
-        }
+        Property("version")
+            .get<String> { "1.3.1" }
         
         // Events
         Events(
@@ -150,7 +152,6 @@ class HoneygainModule : Module() {
         }
 
         try {
-            val context = appContext.androidContext
             synchronized(this) {
                 if (!isInitialized) {
                     HgSdk.initialize(context, API_KEY)
@@ -179,7 +180,6 @@ class HoneygainModule : Module() {
 
     private fun initializeWithApiKey(apiKey: String, promise: Promise) {
         try {
-            val context = appContext.androidContext
             synchronized(this) {
                 HgSdk.initialize(context, apiKey)
                 isInitialized = true
@@ -324,7 +324,7 @@ class HoneygainModule : Module() {
     }
 
     private fun requestConsent(promise: Promise) {
-        val currentActivity = appContext.currentActivity
+        val currentActivity = activity
         if (currentActivity == null) {
             promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
             return
@@ -368,7 +368,7 @@ class HoneygainModule : Module() {
         buttonBackgroundResId: Int,
         promise: Promise
     ) {
-        val currentActivity = appContext.currentActivity
+        val currentActivity = activity
         if (currentActivity == null) {
             promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
             return
@@ -493,6 +493,7 @@ class HoneygainModule : Module() {
         }
     }
 
+    // Safe access helpers
     private inline fun <T> safeValue(block: () -> T?): T? {
         return try {
             block()
