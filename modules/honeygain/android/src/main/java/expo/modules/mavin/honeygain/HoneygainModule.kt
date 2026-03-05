@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.honeygain.hgsdk.HgSdk
-import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -14,8 +13,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 class HoneygainModule : Module() {
     
-    // ✅ FIXED: Proper context access for Expo SDK 52
-    private val appContext: AppContext get() = this.appContext
+    // ✅ FIXED: Direct access to appContext from Module (no custom property)
     private val context: Context get() = appContext.androidContext
     private val activity: Activity? get() = appContext.currentActivity
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -98,7 +96,7 @@ class HoneygainModule : Module() {
             configureSdk(config, promise)
         }
         
-        // ✅ FIXED: Proper Property syntax + explicit imports
+        // ✅ FIXED: Property syntax - all inside ModuleDefinition
         Property("isRunning") {
             get { safeValue { HgSdk.isRunning } ?: false }
         }
@@ -204,8 +202,8 @@ class HoneygainModule : Module() {
                 "message" to "Honeygain SDK initialized successfully"
             ))
         } catch (e: Exception) {
-            // ✅ FIXED: Proper Promise.reject syntax
-            promise.reject(CodedException("INIT_ERROR", "Failed to initialize: ${e.message}"))
+            // ✅ FIXED: Added exception as third parameter
+            promise.reject("INIT_ERROR", "Failed to initialize: ${e.message}", e)
         }
     }
 
@@ -245,7 +243,7 @@ class HoneygainModule : Module() {
                 "message" to "Configuration updated successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("CONFIG_ERROR", "Failed to configure: ${e.message}"))
+            promise.reject("CONFIG_ERROR", "Failed to configure: ${e.message}", e)
         }
     }
 
@@ -271,7 +269,7 @@ class HoneygainModule : Module() {
                 "message" to "Honeygain SDK started successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("START_ERROR", "Failed to start: ${e.message}"))
+            promise.reject("START_ERROR", "Failed to start: ${e.message}", e)
         }
     }
 
@@ -288,7 +286,7 @@ class HoneygainModule : Module() {
                 "message" to "Honeygain SDK stopped successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("STOP_ERROR", "Failed to stop: ${e.message}"))
+            promise.reject("STOP_ERROR", "Failed to stop: ${e.message}", e)
         }
     }
 
@@ -305,7 +303,7 @@ class HoneygainModule : Module() {
                 "message" to "User opted in successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("OPTIN_ERROR", "Failed to opt in: ${e.message}"))
+            promise.reject("OPTIN_ERROR", "Failed to opt in: ${e.message}", e)
         }
     }
 
@@ -322,14 +320,14 @@ class HoneygainModule : Module() {
                 "message" to "User opted out successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("OPTOUT_ERROR", "Failed to opt out: ${e.message}"))
+            promise.reject("OPTOUT_ERROR", "Failed to opt out: ${e.message}", e)
         }
     }
 
     private fun requestConsent(promise: Promise) {
         val currentActivity = activity
         if (currentActivity == null) {
-            promise.reject(CodedException("NO_ACTIVITY", "Activity context not available"))
+            promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
             return
         }
 
@@ -355,11 +353,11 @@ class HoneygainModule : Module() {
                         "message" to "Consent dialog shown"
                     ))
                 } catch (e: Exception) {
-                    promise.reject(CodedException("CONSENT_ERROR", "Failed to show consent: ${e.message}"))
+                    promise.reject("CONSENT_ERROR", "Failed to show consent: ${e.message}", e)
                 }
             }
         } catch (e: Exception) {
-            promise.reject(CodedException("CONSENT_ERROR", "Activity error: ${e.message}"))
+            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
         }
     }
 
@@ -373,7 +371,7 @@ class HoneygainModule : Module() {
     ) {
         val currentActivity = activity
         if (currentActivity == null) {
-            promise.reject(CodedException("NO_ACTIVITY", "Activity context not available"))
+            promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
             return
         }
 
@@ -394,11 +392,11 @@ class HoneygainModule : Module() {
                         "message" to "Styled consent dialog shown"
                     ))
                 } catch (e: Exception) {
-                    promise.reject(CodedException("CONSENT_ERROR", "Failed to show styled consent: ${e.message}"))
+                    promise.reject("CONSENT_ERROR", "Failed to show styled consent: ${e.message}", e)
                 }
             }
         } catch (e: Exception) {
-            promise.reject(CodedException("CONSENT_ERROR", "Activity error: ${e.message}"))
+            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
         }
     }
 
@@ -432,7 +430,8 @@ class HoneygainModule : Module() {
                 "isRunning" to (safeValue { HgSdk.isRunning } ?: false)
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("PRESET_ERROR", "Activation failed: ${e.message}"))
+            Log.e(TAG, "Preset activation failed: ${e.message}", e)
+            promise.reject("PRESET_ERROR", "Activation failed: ${e.message}", e)
         }
     }
 
@@ -450,7 +449,7 @@ class HoneygainModule : Module() {
                 "version" to "1.3.1"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("STATUS_ERROR", "Status fetch failed: ${e.message}"))
+            promise.reject("STATUS_ERROR", "Status fetch failed: ${e.message}", e)
         }
     }
 
@@ -466,7 +465,7 @@ class HoneygainModule : Module() {
                 promise.resolve(null)
             }
         } catch (e: Exception) {
-            promise.reject(CodedException("ERROR_CHECK", "Failed to get last error: ${e.message}"))
+            promise.reject("ERROR_CHECK", "Failed to get last error: ${e.message}", e)
         }
     }
 
@@ -477,7 +476,7 @@ class HoneygainModule : Module() {
                 "message" to "Last error cleared (client-side only)"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("CLEAR_ERROR", "Failed to clear last error: ${e.message}"))
+            promise.reject("CLEAR_ERROR", "Failed to clear last error: ${e.message}", e)
         }
     }
 
@@ -490,7 +489,8 @@ class HoneygainModule : Module() {
                 "message" to "Honeygain stopped successfully"
             ))
         } catch (e: Exception) {
-            promise.reject(CodedException("STOP_ERROR", "Stop failed: ${e.message}"))
+            Log.e(TAG, "Stop failed: ${e.message}", e)
+            promise.reject("STOP_ERROR", "Stop failed: ${e.message}", e)
         }
     }
 

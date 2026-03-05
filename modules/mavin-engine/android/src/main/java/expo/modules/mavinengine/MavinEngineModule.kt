@@ -25,10 +25,10 @@ import org.schabi.newpipe.extractor.InfoItem
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-// 2025 Expo Modules API: No constructor parameters needed
+// ✅ No constructor parameters - correct for Expo SDK 52+
 class MavinEngineModule : Module() {
     
-    // 2025 Best Practice: Safe context access property
+    // ✅ Safe context access (optional - only if needed)
     private val reactContext get() = appContext?.reactContext 
         ?: throw CodedException("NO_CONTEXT: React context unavailable")
 
@@ -366,10 +366,14 @@ class MavinEngineModule : Module() {
         return StreamInfo.getInfo(ServiceList.YouTube, firstStream.url!!)
     }
 
+    // ✅ FIXED: extractVideoId with safe group access
     private fun extractVideoId(url: String): String {
         val patterns = listOf("v=([a-zA-Z0-9_-]{11})", "youtu\\.be/([a-zA-Z0-9_-]{11})")
         patterns.forEach { pattern ->
-            Regex(pattern).find(url)?.groupValues?.get(1)?.let { return it }
+            val matchResult = Regex(pattern).find(url)
+            if (matchResult != null && matchResult.groupValues.size > 1) {
+                return matchResult.groupValues[1]
+            }
         }
         return url
     }
@@ -412,7 +416,12 @@ class MavinEngineModule : Module() {
 
     private fun extractPlaylistId(url: String): String {
         val pattern = "list=([a-zA-Z0-9_-]+)".toRegex()
-        return pattern.find(url)?.groupValues?.get(1) ?: url
+        val matchResult = pattern.find(url)
+        return if (matchResult != null && matchResult.groupValues.size > 1) {
+            matchResult.groupValues[1]
+        } else {
+            url
+        }
     }
 
     private fun extractSearchResults(items: List<InfoItem>): List<Map<String, Any>> {
@@ -467,7 +476,7 @@ class MavinEngineModule : Module() {
             }
     }
 
-    // 2025: NewPipe 0.25.2 only has LIVE_STREAM (no LIVE_STITCH)
+    // ✅ NewPipe 0.25.2 only has LIVE_STREAM (no LIVE_STITCH)
     private fun extractLiveStreams(items: List<InfoItem>): List<Map<String, Any>> {
         return items.filterIsInstance<StreamInfoItem>()
             .filter { item -> 
@@ -492,7 +501,7 @@ class MavinEngineModule : Module() {
 }
 
 // ============================================
-// CUSTOM DOWNLOADER (2025 Compatible)
+// CUSTOM DOWNLOADER
 // ============================================
 class ExpoDownloader(private val client: OkHttpClient) : Downloader() {
 
