@@ -1,4 +1,3 @@
-// modules/mavin-engine/android/src/main/java/expo/modules/mavinengine/MavinEngineModule.kt
 package expo.modules.mavinengine
 
 import android.util.Log
@@ -25,13 +24,8 @@ import org.schabi.newpipe.extractor.InfoItem
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-// ✅ No constructor parameters - correct for Expo SDK 52+
 class MavinEngineModule : Module() {
     
-    // ✅ Safe context access (optional - only if needed)
-    private val reactContext get() = appContext?.reactContext 
-        ?: throw CodedException("NO_CONTEXT: React context unavailable")
-
     companion object {
         private const val TAG = "MavinEngine"
         private val client = OkHttpClient.Builder()
@@ -43,9 +37,6 @@ class MavinEngineModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("MavinEngine")
 
-        // ============================================
-        // DEEP LINK HANDLER
-        // ============================================
         AsyncFunction("handleDeepLink") { url: String ->
             try {
                 NewPipe.init(ExpoDownloader(client))
@@ -64,9 +55,6 @@ class MavinEngineModule : Module() {
             }
         }
 
-        // ============================================
-        // AUDIO EXTRACTION
-        // ============================================
         AsyncFunction("extractAudio") { artist: String, title: String, isrc: String? ->
             try {
                 NewPipe.init(ExpoDownloader(client))
@@ -108,9 +96,6 @@ class MavinEngineModule : Module() {
             }
         }
 
-        // ============================================
-        // HOME SCREEN SECTIONS
-        // ============================================
         AsyncFunction("getTrendingMusic") {
             try {
                 NewPipe.init(ExpoDownloader(client))
@@ -311,10 +296,6 @@ class MavinEngineModule : Module() {
         }
     }
 
-    // ============================================
-    // PRIVATE HELPER FUNCTIONS
-    // ============================================
-    
     private fun getTrackInfoFromVideoId(videoId: String): Map<String, Any> {
         val url = "https://www.youtube.com/watch?v=$videoId"
         val info = StreamInfo.getInfo(ServiceList.YouTube, url)
@@ -366,10 +347,10 @@ class MavinEngineModule : Module() {
         return StreamInfo.getInfo(ServiceList.YouTube, firstStream.url!!)
     }
 
-    // ✅ FIXED: extractVideoId with safe group access
+    // ✅ FIXED: Safe regex group access
     private fun extractVideoId(url: String): String {
         val patterns = listOf("v=([a-zA-Z0-9_-]{11})", "youtu\\.be/([a-zA-Z0-9_-]{11})")
-        patterns.forEach { pattern ->
+        for (pattern in patterns) {
             val matchResult = Regex(pattern).find(url)
             if (matchResult != null && matchResult.groupValues.size > 1) {
                 return matchResult.groupValues[1]
@@ -476,7 +457,6 @@ class MavinEngineModule : Module() {
             }
     }
 
-    // ✅ NewPipe 0.25.2 only has LIVE_STREAM (no LIVE_STITCH)
     private fun extractLiveStreams(items: List<InfoItem>): List<Map<String, Any>> {
         return items.filterIsInstance<StreamInfoItem>()
             .filter { item -> 
@@ -500,9 +480,6 @@ class MavinEngineModule : Module() {
     }
 }
 
-// ============================================
-// CUSTOM DOWNLOADER
-// ============================================
 class ExpoDownloader(private val client: OkHttpClient) : Downloader() {
 
     @Throws(IOException::class, ExtractionException::class)
