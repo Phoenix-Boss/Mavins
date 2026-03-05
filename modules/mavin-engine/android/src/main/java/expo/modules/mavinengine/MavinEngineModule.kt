@@ -2,7 +2,6 @@
 package expo.modules.mavinengine
 
 import android.util.Log
-import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -14,7 +13,6 @@ import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.exceptions.ExtractionException
-import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler
 import org.schabi.newpipe.extractor.search.SearchExtractor
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
@@ -27,7 +25,12 @@ import org.schabi.newpipe.extractor.InfoItem
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
+// 2025 Expo Modules API: No constructor parameters needed
+class MavinEngineModule : Module() {
+    
+    // 2025 Best Practice: Safe context access property
+    private val reactContext get() = appContext?.reactContext 
+        ?: throw CodedException("NO_CONTEXT: React context unavailable")
 
     companion object {
         private const val TAG = "MavinEngine"
@@ -47,7 +50,7 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
             try {
                 NewPipe.init(ExpoDownloader(client))
                 val videoId = extractVideoId(url)
-                val trackInfo = extractAudioFromVideoId(videoId)
+                val trackInfo = getTrackInfoFromVideoId(videoId)
                 return@AsyncFunction mapOf(
                     "success" to true,
                     "videoId" to videoId,
@@ -57,12 +60,12 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Deep link failed", e)
-                throw CodedException("DEEP_LINK_FAILED", e.message ?: "Invalid URL")
+                throw CodedException("DEEP_LINK_FAILED: ${e.message}")
             }
         }
 
         // ============================================
-        // AUDIO EXTRACTION (FIXED)
+        // AUDIO EXTRACTION
         // ============================================
         AsyncFunction("extractAudio") { artist: String, title: String, isrc: String? ->
             try {
@@ -73,7 +76,7 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
                     .filterNotNull()
                     .filter { it.content != null }
                     .maxByOrNull { it.averageBitrate ?: 0 }
-                    ?: throw CodedException("NO_AUDIO", "No usable audio stream found")
+                    ?: throw CodedException("NO_AUDIO: No usable audio stream found")
 
                 return@AsyncFunction mapOf(
                     "url" to audioStream.content!!,
@@ -90,42 +93,23 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Audio extraction failed", e)
-                throw CodedException("EXTRACTION_FAILED", e.message ?: "Unknown error")
+                throw CodedException("EXTRACTION_FAILED: ${e.message}")
             }
         }
 
         AsyncFunction("extractAudioFromVideoId") { videoId: String ->
             try {
                 NewPipe.init(ExpoDownloader(client))
-                val url = "https://www.youtube.com/watch?v=$videoId"
-                val info = StreamInfo.getInfo(ServiceList.YouTube, url)
-                val audioStream = info.audioStreams
-                    .filterNotNull()
-                    .filter { it.content != null }
-                    .maxByOrNull { it.averageBitrate ?: 0 }
-                    ?: throw CodedException("NO_AUDIO", "No usable audio stream found")
-
-                return@AsyncFunction mapOf(
-                    "url" to audioStream.content!!,
-                    "videoId" to videoId,
-                    "title" to (info.name ?: "Unknown"),
-                    "artist" to (info.uploaderName ?: "Unknown"),
-                    "duration" to (info.duration ?: 0),
-                    "thumbnail" to (info.thumbnails?.firstOrNull()?.url ?: ""),
-                    "views" to (info.viewCount ?: 0L),
-                    "likes" to (info.likeCount ?: 0L),
-                    "expires" to (System.currentTimeMillis() + 6 * 60 * 60 * 1000),
-                    "quality" to getQualityLabel(audioStream),
-                    "success" to true
-                )
+                val result = getTrackInfoFromVideoId(videoId)
+                return@AsyncFunction result
             } catch (e: Exception) {
                 Log.e(TAG, "Video ID extraction failed", e)
-                throw CodedException("EXTRACTION_FAILED", e.message ?: "Unknown error")
+                throw CodedException("EXTRACTION_FAILED: ${e.message}")
             }
         }
 
         // ============================================
-        // HOME SCREEN SECTIONS (All FIXED)
+        // HOME SCREEN SECTIONS
         // ============================================
         AsyncFunction("getTrendingMusic") {
             try {
@@ -322,14 +306,38 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Track details failed", e)
-                throw CodedException("DETAILS_FAILED", e.message ?: "Unknown error")
+                throw CodedException("DETAILS_FAILED: ${e.message}")
             }
         }
     }
 
     // ============================================
-    // ✅ FIXED HELPER FUNCTIONS (2026 READY)
+    // PRIVATE HELPER FUNCTIONS
     // ============================================
+    
+    private fun getTrackInfoFromVideoId(videoId: String): Map<String, Any> {
+        val url = "https://www.youtube.com/watch?v=$videoId"
+        val info = StreamInfo.getInfo(ServiceList.YouTube, url)
+        val audioStream = info.audioStreams
+            .filterNotNull()
+            .filter { it.content != null }
+            .maxByOrNull { it.averageBitrate ?: 0 }
+            ?: throw CodedException("NO_AUDIO: No usable audio stream found")
+
+        return mapOf(
+            "url" to audioStream.content!!,
+            "videoId" to videoId,
+            "title" to (info.name ?: "Unknown"),
+            "artist" to (info.uploaderName ?: "Unknown"),
+            "duration" to (info.duration ?: 0),
+            "thumbnail" to (info.thumbnails?.firstOrNull()?.url ?: ""),
+            "views" to (info.viewCount ?: 0L),
+            "likes" to (info.likeCount ?: 0L),
+            "expires" to (System.currentTimeMillis() + 6 * 60 * 60 * 1000),
+            "quality" to getQualityLabel(audioStream),
+            "success" to true
+        )
+    }
     
     private fun fallbackSearch(query: String): List<Map<String, Any>> {
         return try {
@@ -353,13 +361,13 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
         val firstStream = extractor.initialPage.items
             .filterIsInstance<StreamInfoItem>()
             .firstOrNull() 
-            ?: throw CodedException("NO_STREAM", "No valid stream found")
+            ?: throw CodedException("NO_STREAM: No valid stream found")
             
         return StreamInfo.getInfo(ServiceList.YouTube, firstStream.url!!)
     }
 
     private fun extractVideoId(url: String): String {
-        val patterns = listOf("v=([a-zA-Z0-9_-]{11})", "youtu\\\\.be/([a-zA-Z0-9_-]{11})")
+        val patterns = listOf("v=([a-zA-Z0-9_-]{11})", "youtu\\.be/([a-zA-Z0-9_-]{11})")
         patterns.forEach { pattern ->
             Regex(pattern).find(url)?.groupValues?.get(1)?.let { return it }
         }
@@ -459,15 +467,14 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
             }
     }
 
-    // ✅ FIXED: 2026 NewPipe Live Stream Detection
+    // 2025: NewPipe 0.25.2 only has LIVE_STREAM (no LIVE_STITCH)
     private fun extractLiveStreams(items: List<InfoItem>): List<Map<String, Any>> {
         return items.filterIsInstance<StreamInfoItem>()
             .filter { item -> 
                 try {
-                    val streamType = item.getStreamType()
-                    streamType == StreamType.LIVE_STREAM || streamType == StreamType.LIVE_STITCH
+                    item.getStreamType() == StreamType.LIVE_STREAM
                 } catch (e: Exception) {
-                    false // Safe fallback if stream type can't be determined
+                    false
                 }
             }
             .map { item ->
@@ -485,7 +492,7 @@ class MavinEngineModule(appContext: AppContext? = null) : Module(appContext) {
 }
 
 // ============================================
-// FIXED CUSTOM DOWNLOADER (2026 Compatible)
+// CUSTOM DOWNLOADER (2025 Compatible)
 // ============================================
 class ExpoDownloader(private val client: OkHttpClient) : Downloader() {
 

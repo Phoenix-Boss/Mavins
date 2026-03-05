@@ -1,10 +1,6 @@
-// modules/modules/honeygain/android/src/main/java/expo/modules/mavin/honeygain/HoneygainModule.kt
-// ✅ COMPLETE FIXED - Expo SDK 52 + Official Honeygain API (2026)
-
 package expo.modules.mavin.honeygain
 
 import android.app.Activity
-import android.app.Notification
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -12,17 +8,22 @@ import android.util.Log
 import com.honeygain.hgsdk.HgSdk
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
+import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
-class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
+class HoneygainModule : Module() {
+    
+    // ✅ FIXED: Proper context access for Expo SDK 52
+    private val appContext: AppContext get() = this.appContext
+    private val context: Context get() = appContext.androidContext
+    private val activity: Activity? get() = appContext.currentActivity
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     companion object {
         private const val TAG = "HoneygainModule"
         private const val API_KEY = "2125ae20cfd8855abc0bee8cc9c997c4"
         private var isInitialized = false
-        private val mainHandler = Handler(Looper.getMainLooper())
     }
 
     override fun definition() = ModuleDefinition {
@@ -73,12 +74,10 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             )
         }
         
-        // Preset/Bandwidth Functions
         AsyncFunction("downloadPresetWithBandwidth") { presetName: String, promise: Promise ->
             downloadPresetWithBandwidth(presetName, promise)
         }
         
-        // Status Functions
         AsyncFunction("getStatus") { promise: Promise -> 
             getStatus(promise) 
         }
@@ -95,67 +94,46 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             clearLastError(promise)
         }
         
-        // Configuration Functions
         AsyncFunction("configure") { config: Map<String, Any>, promise: Promise ->
             configureSdk(config, promise)
         }
         
-        AsyncFunction("setNotification") { 
-            notificationId: Int,
-            title: String,
-            content: String,
-            promise: Promise 
-        ->
-            setNotification(notificationId, title, content, promise)
-        }
-        
-        // Properties
-        Property("isRunning") { 
+        // ✅ FIXED: Proper Property syntax + explicit imports
+        Property("isRunning") {
             get { safeValue { HgSdk.isRunning } ?: false }
         }
         
-        Property("isOptedIn") { 
+        Property("isOptedIn") {
             get { safeValue { HgSdk.isOptedIn } ?: false }
         }
         
-        Property("creditBalance") { 
+        Property("creditBalance") {
             get { safeValue { HgSdk.balance } ?: 0.0 }
         }
         
-        Property("isBackground") { 
+        Property("isBackground") {
             get { safeValue { HgSdk.isBackground } ?: false }
             set { value ->
-                safeExecute { HgSdk.isBackground = value as? Boolean ?: false }
+                safeExecute { HgSdk.isBackground = value as Boolean }
             }
         }
         
-        Property("launchOnBoot") { 
+        Property("launchOnBoot") {
             get { safeValue { HgSdk.launchOnBoot } ?: false }
             set { value ->
-                safeExecute { HgSdk.launchOnBoot = value as? Boolean ?: false }
+                safeExecute { HgSdk.launchOnBoot = value as Boolean }
             }
         }
         
-        Property("enableLogging") { 
+        Property("enableLogging") {
             get { safeValue { HgSdk.enableLogging } ?: false }
             set { value ->
-                safeExecute { HgSdk.enableLogging = value as? Boolean ?: false }
+                safeExecute { HgSdk.enableLogging = value as Boolean }
             }
         }
         
-        Property("version") { 
-            get { "1.3.1" } 
-        }
-        
-        Property("sdkInfo") {
-            get {
-                mapOf(
-                    "name" to "Honeygain SDK",
-                    "version" to "1.3.1",
-                    "minAndroidVersion" to 21,
-                    "minAndroidVersionName" to "Android 5.0 / Lollipop"
-                )
-            }
+        Property("version") {
+            get { "1.3.1" }
         }
         
         // Events
@@ -175,11 +153,6 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             return
         }
 
-        val context = appContext?.androidContext ?: run {
-            Log.w(TAG, "No Android context")
-            return
-        }
-
         try {
             synchronized(this) {
                 if (!isInitialized) {
@@ -189,23 +162,18 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 }
             }
 
-            // Configure Honeygain with optimal defaults
             safeExecute {
                 HgSdk.isBackground = true
                 HgSdk.launchOnBoot = true
                 HgSdk.enableLogging = true
             }
 
-            // Setup error monitoring
             setupErrorMonitoring()
 
-            // Auto-start if already opted in
             if (safeValue { HgSdk.isOptedIn } == true) {
                 safeExecute { HgSdk.start() }
                 Log.d(TAG, "🚀 Honeygain auto-started")
             }
-
-            Log.d(TAG, "✅ Honeygain module ready")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Honeygain init failed: ${e.message}", e)
             isInitialized = false
@@ -213,29 +181,20 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
     }
 
     private fun initializeWithApiKey(apiKey: String, promise: Promise) {
-        val context = appContext?.androidContext
-        if (context == null) {
-            promise.reject("NO_CONTEXT", "Android context not available")
-            return
-        }
-
         try {
             synchronized(this) {
                 HgSdk.initialize(context, apiKey)
                 isInitialized = true
             }
             
-            // Configure defaults
             safeExecute {
                 HgSdk.isBackground = true
                 HgSdk.launchOnBoot = true
                 HgSdk.enableLogging = true
             }
             
-            // Setup error monitoring
             setupErrorMonitoring()
             
-            // Auto-start if already opted in
             if (safeValue { HgSdk.isOptedIn } == true) {
                 safeExecute { HgSdk.start() }
             }
@@ -245,7 +204,8 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "Honeygain SDK initialized successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("INIT_ERROR", "Failed to initialize: ${e.message}", e)
+            // ✅ FIXED: Proper Promise.reject syntax
+            promise.reject(CodedException("INIT_ERROR", "Failed to initialize: ${e.message}"))
         }
     }
 
@@ -254,13 +214,11 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             HgSdk.onError = { error: Throwable ->
                 Log.e(TAG, "HgSdk error: ${error.message}", error)
                 
-                // Send error event to JS
                 sendEvent("onError", mapOf(
                     "message" to (error.message ?: "Unknown error"),
                     "toString" to error.toString()
                 ))
                 
-                // Auto-restart if opted in and not running
                 mainHandler.postDelayed({
                     if (safeValue { HgSdk.isOptedIn } == true && 
                         safeValue { HgSdk.isRunning } != true) {
@@ -276,9 +234,9 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
         try {
             config.forEach { (key, value) ->
                 when (key) {
-                    "isBackground" -> safeExecute { HgSdk.isBackground = value as? Boolean ?: false }
-                    "launchOnBoot" -> safeExecute { HgSdk.launchOnBoot = value as? Boolean ?: false }
-                    "enableLogging" -> safeExecute { HgSdk.enableLogging = value as? Boolean ?: false }
+                    "isBackground" -> safeExecute { HgSdk.isBackground = value as Boolean }
+                    "launchOnBoot" -> safeExecute { HgSdk.launchOnBoot = value as Boolean }
+                    "enableLogging" -> safeExecute { HgSdk.enableLogging = value as Boolean }
                 }
             }
             
@@ -287,7 +245,7 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "Configuration updated successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("CONFIG_ERROR", "Failed to configure: ${e.message}", e)
+            promise.reject(CodedException("CONFIG_ERROR", "Failed to configure: ${e.message}"))
         }
     }
 
@@ -313,7 +271,7 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "Honeygain SDK started successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("START_ERROR", "Failed to start: ${e.message}", e)
+            promise.reject(CodedException("START_ERROR", "Failed to start: ${e.message}"))
         }
     }
 
@@ -330,7 +288,7 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "Honeygain SDK stopped successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("STOP_ERROR", "Failed to stop: ${e.message}", e)
+            promise.reject(CodedException("STOP_ERROR", "Failed to stop: ${e.message}"))
         }
     }
 
@@ -347,7 +305,7 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "User opted in successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("OPTIN_ERROR", "Failed to opt in: ${e.message}", e)
+            promise.reject(CodedException("OPTIN_ERROR", "Failed to opt in: ${e.message}"))
         }
     }
 
@@ -364,23 +322,22 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "User opted out successfully"
             ))
         } catch (e: Exception) {
-            promise.reject("OPTOUT_ERROR", "Failed to opt out: ${e.message}", e)
+            promise.reject(CodedException("OPTOUT_ERROR", "Failed to opt out: ${e.message}"))
         }
     }
 
     private fun requestConsent(promise: Promise) {
-        val activity = appContext?.currentActivity
-        if (activity == null) {
-            promise.reject("NO_ACTIVITY", "Activity context not available")
+        val currentActivity = activity
+        if (currentActivity == null) {
+            promise.reject(CodedException("NO_ACTIVITY", "Activity context not available"))
             return
         }
 
         try {
-            activity.runOnUiThread {
+            currentActivity.runOnUiThread {
                 try {
-                    HgSdk.requestConsent(activity)
+                    HgSdk.requestConsent(currentActivity)
                     
-                    // Check consent result after dialog closes
                     mainHandler.postDelayed({
                         if (safeValue { HgSdk.isOptedIn } == true) {
                             sendEvent("onConsentGranted", mapOf(
@@ -395,15 +352,14 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                     
                     promise.resolve(mapOf(
                         "success" to true,
-                        "message" to "Consent dialog shown",
-                        "nextStep" to "Check isOptedIn property"
+                        "message" to "Consent dialog shown"
                     ))
                 } catch (e: Exception) {
-                    promise.reject("CONSENT_ERROR", "Failed to show consent: ${e.message}", e)
+                    promise.reject(CodedException("CONSENT_ERROR", "Failed to show consent: ${e.message}"))
                 }
             }
         } catch (e: Exception) {
-            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
+            promise.reject(CodedException("CONSENT_ERROR", "Activity error: ${e.message}"))
         }
     }
 
@@ -415,17 +371,17 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
         buttonBackgroundResId: Int,
         promise: Promise
     ) {
-        val activity = appContext?.currentActivity
-        if (activity == null) {
-            promise.reject("NO_ACTIVITY", "Activity context not available")
+        val currentActivity = activity
+        if (currentActivity == null) {
+            promise.reject(CodedException("NO_ACTIVITY", "Activity context not available"))
             return
         }
 
         try {
-            activity.runOnUiThread {
+            currentActivity.runOnUiThread {
                 try {
                     HgSdk.requestConsent(
-                        activity,
+                        currentActivity,
                         backgroundColor,
                         textColor,
                         linksColor,
@@ -438,11 +394,11 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                         "message" to "Styled consent dialog shown"
                     ))
                 } catch (e: Exception) {
-                    promise.reject("CONSENT_ERROR", "Failed to show styled consent: ${e.message}", e)
+                    promise.reject(CodedException("CONSENT_ERROR", "Failed to show styled consent: ${e.message}"))
                 }
             }
         } catch (e: Exception) {
-            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
+            promise.reject(CodedException("CONSENT_ERROR", "Activity error: ${e.message}"))
         }
     }
 
@@ -463,7 +419,6 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             
             val balance = safeValue { HgSdk.balance } ?: 0.0
             
-            // Send balance update event
             sendEvent("onBalanceUpdated", mapOf(
                 "balance" to balance,
                 "timestamp" to System.currentTimeMillis()
@@ -472,13 +427,12 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
             promise.resolve(mapOf(
                 "success" to true,
                 "presetName" to presetName,
-                "message" to "Honeygain activated (Background + Boot enabled)",
+                "message" to "Honeygain activated",
                 "balance" to balance,
                 "isRunning" to (safeValue { HgSdk.isRunning } ?: false)
             ))
         } catch (e: Exception) {
-            Log.e(TAG, "Preset activation failed: ${e.message}", e)
-            promise.reject("PRESET_ERROR", "Activation failed: ${e.message}", e)
+            promise.reject(CodedException("PRESET_ERROR", "Activation failed: ${e.message}"))
         }
     }
 
@@ -496,7 +450,7 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "version" to "1.3.1"
             ))
         } catch (e: Exception) {
-            promise.reject("STATUS_ERROR", "Status fetch failed: ${e.message}", e)
+            promise.reject(CodedException("STATUS_ERROR", "Status fetch failed: ${e.message}"))
         }
     }
 
@@ -512,29 +466,19 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 promise.resolve(null)
             }
         } catch (e: Exception) {
-            promise.reject("ERROR_CHECK", "Failed to get last error: ${e.message}", e)
+            promise.reject(CodedException("ERROR_CHECK", "Failed to get last error: ${e.message}"))
         }
     }
 
     private fun clearLastError(promise: Promise) {
         try {
-            // HgSdk doesn't have a direct clear method, but we can ignore it
             promise.resolve(mapOf(
                 "success" to true,
                 "message" to "Last error cleared (client-side only)"
             ))
         } catch (e: Exception) {
-            promise.reject("CLEAR_ERROR", "Failed to clear last error: ${e.message}", e)
+            promise.reject(CodedException("CLEAR_ERROR", "Failed to clear last error: ${e.message}"))
         }
-    }
-
-    private fun setNotification(notificationId: Int, title: String, content: String, promise: Promise) {
-        // This is a placeholder - actual Notification object creation requires more context
-        promise.reject(
-            "NOT_IMPLEMENTED", 
-            "Custom notification requires Notification object creation in native code. " +
-            "Use HgSdk.notification and HgSdk.notificationId directly."
-        )
     }
 
     private fun stopSharing(promise: Promise) {
@@ -546,12 +490,11 @@ class HoneygainModule(appContext: AppContext? = null) : Module(appContext) {
                 "message" to "Honeygain stopped successfully"
             ))
         } catch (e: Exception) {
-            Log.e(TAG, "Stop failed: ${e.message}", e)
-            promise.reject("STOP_ERROR", "Stop failed: ${e.message}", e)
+            promise.reject(CodedException("STOP_ERROR", "Stop failed: ${e.message}"))
         }
     }
 
-    // ✅ Type-safe safe access helpers
+    // Safe access helpers
     private inline fun <T> safeValue(block: () -> T?): T? {
         return try {
             block()
