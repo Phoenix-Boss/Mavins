@@ -7,13 +7,11 @@ import android.os.Looper
 import android.util.Log
 import com.honeygain.hgsdk.HgSdk
 import expo.modules.kotlin.Promise
-import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class HoneygainModule : Module() {
     
-    // ✅ FIXED: Use appContext.reactContext (not androidContext)
     private val context: Context
         get() = requireNotNull(appContext.reactContext) {
             "React context is not available"
@@ -102,37 +100,30 @@ class HoneygainModule : Module() {
             configureSdk(config, promise)
         }
         
-        // ✅ FIXED: Property syntax with explicit types for Expo Modules Core 3.x
-        // Properties must specify explicit types when using get/set
+        // ✅ FIXED: Properties use correct syntax for Expo Modules Core 3.x
         Property("isRunning")
-            .get<Boolean> { safeValue { HgSdk.isRunning } ?: false }
+            .get { HgSdk.isRunning }
         
         Property("isOptedIn")
-            .get<Boolean> { safeValue { HgSdk.isOptedIn } ?: false }
+            .get { HgSdk.isOptedIn }
         
-        Property("creditBalance")
-            .get<Double> { safeValue { HgSdk.balance } ?: 0.0 }
+        // ✅ REMOVED: creditBalance - HgSdk.balance does NOT exist in SDK
+        // If you need balance, fetch it from Honeygain REST API in JS layer
         
         Property("isBackground")
-            .get<Boolean> { safeValue { HgSdk.isBackground } ?: false }
-            .set { value: Boolean ->
-                safeExecute { HgSdk.isBackground = value }
-            }
+            .get { HgSdk.isBackground }
+            .set { value: Boolean -> HgSdk.isBackground = value }
         
         Property("launchOnBoot")
-            .get<Boolean> { safeValue { HgSdk.launchOnBoot } ?: false }
-            .set { value: Boolean ->
-                safeExecute { HgSdk.launchOnBoot = value }
-            }
+            .get { HgSdk.launchOnBoot }
+            .set { value: Boolean -> HgSdk.launchOnBoot = value }
         
         Property("enableLogging")
-            .get<Boolean> { safeValue { HgSdk.enableLogging } ?: false }
-            .set { value: Boolean ->
-                safeExecute { HgSdk.enableLogging = value }
-            }
+            .get { HgSdk.enableLogging }
+            .set { value: Boolean -> HgSdk.enableLogging = value }
         
         Property("version")
-            .get<String> { "1.3.1" }
+            .get { "1.3.1" }
         
         // Events
         Events(
@@ -140,8 +131,8 @@ class HoneygainModule : Module() {
             "onConsentGranted",
             "onConsentDenied",
             "onSdkStarted",
-            "onSdkStopped",
-            "onBalanceUpdated"
+            "onSdkStopped"
+            // ✅ REMOVED: onBalanceUpdated - no balance in SDK
         )
     }
 
@@ -160,16 +151,14 @@ class HoneygainModule : Module() {
                 }
             }
 
-            safeExecute {
-                HgSdk.isBackground = true
-                HgSdk.launchOnBoot = true
-                HgSdk.enableLogging = true
-            }
+            HgSdk.isBackground = true
+            HgSdk.launchOnBoot = true
+            HgSdk.enableLogging = true
 
             setupErrorMonitoring()
 
-            if (safeValue { HgSdk.isOptedIn } == true) {
-                safeExecute { HgSdk.start() }
+            if (HgSdk.isOptedIn && !HgSdk.isRunning) {
+                HgSdk.start()
                 Log.d(TAG, "🚀 Honeygain auto-started")
             }
         } catch (e: Exception) {
@@ -185,16 +174,14 @@ class HoneygainModule : Module() {
                 isInitialized = true
             }
             
-            safeExecute {
-                HgSdk.isBackground = true
-                HgSdk.launchOnBoot = true
-                HgSdk.enableLogging = true
-            }
+            HgSdk.isBackground = true
+            HgSdk.launchOnBoot = true
+            HgSdk.enableLogging = true
             
             setupErrorMonitoring()
             
-            if (safeValue { HgSdk.isOptedIn } == true) {
-                safeExecute { HgSdk.start() }
+            if (HgSdk.isOptedIn && !HgSdk.isRunning) {
+                HgSdk.start()
             }
             
             promise.resolve(mapOf(
@@ -207,23 +194,20 @@ class HoneygainModule : Module() {
     }
 
     private fun setupErrorMonitoring() {
-        safeExecute {
-            HgSdk.onError = { error: Throwable ->
-                Log.e(TAG, "HgSdk error: ${error.message}", error)
-                
-                sendEvent("onError", mapOf(
-                    "message" to (error.message ?: "Unknown error"),
-                    "toString" to error.toString()
-                ))
-                
-                mainHandler.postDelayed({
-                    if (safeValue { HgSdk.isOptedIn } == true && 
-                        safeValue { HgSdk.isRunning } != true) {
-                        safeExecute { HgSdk.start() }
-                        Log.d(TAG, "🔄 Auto-restarted after error")
-                    }
-                }, 5000)
-            }
+        HgSdk.onError = { error: Throwable ->
+            Log.e(TAG, "HgSdk error: ${error.message}", error)
+            
+            sendEvent("onError", mapOf(
+                "message" to (error.message ?: "Unknown error"),
+                "toString" to error.toString()
+            ))
+            
+            mainHandler.postDelayed({
+                if (HgSdk.isOptedIn && !HgSdk.isRunning) {
+                    HgSdk.start()
+                    Log.d(TAG, "🔄 Auto-restarted after error")
+                }
+            }, 5000)
         }
     }
 
@@ -231,9 +215,9 @@ class HoneygainModule : Module() {
         try {
             config.forEach { (key, value) ->
                 when (key) {
-                    "isBackground" -> safeExecute { HgSdk.isBackground = value as Boolean }
-                    "launchOnBoot" -> safeExecute { HgSdk.launchOnBoot = value as Boolean }
-                    "enableLogging" -> safeExecute { HgSdk.enableLogging = value as Boolean }
+                    "isBackground" -> HgSdk.isBackground = value as Boolean
+                    "launchOnBoot" -> HgSdk.launchOnBoot = value as Boolean
+                    "enableLogging" -> HgSdk.enableLogging = value as Boolean
                 }
             }
             
@@ -248,7 +232,7 @@ class HoneygainModule : Module() {
 
     private fun startSdk(promise: Promise) {
         try {
-            if (safeValue { HgSdk.isOptedIn } != true) {
+            if (!HgSdk.isOptedIn) {
                 promise.resolve(mapOf(
                     "success" to false,
                     "requiresConsent" to true,
@@ -257,7 +241,7 @@ class HoneygainModule : Module() {
                 return
             }
 
-            safeExecute { HgSdk.start() }
+            HgSdk.start()
             
             sendEvent("onSdkStarted", mapOf(
                 "timestamp" to System.currentTimeMillis()
@@ -274,7 +258,7 @@ class HoneygainModule : Module() {
 
     private fun stopSdk(promise: Promise) {
         try {
-            safeExecute { HgSdk.stop() }
+            HgSdk.stop()
             
             sendEvent("onSdkStopped", mapOf(
                 "timestamp" to System.currentTimeMillis()
@@ -291,7 +275,7 @@ class HoneygainModule : Module() {
 
     private fun optIn(promise: Promise) {
         try {
-            safeExecute { HgSdk.optIn() }
+            HgSdk.optIn()
             
             sendEvent("onConsentGranted", mapOf(
                 "timestamp" to System.currentTimeMillis()
@@ -308,7 +292,7 @@ class HoneygainModule : Module() {
 
     private fun optOut(promise: Promise) {
         try {
-            safeExecute { HgSdk.optOut() }
+            HgSdk.optOut()
             
             sendEvent("onConsentDenied", mapOf(
                 "timestamp" to System.currentTimeMillis()
@@ -323,43 +307,35 @@ class HoneygainModule : Module() {
         }
     }
 
+    // ✅ FIXED: requestConsent() takes NO parameters according to SDK docs
     private fun requestConsent(promise: Promise) {
-        val currentActivity = activity
-        if (currentActivity == null) {
-            promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
-            return
-        }
-
         try {
-            currentActivity.runOnUiThread {
-                try {
-                    HgSdk.requestConsent(currentActivity)
-                    
-                    mainHandler.postDelayed({
-                        if (safeValue { HgSdk.isOptedIn } == true) {
-                            sendEvent("onConsentGranted", mapOf(
-                                "timestamp" to System.currentTimeMillis()
-                            ))
-                        } else {
-                            sendEvent("onConsentDenied", mapOf(
-                                "timestamp" to System.currentTimeMillis()
-                            ))
-                        }
-                    }, 500)
-                    
-                    promise.resolve(mapOf(
-                        "success" to true,
-                        "message" to "Consent dialog shown"
+            // SDK docs: fun HgSdk.requestConsent() - no args, starts Activity internally
+            HgSdk.requestConsent()
+            
+            // Check consent status after a delay (consent is async)
+            mainHandler.postDelayed({
+                if (HgSdk.isOptedIn) {
+                    sendEvent("onConsentGranted", mapOf(
+                        "timestamp" to System.currentTimeMillis()
                     ))
-                } catch (e: Exception) {
-                    promise.reject("CONSENT_ERROR", "Failed to show consent: ${e.message}", e)
+                } else {
+                    sendEvent("onConsentDenied", mapOf(
+                        "timestamp" to System.currentTimeMillis()
+                    ))
                 }
-            }
+            }, 1000)
+            
+            promise.resolve(mapOf(
+                "success" to true,
+                "message" to "Consent dialog shown"
+            ))
         } catch (e: Exception) {
-            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
+            promise.reject("CONSENT_ERROR", "Failed to show consent: ${e.message}", e)
         }
     }
 
+    // ✅ FIXED: requestConsent with styling - 5 Int params, NO Activity
     private fun requestConsentWithStyle(
         backgroundColor: Int,
         textColor: Int,
@@ -368,42 +344,31 @@ class HoneygainModule : Module() {
         buttonBackgroundResId: Int,
         promise: Promise
     ) {
-        val currentActivity = activity
-        if (currentActivity == null) {
-            promise.reject("NO_ACTIVITY", "Activity context not available", Exception("Activity missing"))
-            return
-        }
-
         try {
-            currentActivity.runOnUiThread {
-                try {
-                    HgSdk.requestConsent(
-                        currentActivity,
-                        backgroundColor,
-                        textColor,
-                        linksColor,
-                        buttonTextColor,
-                        buttonBackgroundResId
-                    )
-                    
-                    promise.resolve(mapOf(
-                        "success" to true,
-                        "message" to "Styled consent dialog shown"
-                    ))
-                } catch (e: Exception) {
-                    promise.reject("CONSENT_ERROR", "Failed to show styled consent: ${e.message}", e)
-                }
-            }
+            // SDK docs: fun HgSdk.requestConsent(bgColor, textColor, linksColor, btnTextColor, btnBgResId)
+            HgSdk.requestConsent(
+                backgroundColor,
+                textColor,
+                linksColor,
+                buttonTextColor,
+                buttonBackgroundResId
+            )
+            
+            promise.resolve(mapOf(
+                "success" to true,
+                "message" to "Styled consent dialog shown"
+            ))
         } catch (e: Exception) {
-            promise.reject("CONSENT_ERROR", "Activity error: ${e.message}", e)
+            promise.reject("CONSENT_ERROR", "Failed to show styled consent: ${e.message}", e)
         }
     }
 
+    // ✅ FIXED: Removed balance references - SDK doesn't expose this
     private fun downloadPresetWithBandwidth(presetName: String, promise: Promise) {
         Log.d(TAG, "🎛️ Activating preset: $presetName")
         
         try {
-            if (safeValue { HgSdk.isOptedIn } != true) {
+            if (!HgSdk.isOptedIn) {
                 promise.resolve(mapOf(
                     "success" to false,
                     "requiresConsent" to true,
@@ -412,21 +377,16 @@ class HoneygainModule : Module() {
                 return
             }
 
-            safeExecute { HgSdk.start() }
+            HgSdk.start()
             
-            val balance = safeValue { HgSdk.balance } ?: 0.0
-            
-            sendEvent("onBalanceUpdated", mapOf(
-                "balance" to balance,
-                "timestamp" to System.currentTimeMillis()
-            ))
+            // ✅ REMOVED: Balance reference - SDK doesn't have this property
+            // Use Honeygain REST API to get balance if needed
             
             promise.resolve(mapOf(
                 "success" to true,
                 "presetName" to presetName,
                 "message" to "Honeygain activated",
-                "balance" to balance,
-                "isRunning" to (safeValue { HgSdk.isRunning } ?: false)
+                "isRunning" to HgSdk.isRunning
             ))
         } catch (e: Exception) {
             Log.e(TAG, "Preset activation failed: ${e.message}", e)
@@ -437,13 +397,13 @@ class HoneygainModule : Module() {
     private fun getStatus(promise: Promise) {
         try {
             promise.resolve(mapOf(
-                "isRunning" to (safeValue { HgSdk.isRunning } ?: false),
-                "isOptedIn" to (safeValue { HgSdk.isOptedIn } ?: false),
-                "isBackground" to (safeValue { HgSdk.isBackground } ?: false),
-                "launchOnBoot" to (safeValue { HgSdk.launchOnBoot } ?: false),
-                "enableLogging" to (safeValue { HgSdk.enableLogging } ?: false),
-                "balance" to (safeValue { HgSdk.balance } ?: 0.0),
-                "lastError" to (safeValue { HgSdk.lastError?.message }),
+                "isRunning" to HgSdk.isRunning,
+                "isOptedIn" to HgSdk.isOptedIn,
+                "isBackground" to HgSdk.isBackground,
+                "launchOnBoot" to HgSdk.launchOnBoot,
+                "enableLogging" to HgSdk.enableLogging,
+                // ✅ REMOVED: balance - not available in SDK
+                "lastError" to HgSdk.lastError?.message,
                 "initialized" to isInitialized,
                 "version" to "1.3.1"
             ))
@@ -454,7 +414,7 @@ class HoneygainModule : Module() {
 
     private fun getLastError(promise: Promise) {
         try {
-            val lastError = safeValue { HgSdk.lastError }
+            val lastError = HgSdk.lastError
             if (lastError != null) {
                 promise.resolve(mapOf(
                     "message" to (lastError.message ?: "Unknown error"),
@@ -469,19 +429,15 @@ class HoneygainModule : Module() {
     }
 
     private fun clearLastError(promise: Promise) {
-        try {
-            promise.resolve(mapOf(
-                "success" to true,
-                "message" to "Last error cleared (client-side only)"
-            ))
-        } catch (e: Exception) {
-            promise.reject("CLEAR_ERROR", "Failed to clear last error: ${e.message}", e)
-        }
+        promise.resolve(mapOf(
+            "success" to true,
+            "message" to "Last error cleared (client-side only)"
+        ))
     }
 
     private fun stopSharing(promise: Promise) {
         try {
-            safeExecute { HgSdk.stop() }
+            HgSdk.stop()
             Log.d(TAG, "⏹️ Honeygain stopped")
             promise.resolve(mapOf(
                 "success" to true,
@@ -490,24 +446,6 @@ class HoneygainModule : Module() {
         } catch (e: Exception) {
             Log.e(TAG, "Stop failed: ${e.message}", e)
             promise.reject("STOP_ERROR", "Stop failed: ${e.message}", e)
-        }
-    }
-
-    // Safe access helpers
-    private inline fun <T> safeValue(block: () -> T?): T? {
-        return try {
-            block()
-        } catch (e: Exception) {
-            Log.w(TAG, "Safe value access failed: ${e.message}")
-            null
-        }
-    }
-
-    private inline fun safeExecute(block: () -> Unit) {
-        try {
-            block()
-        } catch (e: Exception) {
-            Log.w(TAG, "Safe execute failed: ${e.message}")
         }
     }
 }

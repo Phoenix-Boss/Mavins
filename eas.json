@@ -6,13 +6,33 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "cache": {
+        "disabled": true,
+        "key": "development-{{ targetPlatform }}-{{ runtimeVersion }}-{{ profile }}"
+      },
+      "android": {
+        "gradleCommand": ":app:assembleDebug --no-build-cache --refresh-dependencies"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "cache": {
+        "disabled": true,
+        "key": "preview-{{ targetPlatform }}-{{ runtimeVersion }}-{{ profile }}"
+      },
+      "android": {
+        "gradleCommand": "./gradlew clean && ./gradlew :app:assembleRelease --no-build-cache --refresh-dependencies"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "cache": {
+        "key": "production-{{ targetPlatform }}-{{ runtimeVersion }}-{{ profile }}"
+      },
+      "android": {
+        "gradleCommand": "./gradlew clean && ./gradlew :app:bundleRelease --no-build-cache --refresh-dependencies"
+      }
     }
   },
   "submit": {
