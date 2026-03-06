@@ -1,5 +1,6 @@
 /**
  * Mix Card Component - Displays a mix/playlist in a square card format
+ * v1.1 - With defensive checks for missing data
  */
 import React from "react";
 import {
@@ -22,14 +23,15 @@ const COLORS = {
   goldShimmer: '#E6C16A',
   text: '#FFFFFF',
   textSecondary: '#B3B3B3',
+  textMuted: '#808080',
 };
 
 interface MixCardProps {
-  item: {
-    id: string;
-    title: string;
-    artist: string;
-    thumbnail: string;
+  item?: {
+    id?: string;
+    title?: string;
+    artist?: string;
+    thumbnail?: string;
     reason?: string;
     releaseDate?: string;
     originalArtist?: string;
@@ -37,30 +39,43 @@ interface MixCardProps {
   isCurrentTrack?: boolean;
   isPlaying?: boolean;
   onPress?: () => void;
+  fallbackTitle?: string;
 }
 
 export const MixCard = ({ 
   item, 
   isCurrentTrack = false,
   isPlaying = false,
-  onPress 
+  onPress,
+  fallbackTitle = "Unknown Mix"
 }: MixCardProps) => {
   const router = useRouter();
+
+  // ✅ DEFENSIVE: Handle missing or invalid item
+  const safeItem = {
+    id: item?.id || `fallback_${Math.random()}`,
+    title: item?.title || fallbackTitle,
+    artist: item?.artist || "Unknown Artist",
+    thumbnail: item?.thumbnail || null,
+    reason: item?.reason,
+    releaseDate: item?.releaseDate,
+    originalArtist: item?.originalArtist
+  };
+
+  const hasValidImage = safeItem.thumbnail && safeItem.thumbnail.startsWith('http');
 
   const handlePress = () => {
     triggerHaptic();
     if (onPress) {
       onPress();
-    } else {
-      // Default behavior - navigate to mix/playlist
-      router.navigate(`/mix/${item.id}`);
+    } else if (safeItem.id && !safeItem.id.startsWith('fallback_')) {
+      router.navigate(`/mix/${safeItem.id}`);
     }
   };
 
   const handlePlayPress = (e: any) => {
     e.stopPropagation();
     triggerHaptic();
-    // Play the mix
     router.navigate('/player');
   };
 
@@ -68,43 +83,59 @@ export const MixCard = ({
     <TouchableOpacity
       style={[
         styles.mixCard,
-        isCurrentTrack && styles.currentPlayingTrack
+        isCurrentTrack && styles.currentPlayingTrack,
+        !hasValidImage && styles.noImageCard
       ]}
       onPress={handlePress}
       activeOpacity={0.9}
     >
-      <Image
-        source={{ uri: item.thumbnail }}
-        style={styles.mixCardImage}
-      />
+      {/* ✅ Image with fallback */}
+      {hasValidImage ? (
+        <Image
+          source={{ uri: safeItem.thumbnail }}
+          style={styles.mixCardImage}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[styles.mixCardImage, styles.fallbackImage]}>
+          <Ionicons name="musical-notes" size={40} color={COLORS.goldShimmer} />
+        </View>
+      )}
       
       {/* Play button top right */}
-      <View style={styles.mixCardPlayButtonContainer}>
-        <TouchableOpacity 
-          style={[
-            styles.metallicPlayButtonOutline,
-            isCurrentTrack && styles.activePlayButton
-          ]}
-          onPress={handlePlayPress}
-        >
-          <Ionicons 
-            name={isCurrentTrack && isPlaying ? "pause" : "play"} 
-            size={12} 
-            color={COLORS.goldShiny} 
-          />
-        </TouchableOpacity>
-      </View>
+      {hasValidImage && (
+        <View style={styles.mixCardPlayButtonContainer}>
+          <TouchableOpacity 
+            style={[
+              styles.metallicPlayButtonOutline,
+              isCurrentTrack && styles.activePlayButton
+            ]}
+            onPress={handlePlayPress}
+          >
+            <Ionicons 
+              name={isCurrentTrack && isPlaying ? "pause" : "play"} 
+              size={12} 
+              color={COLORS.goldShiny} 
+            />
+          </TouchableOpacity>
+        </View>
+      )}
       
       <View style={styles.mixCardOverlay}>
         <Text style={styles.mixCardTitle} numberOfLines={1}>
-          {item.title}
+          {safeItem.title}
         </Text>
         <Text style={styles.mixCardArtist} numberOfLines={1}>
-          {item.artist}
+          {safeItem.artist}
         </Text>
-        {item.reason && (
+        {safeItem.reason && (
           <Text style={styles.mixCardReason} numberOfLines={1}>
-            {item.reason}
+            {safeItem.reason}
+          </Text>
+        )}
+        {safeItem.releaseDate && (
+          <Text style={styles.mixCardDate} numberOfLines={1}>
+            {safeItem.releaseDate}
           </Text>
         )}
       </View>
@@ -119,10 +150,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: COLORS.surfaceLight,
+  },
+  noImageCard: {
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary + '30',
   },
   mixCardImage: {
     width: '100%',
     height: '100%',
+    backgroundColor: COLORS.surfaceLight,
+  },
+  fallbackImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: COLORS.surfaceLight,
   },
   mixCardPlayButtonContainer: {
@@ -160,7 +201,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     padding: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
   },
   mixCardTitle: {
     fontSize: 14,
@@ -176,6 +217,11 @@ const styles = StyleSheet.create({
   mixCardReason: {
     fontSize: 10,
     color: COLORS.textSecondary,
+    marginBottom: 2,
+  },
+  mixCardDate: {
+    fontSize: 10,
+    color: COLORS.textMuted,
   },
   currentPlayingTrack: {
     borderWidth: 2,

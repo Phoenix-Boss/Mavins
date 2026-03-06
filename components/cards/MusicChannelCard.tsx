@@ -1,5 +1,6 @@
 /**
  * Music Channel Card Component - Displays a music channel/station
+ * v1.1 - With defensive checks for missing data
  */
 import React from "react";
 import {
@@ -25,38 +26,52 @@ const COLORS = {
   textSecondary: '#B3B3B3',
   textTertiary: '#808080',
   textQuaternary: '#666666',
+  textMuted: '#666666',
   border: '#333333',
 };
 
 interface MusicChannelCardProps {
-  item: {
-    id: string;
-    name: string;
-    logo: string;
-    tracks: string[];
-    plays: string;
+  item?: {
+    id?: string;
+    name?: string;
+    logo?: string;
+    tracks?: string[];
+    plays?: string;
     genre?: string;
   };
   isCurrentChannel?: boolean;
   isPlaying?: boolean;
   onPress?: () => void;
+  fallbackName?: string;
 }
 
 export const MusicChannelCard = ({ 
   item, 
   isCurrentChannel = false,
   isPlaying = false,
-  onPress 
+  onPress,
+  fallbackName = "Unknown Channel"
 }: MusicChannelCardProps) => {
   const router = useRouter();
+
+  // ✅ DEFENSIVE: Handle missing or invalid item
+  const safeItem = {
+    id: item?.id || `fallback_${Math.random()}`,
+    name: item?.name || fallbackName,
+    logo: item?.logo || null,
+    tracks: Array.isArray(item?.tracks) ? item.tracks : [],
+    plays: item?.plays || "0",
+    genre: item?.genre
+  };
+
+  const hasValidLogo = safeItem.logo && safeItem.logo.startsWith('http');
 
   const handlePress = () => {
     triggerHaptic();
     if (onPress) {
       onPress();
-    } else {
-      // Default behavior - navigate to channel
-      router.navigate(`/channel/${item.id}`);
+    } else if (safeItem.id && !safeItem.id.startsWith('fallback_')) {
+      router.navigate(`/channel/${safeItem.id}`);
     }
   };
 
@@ -71,10 +86,17 @@ export const MusicChannelCard = ({
     >
       <View style={styles.channelHeader}>
         <View style={styles.channelLogoContainer}>
-          <Image
-            source={{ uri: item.logo }}
-            style={styles.channelLogo}
-          />
+          {hasValidLogo ? (
+            <Image
+              source={{ uri: safeItem.logo }}
+              style={styles.channelLogo}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={[styles.channelLogo, styles.fallbackLogo]}>
+              <Ionicons name="radio" size={24} color={COLORS.goldShimmer} />
+            </View>
+          )}
           <View style={styles.channelLogoBorder} />
         </View>
         <View style={styles.channelInfo}>
@@ -82,21 +104,37 @@ export const MusicChannelCard = ({
             styles.channelName,
             isCurrentChannel && styles.currentTrackText
           ]} numberOfLines={1}>
-            {item.name}
+            {safeItem.name}
           </Text>
-          <Text style={styles.channelPlays}>{item.plays} plays</Text>
+          <Text style={styles.channelPlays}>{safeItem.plays} plays</Text>
+          {safeItem.genre && (
+            <Text style={styles.channelGenre} numberOfLines={1}>
+              {safeItem.genre}
+            </Text>
+          )}
         </View>
       </View>
-      <View style={styles.channelTracks}>
-        {item.tracks.slice(0, 3).map((track: string, idx: number) => (
-          <View key={idx} style={styles.channelTrackRow}>
-            <Text style={styles.channelTrackNumber}>{idx + 1}</Text>
-            <Text style={styles.channelTrack} numberOfLines={1}>
-              {track}
-            </Text>
-          </View>
-        ))}
-      </View>
+      
+      {/* Only show tracks if we have them */}
+      {safeItem.tracks.length > 0 && (
+        <View style={styles.channelTracks}>
+          {safeItem.tracks.slice(0, 3).map((track: string, idx: number) => (
+            <View key={idx} style={styles.channelTrackRow}>
+              <Text style={styles.channelTrackNumber}>{idx + 1}</Text>
+              <Text style={styles.channelTrack} numberOfLines={1}>
+                {track || "Unknown Track"}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+      
+      {/* Empty state */}
+      {safeItem.tracks.length === 0 && (
+        <View style={styles.emptyTracks}>
+          <Text style={styles.emptyText}>No tracks available</Text>
+        </View>
+      )}
     </TouchableOpacity>
   );
 };
@@ -124,6 +162,12 @@ const styles = StyleSheet.create({
     borderRadius: 23,
     backgroundColor: COLORS.surfaceLight,
   },
+  fallbackLogo: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary + '30',
+  },
   channelLogoBorder: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: 23,
@@ -131,7 +175,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.goldPrimary,
   },
   channelInfo: {
-    flex: 1,
+    flexLeft: 1,
     marginLeft: 10,
   },
   channelName: {
@@ -143,6 +187,11 @@ const styles = StyleSheet.create({
   channelPlays: {
     fontSize: 10,
     color: COLORS.textTertiary,
+  },
+  channelGenre: {
+    fontSize: 10,
+    color: COLORS.goldShimmer,
+    marginTop: 2,
   },
   channelTracks: {
     gap: 4,
@@ -162,6 +211,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.textQuaternary,
     flex: 1,
+  },
+  emptyTracks: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 10,
+    color: COLORS.textMuted,
+    fontStyle: 'italic',
   },
   currentPlayingTrack: {
     backgroundColor: COLORS.goldPrimary + '15',

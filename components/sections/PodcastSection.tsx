@@ -1,78 +1,76 @@
 /**
- * Podcast Section - Displays podcast content from YouTube Music
- * Uses usePodcasts hook for data fetching
+ * PodcastSection
+ *
+ * Displays podcast playlists sourced from YouTube Music search.
+ *
+ * Data flow:
+ *   usePodcasts()
+ *     → MavinEngine.search("music podcast 2025", "all")
+ *       → Kotlin: performSearch(query, "all", null, 0)
+ *       → filters to PlaylistInfoItem results only
+ *
+ * PodcastCard receives only fields present on PodcastItem.
+ * item.artist replaces the fabricated item.artist that was
+ * previously passed but never existed on PodcastItem.
  */
-import React from "react";
+
+import React from 'react';
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from "react-native";
-import { usePodcasts } from "../../hooks/usePodcasts";
-import { PodcastCard } from "../cards/PodcastCard";
-import { SectionHeader } from "../common/SectionHeader";
+} from 'react-native';
+import { usePodcasts, PodcastItem } from '../../hooks/usePodcasts';
+import { PodcastCard } from '../cards/PodcastCard';
+import { SectionHeader } from '../common/SectionHeader';
 
-// Metallic Gold Color Palette
 const COLORS = {
-  background: '#000000',
   surface: '#121212',
-  surfaceLight: '#1F1F1F',
   goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  goldMuted: '#C9A96A',
-  text: '#FFFFFF',
   textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
-  border: '#333333',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#EF4444',
 };
 
 export const PodcastSection = () => {
-  const { data: podcasts, loading, error } = usePodcasts();
+  const { data, loading, error } = usePodcasts();
 
-  // Loading State
+  // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Podcast" showPlayAll={true} />
-        <View style={styles.loadingContainer}>
+        <SectionHeader title="Podcast" showPlayAll />
+        <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.loadingText}>Loading podcasts...</Text>
+          <Text style={styles.subtleText}>Loading podcasts…</Text>
         </View>
       </View>
     );
   }
 
-  // Error State - Section won't render if there's an error
-  if (error || !podcasts.length) {
-    return null;
-  }
+  // ── Error / Empty — section hides silently ─
+  if (error || !data.length) return null;
 
-  // Success State
+  // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Podcast" showPlayAll={true} />
+      <SectionHeader title="Podcast" showPlayAll />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {podcasts.slice(0, 8).map((item) => (
-          <PodcastCard 
-            key={item.id} 
+        {data.map((item: PodcastItem) => (
+          <PodcastCard
+            key={item.id}
             item={{
-              id: item.id,
+              id: item.videoId,           // playlist url → getPlaylistInfo()
               title: item.title,
-              artist: item.artist,
+              artist: item.artist,        // uploaderName — podcast creator
               thumbnail: item.thumbnail,
               episodeCount: item.episodeCount,
-              type: 'podcast'
-            }} 
+              type: 'podcast',
+            }}
           />
         ))}
       </ScrollView>
@@ -83,20 +81,21 @@ export const PodcastSection = () => {
 const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
-    zIndex: 2,
   },
   horizontalScroll: {
-    paddingRight: 16,
+    paddingHorizontal: 16,
     gap: 14,
   },
-  loadingContainer: {
+  centeredBox: {
     padding: 40,
     alignItems: 'center',
     backgroundColor: COLORS.surface,
     borderRadius: 12,
+    marginHorizontal: 16,
+    gap: 8,
   },
-  loadingText: {
+  subtleText: {
     color: COLORS.textSecondary,
-    marginTop: 10,
+    marginTop: 2,
   },
 });

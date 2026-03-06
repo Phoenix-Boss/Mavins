@@ -1,77 +1,94 @@
 /**
- * Covers Section - Displays cover songs and acoustic versions
- * Uses useCoverSongs hook for data fetching
+ * CoversSection
+ *
+ * Displays cover songs and acoustic versions.
+ *
+ * Data flow:
+ *   useCoverSongs()
+ *     → MavinEngine.search("cover songs acoustic 2025", "songs")
+ *       → Kotlin: performSearch(query, "songs", null, 0)
+ *
+ * MixCard receives only fields present on CoverItem —
+ * no fabricated properties (originalArtist does not exist on StreamInfoItem).
  */
-import React from "react";
+
+import React from 'react';
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from "react-native";
-import { useCoverSongs } from "../../hooks/useCoverSongs";
-import { MixCard } from "../cards/MixCard";
-import { SectionHeader } from "../common/SectionHeader";
+  TouchableOpacity,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useCoverSongs } from '../../hooks/useCoverSongs';
+import { MixCard } from '../cards/MixCard';
+import { SectionHeader } from '../common/SectionHeader';
 
-// Metallic Gold Color Palette
 const COLORS = {
-  background: '#000000',
   surface: '#121212',
-  surfaceLight: '#1F1F1F',
   goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  goldMuted: '#C9A96A',
-  text: '#FFFFFF',
   textSecondary: '#B3B3B3',
   textTertiary: '#808080',
-  border: '#333333',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#EF4444',
 };
 
 export const CoversSection = () => {
-  const { data: coverSongs, loading, error } = useCoverSongs();
+  const { data, loading, error, refetch } = useCoverSongs();
 
-  // Loading State
+  // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Covers" showPlayAll={true} />
-        <View style={styles.loadingContainer}>
+        <SectionHeader title="Covers" showPlayAll />
+        <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.loadingText}>Loading cover songs...</Text>
+          <Text style={styles.subtleText}>Loading covers…</Text>
         </View>
       </View>
     );
   }
 
-  // Error State - Section won't render if there's an error
-  if (error || !coverSongs.length) {
+  // ── Error / Empty — section hides silently ─
+  if (error || !data.length) {
+    // Non-critical section: don't break the home screen layout.
+    // Uncomment the block below to show a retry instead of hiding.
+    //
+    // return (
+    //   <View style={styles.section}>
+    //     <SectionHeader title="Covers" showPlayAll />
+    //     <View style={styles.centeredBox}>
+    //       <Ionicons name="musical-note-outline" size={28} color={COLORS.textTertiary} />
+    //       <Text style={styles.subtleText}>Covers unavailable</Text>
+    //       <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+    //         <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
+    //         <Text style={styles.retryText}>Retry</Text>
+    //       </TouchableOpacity>
+    //     </View>
+    //   </View>
+    // );
     return null;
   }
 
-  // Success State
+  // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Covers" showPlayAll={true} />
+      <SectionHeader title="Covers" showPlayAll />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {coverSongs.slice(0, 8).map((item) => (
-          <MixCard 
-            key={item.id || item.videoId} 
+        {data.map(item => (
+          <MixCard
+            key={item.id}
             item={{
-              id: item.videoId,
+              id: item.videoId,     // full stream url for playback
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              originalArtist: item.originalArtist
-            }} 
+              duration: item.duration,
+            }}
           />
         ))}
       </ScrollView>
@@ -82,20 +99,38 @@ export const CoversSection = () => {
 const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
-    zIndex: 2,
   },
   horizontalScroll: {
-    paddingRight: 16,
+    paddingHorizontal: 16,
     gap: 14,
   },
-  loadingContainer: {
-    padding: 40,
+  centeredBox: {
+    padding: 36,
     alignItems: 'center',
     backgroundColor: COLORS.surface,
     borderRadius: 12,
+    marginHorizontal: 16,
+    gap: 8,
   },
-  loadingText: {
-    color: COLORS.textSecondary,
-    marginTop: 10,
+  subtleText: {
+    color: COLORS.textTertiary,
+    fontSize: 12,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: COLORS.goldPrimary + '20',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary,
+    gap: 5,
+  },
+  retryText: {
+    color: COLORS.goldPrimary,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

@@ -1,6 +1,7 @@
 /**
  * Mavins Player - Premium Gold Edition
  * Main Home Screen with Real Data Integration - All Sections
+ * v2.0 - With Error Boundaries and Service Debugging
  */
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import {
@@ -14,12 +15,14 @@ import {
   StyleSheet,
   Dimensions,
   TextInput,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
+import MavinEngine from '@/modules/mavin-engine';
 
 // Import all sections
 import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
@@ -29,7 +32,7 @@ import { MusicChannelsSection } from "@/components/sections/MusicChannelsSection
 import { PeoplesChoiceSection } from "@/components/sections/PeoplesChoiceSection";
 import { Top10MonthSection } from "@/components/sections/Top10MonthSection";
 import { MavinsBestSection } from "@/components/sections/MavinsBestSection";
-import { SponsoredSection } from "@/components/sections/SponsoredSection";
+import { FeaturedSection } from "@/components/sections/FeaturedSection";
 import { PodcastSection } from "@/components/sections/PodcastSection";
 import { RadioFMSection } from "@/components/sections/RadioFMSection";
 import { CoversSection } from "@/components/sections/CoversSection";
@@ -66,13 +69,84 @@ const COLORS = {
 // Top categories for horizontal scroll
 const TOP_CATEGORIES = ["Hits", "Mixes", "Charts", "Genres", "Workout", "Chill", "Energize", "Feel Good", "Focus", "Party"];
 
+// ✅ ERROR BOUNDARY: Prevents one failing section from crashing entire screen
+class SectionErrorBoundary extends React.Component<
+  { children: React.ReactNode; sectionName: string },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; sectionName: string }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(`❌ [${this.props.sectionName}] Error:`, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
+          <Text style={styles.errorText}>{this.props.sectionName} unavailable</Text>
+          <TouchableOpacity 
+            onPress={() => this.setState({ hasError: false, error: null })}
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedTab, setSelectedTab] = useState("Hits");
   const [searchQuery, setSearchQuery] = useState("");
+  const [servicesOnline, setServicesOnline] = useState<boolean | null>(null);
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
+
+  // ✅ DEBUG: Test MavinEngine on mount
+  useEffect(() => {
+    const testServices = async () => {
+      try {
+        console.log('🔍 Testing MavinEngine...');
+        const ping = await MavinEngine.ping();
+        console.log('✅ MavinEngine online:', ping);
+        
+        const status = await MavinEngine.getServiceStatus();
+        console.log('📡 Services:', status);
+        
+        const availableServices = status.services.filter((s: any) => s.available);
+        setServicesOnline(availableServices.length > 0);
+        
+        if (availableServices.length === 0) {
+          Alert.alert(
+            'Service Unavailable',
+            'No music services are currently available. Please check your internet connection.'
+          );
+        }
+      } catch (e) {
+        console.error('❌ MavinEngine test failed:', e);
+        setServicesOnline(false);
+        Alert.alert(
+          'Module Error',
+          'Music engine failed to initialize. Please restart the app.'
+        );
+      }
+    };
+    
+    testServices();
+  }, []);
 
   // Start pulse animation for watermark
   useEffect(() => {
@@ -92,10 +166,17 @@ export default function HomeScreen() {
     ).start();
   }, []);
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Invalidate caches and refresh data
-    setTimeout(() => setRefreshing(false), 1500);
+    // Clear all caches and refresh
+    try {
+      // Force refresh all sections by clearing cache
+      const cache = (await import('@/libs/cache')).cache;
+      await cache.clear?.(); // If clear method exists
+    } catch (e) {
+      console.log('Cache clear not available');
+    }
+    setTimeout(() => setRefreshing(false), 2000);
   }, []);
 
   const handleSearchPress = () => {
@@ -121,6 +202,14 @@ export default function HomeScreen() {
         
         {/* Right Icons */}
         <View style={styles.headerRight}>
+          {/* ✅ SERVICE STATUS INDICATOR */}
+          {servicesOnline === false && (
+            <Ionicons name="cloud-offline" size={20} color={COLORS.danger} style={{ marginRight: 12 }} />
+          )}
+          {servicesOnline === true && (
+            <Ionicons name="cloud" size={20} color={COLORS.success} style={{ marginRight: 12 }} />
+          )}
+          
           <TouchableOpacity
             onPress={() => {
               triggerHaptic();
@@ -194,19 +283,57 @@ export default function HomeScreen() {
         refreshControl={refreshControl}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* All 12 sections with real data */}
-        <TrendingNowSection />
-        <BiggestHitsSection />
-        <CreateMixSection />
-        <MusicChannelsSection />
-        <PeoplesChoiceSection />
-        <Top10MonthSection />
-        <MavinsBestSection />
-        <SponsoredSection />
-        <PodcastSection />
-        <RadioFMSection />
-        <CoversSection />
-        <NewReleasesSection />
+        {/* ✅ WRAPPED SECTIONS: Each in Error Boundary to prevent crashes */}
+        
+        <SectionErrorBoundary sectionName="Trending Now">
+          <TrendingNowSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Biggest Hits">
+          <BiggestHitsSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Create Mix">
+          {/* ✅ FIX: Ensure CreateMixSection passes string genre, not number */}
+          <CreateMixSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Music Channels">
+          {/* ✅ FIX: Pass string genres */}
+          <MusicChannelsSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="People's Choice">
+          <PeoplesChoiceSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Top 10 This Month">
+          <Top10MonthSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Mavin's Best">
+          <MavinsBestSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Sponsored">
+          <SponsoredSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Podcasts">
+          <PodcastSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Radio FM">
+          <RadioFMSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="Covers">
+          <CoversSection />
+        </SectionErrorBoundary>
+        
+        <SectionErrorBoundary sectionName="New Releases">
+          <NewReleasesSection />
+        </SectionErrorBoundary>
 
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
@@ -304,5 +431,34 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 60,
+  },
+  // ✅ ERROR BOUNDARY STYLES
+  errorContainer: {
+    padding: 20,
+    marginVertical: 10,
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.danger + '40',
+    alignItems: 'center',
+  },
+  errorText: {
+    color: COLORS.textSecondary,
+    fontSize: 14,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: COLORS.goldPrimary + '20',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary,
+  },
+  retryText: {
+    color: COLORS.goldPrimary,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

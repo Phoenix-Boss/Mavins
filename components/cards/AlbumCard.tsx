@@ -1,5 +1,6 @@
 /**
  * Album Card Component - Displays an album/playlist in a square card format
+ * v1.1 - With defensive checks for missing data
  */
 import React from "react";
 import {
@@ -22,14 +23,15 @@ const COLORS = {
   goldShimmer: '#E6C16A',
   text: '#FFFFFF',
   textSecondary: '#B3B3B3',
+  textMuted: '#808080',
 };
 
 interface AlbumCardProps {
-  item: {
-    id: string;
-    title: string;
-    artist: string;
-    thumbnail: string;
+  item?: {
+    id?: string;
+    title?: string;
+    artist?: string;
+    thumbnail?: string;
     position?: number;
     plays?: string;
   };
@@ -37,6 +39,7 @@ interface AlbumCardProps {
   isCurrentTrack?: boolean;
   isPlaying?: boolean;
   onPress?: () => void;
+  fallbackTitle?: string;
 }
 
 export const AlbumCard = ({ 
@@ -44,24 +47,35 @@ export const AlbumCard = ({
   showPlayButton = true,
   isCurrentTrack = false,
   isPlaying = false,
-  onPress 
+  onPress,
+  fallbackTitle = "Unknown Album"
 }: AlbumCardProps) => {
   const router = useRouter();
+
+  // ✅ DEFENSIVE: Handle missing or invalid item
+  const safeItem = {
+    id: item?.id || `fallback_${Math.random()}`,
+    title: item?.title || fallbackTitle,
+    artist: item?.artist || "Unknown Artist",
+    thumbnail: item?.thumbnail || null,
+    position: item?.position,
+    plays: item?.plays
+  };
+
+  const hasValidImage = safeItem.thumbnail && safeItem.thumbnail.startsWith('http');
 
   const handlePress = () => {
     triggerHaptic();
     if (onPress) {
       onPress();
-    } else {
-      // Default behavior - navigate to album/playlist
-      router.navigate(`/album/${item.id}`);
+    } else if (safeItem.id && !safeItem.id.startsWith('fallback_')) {
+      router.navigate(`/album/${safeItem.id}`);
     }
   };
 
   const handlePlayPress = (e: any) => {
     e.stopPropagation();
     triggerHaptic();
-    // Play the first track or album
     router.navigate('/player');
   };
 
@@ -69,30 +83,51 @@ export const AlbumCard = ({
     <TouchableOpacity
       style={[
         styles.albumCard,
-        isCurrentTrack && styles.currentPlayingTrack
+        isCurrentTrack && styles.currentPlayingTrack,
+        !hasValidImage && styles.noImageCard
       ]}
       onPress={handlePress}
       activeOpacity={0.9}
     >
-      <Image
-        source={{ uri: item.thumbnail }}
-        style={styles.albumImage}
-      />
+      {/* ✅ Image with fallback */}
+      {hasValidImage ? (
+        <Image
+          source={{ uri: safeItem.thumbnail }}
+          style={styles.albumImage}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[styles.albumImage, styles.fallbackImage]}>
+          <Ionicons name="musical-note" size={40} color={COLORS.goldShimmer} />
+        </View>
+      )}
       
-      {/* Netflix-style text overlay on image */}
+      {/* Text overlay */}
       <View style={styles.albumTextOverlay}>
         <View style={styles.albumTextContainer}>
+          {/* Position badge if available */}
+          {safeItem.position && safeItem.position > 0 && (
+            <View style={styles.positionBadge}>
+              <Text style={styles.positionText}>#{safeItem.position}</Text>
+            </View>
+          )}
+          
           <Text style={styles.albumTitle} numberOfLines={1}>
-            {item.title}
+            {safeItem.title}
           </Text>
           <Text style={styles.albumArtist} numberOfLines={1}>
-            {item.artist}
+            {safeItem.artist}
           </Text>
+          
+          {/* Plays count if available */}
+          {safeItem.plays && (
+            <Text style={styles.playsText}>{safeItem.plays} plays</Text>
+          )}
         </View>
       </View>
       
-      {/* Metallic Play Button - Top Right */}
-      {showPlayButton && (
+      {/* Play Button */}
+      {showPlayButton && hasValidImage && (
         <View style={styles.albumPlayButtonContainerTopRight}>
           <TouchableOpacity 
             style={[
@@ -120,10 +155,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: COLORS.surfaceLight,
+  },
+  noImageCard: {
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary + '30',
   },
   albumImage: {
     width: '100%',
     height: '100%',
+    backgroundColor: COLORS.surfaceLight,
+  },
+  fallbackImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: COLORS.surfaceLight,
   },
   albumTextOverlay: {
@@ -132,10 +177,24 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     padding: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
   },
   albumTextContainer: {
-    maxWidth: '85%',
+    maxWidth: '100%',
+  },
+  positionBadge: {
+    position: 'absolute',
+    top: -25,
+    left: 0,
+    backgroundColor: COLORS.goldPrimary,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  positionText: {
+    color: '#000',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   albumTitle: {
     fontSize: 14,
@@ -146,6 +205,11 @@ const styles = StyleSheet.create({
   albumArtist: {
     fontSize: 12,
     color: COLORS.goldShimmer,
+    marginBottom: 2,
+  },
+  playsText: {
+    fontSize: 10,
+    color: COLORS.textMuted,
   },
   albumPlayButtonContainerTopRight: {
     position: 'absolute',

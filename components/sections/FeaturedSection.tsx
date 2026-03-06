@@ -1,15 +1,20 @@
 /**
- * RadioFMSection
+ * FeaturedSection
  *
- * Displays live music streams from the YouTube "Live" kiosk.
+ * Replaces SponsoredSection. Displays curated featured music
+ * from the YouTube "Music" kiosk.
+ *
+ * Why the rename:
+ *   - getSponsoredContent() does not exist in Kotlin
+ *   - NewPipeExtractor exposes no sponsored/ad metadata
+ *   - SponsoredBadge and sponsorName had no real data source
  *
  * Data flow:
- *   useLiveStations()
- *     → MavinEngine.getKioskInfo("Live", undefined, 0)
- *       → Kotlin: extractKioskInfo("Live", null, 0)
+ *   useFeatured()
+ *     → MavinEngine.getTrending(undefined, 0)
+ *       → Kotlin: extractKioskInfo("Music", null, 0)
  *
- * RadioFMCard receives only fields present on LiveStationItem.
- * viewers is formatted via formatViewers exported from the hook.
+ * AlbumCard receives only fields present on FeaturedItem.
  */
 
 import React from 'react';
@@ -20,8 +25,8 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from 'react-native';
-import { useLiveStations, LiveStationItem } from '../../hooks/useLiveStations';
-import { RadioFMCard } from '../cards/RadioFMCard';
+import { useFeatured, FeaturedItem } from '../../hooks/useFeatured';
+import { AlbumCard } from '../cards/AlbumCard';
 import { SectionHeader } from '../common/SectionHeader';
 
 const COLORS = {
@@ -30,17 +35,25 @@ const COLORS = {
   textSecondary: '#B3B3B3',
 };
 
-export const RadioFMSection = () => {
-  const { data, loading, error, formatViewers } = useLiveStations();
+function formatViews(views: number): string {
+  if (!views) return '0';
+  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`;
+  if (views >= 1_000_000)     return `${(views / 1_000_000).toFixed(1)}M`;
+  if (views >= 1_000)         return `${(views / 1_000).toFixed(1)}K`;
+  return String(views);
+}
+
+export const FeaturedSection = () => {
+  const { data, loading, error } = useFeatured();
 
   // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Radio FM" showPlayAll />
+        <SectionHeader title="Featured" />
         <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading live stations…</Text>
+          <Text style={styles.subtleText}>Loading featured music…</Text>
         </View>
       </View>
     );
@@ -52,23 +65,24 @@ export const RadioFMSection = () => {
   // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Radio FM" showPlayAll />
+      <SectionHeader title="Featured" />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: LiveStationItem) => (
-          <RadioFMCard
+        {data.map((item: FeaturedItem) => (
+          <AlbumCard
             key={item.id}
             item={{
-              id: item.videoId,                  // full stream url for playback
+              id: item.videoId,              // full stream url for playback
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              viewers: formatViewers(item.viewers), // formatted e.g. "12.3K"
-              live: true,                          // always true — Live kiosk only
+              duration: item.duration,
+              plays: formatViews(item.views),
             }}
+            showPlayButton={false}
           />
         ))}
       </ScrollView>

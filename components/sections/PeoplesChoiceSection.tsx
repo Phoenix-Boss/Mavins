@@ -1,93 +1,90 @@
 /**
- * People's Choice Section - Displays most popular/viral songs
- * Uses usePopularChoice hook for data fetching
+ * PeoplesChoiceSection
+ *
+ * Displays most popular/viral music tracks.
+ *
+ * Data flow:
+ *   usePopularChoice()
+ *     → MavinEngine.search("most popular songs 2025", "songs")
+ *       → Kotlin: performSearch(query, "songs", null, 0)
+ *
+ * AlbumCard receives only fields present on PopularItem.
  */
-import React from "react";
+
+import React from 'react';
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from "react-native";
-import { usePopularChoice } from "../../hooks/usePopularChoice";
-import { AlbumCard } from "../cards/AlbumCard";
-import { SectionHeader } from "../common/SectionHeader";
+} from 'react-native';
+import { usePopularChoice, PopularItem } from '../../hooks/usePopularChoice';
+import { AlbumCard } from '../cards/AlbumCard';
+import { SectionHeader } from '../common/SectionHeader';
 
-// Metallic Gold Color Palette
 const COLORS = {
-  background: '#000000',
   surface: '#121212',
-  surfaceLight: '#1F1F1F',
   goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  goldMuted: '#C9A96A',
-  text: '#FFFFFF',
   textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
-  border: '#333333',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#EF4444',
 };
 
-// Format view counts
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
+
 const formatViews = (views: number): string => {
-  if (!views) return "0";
-  if (views >= 1_000_000_000) {
-    return (views / 1_000_000_000).toFixed(1) + 'B';
-  }
-  if (views >= 1_000_000) {
-    return (views / 1_000_000).toFixed(1) + 'M';
-  }
-  if (views >= 1_000) {
-    return (views / 1_000).toFixed(1) + 'K';
-  }
-  return views.toString();
+  if (!views) return '0';
+  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`;
+  if (views >= 1_000_000)     return `${(views / 1_000_000).toFixed(1)}M`;
+  if (views >= 1_000)         return `${(views / 1_000).toFixed(1)}K`;
+  return String(views);
 };
+
+// ─────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────
 
 export const PeoplesChoiceSection = () => {
-  const { data: popularSongs, loading, error } = usePopularChoice();
+  const { data, loading, error } = usePopularChoice();
 
-  // Loading State
+  // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="People's Choice" showPlayAll={true} />
-        <View style={styles.loadingContainer}>
+        <SectionHeader title="People's Choice" showPlayAll />
+        <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.loadingText}>Loading popular songs...</Text>
+          <Text style={styles.subtleText}>Loading popular songs…</Text>
         </View>
       </View>
     );
   }
 
-  // Error State - Section won't render if there's an error
-  if (error || !popularSongs.length) {
-    return null;
-  }
+  // ── Error / Empty — section hides silently ─
+  if (error || !data.length) return null;
 
-  // Success State
+  // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="People's Choice" showPlayAll={true} />
+      <SectionHeader title="People's Choice" showPlayAll />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {popularSongs.slice(0, 8).map((item) => (
-          <AlbumCard 
-            key={item.id || item.videoId} 
+        {data.map((item: PopularItem) => (
+          <AlbumCard
+            key={item.id}
             item={{
-              id: item.videoId,
+              id: item.videoId,               // full stream url for playback
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              plays: formatViews(item.views)
-            }} 
-            showPlayButton={false} 
+              duration: item.duration,
+              plays: formatViews(item.views),
+            }}
+            showPlayButton={false}
           />
         ))}
       </ScrollView>
@@ -95,23 +92,28 @@ export const PeoplesChoiceSection = () => {
   );
 };
 
+// ─────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
-    zIndex: 2,
   },
   horizontalScroll: {
-    paddingRight: 16,
+    paddingHorizontal: 16,
     gap: 14,
   },
-  loadingContainer: {
+  centeredBox: {
     padding: 40,
     alignItems: 'center',
     backgroundColor: COLORS.surface,
     borderRadius: 12,
+    marginHorizontal: 16,
+    gap: 8,
   },
-  loadingText: {
+  subtleText: {
     color: COLORS.textSecondary,
-    marginTop: 10,
+    marginTop: 2,
   },
 });

@@ -1,78 +1,173 @@
 /**
- * Biggest Hits Section - Displays top charts from YouTube Music
- * Uses useTopCharts hook for data fetching
+ * BiggestHitsSection
+ *
+ * Displays music chart items sourced from the YouTube Music kiosk
+ * (getTrending → 'Music' kiosk) and YouTube Music search ('viral50').
+ *
+ * Data flow:
+ *   useTopCharts(chartType)
+ *     → MavinEngine.getTrending() or MavinEngine.search('songs')
+ *       → Kotlin: KioskInfo("Music") or SearchInfo(filter="songs")
+ *
+ * Only StreamInfoItem fields are used — no fabricated properties.
  */
-import React from "react";
+
+import React, { useState } from 'react';
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from "react-native";
-import { useTopCharts } from "../../hooks/useTopCharts";
-import { AlbumCard } from "../cards/AlbumCard";
-import { SectionHeader } from "../common/SectionHeader";
+  TouchableOpacity,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useTopCharts, MusicChartItem } from '../../hooks/useTopCharts';
+import { AlbumCard } from '../cards/AlbumCard';
+import { SectionHeader } from '../common/SectionHeader';
 
-// Metallic Gold Color Palette
 const COLORS = {
   background: '#000000',
   surface: '#121212',
   surfaceLight: '#1F1F1F',
   goldPrimary: '#D4AF37',
   goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  goldMuted: '#C9A96A',
   text: '#FFFFFF',
   textSecondary: '#B3B3B3',
   textTertiary: '#808080',
   border: '#333333',
-  success: '#22C55E',
-  warning: '#F59E0B',
   danger: '#EF4444',
 };
 
-export const BiggestHitsSection = () => {
-  const { data: chartSongs, loading, error } = useTopCharts("top50");
+const CHART_TYPES = [
+  { id: 'top50',   label: 'Top 50',   icon: '🏆' },
+  { id: 'viral50', label: 'Viral 50', icon: '🔥' },
+] as const;
 
-  // Loading State
+type ChartType = 'top50' | 'viral50';
+
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
+
+function formatViews(views: number): string {
+  if (views >= 1_000_000) return `${(views / 1_000_000).toFixed(1)}M`;
+  if (views >= 1_000)     return `${(views / 1_000).toFixed(1)}K`;
+  return String(views);
+}
+
+// ─────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────
+
+interface ChartSelectorProps {
+  active: ChartType;
+  onChange: (type: ChartType) => void;
+}
+
+const ChartSelector = ({ active, onChange }: ChartSelectorProps) => (
+  <View style={styles.chartSelector}>
+    {CHART_TYPES.map(({ id, label, icon }) => {
+      const isActive = active === id;
+      return (
+        <TouchableOpacity
+          key={id}
+          style={[styles.chartChip, isActive && styles.chartChipActive]}
+          onPress={() => onChange(id)}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.chartIcon}>{icon}</Text>
+          <Text style={[styles.chartChipText, isActive && styles.chartChipTextActive]}>
+            {label}
+          </Text>
+        </TouchableOpacity>
+      );
+    })}
+  </View>
+);
+
+// ─────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────
+
+export const BiggestHitsSection = () => {
+  const [chartType, setChartType] = useState<ChartType>('top50');
+  const { data, loading, error, refetch } = useTopCharts(chartType);
+
+  // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Biggest Hits" showPlayAll={true} />
-        <View style={styles.loadingContainer}>
+        <SectionHeader title="Biggest Hits" showPlayAll />
+        <ChartSelector active={chartType} onChange={setChartType} />
+        <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.loadingText}>Loading top charts...</Text>
+          <Text style={styles.subtleText}>Loading charts…</Text>
         </View>
       </View>
     );
   }
 
-  // Error State
-  if (error || !chartSongs.length) {
-    return null;
+  // ── Error ─────────────────────────────────
+  if (error) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="Biggest Hits" showPlayAll />
+        <ChartSelector active={chartType} onChange={setChartType} />
+        <View style={styles.centeredBox}>
+          <Ionicons name="cloud-offline-outline" size={32} color={COLORS.danger} />
+          <Text style={styles.errorText}>Charts unavailable</Text>
+          <Text style={styles.subtleText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Ionicons name="refresh" size={14} color={COLORS.goldPrimary} />
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   }
 
-  // Success State
+  // ── Empty ─────────────────────────────────
+  if (!data.length) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="Biggest Hits" showPlayAll />
+        <ChartSelector active={chartType} onChange={setChartType} />
+        <View style={styles.centeredBox}>
+          <Ionicons name="musical-note-outline" size={32} color={COLORS.textTertiary} />
+          <Text style={styles.subtleText}>No charts available</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Text style={styles.retryText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Biggest Hits" showPlayAll={true} />
+      <SectionHeader title="Biggest Hits" showPlayAll />
+      <ChartSelector active={chartType} onChange={setChartType} />
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {chartSongs.slice(0, 10).map((item) => (
-          <AlbumCard 
-            key={item.id || item.videoId} 
+        {data.map((item: MusicChartItem, index: number) => (
+          <AlbumCard
+            key={item.id}
             item={{
-              id: item.videoId,
+              id: item.videoId,          // full stream url — pass to getStreamUrl()
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              position: item.position
-            }} 
-            showPlayButton={true} 
+              position: item.position,
+              plays: item.views > 0 ? formatViews(item.views) : undefined,
+              duration: item.duration,
+            }}
+            showPlayButton
           />
         ))}
       </ScrollView>
@@ -80,23 +175,84 @@ export const BiggestHitsSection = () => {
   );
 };
 
+// ─────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
-    zIndex: 2,
+  },
+  chartSelector: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  chartChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 4,
+  },
+  chartChipActive: {
+    backgroundColor: COLORS.goldPrimary,
+    borderColor: COLORS.goldPrimary,
+  },
+  chartIcon: {
+    fontSize: 12,
+  },
+  chartChipText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  chartChipTextActive: {
+    color: '#000',
+    fontWeight: '700',
   },
   horizontalScroll: {
-    paddingRight: 16,
+    paddingHorizontal: 16,
     gap: 14,
   },
-  loadingContainer: {
-    padding: 40,
+  centeredBox: {
+    padding: 36,
     alignItems: 'center',
     backgroundColor: COLORS.surface,
     borderRadius: 12,
+    marginHorizontal: 16,
+    gap: 8,
   },
-  loadingText: {
-    color: COLORS.textSecondary,
-    marginTop: 10,
+  errorText: {
+    color: COLORS.danger,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  subtleText: {
+    color: COLORS.textTertiary,
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: COLORS.goldPrimary + '20',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary,
+    gap: 6,
+  },
+  retryText: {
+    color: COLORS.goldPrimary,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

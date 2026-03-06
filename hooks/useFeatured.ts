@@ -1,23 +1,27 @@
 /**
- * useEditorPicks Hook
+ * useFeatured Hook
  *
- * Fetches curated/editorial music picks via MavinEngine.search().
- * Calls Kotlin: performSearch("best music videos 2025", "songs", null, 0)
+ * Replaces the fabricated useSponsored hook.
  *
- * "songs" is the YouTube Music content filter in NewPipe extractor.
- * No getEditorPicks() exists in Kotlin — closest equivalent is a
- * curated search query returning high-quality music tracks.
+ * getSponsoredContent() does not exist in Kotlin/NewPipeExtractor.
+ * NewPipeExtractor has no concept of sponsored or promoted content —
+ * it is a YouTube frontend; ad/sponsor metadata is not exposed via
+ * any documented InfoItem field.
+ *
+ * Replacement: fetches curated featured tracks from the YouTube
+ * "Music" kiosk via MavinEngine.getTrending().
+ * Calls Kotlin: extractKioskInfo("Music", null, 0)
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import MavinEngine, { StreamInfoItem, KioskPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
-// Public shape — only what MavinsBestSection needs
+// Public shape
 // ─────────────────────────────────────────────
 
-export interface EditorPickItem {
+export interface FeaturedItem {
   id: string;       // stable React key (stream url)
   videoId: string;  // full stream url → pass to getStreamUrl() for playback
   title: string;
@@ -27,8 +31,8 @@ export interface EditorPickItem {
   views: number;
 }
 
-interface UseEditorPicksResult {
-  data: EditorPickItem[];
+interface UseFeaturedResult {
+  data: FeaturedItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -40,15 +44,8 @@ interface UseEditorPicksResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'editor:picks';
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — matches original
-
-// Fallback query chain — tries each until results are found
-const SEARCH_QUERIES = [
-  'best music videos 2025',
-  'must listen music 2025',
-  'top music picks',
-];
+const CACHE_KEY = 'featured:music'; // replaces "sponsored:content"
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours — same as original
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -64,7 +61,7 @@ function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   return thumbnails[0]?.url ?? '';
 }
 
-function toEditorPickItem(item: StreamInfoItem): EditorPickItem | null {
+function toFeaturedItem(item: StreamInfoItem): FeaturedItem | null {
   if (item.isLive) return null;
   if (item.isShortFormContent) return null;
   if (!item.url) return null;
@@ -81,70 +78,66 @@ function toEditorPickItem(item: StreamInfoItem): EditorPickItem | null {
 }
 
 // ─────────────────────────────────────────────
-// Fetcher — tries each query until items found
+// Fetcher
 // ─────────────────────────────────────────────
 
-async function fetchEditorPicks(): Promise<EditorPickItem[]> {
-  for (const query of SEARCH_QUERIES) {
-    try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
-        query,
-        'songs',
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
+async function fetchFeatured(): Promise<FeaturedItem[]> {
+  // ✅ Calls Kotlin: extractKioskInfo("Music", null, 0)
+  // YouTube "Music" kiosk — curated music picks
+  const result: KioskPage = await MavinEngine.getTrending(
+    undefined,
+    YOUTUBE_SERVICE_ID,
+  );
 
-      if (!result.success) continue;
-
-      const items = (result.results as StreamInfoItem[])
-        .filter(item => item.type === 'stream')
-        .map(toEditorPickItem)
-        .filter((item): item is EditorPickItem => item !== null)
-        .slice(0, MAX_ITEMS);
-
-      if (items.length > 0) return items;
-    } catch {
-      continue;
-    }
+  if (!result.success) {
+    throw new Error(result.errors?.[0] || 'Featured music unavailable');
   }
-  throw new Error('No editor picks available');
+
+  const items = (result.items as StreamInfoItem[])
+    .filter(item => item.type === 'stream')
+    .map(toFeaturedItem)
+    .filter((item): item is FeaturedItem => item !== null)
+    .slice(0, MAX_ITEMS);
+
+  if (!items.length) {
+    throw new Error('No featured music available');
+  }
+
+  return items;
 }
 
 // ─────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────
 
-export const useEditorPicks = (): UseEditorPicksResult => {
-  const [data, setData]       = useState<EditorPickItem[]>([]);
+export const useFeatured = (): UseFeaturedResult => {
+  const [data, setData]       = useState<FeaturedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const fetchFeaturedData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
       if (cached) {
-        console.log('📦 [useEditorPicks] Using cached data');
+        console.log('📦 [useFeatured] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
-      console.log('🔍 [useEditorPicks] Fetching from native module...');
-      const picks = await fetchEditorPicks();
+      console.log('🔍 [useFeatured] Fetching from native module...');
+      const featured = await fetchFeatured();
 
-      console.log(`✅ [useEditorPicks] Received ${picks.length} items`);
-      await cache.set(CACHE_KEY, picks, CACHE_TTL_MS);
-      setData(picks);
+      console.log(`✅ [useFeatured] Received ${featured.length} items`);
+      await cache.set(CACHE_KEY, featured, CACHE_TTL_MS);
+      setData(featured);
 
     } catch (err: any) {
-      console.error('❌ [useEditorPicks] Failed:', err);
-      setError(err.message || 'Failed to load editor picks');
+      console.error('❌ [useFeatured] Failed:', err);
+      setError(err.message || 'Failed to load featured music');
       setData([]);
     } finally {
       setLoading(false);
@@ -152,10 +145,10 @@ export const useEditorPicks = (): UseEditorPicksResult => {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchFeaturedData();
+  }, [fetchFeaturedData]);
 
-  const refetch = () => load();
+  const refetch = () => fetchFeaturedData();
 
   return { data, loading, error, refetch };
 };
