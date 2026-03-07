@@ -485,7 +485,7 @@ class MavinEngineModule : Module() {
                 "disabled"      to info.isCommentsDisabled,
                 "commentsCount" to info.commentsCount,
                 "comments"      to info.relatedItems.map { commentItemToMap(it) },
-                "nextPage"      to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"      to pageOrEmpty(info.nextPage),
                 "hasNextPage"   to (info.nextPage != null),
                 "errors"        to info.errors.map { it.message.orEmpty() }
             )
@@ -494,7 +494,7 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "success"     to true,
                 "comments"    to more.items.map { commentItemToMap(it) },
-                "nextPage"    to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(more.nextPage),
                 "hasNextPage" to (more.nextPage != null),
                 "errors"      to more.errors.map { it.message.orEmpty() }
             )
@@ -512,7 +512,7 @@ class MavinEngineModule : Module() {
         return mapOf<String, Any>(
             "success"     to true,
             "replies"     to page.items.map { commentItemToMap(it) },
-            "nextPage"    to (page.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+            "nextPage"    to pageOrEmpty(page.nextPage),
             "hasNextPage" to (page.nextPage != null),
             "errors"      to page.errors.map { it.message.orEmpty() }
         )
@@ -583,7 +583,7 @@ class MavinEngineModule : Module() {
                 "suggestion"       to info.searchSuggestion.orEmpty(),
                 "isCorrectedSearch" to info.isCorrectedSearch,
                 "results"          to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage"         to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"         to pageOrEmpty(info.nextPage),
                 "hasNextPage"      to (info.nextPage != null),
                 "errors"           to info.errors.map { it.message.orEmpty() }
             )
@@ -592,7 +592,7 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "success"     to true,
                 "results"     to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(more.nextPage),
                 "hasNextPage" to (more.nextPage != null),
                 "errors"      to more.errors.map { it.message.orEmpty() }
             )
@@ -640,7 +640,7 @@ class MavinEngineModule : Module() {
             "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
             "streamCount"    to info.streamCount.coerceAtLeast(0),
             "playlistType"   to (info.playlistType?.name ?: "NORMAL"),
-            "nextPage"       to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+            "nextPage"       to pageOrEmpty(info.nextPage),
             "hasNextPage"    to (info.nextPage != null),
             "items"          to info.relatedItems.mapNotNull { infoItemToMap(it) },
             "errors"         to info.errors.map { it.message.orEmpty() }
@@ -655,7 +655,7 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "success"     to true,
                 "items"       to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(info.nextPage),
                 "hasNextPage" to (info.nextPage != null),
                 "errors"      to info.errors.map { it.message.orEmpty() }
             )
@@ -664,7 +664,7 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "success"     to true,
                 "items"       to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(more.nextPage),
                 "hasNextPage" to (more.nextPage != null),
                 "errors"      to more.errors.map { it.message.orEmpty() }
             )
@@ -696,7 +696,7 @@ class MavinEngineModule : Module() {
             "subscriberCount" to info.subscriberCount.coerceAtLeast(0),
             "isVerified"      to info.isVerified,
             "tabs"            to info.tabs.map { tabLinkHandlerToMap(it) },
-            "nextPage"        to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+            "nextPage"        to pageOrEmpty(info.nextPage),
             "errors"          to info.errors.map { it.message.orEmpty() }
         )
     }
@@ -752,7 +752,7 @@ class MavinEngineModule : Module() {
                 "tabName"     to (targetTab.contentFilters.firstOrNull() ?: ""),
                 "tabFilter"   to tabFilter,
                 "items"       to tabInfo.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (tabInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(tabInfo.nextPage),
                 "hasNextPage" to (tabInfo.nextPage != null),
                 "errors"      to tabInfo.errors.map { it.message.orEmpty() }
             )
@@ -763,7 +763,7 @@ class MavinEngineModule : Module() {
                 "tabName"     to (targetTab.contentFilters.firstOrNull() ?: ""),
                 "tabFilter"   to tabFilter,
                 "items"       to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(more.nextPage),
                 "hasNextPage" to (more.nextPage != null),
                 "errors"      to more.errors.map { it.message.orEmpty() }
             )
@@ -846,7 +846,7 @@ class MavinEngineModule : Module() {
                 "kioskId"     to kioskId,
                 "name"        to info.name.orEmpty(),
                 "items"       to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(info.nextPage),
                 "hasNextPage" to (info.nextPage != null),
                 "errors"      to info.errors.map { it.message.orEmpty() }
             )
@@ -856,7 +856,7 @@ class MavinEngineModule : Module() {
                 "success"     to true,
                 "kioskId"     to kioskId,
                 "items"       to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage"    to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
+                "nextPage"    to pageOrEmpty(more.nextPage),
                 "hasNextPage" to (more.nextPage != null),
                 "errors"      to more.errors.map { it.message.orEmpty() }
             )
@@ -1086,6 +1086,10 @@ class MavinEngineModule : Module() {
      *
      * All are nullable-safe getters; use ?: for null-safety.
      */
+    // Helper to avoid Kotlin type-inference failure with nullable Page in mapOf blocks
+    private fun pageOrEmpty(p: Page?): Map<String, Any> =
+        p?.let { pageToMap(it) } ?: emptyMap()
+
     private fun pageToMap(p: Page): Map<String, Any> = mapOf<String, Any>(
         "url"     to (p.getUrl() ?: ""),
         "ids"     to (p.getIds() ?: emptyList<String>()),
