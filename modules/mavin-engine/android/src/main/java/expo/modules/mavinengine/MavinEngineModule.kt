@@ -49,7 +49,7 @@ import java.util.concurrent.TimeUnit
  * ═══════════════════════════════════════════════════════════════
  *  FIXED API USAGE (v0.24.8+ compatible):
  * ═══════════════════════════════════════════════════════════════
- *  • Use getter methods instead of direct field access
+ *  • Use getter methods instead of direct field access for Java classes
  *  • Description objects have getContent() and getHtml()
  *  • Page objects have getUrl(), getIds(), getCookies(), getBody()
  *  • InfoItem subclasses use getName(), getUrl(), getThumbnails()
@@ -63,7 +63,7 @@ class MavinEngineModule : Module() {
 
     companion object {
         private const val TAG = "MavinEngine"
-        private const val VERSION = "6.0.1"
+        private const val VERSION = "6.0.2"
 
         // ✅ OFFICIAL: Single shared OkHttpClient — Downloader.init() called once
         private val httpClient = OkHttpClient.Builder()
@@ -319,59 +319,60 @@ class MavinEngineModule : Module() {
     }
 
     private fun streamInfoToMap(info: StreamInfo, serviceId: Int): Map<String, Any> {
-        return mapOf(
-            "success" to true,
-            "serviceId" to serviceId,
-            "id" to info.id,
-            "url" to info.url,
-            "originalUrl" to info.originalUrl,
-            "title" to info.name.orEmpty(),
-            "uploaderName" to info.uploaderName.orEmpty(),
-            "uploaderUrl" to info.uploaderUrl.orEmpty(),
-            // ✅ FIXED: Use getter methods for Image list
-            "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
-            "uploaderVerified" to info.isUploaderVerified,
-            "uploaderSubscriberCount" to info.uploaderSubscriberCount.coerceAtLeast(0),
-            "duration" to info.duration,
-            "viewCount" to info.viewCount.coerceAtLeast(0),
-            "likeCount" to info.likeCount.coerceAtLeast(0),
-            "dislikeCount" to info.dislikeCount.coerceAtLeast(0),
-            // ✅ FIXED: Description uses getContent() and getHtml()
-            "description" to (info.description?.content ?: ""),
-            "descriptionHtml" to (info.description?.html ?: ""),
-            // ✅ FIXED: DateWrapper uses offsetDateTime()
-            "uploadDate" to (info.uploadDate?.offsetDateTime()?.toString() ?: ""),
-            "textualUploadDate" to info.textualUploadDate.orEmpty(),
-            // ✅ FIXED: Use getter for thumbnails
-            "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            // ✅ FIXED: StreamType enum
-            "streamType" to info.streamType.name,
-            "isLive" to (info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM),
-            "isShortFormContent" to info.isShortFormContent,
-            // ✅ FIXED: Use getter method getContentAvailability()
-            "availability" to (info.contentAvailability?.name ?: "PUBLIC"),
-            "ageLimit" to info.ageLimit,
-            "tags" to info.tags,
-            "category" to info.category.orEmpty(),
-            // ✅ FIXED: Use getter methods for stream lists
-            "audioStreams" to info.audioStreams.map { audioStreamToMap(it) },
-            "videoStreams" to info.videoStreams.map { videoStreamToMap(it) },
-            "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) },
-            "dashMpdUrl" to info.dashMpdUrl.orEmpty(),
-            "hlsUrl" to info.hlsUrl.orEmpty(),
-            "subtitles" to info.subtitles.map { subtitleToMap(it) },
-            // ✅ FIXED: Use getRelatedItems() method
-            "relatedItems" to info.relatedItems.take(20).mapNotNull { infoItemToMap(it) },
-            // ✅ FIXED: MetaInfo mapping with getter methods
-            "metaInfo" to info.metaInfo.map { m ->
-                mapOf(
-                    "title" to m.title.orEmpty(),
-                    "content" to (m.content?.content ?: ""),
-                    "urls" to m.urls.map { it.toString() },
-                    "urlTexts" to m.urlTexts
-                )
-            }
-        )
+        // ✅ FIXED: Use HashMap to avoid type inference issues with mapOf
+        val result = HashMap<String, Any>()
+        result["success"] = true
+        result["serviceId"] = serviceId
+        result["id"] = info.id
+        result["url"] = info.url
+        result["originalUrl"] = info.originalUrl
+        result["title"] = info.name.orEmpty()
+        result["uploaderName"] = info.uploaderName.orEmpty()
+        result["uploaderUrl"] = info.uploaderUrl.orEmpty()
+        // ✅ FIXED: Use getter methods for Image list
+        result["uploaderAvatars"] = info.uploaderAvatars.map { imageToMap(it) }
+        result["uploaderVerified"] = info.isUploaderVerified
+        result["uploaderSubscriberCount"] = info.uploaderSubscriberCount.coerceAtLeast(0)
+        result["duration"] = info.duration
+        result["viewCount"] = info.viewCount.coerceAtLeast(0)
+        result["likeCount"] = info.likeCount.coerceAtLeast(0)
+        result["dislikeCount"] = info.dislikeCount.coerceAtLeast(0)
+        // ✅ FIXED: Description uses getContent() and getHtml()
+        result["description"] = info.description?.content ?: ""
+        result["descriptionHtml"] = info.description?.html ?: ""
+        // ✅ FIXED: DateWrapper uses offsetDateTime()
+        result["uploadDate"] = info.uploadDate?.offsetDateTime()?.toString() ?: ""
+        result["textualUploadDate"] = info.textualUploadDate.orEmpty()
+        // ✅ FIXED: Use getter for thumbnails
+        result["thumbnails"] = info.thumbnails.map { imageToMap(it) }
+        // ✅ FIXED: StreamType enum
+        result["streamType"] = info.streamType.name
+        result["isLive"] = (info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM)
+        result["isShortFormContent"] = info.isShortFormContent
+        // ✅ FIXED: Use getter method getContentAvailability()
+        result["availability"] = info.contentAvailability?.name ?: "PUBLIC"
+        result["ageLimit"] = info.ageLimit
+        result["tags"] = info.tags
+        result["category"] = info.category.orEmpty()
+        // ✅ FIXED: Use getter methods for stream lists
+        result["audioStreams"] = info.audioStreams.map { audioStreamToMap(it) }
+        result["videoStreams"] = info.videoStreams.map { videoStreamToMap(it) }
+        result["videoOnlyStreams"] = info.videoOnlyStreams.map { videoStreamToMap(it) }
+        result["dashMpdUrl"] = info.dashMpdUrl.orEmpty()
+        result["hlsUrl"] = info.hlsUrl.orEmpty()
+        result["subtitles"] = info.subtitles.map { subtitleToMap(it) }
+        // ✅ FIXED: Use getRelatedItems() method
+        result["relatedItems"] = info.relatedItems.take(20).mapNotNull { infoItemToMap(it) }
+        // ✅ FIXED: MetaInfo mapping with getter methods
+        result["metaInfo"] = info.metaInfo.map { m ->
+            mapOf(
+                "title" to m.title.orEmpty(),
+                "content" to (m.content?.content ?: ""),
+                "urls" to m.urls.map { it.toString() },
+                "urlTexts" to m.urlTexts
+            )
+        }
+        return result
     }
 
     @Throws(ExtractionException::class, IOException::class)
@@ -513,32 +514,34 @@ class MavinEngineModule : Module() {
      * Maps CommentsInfoItem using only documented fields (v0.26.0 javadoc).
      * FIXED: Use getter methods instead of field access
      */
-    private fun commentItemToMap(item: CommentsInfoItem): Map<String, Any> = mapOf(
-        // ✅ FIXED: InfoItem parent class provides getName(), getUrl(), getThumbnails()
-        "authorName" to item.uploaderName.orEmpty(),
-        "authorUrl" to item.uploaderUrl.orEmpty(),
-        "authorAvatars" to item.uploaderAvatars.map { imageToMap(it) },
-        "authorVerified" to item.isUploaderVerified,
-        "commentId" to item.commentId.orEmpty(),
+    private fun commentItemToMap(item: CommentsInfoItem): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["authorName"] = item.uploaderName.orEmpty()
+        result["authorUrl"] = item.uploaderUrl.orEmpty()
+        result["authorAvatars"] = item.uploaderAvatars.map { imageToMap(it) }
+        result["authorVerified"] = item.isUploaderVerified
+        result["commentId"] = item.commentId.orEmpty()
         // ✅ FIXED: getCommentText() returns Description object with getContent() and getHtml()
-        "commentText" to (item.commentText?.content ?: ""),
-        "commentHtml" to (item.commentText?.html ?: ""),
-        "publishedTime" to item.textualUploadDate.orEmpty(),
+        result["commentText"] = item.commentText?.content ?: ""
+        result["commentHtml"] = item.commentText?.html ?: ""
+        result["publishedTime"] = item.textualUploadDate.orEmpty()
         // ✅ FIXED: getUploadDate() returns DateWrapper
-        "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L),
-        "likeCount" to item.likeCount.coerceAtLeast(0),
-        "textualLikeCount" to item.textualLikeCount.orEmpty(),
-        "replyCount" to item.replyCount,
+        result["publishedTimestamp"] = item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L
+        result["likeCount"] = item.likeCount.coerceAtLeast(0)
+        result["textualLikeCount"] = item.textualLikeCount.orEmpty()
+        result["replyCount"] = item.replyCount
         // ✅ FIXED: getRepliesPage() returns Page? — use getter and then getUrl()
-        "repliesPageUrl" to (item.repliesPage?.url ?: ""),
-        "hasReplies" to (item.replyCount > 0 || item.repliesPage != null),
-        "isPinned" to item.isPinned,
-        "isHearted" to item.isHeartedByUploader,
-        "isChannelOwner" to item.isChannelOwner,
+        result["repliesPageUrl"] = item.repliesPage?.url ?: ""
+        result["hasReplies"] = (item.replyCount > 0 || item.repliesPage != null)
+        result["isPinned"] = item.isPinned
+        result["isHearted"] = item.isHeartedByUploader
+        result["isChannelOwner"] = item.isChannelOwner
         // ✅ FIXED: hasCreatorReply() is a method, not a field
-        "hasCreatorReply" to item.hasCreatorReply(),
-        "streamPosition" to item.streamPosition
-    )
+        result["hasCreatorReply"] = item.hasCreatorReply()
+        result["streamPosition"] = item.streamPosition
+        return result
+    }
 
     // ════════════════════════════════════════════════════════════
     // SEARCH
@@ -609,32 +612,33 @@ class MavinEngineModule : Module() {
     private fun extractPlaylistInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
         val info = PlaylistInfo.getInfo(service, url)
-        return mapOf(
-            "success" to true,
-            "serviceId" to service.serviceId,
-            "id" to info.id,
-            "url" to info.url,
-            "originalUrl" to info.originalUrl,
-            "name" to info.name.orEmpty(),
-            // ✅ FIXED: Description uses getContent() and getHtml()
-            "description" to (info.description?.content ?: ""),
-            "descriptionHtml" to (info.description?.html ?: ""),
-            "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            "uploaderName" to info.uploaderName.orEmpty(),
-            "uploaderUrl" to info.uploaderUrl.orEmpty(),
-            "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
-            // ✅ FIXED: Use getter methods
-            "streamCount" to info.streamCount.coerceAtLeast(0),
-            "viewCount" to info.viewCount.coerceAtLeast(0),
-            // ✅ FIXED: PlaylistType enum via getPlaylistType()
-            "playlistType" to (info.playlistType?.name ?: "NORMAL"),
-            // ✅ FIXED: Use getNextPage() method
-            "nextPage" to info.nextPage?.let { pageToMap(it) },
-            "hasNextPage" to (info.nextPage != null),
-            // ✅ FIXED: Use getRelatedItems() method
-            "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-            "errors" to info.errors.map { it.message.orEmpty() }
-        )
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["success"] = true
+        result["serviceId"] = service.serviceId
+        result["id"] = info.id
+        result["url"] = info.url
+        result["originalUrl"] = info.originalUrl
+        result["name"] = info.name.orEmpty()
+        // ✅ FIXED: Description uses getContent() and getHtml()
+        result["description"] = info.description?.content ?: ""
+        result["descriptionHtml"] = info.description?.html ?: ""
+        result["thumbnails"] = info.thumbnails.map { imageToMap(it) }
+        result["uploaderName"] = info.uploaderName.orEmpty()
+        result["uploaderUrl"] = info.uploaderUrl.orEmpty()
+        result["uploaderAvatars"] = info.uploaderAvatars.map { imageToMap(it) }
+        // ✅ FIXED: Use getter methods
+        result["streamCount"] = info.streamCount.coerceAtLeast(0)
+        result["viewCount"] = info.viewCount.coerceAtLeast(0)
+        // ✅ FIXED: PlaylistType enum via getPlaylistType()
+        result["playlistType"] = info.playlistType?.name ?: "NORMAL"
+        // ✅ FIXED: Use getNextPage() method
+        result["nextPage"] = info.nextPage?.let { pageToMap(it) }
+        result["hasNextPage"] = (info.nextPage != null)
+        // ✅ FIXED: Use getRelatedItems() method
+        result["items"] = info.relatedItems.mapNotNull { infoItemToMap(it) }
+        result["errors"] = info.errors.map { it.message.orEmpty() }
+        return result
     }
 
     @Throws(ExtractionException::class, IOException::class)
@@ -671,36 +675,37 @@ class MavinEngineModule : Module() {
         val service = resolveService(url, serviceId)
         // ✅ OFFICIAL: ChannelInfo.getInfo(StreamingService, String url)
         val info = ChannelInfo.getInfo(service, url)
-        return mapOf(
-            "success" to true,
-            "serviceId" to service.serviceId,
-            "id" to info.id,
-            "url" to info.url,
-            "originalUrl" to info.originalUrl,
-            // ✅ FIXED: Use getName() method from InfoItem
-            "name" to info.name.orEmpty(),
-            // ✅ FIXED: Description getters
-            "description" to (info.description?.content ?: ""),
-            "descriptionHtml" to (info.description?.html ?: ""),
-            // ✅ FIXED: Use getter methods for Image lists
-            "avatars" to info.avatars.map { imageToMap(it) },
-            "banners" to info.banners.map { imageToMap(it) },
-            "feedUrl" to info.feedUrl.orEmpty(),
-            "subscriberCount" to info.subscriberCount.coerceAtLeast(0),
-            "streamCount" to info.streamCount.coerceAtLeast(0),
-            "viewCount" to info.viewCount.coerceAtLeast(0),
-            "isVerified" to info.isVerified,
-            // ✅ FIXED: tabs are ListLinkHandler — use getter methods
-            "tabs" to info.tabs.map { tab ->
-                mapOf(
-                    "name" to tab.name,
-                    "contentFilters" to tab.contentFilters,
-                    "url" to tab.url
-                )
-            },
-            "nextPage" to info.nextPage?.let { pageToMap(it) },
-            "errors" to info.errors.map { it.message.orEmpty() }
-        )
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["success"] = true
+        result["serviceId"] = service.serviceId
+        result["id"] = info.id
+        result["url"] = info.url
+        result["originalUrl"] = info.originalUrl
+        // ✅ FIXED: Use getName() method from InfoItem
+        result["name"] = info.name.orEmpty()
+        // ✅ FIXED: Description getters
+        result["description"] = info.description?.content ?: ""
+        result["descriptionHtml"] = info.description?.html ?: ""
+        // ✅ FIXED: Use getter methods for Image lists
+        result["avatars"] = info.avatars.map { imageToMap(it) }
+        result["banners"] = info.banners.map { imageToMap(it) }
+        result["feedUrl"] = info.feedUrl.orEmpty()
+        result["subscriberCount"] = info.subscriberCount.coerceAtLeast(0)
+        result["streamCount"] = info.streamCount.coerceAtLeast(0)
+        result["viewCount"] = info.viewCount.coerceAtLeast(0)
+        result["isVerified"] = info.isVerified
+        // ✅ FIXED: tabs are ListLinkHandler — use getter methods
+        result["tabs"] = info.tabs.map { tab ->
+            mapOf(
+                "name" to tab.name,
+                "contentFilters" to tab.contentFilters,
+                "url" to tab.url
+            )
+        }
+        result["nextPage"] = info.nextPage?.let { pageToMap(it) }
+        result["errors"] = info.errors.map { it.message.orEmpty() }
+        return result
     }
 
     @Throws(ExtractionException::class, IOException::class)
@@ -923,46 +928,53 @@ class MavinEngineModule : Module() {
     // ════════════════════════════════════════════════════════════
 
     private fun infoItemToMap(item: InfoItem): Map<String, Any>? = when (item) {
-        is StreamInfoItem -> mapOf(
-            "type" to "stream",
-            "serviceId" to item.serviceId,
+        is StreamInfoItem -> {
+            // ✅ FIXED: Use HashMap to avoid type inference issues
+            val result = HashMap<String, Any>()
+            result["type"] = "stream"
+            result["serviceId"] = item.serviceId
             // ✅ FIXED: Use getter methods from InfoItem parent class
-            "url" to item.url,
-            "name" to item.name.orEmpty(),
-            "uploaderName" to item.uploaderName.orEmpty(),
-            "uploaderUrl" to item.uploaderUrl.orEmpty(),
-            "uploaderVerified" to item.isUploaderVerified,
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "duration" to (item.duration ?: 0L),
-            "viewCount" to (item.viewCount ?: 0L),
-            "textualUploadDate" to item.textualUploadDate.orEmpty(),
-            "streamType" to item.streamType.name,
-            "isLive" to (item.streamType == LIVE_STREAM || item.streamType == AUDIO_LIVE_STREAM),
-            "isShortFormContent" to item.isShortFormContent
-        )
-        is PlaylistInfoItem -> mapOf(
-            "type" to "playlist",
-            "serviceId" to item.serviceId,
-            "url" to item.url,
-            "name" to item.name.orEmpty(),
-            "uploaderName" to item.uploaderName.orEmpty(),
-            "uploaderUrl" to item.uploaderUrl.orEmpty(),
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
+            result["url"] = item.url
+            result["name"] = item.name.orEmpty()
+            result["uploaderName"] = item.uploaderName.orEmpty()
+            result["uploaderUrl"] = item.uploaderUrl.orEmpty()
+            result["uploaderVerified"] = item.isUploaderVerified
+            result["thumbnails"] = item.thumbnails.map { imageToMap(it) }
+            result["duration"] = item.duration ?: 0L
+            result["viewCount"] = item.viewCount ?: 0L
+            result["textualUploadDate"] = item.textualUploadDate.orEmpty()
+            result["streamType"] = item.streamType.name
+            result["isLive"] = (item.streamType == LIVE_STREAM || item.streamType == AUDIO_LIVE_STREAM)
+            result["isShortFormContent"] = item.isShortFormContent
+            result
+        }
+        is PlaylistInfoItem -> {
+            val result = HashMap<String, Any>()
+            result["type"] = "playlist"
+            result["serviceId"] = item.serviceId
+            result["url"] = item.url
+            result["name"] = item.name.orEmpty()
+            result["uploaderName"] = item.uploaderName.orEmpty()
+            result["uploaderUrl"] = item.uploaderUrl.orEmpty()
+            result["thumbnails"] = item.thumbnails.map { imageToMap(it) }
             // ✅ FIXED: Use getter method
-            "streamCount" to (item.streamCount ?: 0L),
-            "playlistType" to (item.playlistType?.name ?: "NORMAL")
-        )
-        is ChannelInfoItem -> mapOf(
-            "type" to "channel",
-            "serviceId" to item.serviceId,
-            "url" to item.url,
-            "name" to item.name.orEmpty(),
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "subscriberCount" to (item.subscriberCount ?: 0L),
-            "streamCount" to (item.streamCount ?: 0L),
-            "isVerified" to item.isVerified,
-            "description" to item.description.orEmpty()
-        )
+            result["streamCount"] = item.streamCount ?: 0L
+            result["playlistType"] = item.playlistType?.name ?: "NORMAL"
+            result
+        }
+        is ChannelInfoItem -> {
+            val result = HashMap<String, Any>()
+            result["type"] = "channel"
+            result["serviceId"] = item.serviceId
+            result["url"] = item.url
+            result["name"] = item.name.orEmpty()
+            result["thumbnails"] = item.thumbnails.map { imageToMap(it) }
+            result["subscriberCount"] = item.subscriberCount ?: 0L
+            result["streamCount"] = item.streamCount ?: 0L
+            result["isVerified"] = item.isVerified
+            result["description"] = item.description.orEmpty()
+            result
+        }
         else -> null
     }
 
@@ -976,76 +988,91 @@ class MavinEngineModule : Module() {
      *    getAverageBitrate(), getCodec(), getAudioTrackId(), getAudioTrackName(),
      *    getAudioLocale(), getItagItem()
      */
-    private fun audioStreamToMap(s: AudioStream): Map<String, Any> = mapOf(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
-        "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""),
+    private fun audioStreamToMap(s: AudioStream): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["url"] = s.content ?: ""
+        result["isUrl"] = s.isUrl
+        result["deliveryMethod"] = s.deliveryMethod.name
+        result["format"] = s.format?.name ?: ""
+        result["codec"] = s.codec ?: ""
         // ✅ FIXED: Use getAverageBitrate() method
-        "averageBitrate" to s.averageBitrate,
-        "audioTrackId" to (s.audioTrackId ?: ""),
-        "audioTrackName" to (s.audioTrackName ?: ""),
+        result["averageBitrate"] = s.averageBitrate
+        result["audioTrackId"] = s.audioTrackId ?: ""
+        result["audioTrackName"] = s.audioTrackName ?: ""
         // ✅ FIXED: getAudioLocale() returns Locale, convert to string
-        "audioLocale" to (s.audioLocale?.toLanguageTag() ?: ""),
-        "manifestUrl" to (s.manifestUrl ?: "")
-    )
+        result["audioLocale"] = s.audioLocale?.toLanguageTag() ?: ""
+        result["manifestUrl"] = s.manifestUrl ?: ""
+        return result
+    }
 
     /**
      * ✅ FIXED: VideoStream getters: getContent(), getDeliveryMethod(), getFormat(),
      *    getCodec(), getWidth(), getHeight(), getFps(), getAverageBitrate()
      */
-    private fun videoStreamToMap(s: VideoStream): Map<String, Any> = mapOf(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
-        "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""),
-        "width" to (s.width ?: 0),
-        "height" to (s.height ?: 0),
-        "fps" to (s.fps ?: 0),
+    private fun videoStreamToMap(s: VideoStream): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["url"] = s.content ?: ""
+        result["isUrl"] = s.isUrl
+        result["deliveryMethod"] = s.deliveryMethod.name
+        result["format"] = s.format?.name ?: ""
+        result["codec"] = s.codec ?: ""
+        result["width"] = s.width ?: 0
+        result["height"] = s.height ?: 0
+        result["fps"] = s.fps ?: 0
         // ✅ FIXED: Use getAverageBitrate() method
-        "averageBitrate" to s.averageBitrate,
-        "manifestUrl" to (s.manifestUrl ?: ""),
-        "quality" to (s.quality ?: "")
-    )
+        result["averageBitrate"] = s.averageBitrate
+        result["manifestUrl"] = s.manifestUrl ?: ""
+        result["quality"] = s.quality ?: ""
+        return result
+    }
 
     /**
      * ✅ FIXED: SubtitlesStream getters: getContent(), getDeliveryMethod(), getFormat(),
      *    getLanguageCode(), getDisplayLanguageName(), isAutoGenerated()
      */
-    private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> = mapOf(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
-        "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
+    private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
+        result["url"] = s.content ?: ""
+        result["isUrl"] = s.isUrl
+        result["deliveryMethod"] = s.deliveryMethod.name
+        result["format"] = s.format?.name ?: ""
         // ✅ FIXED: Use getLanguageCode() method
-        "languageCode" to (s.languageCode ?: ""),
-        "displayLanguageName" to (s.displayLanguageName ?: ""),
-        "isAutoGenerated" to s.isAutoGenerated,
-        "manifestUrl" to (s.manifestUrl ?: "")
-    )
+        result["languageCode"] = s.languageCode ?: ""
+        result["displayLanguageName"] = s.displayLanguageName ?: ""
+        result["isAutoGenerated"] = s.isAutoGenerated
+        result["manifestUrl"] = s.manifestUrl ?: ""
+        return result
+    }
 
     /**
      * ✅ FIXED: Image getters: getUrl(), getWidth(), getHeight(), getEstimatedResolutionLevel()
      */
-    private fun imageToMap(img: Image): Map<String, Any> = mapOf(
+    private fun imageToMap(img: Image): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
         // ✅ FIXED: Use getter methods
-        "url" to img.url,
-        "width" to img.width,
-        "height" to img.height,
-        "resolutionLevel" to img.estimatedResolutionLevel.name
-    )
+        result["url"] = img.url
+        result["width"] = img.width
+        result["height"] = img.height
+        result["resolutionLevel"] = img.estimatedResolutionLevel.name
+        return result
+    }
 
     /**
      * ✅ FIXED: Page getters: getUrl(), getIds(), getBody(), getCookies()
      */
-    private fun pageToMap(p: Page): Map<String, Any> = mapOf(
+    private fun pageToMap(p: Page): Map<String, Any> {
+        // ✅ FIXED: Use HashMap to avoid type inference issues
+        val result = HashMap<String, Any>()
         // ✅ FIXED: Use getter methods
-        "url" to p.url,
-        "ids" to p.ids,
-        "cookies" to p.cookies
-    )
+        result["url"] = p.url
+        result["ids"] = p.ids
+        result["cookies"] = p.cookies
+        return result
+    }
 
     // ════════════════════════════════════════════════════════════
     // OFFICIAL DOWNLOADER — Downloader abstract class
