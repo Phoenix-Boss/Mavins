@@ -29,20 +29,13 @@ android {
 repositories {
     google()
     mavenCentral()
-    // ✅ JitPack repository for NewPipeExtractor
     maven { url 'https://jitpack.io' }
 }
 
 dependencies {
+    // The ONLY things you actually need
     implementation project(':expo-modules-core')
-
-    // ✅ Kotlin stdlib — matches project-level Kotlin version (2.1.20)
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:2.1.20"
-
-    // ✅ UPDATED: NewPipe Extractor — v0.26.0 (latest stable)
-    // Breaking change: Service.getMediaCapabilities() returns Set<MediaCapability>
-    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.0'
-
-    // ✅ OkHttp — used by MavinDownloader
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.20"
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.25.2'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
