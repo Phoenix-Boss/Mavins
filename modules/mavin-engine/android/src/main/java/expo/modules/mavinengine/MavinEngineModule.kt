@@ -319,15 +319,17 @@ class MavinEngineModule : Module() {
             "viewCount" to info.viewCount.coerceAtLeast(0),
             "likeCount" to info.likeCount.coerceAtLeast(0),
             "dislikeCount" to info.dislikeCount.coerceAtLeast(0),
-            "description" to (info.description?.content ?: ""),
-            "descriptionHtml" to (info.description?.html ?: ""),
+            // FIX: Description has getContent() method, not content field
+            "description" to info.description.content,
+            // FIX: Description may not have html property directly
+            "descriptionHtml" to info.description.content,
             "uploadDate" to (info.uploadDate?.offsetDateTime()?.toString() ?: ""),
             "textualUploadDate" to info.textualUploadDate.orEmpty(),
             "thumbnails" to info.thumbnails.map { imageToMap(it) },
             "streamType" to info.streamType.name,
             "isLive" to (info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM),
             "isShortFormContent" to info.isShortFormContent,
-            // FIX: Use getContentAvailability() method instead of availability field
+            // FIX: Use getContentAvailability() method
             "availability" to info.contentAvailability.name,
             "ageLimit" to info.ageLimit,
             "tags" to info.tags,
@@ -342,7 +344,8 @@ class MavinEngineModule : Module() {
             "metaInfo" to info.metaInfo.map { m ->
                 mapOf(
                     "title" to m.title.orEmpty(),
-                    "content" to (m.content?.content ?: ""),
+                    // FIX: MetaInfo content is Description type
+                    "content" to m.content.content,
                     "urls" to m.urls.map { it.toString() },
                     "urlTexts" to m.urlTexts
                 )
@@ -359,6 +362,7 @@ class MavinEngineModule : Module() {
 
         val best = when (format.lowercase()) {
             "audio", "mp3", "m4a", "ogg" ->
+                // FIX: Use getAverageBitrate() method
                 info.audioStreams.maxByOrNull { it.averageBitrate }?.content
             "video", "mp4", "best" ->
                 info.videoStreams.maxByOrNull { it.height ?: 0 }?.content
@@ -415,13 +419,15 @@ class MavinEngineModule : Module() {
         extractor.fetchPage()
         val info = StreamInfo.getInfo(extractor)
         val all = info.subtitles
+        // FIX: Use getLanguageTag() method instead of languageCode field
         val filtered = if (language.isNullOrBlank()) all
-                       else all.filter { it.languageCode.equals(language, ignoreCase = true) }
+                       else all.filter { it.getLanguageTag().equals(language, ignoreCase = true) }
         return mapOf(
             "success" to true,
             "title" to info.name.orEmpty(),
             "subtitles" to filtered.map { subtitleToMap(it) },
-            "availableLanguages" to all.mapNotNull { it.languageCode }.distinct()
+            // FIX: Use getLanguageTag() method
+            "availableLanguages" to all.map { it.getLanguageTag() }.distinct()
         )
     }
 
@@ -476,14 +482,16 @@ class MavinEngineModule : Module() {
         "authorAvatars" to item.uploaderAvatars.map { imageToMap(it) },
         "authorVerified" to item.isUploaderVerified,
         "commentId" to item.commentId.orEmpty(),
-        "commentText" to (item.commentText?.content ?: ""),
-        "commentHtml" to (item.commentText?.html ?: ""),
+        // FIX: Description has getContent() method
+        "commentText" to item.commentText.content,
+        // FIX: Description may not have html directly
+        "commentHtml" to item.commentText.content,
         "publishedTime" to item.textualUploadDate.orEmpty(),
         "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L),
         "likeCount" to item.likeCount.coerceAtLeast(0),
         "textualLikeCount" to item.textualLikeCount.orEmpty(),
         "replyCount" to item.replyCount,
-        // FIX: Use getReplies() method instead of repliesPage field
+        // FIX: Use getReplies() method
         "repliesPageUrl" to (item.getReplies()?.url ?: ""),
         "hasReplies" to (item.replyCount > 0 || item.getReplies() != null),
         "isPinned" to item.isPinned,
@@ -555,8 +563,9 @@ class MavinEngineModule : Module() {
             "url" to info.url,
             "originalUrl" to info.originalUrl,
             "name" to info.name.orEmpty(),
-            "description" to (info.description?.content ?: ""),
-            "descriptionHtml" to (info.description?.html ?: ""),
+            // FIX: PlaylistInfo description is Description type
+            "description" to info.description.content,
+            "descriptionHtml" to info.description.content,
             "thumbnails" to info.thumbnails.map { imageToMap(it) },
             "uploaderName" to info.uploaderName.orEmpty(),
             "uploaderUrl" to info.uploaderUrl.orEmpty(),
@@ -606,19 +615,18 @@ class MavinEngineModule : Module() {
             "url" to info.url,
             "originalUrl" to info.originalUrl,
             "name" to info.name.orEmpty(),
+            // FIX: ChannelInfo description is String type, not Description
             "description" to info.description.orEmpty(),
-            // FIX: ChannelInfo in v0.26.0 does NOT have getDescription() that returns Description
-            // It returns String directly. Remove descriptionHtml or use description.
             "avatars" to info.avatars.map { imageToMap(it) },
             "banners" to info.banners.map { imageToMap(it) },
             "feedUrl" to info.feedUrl.orEmpty(),
             "subscriberCount" to info.subscriberCount.coerceAtLeast(0),
             // FIX: ChannelInfo does NOT have viewCount or streamCount in v0.26.0
-            // These fields were removed - only subscriberCount is available
             "isVerified" to info.isVerified,
             "tabs" to info.tabs.map { tab ->
                 mapOf(
-                    "name" to tab.name,
+                    // FIX: ListLinkHandler doesn't have name field
+                    "name" to tab.contentFilters.firstOrNull().orEmpty(),
                     "contentFilters" to tab.contentFilters,
                     "url" to tab.url
                 )
@@ -637,7 +645,8 @@ class MavinEngineModule : Module() {
             "channelName" to info.name.orEmpty(),
             "tabs" to info.tabs.map { tab ->
                 mapOf(
-                    "name" to tab.name,
+                    // FIX: ListLinkHandler doesn't have name field
+                    "name" to tab.contentFilters.firstOrNull().orEmpty(),
                     "contentFilters" to tab.contentFilters,
                     "url" to tab.url
                 )
@@ -660,8 +669,7 @@ class MavinEngineModule : Module() {
             channelInfo.tabs.firstOrNull()
         } else {
             channelInfo.tabs.firstOrNull { tab ->
-                tab.contentFilters.any { it.equals(tabFilter, ignoreCase = true) } ||
-                tab.name.equals(tabFilter, ignoreCase = true)
+                tab.contentFilters.any { it.equals(tabFilter, ignoreCase = true) }
             }
         } ?: throw ExtractionException("No tab matching filter '$tabFilter'")
 
@@ -669,7 +677,8 @@ class MavinEngineModule : Module() {
             val tabInfo = ChannelTabInfo.getInfo(service, targetTab.url)
             mapOf(
                 "success" to true,
-                "tabName" to targetTab.name,
+                // FIX: Use contentFilters for name since ListLinkHandler has no name
+                "tabName" to targetTab.contentFilters.firstOrNull().orEmpty(),
                 "tabFilter" to tabFilter,
                 "items" to tabInfo.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to tabInfo.nextPage?.let { pageToMap(it) },
@@ -680,7 +689,7 @@ class MavinEngineModule : Module() {
             val more = ChannelTabInfo.getMoreItems(service, targetTab.url, Page(pageUrl))
             mapOf(
                 "success" to true,
-                "tabName" to targetTab.name,
+                "tabName" to targetTab.contentFilters.firstOrNull().orEmpty(),
                 "tabFilter" to tabFilter,
                 "items" to more.items.mapNotNull { infoItemToMap(it) },
                 "nextPage" to more.nextPage?.let { pageToMap(it) },
@@ -697,12 +706,10 @@ class MavinEngineModule : Module() {
             ?: return mapOf("success" to false, "error" to "NO_FEED", "message" to "No feed available for this service/channel")
 
         return if (pageUrl.isNullOrEmpty()) {
-            // FIX: FeedInfo.getInfo() returns FeedInfo which extends ListInfo which extends Info
-            // Info has getName() method
             val feedInfo = FeedInfo.getInfo(feedExtractor)
             mapOf(
                 "success" to true,
-                // FIX: Use getName() from Info base class
+                // FIX: FeedInfo extends ListInfo which extends Info - getName() is available
                 "name" to feedInfo.name.orEmpty(),
                 "items" to feedInfo.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to feedInfo.nextPage?.let { pageToMap(it) },
@@ -748,17 +755,12 @@ class MavinEngineModule : Module() {
         val localization = Localization.fromLocale(Locale.US)
 
         return if (pageUrl.isNullOrEmpty()) {
-            // FIX: KioskInfo.getInfo() with service and url (2 params) - no localization needed for this overload
-            // Actually, looking at javadoc, there are 3 overloads:
-            // 1. getInfo(String url)
-            // 2. getInfo(StreamingService service, String url)
-            // 3. getInfo(KioskExtractor extractor)
-            // Using the 2-param version
+            // FIX: KioskInfo.getInfo with service and kioskId (2 params)
             val info = KioskInfo.getInfo(service, kioskId)
             mapOf(
                 "success" to true,
                 "kioskId" to kioskId,
-                // FIX: Use getName() from Info base class
+                // FIX: Info has getName() method
                 "name" to info.name.orEmpty(),
                 "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to info.nextPage?.let { pageToMap(it) },
@@ -766,8 +768,7 @@ class MavinEngineModule : Module() {
                 "errors" to info.errors.map { it.message.orEmpty() }
             )
         } else {
-            // FIX: Need to get the kiosk URL first for getMoreItems
-            // KioskInfo.getMoreItems requires: (StreamingService service, String url, Page page)
+            // FIX: Need to get kiosk URL first for getMoreItems
             val kioskExtractor = service.kioskList.getExtractorById(kioskId, localization)
             val more = KioskInfo.getMoreItems(service, kioskExtractor.url, Page(pageUrl))
             mapOf(
@@ -886,6 +887,7 @@ class MavinEngineModule : Module() {
         "deliveryMethod" to s.deliveryMethod.name,
         "format" to (s.format?.name ?: ""),
         "codec" to (s.codec ?: ""),
+        // FIX: Use getAverageBitrate() method
         "averageBitrate" to s.averageBitrate,
         "audioTrackId" to (s.audioTrackId ?: ""),
         "audioTrackName" to (s.audioTrackName ?: ""),
@@ -912,7 +914,8 @@ class MavinEngineModule : Module() {
         "isUrl" to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name,
         "format" to (s.format?.name ?: ""),
-        "languageTag" to (s.languageTag ?: ""),
+        // FIX: Use getLanguageTag() method
+        "languageTag" to s.getLanguageTag(),
         "displayLanguageName" to (s.displayLanguageName ?: ""),
         "isAutoGenerated" to s.isAutoGenerated,
         "manifestUrl" to (s.manifestUrl ?: "")
