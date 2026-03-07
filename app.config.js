@@ -7,14 +7,14 @@ module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
 
   // MUST match the EAS project metadata
-  owner: "yiyiboks" ,
-  slug: "yiyiboks",
+  owner: "xidokok" ,
+  slug: "xidokok",
 
   version: packageJson.version,
 
   extra: {
     eas: {
-      projectId: "accbfeac-b417-4887-9efb-3da476123a49",
+      projectId: "e93a6b04-6714-4555-a844-2beebf5c613d",
     },
   },
 
