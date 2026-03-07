@@ -264,6 +264,19 @@ export interface CommentsMorePage {
   errors: string[];
 }
 
+/**
+ * Returned exclusively by getCommentReplies().
+ * The Kotlin mapper emits `replies` (not `comments`) for this call.
+ */
+export interface CommentRepliesPage {
+  success: boolean;
+  replies: CommentItem[];
+  /** Empty object `{}` when no next page — check `hasNextPage` instead */
+  nextPage: NativePage;
+  hasNextPage: boolean;
+  errors: string[];
+}
+
 // ─────────────────────────────────────────────
 // Search
 // ─────────────────────────────────────────────
@@ -397,15 +410,27 @@ export interface ChannelTabItemsPage {
   errors: string[];
 }
 
+/**
+ * Returned by getChannelFeed().
+ *
+ * The feed is served via the channel's "videos"/"uploads" tab in v0.26.0
+ * (StreamingService.feedExtractor was removed).  When the channel has no
+ * navigable tabs the Kotlin layer returns { success: false, error: "NO_FEED",
+ * message: "..." } — always check `success` before reading `items`.
+ */
 export interface ChannelFeedPage {
   success: boolean;
-  /** Only present on the first page */
+  /** Channel display name — only present on the first page */
   name?: string;
   items: InfoItem[];
   /** Empty object `{}` when no next page — check `hasNextPage` instead */
   nextPage: NativePage;
   hasNextPage: boolean;
   errors: string[];
+  /** Error code set when success=false, e.g. "NO_FEED" */
+  error?: string;
+  /** Human-readable detail set when success=false */
+  message?: string;
 }
 
 // ─────────────────────────────────────────────
@@ -576,7 +601,7 @@ export const getCommentReplies = (
   commentsUrl: string,
   repliesPageUrl: string,
   serviceId?: number
-): Promise<CommentsMorePage> =>
+): Promise<CommentRepliesPage> =>
   Native.getCommentReplies(commentsUrl, repliesPageUrl, serviceId ?? null);
 
 // ═════════════════════════════════════════════════════════════════

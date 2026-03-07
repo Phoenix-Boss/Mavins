@@ -16,10 +16,10 @@ import org.schabi.newpipe.extractor.channel.ChannelInfoItem
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabInfo
 import org.schabi.newpipe.extractor.comments.CommentsInfo
 import org.schabi.newpipe.extractor.comments.CommentsInfoItem
+import org.schabi.newpipe.extractor.description.Description
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.exceptions.*
-import org.schabi.newpipe.extractor.feed.FeedInfo
 import org.schabi.newpipe.extractor.kiosk.KioskInfo
 import org.schabi.newpipe.extractor.localization.ContentCountry
 import org.schabi.newpipe.extractor.localization.Localization
@@ -64,116 +64,87 @@ class MavinEngineModule : Module() {
         OnCreate { initializeNewPipe() }
 
         AsyncFunction("getStreamInfo") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractStreamInfo(url, serviceId)
+            ensureInit(); extractStreamInfo(url, serviceId)
         }
         AsyncFunction("getStreamInfoById") { videoId: String, serviceId: Int? ->
-            ensureInit()
-            extractStreamInfoById(videoId, serviceId)
+            ensureInit(); extractStreamInfoById(videoId, serviceId)
         }
         AsyncFunction("getStreamUrl") { url: String, format: String?, serviceId: Int? ->
-            ensureInit()
-            getBestStreamUrl(url, format ?: "best", serviceId)
+            ensureInit(); getBestStreamUrl(url, format ?: "best", serviceId)
         }
         AsyncFunction("getAudioStreams") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractAudioStreams(url, serviceId)
+            ensureInit(); extractAudioStreams(url, serviceId)
         }
         AsyncFunction("getVideoStreams") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractVideoStreams(url, serviceId)
+            ensureInit(); extractVideoStreams(url, serviceId)
         }
         AsyncFunction("getSubtitles") { url: String, language: String?, serviceId: Int? ->
-            ensureInit()
-            extractSubtitles(url, language, serviceId)
+            ensureInit(); extractSubtitles(url, language, serviceId)
         }
         AsyncFunction("getComments") { url: String, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            extractComments(url, pageUrl, serviceId)
+            ensureInit(); extractComments(url, pageUrl, serviceId)
         }
         AsyncFunction("getCommentReplies") { commentsUrl: String, repliesPageUrl: String, serviceId: Int? ->
-            ensureInit()
-            extractCommentReplies(commentsUrl, repliesPageUrl, serviceId)
+            ensureInit(); extractCommentReplies(commentsUrl, repliesPageUrl, serviceId)
         }
         AsyncFunction("search") { query: String, filter: String?, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            performSearch(query, filter ?: "all", pageUrl, serviceId)
+            ensureInit(); performSearch(query, filter ?: "all", pageUrl, serviceId)
         }
         AsyncFunction("getSearchSuggestions") { query: String, serviceId: Int? ->
-            ensureInit()
-            getSearchSuggestions(query, serviceId)
+            ensureInit(); getSearchSuggestions(query, serviceId)
         }
         AsyncFunction("getSearchFilters") { serviceId: Int? ->
-            ensureInit()
-            getAvailableSearchFilters(serviceId)
+            ensureInit(); getAvailableSearchFilters(serviceId)
         }
         AsyncFunction("getPlaylistInfo") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractPlaylistInfo(url, serviceId)
+            ensureInit(); extractPlaylistInfo(url, serviceId)
         }
         AsyncFunction("getPlaylistItems") { url: String, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            extractPlaylistItems(url, pageUrl, serviceId)
+            ensureInit(); extractPlaylistItems(url, pageUrl, serviceId)
         }
         AsyncFunction("getChannelInfo") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractChannelInfo(url, serviceId)
+            ensureInit(); extractChannelInfo(url, serviceId)
         }
         AsyncFunction("getChannelTabs") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractChannelTabs(url, serviceId)
+            ensureInit(); extractChannelTabs(url, serviceId)
         }
         AsyncFunction("getChannelTabItems") { url: String, tabFilter: String, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            extractChannelTabItems(url, tabFilter, pageUrl, serviceId)
+            ensureInit(); extractChannelTabItems(url, tabFilter, pageUrl, serviceId)
         }
         AsyncFunction("getChannelFeed") { url: String, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            extractChannelFeed(url, pageUrl, serviceId)
+            ensureInit(); extractChannelFeed(url, pageUrl, serviceId)
         }
         AsyncFunction("getKioskList") { serviceId: Int? ->
-            ensureInit()
-            listAvailableKiosks(serviceId)
+            ensureInit(); listAvailableKiosks(serviceId)
         }
         AsyncFunction("getKioskInfo") { kioskId: String, pageUrl: String?, serviceId: Int? ->
-            ensureInit()
-            extractKioskInfo(kioskId, pageUrl, serviceId)
+            ensureInit(); extractKioskInfo(kioskId, pageUrl, serviceId)
         }
         AsyncFunction("getTrending") { serviceId: Int? ->
-            ensureInit()
-            extractKioskInfo("Trending", null, serviceId)
+            ensureInit(); extractKioskInfo("Trending", null, serviceId)
         }
         AsyncFunction("getMostPopular") { serviceId: Int? ->
-            ensureInit()
-            extractKioskInfo("Most Popular", null, serviceId)
+            ensureInit(); extractKioskInfo("Most Popular", null, serviceId)
         }
         AsyncFunction("resolveUrl") { url: String, serviceId: Int? ->
-            ensureInit()
-            resolveUrl(url, serviceId)
+            ensureInit(); resolveUrl(url, serviceId)
         }
         AsyncFunction("canHandleUrl") { url: String, serviceId: Int? ->
-            ensureInit()
-            checkCanHandle(url, serviceId)
+            ensureInit(); checkCanHandle(url, serviceId)
         }
         AsyncFunction("extractIdFromUrl") { url: String, serviceId: Int? ->
-            ensureInit()
-            extractIdFromUrl(url, serviceId)
+            ensureInit(); extractIdFromUrl(url, serviceId)
         }
         AsyncFunction("ping") {
-            mapOf<String, Any>(
-                "alive" to true,
-                "version" to VERSION,
-                "timestamp" to System.currentTimeMillis()
-            )
+            mapOf("alive" to true, "version" to VERSION, "timestamp" to System.currentTimeMillis())
         }
         AsyncFunction("emergencyReset") { resetNewPipe() }
         AsyncFunction("getVersion") {
-            mapOf<String, Any>(
-                "version" to VERSION,
-                "library" to "NewPipeExtractor 0.26.0"
-            )
+            mapOf("version" to VERSION, "library" to "NewPipeExtractor 0.26.0")
         }
     }
+
+    // ── Init ──────────────────────────────────────────────────────────────────
 
     private fun initializeNewPipe() {
         if (isInitialized) return
@@ -194,18 +165,15 @@ class MavinEngineModule : Module() {
         }
     }
 
-    private fun ensureInit() {
-        if (!isInitialized) initializeNewPipe()
-    }
+    private fun ensureInit() { if (!isInitialized) initializeNewPipe() }
 
     private fun resetNewPipe(): Map<String, Any> {
         isInitialized = false
         initializeNewPipe()
-        return mapOf(
-            "success" to true,
-            "message" to "NewPipe reset and re-initialised"
-        )
+        return mapOf("success" to true, "message" to "NewPipe reset and re-initialised")
     }
+
+    // ── Service helpers ───────────────────────────────────────────────────────
 
     private fun getService(serviceId: Int?): StreamingService {
         val all = ServiceList.all()
@@ -213,21 +181,15 @@ class MavinEngineModule : Module() {
             all.firstOrNull { it.serviceId == serviceId }
                 ?: throw Exception("No service with id=$serviceId")
         } else {
-            all.firstOrNull { it.serviceId == 0 }
-                ?: all.firstOrNull()
+            all.firstOrNull { it.serviceId == 0 } ?: all.firstOrNull()
                 ?: throw Exception("No streaming services registered")
         }
     }
 
-    private fun getServiceForUrl(url: String): StreamingService {
-        return ServiceList.all().firstOrNull { service ->
-            try {
-                service.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE
-            } catch (_: Exception) {
-                false
-            }
+    private fun getServiceForUrl(url: String): StreamingService =
+        ServiceList.all().firstOrNull { s ->
+            try { s.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE } catch (_: Exception) { false }
         } ?: throw Exception("No service can handle URL: $url")
-    }
 
     private fun resolveService(url: String, serviceId: Int?): StreamingService =
         serviceId?.let { getService(it) } ?: getServiceForUrl(url)
@@ -236,19 +198,18 @@ class MavinEngineModule : Module() {
         if (!isInitialized) return emptyList()
         return ServiceList.all().map { s ->
             mapOf(
-                "id" to s.serviceId,
-                "name" to s.serviceInfo.name,
-                "baseUrl" to (s.baseUrl ?: ""),
-                "mediaCapabilities" to s.serviceInfo.mediaCapabilities.map { it.name }
+                "id"                 to s.serviceId,
+                "name"               to s.serviceInfo.name,
+                "baseUrl"            to (s.baseUrl ?: ""),
+                "mediaCapabilities"  to s.serviceInfo.mediaCapabilities.map { it.name }
             )
         }
     }
 
     // ── Description helper ────────────────────────────────────────────────────
-    // In NewPipe 0.26.x Description only exposes .content (plain text).
-    // There is no separate .html getter on the Description class itself.
-    private fun descContent(d: org.schabi.newpipe.extractor.utils.Identifiable?): String =
-        (d as? org.schabi.newpipe.extractor.description.Description)?.content ?: ""
+    // Description.content is the only text accessor in v0.26.0.
+    // The parameter type is the concrete Description class from the extractor.
+    private fun descText(d: Description?): String = d?.content ?: ""
 
     // ── Stream Info ───────────────────────────────────────────────────────────
 
@@ -270,52 +231,50 @@ class MavinEngineModule : Module() {
     }
 
     private fun streamInfoToMap(info: StreamInfo): Map<String, Any> {
-        val desc = info.description
-        return mapOf<String, Any>(
-            "success" to true,
-            "serviceId" to info.serviceId,
-            "id" to (info.id ?: ""),
-            "url" to (info.url ?: ""),
-            "originalUrl" to (info.originalUrl ?: ""),
-            "title" to (info.name ?: ""),
-            "uploaderName" to (info.uploaderName ?: ""),
-            "uploaderUrl" to (info.uploaderUrl ?: ""),
-            "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
-            "uploaderVerified" to info.isUploaderVerified,
-            "uploaderSubscriberCount" to info.uploaderSubscriberCount.coerceAtLeast(0),
-            "duration" to info.duration,
-            "viewCount" to info.viewCount.coerceAtLeast(0),
-            "likeCount" to info.likeCount.coerceAtLeast(0),
-            "dislikeCount" to info.dislikeCount.coerceAtLeast(0),
-            "description" to (desc?.content ?: ""),
-            // Description has no .html in 0.26.x — return content for both
-            "descriptionHtml" to (desc?.content ?: ""),
-            "uploadDate" to (info.uploadDate?.offsetDateTime()?.toString() ?: ""),
-            "textualUploadDate" to (info.textualUploadDate ?: ""),
-            "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            "streamType" to info.streamType.name,
-            "isLive" to (info.streamType == StreamType.LIVE_STREAM || info.streamType == StreamType.AUDIO_LIVE_STREAM),
-            "isShortFormContent" to info.isShortFormContent,
-            "availability" to (info.contentAvailability?.name ?: "PUBLIC"),
-            "ageLimit" to info.ageLimit,
-            "tags" to info.tags,
-            "category" to (info.category ?: ""),
-            "audioStreams" to info.audioStreams.map { audioStreamToMap(it) },
-            "videoStreams" to info.videoStreams.map { videoStreamToMap(it) },
-            "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) },
-            "dashMpdUrl" to (info.dashMpdUrl ?: ""),
-            "hlsUrl" to (info.hlsUrl ?: ""),
-            "subtitles" to info.subtitles.map { subtitleToMap(it) },
-            "relatedItems" to info.relatedItems.take(20).mapNotNull { infoItemToMap(it) },
-            "metaInfo" to info.metaInfo.map { m ->
-                mapOf<String, Any>(
-                    "title" to (m.title ?: ""),
-                    "content" to (m.content?.content ?: ""),
-                    "urls" to m.urls.map { it.toString() },
-                    "urlTexts" to m.urlTexts
-                )
-            }
-        )
+        val result = mutableMapOf<String, Any>()
+        result["success"]                 = true
+        result["serviceId"]               = info.serviceId
+        result["id"]                      = (info.id ?: "")
+        result["url"]                     = (info.url ?: "")
+        result["originalUrl"]             = (info.originalUrl ?: "")
+        result["title"]                   = (info.name ?: "")
+        result["uploaderName"]            = (info.uploaderName ?: "")
+        result["uploaderUrl"]             = (info.uploaderUrl ?: "")
+        result["uploaderAvatars"]         = info.uploaderAvatars.map { imageToMap(it) }
+        result["uploaderVerified"]        = info.isUploaderVerified
+        result["uploaderSubscriberCount"] = info.uploaderSubscriberCount.coerceAtLeast(0)
+        result["duration"]                = info.duration
+        result["viewCount"]               = info.viewCount.coerceAtLeast(0)
+        result["likeCount"]               = info.likeCount.coerceAtLeast(0)
+        result["dislikeCount"]            = info.dislikeCount.coerceAtLeast(0)
+        result["description"]             = descText(info.description)
+        result["descriptionHtml"]         = descText(info.description)
+        result["uploadDate"]              = (info.uploadDate?.offsetDateTime()?.toString() ?: "")
+        result["textualUploadDate"]       = (info.textualUploadDate ?: "")
+        result["thumbnails"]              = info.thumbnails.map { imageToMap(it) }
+        result["streamType"]              = info.streamType.name
+        result["isLive"]                  = (info.streamType == StreamType.LIVE_STREAM || info.streamType == StreamType.AUDIO_LIVE_STREAM)
+        result["isShortFormContent"]      = info.isShortFormContent
+        result["availability"]            = (info.contentAvailability?.name ?: "PUBLIC")
+        result["ageLimit"]                = info.ageLimit
+        result["tags"]                    = info.tags
+        result["category"]                = (info.category ?: "")
+        result["audioStreams"]            = info.audioStreams.map { audioStreamToMap(it) }
+        result["videoStreams"]            = info.videoStreams.map { videoStreamToMap(it) }
+        result["videoOnlyStreams"]        = info.videoOnlyStreams.map { videoStreamToMap(it) }
+        result["dashMpdUrl"]              = (info.dashMpdUrl ?: "")
+        result["hlsUrl"]                  = (info.hlsUrl ?: "")
+        result["subtitles"]               = info.subtitles.map { subtitleToMap(it) }
+        result["relatedItems"]            = info.relatedItems.take(20).mapNotNull { infoItemToMap(it) }
+        result["metaInfo"]                = info.metaInfo.map { m ->
+            mapOf(
+                "title"    to (m.title ?: ""),
+                "content"  to (m.content?.content ?: ""),
+                "urls"     to m.urls.map { u -> u.toString() },
+                "urlTexts" to m.urlTexts
+            )
+        }
+        return result
     }
 
     @Throws(Exception::class, IOException::class)
@@ -324,24 +283,20 @@ class MavinEngineModule : Module() {
         val extractor = service.getStreamExtractor(url)
         extractor.fetchPage()
         val info = StreamInfo.getInfo(extractor)
-
         val best = when (format.lowercase(Locale.US)) {
-            "audio", "mp3", "m4a", "ogg" ->
-                info.audioStreams.maxByOrNull { it.averageBitrate }?.content
-            "video", "mp4", "best" ->
-                info.videoStreams.maxByOrNull { (it.height ?: 0) }?.content
-                    ?: info.videoOnlyStreams.maxByOrNull { (it.height ?: 0) }?.content
+            "audio", "mp3", "m4a", "ogg" -> info.audioStreams.maxByOrNull { it.averageBitrate }?.content
+            "video", "mp4", "best"        -> info.videoStreams.maxByOrNull { it.height ?: 0 }?.content
+                                                ?: info.videoOnlyStreams.maxByOrNull { it.height ?: 0 }?.content
             "dash" -> info.dashMpdUrl.takeIf { !it.isNullOrEmpty() }
             "hls"  -> info.hlsUrl.takeIf { !it.isNullOrEmpty() }
             else   -> info.audioStreams.maxByOrNull { it.averageBitrate }?.content
         }
-
-        return mapOf<String, Any>(
-            "success" to (best != null),
-            "url" to (best ?: ""),
-            "format" to format,
-            "title" to (info.name ?: ""),
-            "duration" to info.duration,
+        return mapOf(
+            "success"      to (best != null),
+            "url"          to (best ?: ""),
+            "format"       to format,
+            "title"        to (info.name ?: ""),
+            "duration"     to info.duration,
             "fallbackUrls" to listOfNotNull(
                 info.dashMpdUrl?.takeIf { it.isNotEmpty() },
                 info.hlsUrl?.takeIf { it.isNotEmpty() }
@@ -355,9 +310,9 @@ class MavinEngineModule : Module() {
         val extractor = service.getStreamExtractor(url)
         extractor.fetchPage()
         val info = StreamInfo.getInfo(extractor)
-        return mapOf<String, Any>(
-            "success" to true,
-            "title" to (info.name ?: ""),
+        return mapOf(
+            "success"      to true,
+            "title"        to (info.name ?: ""),
             "audioStreams" to info.audioStreams.map { audioStreamToMap(it) }
         )
     }
@@ -368,10 +323,10 @@ class MavinEngineModule : Module() {
         val extractor = service.getStreamExtractor(url)
         extractor.fetchPage()
         val info = StreamInfo.getInfo(extractor)
-        return mapOf<String, Any>(
-            "success" to true,
-            "title" to (info.name ?: ""),
-            "videoStreams" to info.videoStreams.map { videoStreamToMap(it) },
+        return mapOf(
+            "success"          to true,
+            "title"            to (info.name ?: ""),
+            "videoStreams"     to info.videoStreams.map { videoStreamToMap(it) },
             "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) }
         )
     }
@@ -385,10 +340,10 @@ class MavinEngineModule : Module() {
         val all = info.subtitles
         val filtered = if (language.isNullOrBlank()) all
                        else all.filter { it.languageTag.equals(language, ignoreCase = true) }
-        return mapOf<String, Any>(
-            "success" to true,
-            "title" to (info.name ?: ""),
-            "subtitles" to filtered.map { subtitleToMap(it) },
+        return mapOf(
+            "success"            to true,
+            "title"              to (info.name ?: ""),
+            "subtitles"          to filtered.map { subtitleToMap(it) },
             "availableLanguages" to all.mapNotNull { it.languageTag }.distinct()
         )
     }
@@ -398,118 +353,101 @@ class MavinEngineModule : Module() {
     @Throws(Exception::class, IOException::class)
     private fun extractComments(url: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-
-        return if (pageUrl.isNullOrEmpty()) {
-            val commentsInfo = CommentsInfo.getInfo(service, url)
-            mapOf<String, Any>(
-                "success" to true,
-                "disabled" to commentsInfo.isCommentsDisabled,
-                "commentsCount" to commentsInfo.commentsCount,
-                "comments" to commentsInfo.relatedItems.map { commentItemToMap(it) },
-                "nextPage" to (commentsInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (commentsInfo.nextPage != null),
-                "errors" to commentsInfo.errors.map { it.message ?: "" }
-            )
+        val result = mutableMapOf<String, Any>()
+        if (pageUrl.isNullOrEmpty()) {
+            val info = CommentsInfo.getInfo(service, url)
+            result["success"]       = true
+            result["disabled"]      = info.isCommentsDisabled
+            result["commentsCount"] = info.commentsCount
+            result["comments"]      = info.relatedItems.map { commentItemToMap(it) }
+            result["nextPage"]      = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"]   = info.nextPage != null
+            result["errors"]        = info.errors.map { it.message ?: "" }
         } else {
-            val morePage = CommentsInfo.getMoreItems(service, url, Page(pageUrl))
-            mapOf<String, Any>(
-                "success" to true,
-                "comments" to morePage.items.map { commentItemToMap(it) },
-                "nextPage" to (morePage.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (morePage.nextPage != null),
-                "errors" to morePage.errors.map { it.message ?: "" }
-            )
+            val more = CommentsInfo.getMoreItems(service, url, Page(pageUrl))
+            result["success"]     = true
+            result["comments"]    = more.items.map { commentItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
+        return result
     }
 
     @Throws(Exception::class, IOException::class)
-    private fun extractCommentReplies(
-        commentsUrl: String,
-        repliesPageUrl: String,
-        serviceId: Int?
-    ): Map<String, Any> {
+    private fun extractCommentReplies(commentsUrl: String, repliesPageUrl: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(commentsUrl, serviceId)
         val page = CommentsInfo.getMoreItems(service, commentsUrl, Page(repliesPageUrl))
-        return mapOf<String, Any>(
-            "success" to true,
-            "replies" to page.items.map { commentItemToMap(it) },
-            "nextPage" to (page.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-            "hasNextPage" to (page.nextPage != null),
-            "errors" to page.errors.map { it.message ?: "" }
-        )
+        val result = mutableMapOf<String, Any>()
+        result["success"]     = true
+        result["replies"]     = page.items.map { commentItemToMap(it) }
+        result["nextPage"]    = page.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+        result["hasNextPage"] = page.nextPage != null
+        result["errors"]      = page.errors.map { it.message ?: "" }
+        return result
     }
 
     private fun commentItemToMap(item: CommentsInfoItem): Map<String, Any> {
-        return mapOf<String, Any>(
-            "authorName" to (item.uploaderName ?: ""),
-            "authorUrl" to (item.uploaderUrl ?: ""),
-            "authorAvatars" to item.uploaderAvatars.map { imageToMap(it) },
-            "authorVerified" to item.isUploaderVerified,
-            "commentId" to (item.commentId ?: ""),
-            "commentText" to (item.commentText?.content ?: ""),
-            "commentHtml" to (item.commentText?.content ?: ""),
-            "publishedTime" to (item.textualUploadDate ?: ""),
-            "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L),
-            "likeCount" to item.likeCount.coerceAtLeast(0),
-            "textualLikeCount" to (item.textualLikeCount ?: ""),
-            "replyCount" to item.replyCount,
-            "repliesPageUrl" to (item.replies?.url ?: ""),
-            "hasReplies" to (item.replyCount > 0 || item.replies != null),
-            "isPinned" to item.isPinned,
-            "isHearted" to item.isHeartedByUploader,
-            "isChannelOwner" to item.isChannelOwner,
-            "hasCreatorReply" to item.hasCreatorReply(),
-            "streamPosition" to item.streamPosition
-        )
+        val result = mutableMapOf<String, Any>()
+        result["authorName"]         = (item.uploaderName ?: "")
+        result["authorUrl"]          = (item.uploaderUrl ?: "")
+        result["authorAvatars"]      = item.uploaderAvatars.map { imageToMap(it) }
+        result["authorVerified"]     = item.isUploaderVerified
+        result["commentId"]          = (item.commentId ?: "")
+        result["commentText"]        = (item.commentText?.content ?: "")
+        result["commentHtml"]        = (item.commentText?.content ?: "")
+        result["publishedTime"]      = (item.textualUploadDate ?: "")
+        result["publishedTimestamp"] = (item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L)
+        result["likeCount"]          = item.likeCount.coerceAtLeast(0)
+        result["textualLikeCount"]   = (item.textualLikeCount ?: "")
+        result["replyCount"]         = item.replyCount
+        result["repliesPageUrl"]     = (item.replies?.url ?: "")
+        result["hasReplies"]         = (item.replyCount > 0 || item.replies != null)
+        result["isPinned"]           = item.isPinned
+        result["isHearted"]          = item.isHeartedByUploader
+        result["isChannelOwner"]     = item.isChannelOwner
+        result["hasCreatorReply"]    = item.hasCreatorReply()
+        result["streamPosition"]     = item.streamPosition
+        return result
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
 
     @Throws(Exception::class, IOException::class)
-    private fun performSearch(
-        query: String,
-        filter: String,
-        pageUrl: String?,
-        serviceId: Int?
-    ): Map<String, Any> {
+    private fun performSearch(query: String, filter: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = getService(serviceId ?: 0)
         val handler = service.searchQHFactory.fromQuery(query, listOf(filter), "")
-
-        return if (pageUrl.isNullOrEmpty()) {
+        val result = mutableMapOf<String, Any>()
+        if (pageUrl.isNullOrEmpty()) {
             val info = SearchInfo.getInfo(service, handler)
-            mapOf<String, Any>(
-                "success" to true,
-                "query" to (info.searchString ?: ""),
-                "suggestion" to (info.searchSuggestion ?: ""),
-                "isCorrectedSearch" to info.isCorrectedSearch,
-                "results" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (info.nextPage != null),
-                "errors" to info.errors.map { it.message ?: "" }
-            )
+            result["success"]           = true
+            result["query"]             = (info.searchString ?: "")
+            result["suggestion"]        = (info.searchSuggestion ?: "")
+            result["isCorrectedSearch"] = info.isCorrectedSearch
+            result["results"]           = info.relatedItems.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]          = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"]       = info.nextPage != null
+            result["errors"]            = info.errors.map { it.message ?: "" }
         } else {
             val more = SearchInfo.getMoreItems(service, handler, Page(pageUrl))
-            mapOf<String, Any>(
-                "success" to true,
-                "results" to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (more.nextPage != null),
-                "errors" to more.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["results"]     = more.items.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
+        return result
     }
 
     @Throws(Exception::class, IOException::class)
-    private fun getSearchSuggestions(query: String, serviceId: Int?): List<String> {
-        val service = getService(serviceId ?: 0)
-        return service.suggestionExtractor.suggestionList(query)
-    }
+    private fun getSearchSuggestions(query: String, serviceId: Int?): List<String> =
+        getService(serviceId ?: 0).suggestionExtractor.suggestionList(query)
 
     private fun getAvailableSearchFilters(serviceId: Int?): Map<String, Any> {
         val service = getService(serviceId ?: 0)
-        return mapOf<String, Any>(
-            "serviceId" to service.serviceId,
-            "serviceName" to service.serviceInfo.name,
+        return mapOf(
+            "serviceId"        to service.serviceId,
+            "serviceName"      to service.serviceInfo.name,
             "availableFilters" to service.searchQHFactory.availableContentFilter.toList()
         )
     }
@@ -520,50 +458,48 @@ class MavinEngineModule : Module() {
     private fun extractPlaylistInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
         val info = PlaylistInfo.getInfo(service, url)
-        val desc = info.description
-        return mapOf<String, Any>(
-            "success" to true,
-            "serviceId" to service.serviceId,
-            "id" to (info.id ?: ""),
-            "url" to (info.url ?: ""),
-            "originalUrl" to (info.originalUrl ?: ""),
-            "name" to (info.name ?: ""),
-            "description" to (desc?.content ?: ""),
-            "descriptionHtml" to (desc?.content ?: ""),
-            "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            "uploaderName" to (info.uploaderName ?: ""),
-            "uploaderUrl" to (info.uploaderUrl ?: ""),
-            "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
-            "streamCount" to info.streamCount.coerceAtLeast(0),
-            "playlistType" to (info.playlistType?.name ?: "NORMAL"),
-            "nextPage" to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-            "hasNextPage" to (info.nextPage != null),
-            "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-            "errors" to info.errors.map { it.message ?: "" }
-        )
+        val result = mutableMapOf<String, Any>()
+        result["success"]         = true
+        result["serviceId"]       = service.serviceId
+        result["id"]              = (info.id ?: "")
+        result["url"]             = (info.url ?: "")
+        result["originalUrl"]     = (info.originalUrl ?: "")
+        result["name"]            = (info.name ?: "")
+        result["description"]     = descText(info.description)
+        result["descriptionHtml"] = descText(info.description)
+        result["thumbnails"]      = info.thumbnails.map { imageToMap(it) }
+        result["uploaderName"]    = (info.uploaderName ?: "")
+        result["uploaderUrl"]     = (info.uploaderUrl ?: "")
+        result["uploaderAvatars"] = info.uploaderAvatars.map { imageToMap(it) }
+        result["streamCount"]     = info.streamCount.coerceAtLeast(0)
+        result["playlistType"]    = (info.playlistType?.name ?: "NORMAL")
+        result["nextPage"]        = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+        result["hasNextPage"]     = info.nextPage != null
+        result["items"]           = info.relatedItems.mapNotNull { infoItemToMap(it) }
+        result["errors"]          = info.errors.map { it.message ?: "" }
+        return result
     }
 
     @Throws(Exception::class, IOException::class)
     private fun extractPlaylistItems(url: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
+        val result = mutableMapOf<String, Any>()
         if (pageUrl.isNullOrEmpty()) {
             val info = PlaylistInfo.getInfo(service, url)
-            return mapOf<String, Any>(
-                "success" to true,
-                "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (info.nextPage != null),
-                "errors" to info.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["items"]       = info.relatedItems.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = info.nextPage != null
+            result["errors"]      = info.errors.map { it.message ?: "" }
+        } else {
+            val more = PlaylistInfo.getMoreItems(service, url, Page(pageUrl))
+            result["success"]     = true
+            result["items"]       = more.items.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
-        val more = PlaylistInfo.getMoreItems(service, url, Page(pageUrl))
-        return mapOf<String, Any>(
-            "success" to true,
-            "items" to more.items.mapNotNull { infoItemToMap(it) },
-            "nextPage" to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-            "hasNextPage" to (more.nextPage != null),
-            "errors" to more.errors.map { it.message ?: "" }
-        )
+        return result
     }
 
     // ── Channel ───────────────────────────────────────────────────────────────
@@ -572,46 +508,37 @@ class MavinEngineModule : Module() {
     private fun extractChannelInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
         val info = ChannelInfo.getInfo(service, url)
-        val desc = info.description
-        return mapOf<String, Any>(
-            "success" to true,
-            "serviceId" to service.serviceId,
-            "id" to (info.id ?: ""),
-            "url" to (info.url ?: ""),
-            "originalUrl" to (info.originalUrl ?: ""),
-            "name" to (info.name ?: ""),
-            "description" to (desc?.content ?: ""),
-            "descriptionHtml" to (desc?.content ?: ""),
-            "avatars" to info.avatars.map { imageToMap(it) },
-            "banners" to info.banners.map { imageToMap(it) },
-            "feedUrl" to (info.feedUrl ?: ""),
-            "subscriberCount" to info.subscriberCount.coerceAtLeast(0),
-            "isVerified" to info.isVerified,
-            "tabs" to info.tabs.map { tab ->
-                mapOf<String, Any>(
-                    "name" to tab.name,
-                    "contentFilters" to tab.contentFilters,
-                    "url" to tab.url
-                )
-            },
-            "nextPage" to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-            "errors" to info.errors.map { it.message ?: "" }
-        )
+        val result = mutableMapOf<String, Any>()
+        result["success"]         = true
+        result["serviceId"]       = service.serviceId
+        result["id"]              = (info.id ?: "")
+        result["url"]             = (info.url ?: "")
+        result["originalUrl"]     = (info.originalUrl ?: "")
+        result["name"]            = (info.name ?: "")
+        result["description"]     = descText(info.description)
+        result["descriptionHtml"] = descText(info.description)
+        result["avatars"]         = info.avatars.map { imageToMap(it) }
+        result["banners"]         = info.banners.map { imageToMap(it) }
+        result["feedUrl"]         = (info.feedUrl ?: "")
+        result["subscriberCount"] = info.subscriberCount.coerceAtLeast(0)
+        result["isVerified"]      = info.isVerified
+        result["tabs"]            = info.tabs.map { tab ->
+            mapOf("name" to tab.name, "contentFilters" to tab.contentFilters, "url" to tab.url)
+        }
+        result["nextPage"]        = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+        result["errors"]          = info.errors.map { it.message ?: "" }
+        return result
     }
 
     @Throws(Exception::class, IOException::class)
     private fun extractChannelTabs(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
         val info = ChannelInfo.getInfo(service, url)
-        return mapOf<String, Any>(
-            "success" to true,
+        return mapOf(
+            "success"     to true,
             "channelName" to (info.name ?: ""),
-            "tabs" to info.tabs.map { tab ->
-                mapOf<String, Any>(
-                    "name" to tab.name,
-                    "contentFilters" to tab.contentFilters,
-                    "url" to tab.url
-                )
+            "tabs"        to info.tabs.map { tab ->
+                mapOf("name" to tab.name, "contentFilters" to tab.contentFilters, "url" to tab.url)
             }
         )
     }
@@ -625,67 +552,73 @@ class MavinEngineModule : Module() {
     ): Map<String, Any> {
         val service = resolveService(channelUrl, serviceId)
         val channelInfo = ChannelInfo.getInfo(service, channelUrl)
-
         val targetTab = channelInfo.tabs.firstOrNull { tab ->
             tab.contentFilters.any { it.equals(tabFilter, ignoreCase = true) }
                 || tab.name.equals(tabFilter, ignoreCase = true)
         } ?: throw Exception("No tab matching filter '$tabFilter'")
 
-        return if (pageUrl.isNullOrEmpty()) {
+        val result = mutableMapOf<String, Any>()
+        result["tabName"]   = targetTab.name
+        result["tabFilter"] = tabFilter
+
+        if (pageUrl.isNullOrEmpty()) {
+            // ChannelTabInfo.getInfo() takes the ListLinkHandler (tab object) directly
             val tabInfo = ChannelTabInfo.getInfo(service, targetTab)
-            mapOf<String, Any>(
-                "success" to true,
-                "tabName" to targetTab.name,
-                "tabFilter" to tabFilter,
-                "items" to tabInfo.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (tabInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (tabInfo.nextPage != null),
-                "errors" to tabInfo.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["items"]       = tabInfo.relatedItems.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = tabInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = tabInfo.nextPage != null
+            result["errors"]      = tabInfo.errors.map { it.message ?: "" }
         } else {
             val more = ChannelTabInfo.getMoreItems(service, targetTab, Page(pageUrl))
-            mapOf<String, Any>(
-                "success" to true,
-                "tabName" to targetTab.name,
-                "tabFilter" to tabFilter,
-                "items" to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (more.nextPage != null),
-                "errors" to more.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["items"]       = more.items.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
+        return result
     }
 
+    /**
+     * Channel feed implemented via the "videos" / "uploads" tab.
+     * StreamingService.feedExtractor and FeedInfo.getMoreItems were removed
+     * in NewPipe Extractor v0.24+; this is the correct approach for v0.26.0.
+     */
     @Throws(Exception::class, IOException::class)
     private fun extractChannelFeed(url: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val feedExtractor = service.feedExtractor
-            ?: return mapOf<String, Any>(
+        val channelInfo = ChannelInfo.getInfo(service, url)
+
+        val feedTab = channelInfo.tabs.firstOrNull { tab ->
+            tab.contentFilters.any { f ->
+                f.equals("videos", ignoreCase = true) || f.equals("uploads", ignoreCase = true)
+            }
+        } ?: channelInfo.tabs.firstOrNull()
+            ?: return mapOf(
                 "success" to false,
-                "error" to "NO_FEED",
-                "message" to "No feed available for this service/channel"
+                "error"   to "NO_FEED",
+                "message" to "Channel has no tabs available"
             )
 
-        return if (pageUrl.isNullOrEmpty()) {
-            val feedInfo = FeedInfo.getInfo(feedExtractor)
-            mapOf<String, Any>(
-                "success" to true,
-                "name" to (feedInfo.name ?: ""),
-                "items" to feedInfo.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (feedInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (feedInfo.nextPage != null),
-                "errors" to feedInfo.errors.map { it.message ?: "" }
-            )
+        val result = mutableMapOf<String, Any>()
+        if (pageUrl.isNullOrEmpty()) {
+            val tabInfo = ChannelTabInfo.getInfo(service, feedTab)
+            result["success"]     = true
+            result["name"]        = (channelInfo.name ?: "")
+            result["items"]       = tabInfo.relatedItems.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = tabInfo.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = tabInfo.nextPage != null
+            result["errors"]      = tabInfo.errors.map { it.message ?: "" }
         } else {
-            val more = FeedInfo.getMoreItems(service, url, Page(pageUrl))
-            mapOf<String, Any>(
-                "success" to true,
-                "items" to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (more.nextPage != null),
-                "errors" to more.errors.map { it.message ?: "" }
-            )
+            val more = ChannelTabInfo.getMoreItems(service, feedTab, Page(pageUrl))
+            result["success"]     = true
+            result["items"]       = more.items.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
+        return result
     }
 
     // ── Kiosk ─────────────────────────────────────────────────────────────────
@@ -694,27 +627,16 @@ class MavinEngineModule : Module() {
     private fun listAvailableKiosks(serviceId: Int?): Map<String, Any> {
         val service = getService(serviceId ?: 0)
         val kioskList = service.kioskList
-        val ids = kioskList.availableKiosks
-        return mapOf<String, Any>(
-            "success" to true,
-            "serviceId" to service.serviceId,
+        return mapOf(
+            "success"        to true,
+            "serviceId"      to service.serviceId,
             "defaultKioskId" to kioskList.defaultKioskId,
-            "kiosks" to ids.map { id ->
+            "kiosks"         to kioskList.availableKiosks.map { id ->
                 try {
                     val extractor = kioskList.getExtractorById(id, null)
-                    mapOf<String, Any>(
-                        "id" to id,
-                        "name" to extractor.name,
-                        "url" to extractor.url,
-                        "available" to true
-                    )
+                    mapOf("id" to id, "name" to extractor.name, "url" to extractor.url, "available" to true)
                 } catch (e: Exception) {
-                    mapOf<String, Any>(
-                        "id" to id,
-                        "name" to id,
-                        "available" to false,
-                        "error" to (e.message ?: "")
-                    )
+                    mapOf("id" to id, "name" to id, "available" to false, "error" to (e.message ?: ""))
                 }
             }
         )
@@ -723,32 +645,28 @@ class MavinEngineModule : Module() {
     @Throws(Exception::class, IOException::class)
     private fun extractKioskInfo(kioskId: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = getService(serviceId ?: 0)
-        val kioskList = service.kioskList
-        val kioskExtractor = kioskList.getExtractorById(kioskId, null)
+        val kioskExtractor = service.kioskList.getExtractorById(kioskId, null)
         val kioskUrl = kioskExtractor.url
+        val result = mutableMapOf<String, Any>()
+        result["kioskId"] = kioskId
 
-        return if (pageUrl.isNullOrEmpty()) {
+        if (pageUrl.isNullOrEmpty()) {
             val info = KioskInfo.getInfo(service, kioskUrl)
-            mapOf<String, Any>(
-                "success" to true,
-                "kioskId" to kioskId,
-                "name" to (info.name ?: ""),
-                "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (info.nextPage != null),
-                "errors" to info.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["name"]        = (info.name ?: "")
+            result["items"]       = info.relatedItems.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = info.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = info.nextPage != null
+            result["errors"]      = info.errors.map { it.message ?: "" }
         } else {
             val more = KioskInfo.getMoreItems(service, kioskUrl, Page(pageUrl))
-            mapOf<String, Any>(
-                "success" to true,
-                "kioskId" to kioskId,
-                "items" to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage" to (more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()),
-                "hasNextPage" to (more.nextPage != null),
-                "errors" to more.errors.map { it.message ?: "" }
-            )
+            result["success"]     = true
+            result["items"]       = more.items.mapNotNull { infoItemToMap(it) }
+            result["nextPage"]    = more.nextPage?.let { pageToMap(it) } ?: emptyMap<String, Any>()
+            result["hasNextPage"] = more.nextPage != null
+            result["errors"]      = more.errors.map { it.message ?: "" }
         }
+        return result
     }
 
     // ── URL utilities ─────────────────────────────────────────────────────────
@@ -763,34 +681,35 @@ class MavinEngineModule : Module() {
             StreamingService.LinkType.PLAYLIST -> service.playlistLHFactory.fromUrl(url).id
             StreamingService.LinkType.NONE     -> throw Exception("URL not handled: $url")
         }
-        return mapOf<String, Any>(
-            "type" to linkType.name.lowercase(Locale.US),
-            "id" to id,
-            "url" to url,
-            "serviceId" to service.serviceId,
+        return mapOf(
+            "type"        to linkType.name.lowercase(Locale.US),
+            "id"          to id,
+            "url"         to url,
+            "serviceId"   to service.serviceId,
             "serviceName" to service.serviceInfo.name
         )
     }
 
     @Throws(Exception::class)
     private fun checkCanHandle(url: String, serviceId: Int?): Map<String, Any> {
-        val service = serviceId?.let { getService(it) } ?: run {
+        val explicitService = serviceId?.let { getService(it) }
+        if (explicitService == null) {
             val match = ServiceList.all().firstOrNull { s ->
                 try { s.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE } catch (_: Exception) { false }
             }
-            return mapOf<String, Any>(
-                "canHandle" to (match != null),
-                "serviceId" to (match?.serviceId ?: -1),
+            return mapOf(
+                "canHandle"   to (match != null),
+                "serviceId"   to (match?.serviceId ?: -1),
                 "serviceName" to (match?.serviceInfo?.name ?: ""),
-                "url" to url
+                "url"         to url
             )
         }
-        val linkType = service.getLinkTypeByUrl(url)
-        return mapOf<String, Any>(
-            "canHandle" to (linkType != StreamingService.LinkType.NONE),
-            "linkType" to linkType.name.lowercase(Locale.US),
-            "serviceId" to service.serviceId,
-            "url" to url
+        val linkType = explicitService.getLinkTypeByUrl(url)
+        return mapOf(
+            "canHandle"  to (linkType != StreamingService.LinkType.NONE),
+            "linkType"   to linkType.name.lowercase(Locale.US),
+            "serviceId"  to explicitService.serviceId,
+            "url"        to url
         )
     }
 
@@ -804,107 +723,115 @@ class MavinEngineModule : Module() {
             StreamingService.LinkType.PLAYLIST -> service.playlistLHFactory.fromUrl(url).id
             StreamingService.LinkType.NONE     -> throw Exception("Cannot extract ID: $url")
         }
-        return mapOf<String, Any>(
-            "id" to id,
-            "type" to linkType.name.lowercase(Locale.US),
-            "url" to url,
+        return mapOf(
+            "id"        to id,
+            "type"      to linkType.name.lowercase(Locale.US),
+            "url"       to url,
             "serviceId" to service.serviceId
         )
     }
 
     // ── InfoItem mapper ───────────────────────────────────────────────────────
 
-    private fun infoItemToMap(item: InfoItem): Map<String, Any>? = when (item) {
-        is StreamInfoItem -> mapOf<String, Any>(
-            "type" to "stream",
-            "serviceId" to item.serviceId,
-            "url" to item.url,
-            "name" to (item.name ?: ""),
-            "uploaderName" to (item.uploaderName ?: ""),
-            "uploaderUrl" to (item.uploaderUrl ?: ""),
-            "uploaderVerified" to item.isUploaderVerified,
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "duration" to (item.duration ?: 0L),
-            "viewCount" to (item.viewCount ?: 0L),
-            "textualUploadDate" to (item.textualUploadDate ?: ""),
-            "streamType" to item.streamType.name,
-            "isLive" to (item.streamType == StreamType.LIVE_STREAM || item.streamType == StreamType.AUDIO_LIVE_STREAM),
-            "isShortFormContent" to item.isShortFormContent
-        )
-        is PlaylistInfoItem -> mapOf<String, Any>(
-            "type" to "playlist",
-            "serviceId" to item.serviceId,
-            "url" to item.url,
-            "name" to (item.name ?: ""),
-            "uploaderName" to (item.uploaderName ?: ""),
-            "uploaderUrl" to (item.uploaderUrl ?: ""),
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "streamCount" to (item.streamCount ?: 0L),
-            "playlistType" to (item.playlistType?.name ?: "NORMAL")
-        )
-        is ChannelInfoItem -> mapOf<String, Any>(
-            "type" to "channel",
-            "serviceId" to item.serviceId,
-            "url" to item.url,
-            "name" to (item.name ?: ""),
-            "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "subscriberCount" to (item.subscriberCount ?: 0L),
-            "isVerified" to item.isVerified,
-            "description" to (item.description ?: "")
-        )
-        else -> null
+    private fun infoItemToMap(item: InfoItem): Map<String, Any>? {
+        return when (item) {
+            is StreamInfoItem -> {
+                val r = mutableMapOf<String, Any>()
+                r["type"]               = "stream"
+                r["serviceId"]          = item.serviceId
+                r["url"]                = item.url
+                r["name"]               = (item.name ?: "")
+                r["uploaderName"]       = (item.uploaderName ?: "")
+                r["uploaderUrl"]        = (item.uploaderUrl ?: "")
+                r["uploaderVerified"]   = item.isUploaderVerified
+                r["thumbnails"]         = item.thumbnails.map { imageToMap(it) }
+                r["duration"]           = (item.duration ?: 0L)
+                r["viewCount"]          = (item.viewCount ?: 0L)
+                r["textualUploadDate"]  = (item.textualUploadDate ?: "")
+                r["streamType"]         = item.streamType.name
+                r["isLive"]             = (item.streamType == StreamType.LIVE_STREAM || item.streamType == StreamType.AUDIO_LIVE_STREAM)
+                r["isShortFormContent"] = item.isShortFormContent
+                r
+            }
+            is PlaylistInfoItem -> {
+                val r = mutableMapOf<String, Any>()
+                r["type"]         = "playlist"
+                r["serviceId"]    = item.serviceId
+                r["url"]          = item.url
+                r["name"]         = (item.name ?: "")
+                r["uploaderName"] = (item.uploaderName ?: "")
+                r["uploaderUrl"]  = (item.uploaderUrl ?: "")
+                r["thumbnails"]   = item.thumbnails.map { imageToMap(it) }
+                r["streamCount"]  = (item.streamCount ?: 0L)
+                r["playlistType"] = (item.playlistType?.name ?: "NORMAL")
+                r
+            }
+            is ChannelInfoItem -> {
+                val r = mutableMapOf<String, Any>()
+                r["type"]            = "channel"
+                r["serviceId"]       = item.serviceId
+                r["url"]             = item.url
+                r["name"]            = (item.name ?: "")
+                r["thumbnails"]      = item.thumbnails.map { imageToMap(it) }
+                r["subscriberCount"] = (item.subscriberCount ?: 0L)
+                r["isVerified"]      = item.isVerified
+                r["description"]     = (item.description ?: "")
+                r
+            }
+            else -> null
+        }
     }
 
     // ── Stream mappers ────────────────────────────────────────────────────────
 
-    private fun audioStreamToMap(s: AudioStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
+    private fun audioStreamToMap(s: AudioStream): Map<String, Any> = mapOf(
+        "url"            to (s.content ?: ""),
+        "isUrl"          to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""),
+        "format"         to (s.format?.name ?: ""),
+        "codec"          to (s.codec ?: ""),
         "averageBitrate" to s.averageBitrate,
-        "audioTrackId" to (s.audioTrackId ?: ""),
+        "audioTrackId"   to (s.audioTrackId ?: ""),
         "audioTrackName" to (s.audioTrackName ?: ""),
-        "audioLocale" to (s.audioLocale?.toLanguageTag() ?: ""),
-        "manifestUrl" to (s.manifestUrl ?: "")
+        "audioLocale"    to (s.audioLocale?.toLanguageTag() ?: ""),
+        "manifestUrl"    to (s.manifestUrl ?: "")
     )
 
-    private fun videoStreamToMap(s: VideoStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
+    private fun videoStreamToMap(s: VideoStream): Map<String, Any> = mapOf(
+        "url"            to (s.content ?: ""),
+        "isUrl"          to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""),
-        "width" to (s.width ?: 0),
-        "height" to (s.height ?: 0),
-        "fps" to (s.fps ?: 0),
-        "bitrate" to s.bitrate,
-        "manifestUrl" to (s.manifestUrl ?: ""),
-        "quality" to (s.quality ?: "")
+        "format"         to (s.format?.name ?: ""),
+        "codec"          to (s.codec ?: ""),
+        "width"          to (s.width ?: 0),
+        "height"         to (s.height ?: 0),
+        "fps"            to (s.fps ?: 0),
+        "bitrate"        to s.bitrate,
+        "manifestUrl"    to (s.manifestUrl ?: ""),
+        "quality"        to (s.quality ?: "")
     )
 
-    private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""),
-        "isUrl" to s.isUrl,
-        "deliveryMethod" to s.deliveryMethod.name,
-        "format" to (s.format?.name ?: ""),
-        "languageTag" to (s.languageTag ?: ""),
+    private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> = mapOf(
+        "url"                 to (s.content ?: ""),
+        "isUrl"               to s.isUrl,
+        "deliveryMethod"      to s.deliveryMethod.name,
+        "format"              to (s.format?.name ?: ""),
+        "languageTag"         to (s.languageTag ?: ""),
         "displayLanguageName" to (s.displayLanguageName ?: ""),
-        "isAutoGenerated" to s.isAutoGenerated,
-        "manifestUrl" to (s.manifestUrl ?: "")
+        "isAutoGenerated"     to s.isAutoGenerated,
+        "manifestUrl"         to (s.manifestUrl ?: "")
     )
 
-    private fun imageToMap(img: Image): Map<String, Any> = mapOf<String, Any>(
-        "url" to img.url,
-        "width" to img.width,
-        "height" to img.height,
+    private fun imageToMap(img: Image): Map<String, Any> = mapOf(
+        "url"             to img.url,
+        "width"           to img.width,
+        "height"          to img.height,
         "resolutionLevel" to img.estimatedResolutionLevel.name
     )
 
-    private fun pageToMap(p: Page): Map<String, Any> = mapOf<String, Any>(
-        "url" to (p.url ?: ""),
-        "ids" to p.ids,
+    private fun pageToMap(p: Page): Map<String, Any> = mapOf(
+        "url"     to (p.url ?: ""),
+        "ids"     to p.ids,
         "cookies" to p.cookies
     )
 
@@ -913,11 +840,8 @@ class MavinEngineModule : Module() {
     class MavinDownloader(private val client: OkHttpClient) : Downloader() {
 
         @Throws(IOException::class, ExtractionException::class)
-        override fun execute(
-            request: org.schabi.newpipe.extractor.downloader.Request
-        ): Response {
+        override fun execute(request: org.schabi.newpipe.extractor.downloader.Request): Response {
             val builder = Request.Builder().url(request.url())
-
             when (request.httpMethod()) {
                 "POST" -> {
                     val body = request.dataToSend()
@@ -931,7 +855,6 @@ class MavinEngineModule : Module() {
                 "HEAD" -> builder.head()
                 else   -> builder.get()
             }
-
             val headers = request.headers()
             if (!headers.containsKey("User-Agent")) {
                 builder.addHeader(
@@ -943,11 +866,9 @@ class MavinEngineModule : Module() {
             headers.forEach { (key, values) ->
                 values.forEach { value -> builder.addHeader(key, value) }
             }
-
             val okResponse = client.newCall(builder.build()).execute()
             val responseBody = okResponse.body?.string() ?: ""
             val responseHeaders = okResponse.headers.toMultimap()
-
             return Response(
                 okResponse.code,
                 okResponse.message,
