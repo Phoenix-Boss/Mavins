@@ -44,19 +44,6 @@ import java.util.concurrent.TimeUnit
  *
  * Strictly follows official Javadoc:
  *   https://teamnewpipe.github.io/NewPipeExtractor/javadoc/ (v0.26.0)
- *
- * ═══════════════════════════════════════════════════════════════
- *  CRITICAL API USAGE (v0.26.0 compatible):
- * ═══════════════════════════════════════════════════════════════
- *  • Description: getContent(), getHtml()
- *  • Page: getUrl(), getIds(), getCookies(), getBody()
- *  • InfoItem: getName(), getUrl(), getThumbnails()
- *  • CommentsInfoItem: getCommentText(), getReplies() (NOT getRepliesPage)
- *  • AudioStream: getAverageBitrate(), getBitrate()
- *  • VideoStream: getBitrate() (NO getAverageBitrate)
- *  • SubtitlesStream: getLanguageTag(), getLocale() (NO getLanguageCode)
- *  • ListLinkHandler: getContentFilters() (field is protected)
- *  • StreamingService: getMediaCapabilities() returns Set<MediaCapability>
  */
 class MavinEngineModule : Module() {
 
@@ -67,7 +54,6 @@ class MavinEngineModule : Module() {
         private const val TAG = "MavinEngine"
         private const val VERSION = "6.0.3"
 
-        // ✅ OFFICIAL: Single shared OkHttpClient
         private val httpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
@@ -79,10 +65,6 @@ class MavinEngineModule : Module() {
         private var isInitialized = false
     }
 
-    // ════════════════════════════════════════════════════════════
-    // MODULE DEFINITION
-    // ════════════════════════════════════════════════════════════
-
     override fun definition() = ModuleDefinition {
         Name("MavinEngine")
 
@@ -92,7 +74,6 @@ class MavinEngineModule : Module() {
 
         OnCreate { initializeNewPipe() }
 
-        // ── Streams ────────────────────────────────────────────
         AsyncFunction("getStreamInfo") { url: String, serviceId: Int? ->
             ensureInit()
             extractStreamInfo(url, serviceId)
@@ -117,8 +98,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractSubtitles(url, language, serviceId)
         }
-
-        // ── Comments ───────────────────────────────────────────
         AsyncFunction("getComments") { url: String, pageUrl: String?, serviceId: Int? ->
             ensureInit()
             extractComments(url, pageUrl, serviceId)
@@ -127,8 +106,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractCommentReplies(commentsUrl, repliesPageUrl, serviceId)
         }
-
-        // ── Search ─────────────────────────────────────────────
         AsyncFunction("search") { query: String, filter: String?, pageUrl: String?, serviceId: Int? ->
             ensureInit()
             performSearch(query, filter ?: "all", pageUrl, serviceId)
@@ -141,8 +118,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             getAvailableSearchFilters(serviceId)
         }
-
-        // ── Playlist ───────────────────────────────────────────
         AsyncFunction("getPlaylistInfo") { url: String, serviceId: Int? ->
             ensureInit()
             extractPlaylistInfo(url, serviceId)
@@ -151,8 +126,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractPlaylistItems(url, pageUrl, serviceId)
         }
-
-        // ── Channel ────────────────────────────────────────────
         AsyncFunction("getChannelInfo") { url: String, serviceId: Int? ->
             ensureInit()
             extractChannelInfo(url, serviceId)
@@ -169,8 +142,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractChannelFeed(url, pageUrl, serviceId)
         }
-
-        // ── Kiosk / Trending ───────────────────────────────────
         AsyncFunction("getKioskList") { serviceId: Int? ->
             ensureInit()
             listAvailableKiosks(serviceId)
@@ -187,8 +158,6 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractKioskInfo("Live", null, serviceId)
         }
-
-        // ── URL Utilities ──────────────────────────────────────
         AsyncFunction("resolveUrl") { url: String, serviceId: Int? ->
             ensureInit()
             resolveUrl(url, serviceId)
@@ -201,18 +170,12 @@ class MavinEngineModule : Module() {
             ensureInit()
             extractIdFromUrl(url, serviceId)
         }
-
-        // ── Utility ────────────────────────────────────────────
         AsyncFunction("ping") {
             mapOf("alive" to true, "version" to VERSION, "timestamp" to System.currentTimeMillis())
         }
         AsyncFunction("emergencyReset") { resetNewPipe() }
         AsyncFunction("getVersion") { mapOf("version" to VERSION, "library" to "NewPipeExtractor 0.26.0") }
     }
-
-    // ════════════════════════════════════════════════════════════
-    // INITIALIZATION
-    // ════════════════════════════════════════════════════════════
 
     private fun initializeNewPipe() {
         if (isInitialized) return
@@ -242,10 +205,6 @@ class MavinEngineModule : Module() {
         initializeNewPipe()
         return mapOf("success" to true, "message" to "NewPipe reset and re-initialised")
     }
-
-    // ════════════════════════════════════════════════════════════
-    // SERVICE RESOLUTION
-    // ════════════════════════════════════════════════════════════
 
     private fun getService(serviceId: Int?): StreamingService {
         val all = ServiceList.all()
@@ -279,15 +238,11 @@ class MavinEngineModule : Module() {
                 "id" to s.serviceId,
                 "name" to s.serviceInfo.name,
                 "baseUrl" to s.baseUrl,
-                // ✅ FIXED: v0.26.0 returns Set<MediaCapability>, convert to List
+                // v0.26.0: getMediaCapabilities() returns Set<MediaCapability>
                 "mediaCapabilities" to s.serviceInfo.mediaCapabilities.map { it.name }
             )
         }
     }
-
-    // ════════════════════════════════════════════════════════════
-    // STREAM EXTRACTION
-    // ════════════════════════════════════════════════════════════
 
     @Throws(ExtractionException::class, IOException::class)
     private fun extractStreamInfo(url: String, serviceId: Int?): Map<String, Any> {
@@ -307,6 +262,7 @@ class MavinEngineModule : Module() {
     }
 
     private fun streamInfoToMap(info: StreamInfo, serviceId: Int): Map<String, Any> {
+        // Use explicit HashMap to avoid type inference issues
         val result = HashMap<String, Any>()
         result["success"] = true
         result["serviceId"] = serviceId
@@ -323,7 +279,7 @@ class MavinEngineModule : Module() {
         result["viewCount"] = info.viewCount.coerceAtLeast(0)
         result["likeCount"] = info.likeCount.coerceAtLeast(0)
         result["dislikeCount"] = info.dislikeCount.coerceAtLeast(0)
-        // ✅ FIXED: Description uses getContent() and getHtml()
+        // Description: use getContent() and getHtml() methods
         result["description"] = info.description?.getContent().orEmpty()
         result["descriptionHtml"] = info.description?.getHtml().orEmpty()
         result["uploadDate"] = info.uploadDate?.offsetDateTime()?.toString() ?: ""
@@ -342,9 +298,9 @@ class MavinEngineModule : Module() {
         result["dashMpdUrl"] = info.dashMpdUrl.orEmpty()
         result["hlsUrl"] = info.hlsUrl.orEmpty()
         result["subtitles"] = info.subtitles.map { subtitleToMap(it) }
-        // ✅ FIXED: Use getRelatedItems() method
+        // ListInfo: use getRelatedItems() method
         result["relatedItems"] = info.relatedItems.take(20).mapNotNull { infoItemToMap(it) }
-        // ✅ FIXED: MetaInfo.getContent() returns Description
+        // MetaInfo: getContent() returns Description
         result["metaInfo"] = info.metaInfo.map { m ->
             mapOf(
                 "title" to m.title.orEmpty(),
@@ -365,7 +321,6 @@ class MavinEngineModule : Module() {
 
         val best = when (format.lowercase()) {
             "audio", "mp3", "m4a", "ogg" ->
-                // ✅ FIXED: AudioStream has getAverageBitrate()
                 info.audioStreams.maxByOrNull { it.getAverageBitrate() }?.content
             "video", "mp4", "best" ->
                 info.videoStreams.maxByOrNull { (it.height ?: 0) }?.content
@@ -422,7 +377,7 @@ class MavinEngineModule : Module() {
         extractor.fetchPage()
         val info = StreamInfo.getInfo(extractor)
         val all = info.subtitles
-        // ✅ FIXED: SubtitlesStream uses getLanguageTag() (NOT getLanguageCode)
+        // SubtitlesStream: use getLanguageTag() (NOT getLanguageCode)
         val filtered = if (language.isNullOrBlank()) all
                        else all.filter { it.getLanguageTag().equals(language, ignoreCase = true) }
         return mapOf(
@@ -432,10 +387,6 @@ class MavinEngineModule : Module() {
             "availableLanguages" to all.mapNotNull { it.getLanguageTag() }.distinct()
         )
     }
-
-    // ════════════════════════════════════════════════════════════
-    // COMMENTS
-    // ════════════════════════════════════════════════════════════
 
     @Throws(ExtractionException::class, IOException::class)
     private fun extractComments(url: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
@@ -482,7 +433,7 @@ class MavinEngineModule : Module() {
     }
 
     /**
-     * ✅ CRITICAL FIX: CommentsInfoItem uses getReplies() (NOT getRepliesPage)
+     * CommentsInfoItem: v0.26.0 uses getReplies() (NOT getRepliesPage)
      */
     private fun commentItemToMap(item: CommentsInfoItem): Map<String, Any> {
         val result = HashMap<String, Any>()
@@ -491,7 +442,7 @@ class MavinEngineModule : Module() {
         result["authorAvatars"] = item.uploaderAvatars.map { imageToMap(it) }
         result["authorVerified"] = item.isUploaderVerified
         result["commentId"] = item.commentId.orEmpty()
-        // ✅ FIXED: getCommentText() returns Description
+        // getCommentText() returns Description
         result["commentText"] = item.commentText?.getContent().orEmpty()
         result["commentHtml"] = item.commentText?.getHtml().orEmpty()
         result["publishedTime"] = item.textualUploadDate.orEmpty()
@@ -499,7 +450,7 @@ class MavinEngineModule : Module() {
         result["likeCount"] = item.likeCount.coerceAtLeast(0)
         result["textualLikeCount"] = item.textualLikeCount.orEmpty()
         result["replyCount"] = item.replyCount
-        // ✅ CRITICAL: CommentsInfoItem uses getReplies() (NOT getRepliesPage)
+        // v0.26.0: getReplies() returns Page? (NOT getRepliesPage)
         result["repliesPageUrl"] = item.replies?.getUrl().orEmpty()
         result["hasReplies"] = (item.replyCount > 0 || item.replies != null)
         result["isPinned"] = item.isPinned
@@ -509,10 +460,6 @@ class MavinEngineModule : Module() {
         result["streamPosition"] = item.streamPosition
         return result
     }
-
-    // ════════════════════════════════════════════════════════════
-    // SEARCH
-    // ════════════════════════════════════════════════════════════
 
     @Throws(ExtractionException::class, IOException::class)
     private fun performSearch(
@@ -562,10 +509,6 @@ class MavinEngineModule : Module() {
             "availableFilters" to service.searchQHFactory.availableContentFilter.toList()
         )
     }
-
-    // ════════════════════════════════════════════════════════════
-    // PLAYLIST
-    // ════════════════════════════════════════════════════════════
 
     @Throws(ExtractionException::class, IOException::class)
     private fun extractPlaylistInfo(url: String, serviceId: Int?): Map<String, Any> {
@@ -617,10 +560,6 @@ class MavinEngineModule : Module() {
         )
     }
 
-    // ════════════════════════════════════════════════════════════
-    // CHANNEL
-    // ════════════════════════════════════════════════════════════
-
     @Throws(ExtractionException::class, IOException::class)
     private fun extractChannelInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
@@ -641,7 +580,7 @@ class MavinEngineModule : Module() {
         result["streamCount"] = info.streamCount.coerceAtLeast(0)
         result["viewCount"] = info.viewCount.coerceAtLeast(0)
         result["isVerified"] = info.isVerified
-        // ✅ FIXED: ListLinkHandler uses getContentFilters() method (field is protected)
+        // ListLinkHandler: use getContentFilters() method (field is protected)
         result["tabs"] = info.tabs.map { tab ->
             mapOf(
                 "name" to tab.getName(),
@@ -681,7 +620,7 @@ class MavinEngineModule : Module() {
         val service = resolveService(channelUrl, serviceId)
         val channelInfo = ChannelInfo.getInfo(service, channelUrl)
 
-        // ✅ FIXED: Use getContentFilters() method and getName()
+        // Use getContentFilters() method and getName()
         val targetTab = channelInfo.tabs.firstOrNull { tab ->
             tab.getContentFilters().any { it.equals(tabFilter, ignoreCase = true) }
                 || tab.getName().equals(tabFilter, ignoreCase = true)
@@ -740,10 +679,6 @@ class MavinEngineModule : Module() {
         }
     }
 
-    // ════════════════════════════════════════════════════════════
-    // KIOSK
-    // ════════════════════════════════════════════════════════════
-
     @Throws(ExtractionException::class, IOException::class)
     private fun listAvailableKiosks(serviceId: Int?): Map<String, Any> {
         val service = getService(serviceId ?: 0)
@@ -793,10 +728,6 @@ class MavinEngineModule : Module() {
             )
         }
     }
-
-    // ════════════════════════════════════════════════════════════
-    // URL UTILITIES
-    // ════════════════════════════════════════════════════════════
 
     @Throws(ExtractionException::class)
     private fun resolveUrl(url: String, serviceId: Int?): Map<String, Any> {
@@ -852,16 +783,12 @@ class MavinEngineModule : Module() {
         return mapOf("id" to id, "type" to linkType.name.lowercase(), "url" to url, "serviceId" to service.serviceId)
     }
 
-    // ════════════════════════════════════════════════════════════
-    // InfoItem → Map
-    // ════════════════════════════════════════════════════════════
-
     private fun infoItemToMap(item: InfoItem): Map<String, Any>? = when (item) {
         is StreamInfoItem -> {
             val result = HashMap<String, Any>()
             result["type"] = "stream"
             result["serviceId"] = item.serviceId
-            // ✅ FIXED: Use getter methods from InfoItem
+            // InfoItem: use getter methods
             result["url"] = item.getUrl()
             result["name"] = item.getName().orEmpty()
             result["uploaderName"] = item.uploaderName.orEmpty()
@@ -905,15 +832,6 @@ class MavinEngineModule : Module() {
         else -> null
     }
 
-    // ════════════════════════════════════════════════════════════
-    // Stream field mapping helpers
-    // ════════════════════════════════════════════════════════════
-
-    /**
-     * ✅ AudioStream: getContent(), getDeliveryMethod(), getFormat(),
-     *    getAverageBitrate(), getCodec(), getAudioTrackId(), getAudioTrackName(),
-     *    getAudioLocale()
-     */
     private fun audioStreamToMap(s: AudioStream): Map<String, Any> {
         val result = HashMap<String, Any>()
         result["url"] = s.content ?: ""
@@ -921,7 +839,7 @@ class MavinEngineModule : Module() {
         result["deliveryMethod"] = s.deliveryMethod.name
         result["format"] = s.format?.name ?: ""
         result["codec"] = s.codec ?: ""
-        // ✅ AudioStream has getAverageBitrate()
+        // AudioStream: has getAverageBitrate()
         result["averageBitrate"] = s.getAverageBitrate()
         result["audioTrackId"] = s.audioTrackId ?: ""
         result["audioTrackName"] = s.audioTrackName ?: ""
@@ -930,11 +848,6 @@ class MavinEngineModule : Module() {
         return result
     }
 
-    /**
-     * ✅ VideoStream: getContent(), getDeliveryMethod(), getFormat(),
-     *    getCodec(), getWidth(), getHeight(), getFps(), getBitrate()
-     *    ❌ NO getAverageBitrate() - only getBitrate()
-     */
     private fun videoStreamToMap(s: VideoStream): Map<String, Any> {
         val result = HashMap<String, Any>()
         result["url"] = s.content ?: ""
@@ -945,25 +858,20 @@ class MavinEngineModule : Module() {
         result["width"] = s.width ?: 0
         result["height"] = s.height ?: 0
         result["fps"] = s.fps ?: 0
-        // ✅ VideoStream has getBitrate(), NOT getAverageBitrate()
+        // VideoStream: has getBitrate(), NOT getAverageBitrate()
         result["bitrate"] = s.getBitrate()
         result["manifestUrl"] = s.manifestUrl ?: ""
         result["quality"] = s.quality ?: ""
         return result
     }
 
-    /**
-     * ✅ SubtitlesStream: getContent(), getDeliveryMethod(), getFormat(),
-     *    getLanguageTag(), getDisplayLanguageName(), isAutoGenerated()
-     *    ❌ NO getLanguageCode() - use getLanguageTag()
-     */
     private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> {
         val result = HashMap<String, Any>()
         result["url"] = s.content ?: ""
         result["isUrl"] = s.isUrl
         result["deliveryMethod"] = s.deliveryMethod.name
         result["format"] = s.format?.name ?: ""
-        // ✅ SubtitlesStream has getLanguageTag(), NOT getLanguageCode()
+        // SubtitlesStream: has getLanguageTag(), NOT getLanguageCode()
         result["languageTag"] = s.getLanguageTag() ?: ""
         result["displayLanguageName"] = s.displayLanguageName ?: ""
         result["isAutoGenerated"] = s.isAutoGenerated
@@ -971,11 +879,9 @@ class MavinEngineModule : Module() {
         return result
     }
 
-    /**
-     * ✅ Image: getUrl(), getHeight(), getWidth(), getEstimatedResolutionLevel()
-     */
     private fun imageToMap(img: Image): Map<String, Any> {
         val result = HashMap<String, Any>()
+        // Image: use getter methods
         result["url"] = img.getUrl()
         result["width"] = img.getWidth()
         result["height"] = img.getHeight()
@@ -983,20 +889,14 @@ class MavinEngineModule : Module() {
         return result
     }
 
-    /**
-     * ✅ Page: getUrl(), getIds(), getCookies(), getBody()
-     */
     private fun pageToMap(p: Page): Map<String, Any> {
         val result = HashMap<String, Any>()
+        // Page: use getter methods
         result["url"] = p.getUrl()
         result["ids"] = p.getIds()
         result["cookies"] = p.getCookies()
         return result
     }
-
-    // ════════════════════════════════════════════════════════════
-    // OFFICIAL DOWNLOADER
-    // ════════════════════════════════════════════════════════════
 
     class MavinDownloader(private val client: OkHttpClient) : Downloader() {
 
