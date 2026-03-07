@@ -696,7 +696,7 @@ class MavinEngineModule : Module() {
             "subscriberCount" to info.subscriberCount.coerceAtLeast(0),
             "isVerified"      to info.isVerified,
             "tabs"            to info.tabs.map { tabLinkHandlerToMap(it) },
-            "nextPage"        to pageOrEmpty(info.nextPage),
+            // ChannelInfo extends Info (not ListInfo) — no nextPage field
             "errors"          to info.errors.map { it.message.orEmpty() }
         )
     }
