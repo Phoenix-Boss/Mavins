@@ -353,54 +353,54 @@ class MavinEngineModule : Module() {
      *  DateWrapper.offsetDateTime() was replaced by .date() returning Instant in v0.25.0+.
      *  Use uploadDate?.date?.toString() safely.
      */
-    private fun streamInfoToMap(info: StreamInfo, serviceId: Int): Map<String, Any> {
-        return mapOf<String, Any>(
-            "success"                  to true,
-            "serviceId"                to serviceId,
-            "id"                       to info.id,
-            "url"                      to info.url,
-            "originalUrl"              to info.originalUrl,
-            "title"                    to info.name.orEmpty(),
-            "uploaderName"             to info.uploaderName.orEmpty(),
-            "uploaderUrl"              to info.uploaderUrl.orEmpty(),
-            "uploaderAvatars"          to info.uploaderAvatars.map { imageToMap(it) },
-            "uploaderVerified"         to info.isUploaderVerified,
+    // Use buildMap to avoid Kotlin type-inference failure on large heterogeneous mapOf blocks
+    private fun streamInfoToMap(info: StreamInfo, serviceId: Int): Map<String, Any> =
+        buildMap<String, Any> {
+            put("success",                 true)
+            put("serviceId",               serviceId)
+            put("id",                      info.id)
+            put("url",                     info.url)
+            put("originalUrl",             info.originalUrl)
+            put("title",                   info.name.orEmpty())
+            put("uploaderName",            info.uploaderName.orEmpty())
+            put("uploaderUrl",             info.uploaderUrl.orEmpty())
+            put("uploaderAvatars",         info.uploaderAvatars.map { imageToMap(it) })
+            put("uploaderVerified",        info.isUploaderVerified)
             // uploaderSubscriberCount returns -1 when unknown; clamp to 0 for JS consumers
-            "uploaderSubscriberCount"  to info.uploaderSubscriberCount.coerceAtLeast(0),
-            "duration"                 to info.duration,
-            "viewCount"                to info.viewCount.coerceAtLeast(0),
-            "likeCount"                to info.likeCount.coerceAtLeast(0),
-            "dislikeCount"             to info.dislikeCount.coerceAtLeast(0),
+            put("uploaderSubscriberCount", info.uploaderSubscriberCount.coerceAtLeast(0))
+            put("duration",                info.duration)
+            put("viewCount",               info.viewCount.coerceAtLeast(0))
+            put("likeCount",               info.likeCount.coerceAtLeast(0))
+            put("dislikeCount",            info.dislikeCount.coerceAtLeast(0))
             // Description.content is the plain-text accessor in Kotlin (getContent() in Java)
-            "description"              to info.description.content,
-            "uploadDate"               to (info.uploadDate?.offsetDateTime()?.toString() ?: ""),
-            "textualUploadDate"        to info.textualUploadDate.orEmpty(),
-            "thumbnails"               to info.thumbnails.map { imageToMap(it) },
-            "streamType"               to info.streamType.name,
-            "isLive"                   to (info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM),
-            "isShortFormContent"       to info.isShortFormContent,
+            put("description",             info.description.content)
+            put("uploadDate",              info.uploadDate?.offsetDateTime()?.toString() ?: "")
+            put("textualUploadDate",       info.textualUploadDate.orEmpty())
+            put("thumbnails",              info.thumbnails.map { imageToMap(it) })
+            put("streamType",              info.streamType.name)
+            put("isLive",                  info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM)
+            put("isShortFormContent",      info.isShortFormContent)
             // getContentAvailability() returns ContentAvailability enum
-            "availability"             to info.getContentAvailability().name,
-            "ageLimit"                 to info.ageLimit,
-            "tags"                     to info.tags,
-            "category"                 to info.category.orEmpty(),
-            "audioStreams"             to info.audioStreams.map { audioStreamToMap(it) },
-            "videoStreams"             to info.videoStreams.map { videoStreamToMap(it) },
-            "videoOnlyStreams"         to info.videoOnlyStreams.map { videoStreamToMap(it) },
-            "dashMpdUrl"               to info.dashMpdUrl.orEmpty(),
-            "hlsUrl"                   to info.hlsUrl.orEmpty(),
-            "subtitles"                to info.subtitles.map { subtitleToMap(it) },
-            "relatedItems"             to info.relatedItems.take(20).mapNotNull { infoItemToMap(it) },
-            "metaInfo"                 to info.metaInfo.map { m ->
+            put("availability",            info.getContentAvailability().name)
+            put("ageLimit",                info.ageLimit)
+            put("tags",                    info.tags)
+            put("category",                info.category.orEmpty())
+            put("audioStreams",            info.audioStreams.map { audioStreamToMap(it) })
+            put("videoStreams",            info.videoStreams.map { videoStreamToMap(it) })
+            put("videoOnlyStreams",        info.videoOnlyStreams.map { videoStreamToMap(it) })
+            put("dashMpdUrl",              info.dashMpdUrl.orEmpty())
+            put("hlsUrl",                  info.hlsUrl.orEmpty())
+            put("subtitles",               info.subtitles.map { subtitleToMap(it) })
+            put("relatedItems",            info.relatedItems.take(20).mapNotNull { infoItemToMap(it) })
+            put("metaInfo",                info.metaInfo.map { m ->
                 mapOf<String, Any>(
                     "title"    to m.title.orEmpty(),
                     "content"  to m.content.content,
                     "urls"     to m.urls.map { it.toString() },
                     "urlTexts" to m.urlTexts
                 )
-            }
-        )
-    }
+            })
+        }
 
     @Throws(ExtractionException::class, IOException::class)
     private fun getBestStreamUrl(url: String, format: String, serviceId: Int?): Map<String, Any> {
@@ -796,7 +796,7 @@ class MavinEngineModule : Module() {
     // ── Kiosk ───────────────────────────────────────────────────────────────
 
     /**
-     * KioskList.getExtractorById(kioskId, Localization) — returns KioskExtractor.
+     * KioskList.getExtractorById(kioskId, Page?) — second param is Page? (null for first page), NOT Localization.
      * KioskExtractor.url — gives the URL string.
      * KioskInfo.getInfo(StreamingService, String) — String is the kiosk URL.
      * KioskInfo.getMoreItems(StreamingService, String, Page) — String is the kiosk URL.
@@ -806,37 +806,37 @@ class MavinEngineModule : Module() {
         val service = if (serviceId != null) getService(serviceId) else getDefaultService()
         val kioskList = service.kioskList
         val ids = kioskList.availableKiosks
+        // Use mutableMapOf per entry to avoid Kotlin mixed-type inference failure in try/catch
+        // getExtractorById(String, Page?) — second param is Page?, not Localization; pass null
+        val kioskEntries: List<Map<String, Any>> = ids.map { id ->
+            val entry = mutableMapOf<String, Any>()
+            try {
+                val extractor = kioskList.getExtractorById(id, null)
+                entry["id"]        = id
+                entry["name"]      = extractor.name
+                entry["url"]       = extractor.url
+                entry["available"] = true
+            } catch (e: Exception) {
+                entry["id"]        = id
+                entry["name"]      = id
+                entry["available"] = false
+                entry["error"]     = e.message ?: ""
+            }
+            entry
+        }
         return mapOf<String, Any>(
             "success"        to true,
             "serviceId"      to service.serviceId,
-            "defaultKioskId" to kioskList.defaultKioskId,
-            "kiosks"         to ids.map { id ->
-                try {
-                    val extractor = kioskList.getExtractorById(id, Localization.fromLocale(Locale.US))
-                    mapOf<String, Any>(
-                        "id"        to id,
-                        "name"      to extractor.name,
-                        "url"       to extractor.url,
-                        "available" to true
-                    )
-                } catch (e: Exception) {
-                    mapOf<String, Any>(
-                        "id"        to id,
-                        "name"      to id,
-                        "available" to false,
-                        "error"     to e.message.orEmpty()
-                    )
-                }
-            }
+            "defaultKioskId" to (kioskList.defaultKioskId ?: ""),
+            "kiosks"         to kioskEntries
         )
     }
 
     @Throws(ExtractionException::class, IOException::class)
     private fun extractKioskInfo(kioskId: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = if (serviceId != null) getService(serviceId) else getDefaultService()
-        val localization = Localization.fromLocale(Locale.US)
-        // Must get the URL from the extractor; KioskInfo.getInfo takes a URL string, not an id
-        val kioskExtractor = service.kioskList.getExtractorById(kioskId, localization)
+        // getExtractorById(String, Page?) — second param is Page?, not Localization; pass null
+        val kioskExtractor = service.kioskList.getExtractorById(kioskId, null)
         val kioskUrl = kioskExtractor.url
 
         return if (pageUrl.isNullOrEmpty()) {
