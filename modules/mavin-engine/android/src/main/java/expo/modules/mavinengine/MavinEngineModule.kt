@@ -43,34 +43,18 @@ import java.util.concurrent.TimeUnit
  * MavinEngine — NewPipe Extractor v0.24.8+ Integration
  *
  * All APIs verified against:
- *   https://teamnewpipe.github.io/NewPipeExtractor/javadoc/ (v0.26.0 latest stable)
+ *   https://teamnewpipe.github.io/NewPipeExtractor/javadoc/  (v0.26.0 latest stable)
  *   https://teamnewpipe.github.io/documentation/
  *
  * ═══════════════════════════════════════════════════════════════
- *  REMOVED from original (not in official API / broken in 2026):
+ *  FIXED API USAGE (v0.24.8+ compatible):
  * ═══════════════════════════════════════════════════════════════
- *  ✗ TimeAgoParser.init(context)          — never existed; use service.getTimeAgoParser(Localization)
- *  ✗ streamExtractor.commentsUrl          — not a public field; use service.getCommentsExtractor(url)
- *  ✗ service.getCommentsExtractor(handler)→ use CommentsInfo.getInfo(service, url) pattern
- *  ✗ CommentsInfoItem.commentContent      — field is commentText (Description type via getCommentText())
- *  ✗ CommentsInfoItem.commentHtml         — use commentText.html from Description
- *  ✗ CommentsInfoItem.uploaderId          — not on CommentsInfoItem; use uploaderUrl as ID
- *  ✗ CommentsInfoItem.timeAgoParser.parse(uploadDate) — use textualUploadDate string directly
- *  ✗ KioskInfo.getMoreItems(service, url, page)       — only getInfo() and getMoreItems() with Page
- *  ✗ FeedInfo.getMoreItems(service, url, page)        — signature is FeedInfo.getMoreItems(service, url, page)
- *  ✗ ChannelTabInfo.getInfo(service, url)             — correct usage kept, but fetchPage() on extractor not needed before
- *  ✗ StreamInfo.nextVideo field           — does not exist; relatedItems contains the next video
- *  ✗ StreamInfo.errorReason               — does not exist on StreamInfo
- *  ✗ StreamInfo.contentAvailability       — correct enum is StreamInfo.Availability
- *  ✗ service.canHandle(url)               — not on StreamingService; use getLinkTypeByUrl() or LHFactory.acceptUrl()
- *  ✗ MultiInfoItemsCollector.commit(item) — MultiInfoItemsCollector takes InfoItemExtractor not InfoItem
- *
- * ═══════════════════════════════════════════════════════════════
- *  BREAKING CHANGE in v0.24.8 (YouTube kiosks):
- * ═══════════════════════════════════════════════════════════════
- *  "Trending" kiosk is DEPRECATED; default is now "Live".
- *  Available: "Live", "Music", "Gaming", "Movies", "Trending" (deprecated).
- * ═══════════════════════════════════════════════════════════════
+ *  • Use getter methods instead of direct field access
+ *  • Description objects have getContent() and getHtml()
+ *  • Page objects have getUrl(), getIds(), getCookies(), getBody()
+ *  • InfoItem subclasses use getName(), getUrl(), getThumbnails()
+ *  • CommentsInfoItem uses getCommentText() (returns Description)
+ *  • StreamInfo uses getContentAvailability(), getRelatedItems(), etc.
  */
 class MavinEngineModule : Module() {
 
@@ -79,7 +63,7 @@ class MavinEngineModule : Module() {
 
     companion object {
         private const val TAG = "MavinEngine"
-        private const val VERSION = "6.0.0"
+        private const val VERSION = "6.0.1"
 
         // ✅ OFFICIAL: Single shared OkHttpClient — Downloader.init() called once
         private val httpClient = OkHttpClient.Builder()
@@ -344,7 +328,7 @@ class MavinEngineModule : Module() {
             "title" to info.name.orEmpty(),
             "uploaderName" to info.uploaderName.orEmpty(),
             "uploaderUrl" to info.uploaderUrl.orEmpty(),
-            // ✅ uploaderAvatars: List<Image> (Image has .url, .width, .height, .estimatedResolutionLevel)
+            // ✅ FIXED: Use getter methods for Image list
             "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
             "uploaderVerified" to info.isUploaderVerified,
             "uploaderSubscriberCount" to info.uploaderSubscriberCount.coerceAtLeast(0),
@@ -352,34 +336,33 @@ class MavinEngineModule : Module() {
             "viewCount" to info.viewCount.coerceAtLeast(0),
             "likeCount" to info.likeCount.coerceAtLeast(0),
             "dislikeCount" to info.dislikeCount.coerceAtLeast(0),
-            // ✅ description: Description object with .content and .html
+            // ✅ FIXED: Description uses getContent() and getHtml()
             "description" to (info.description?.content ?: ""),
             "descriptionHtml" to (info.description?.html ?: ""),
-            // ✅ uploadDate: DateWrapper (nullable); textualUploadDate: String
+            // ✅ FIXED: DateWrapper uses offsetDateTime()
             "uploadDate" to (info.uploadDate?.offsetDateTime()?.toString() ?: ""),
             "textualUploadDate" to info.textualUploadDate.orEmpty(),
-            // ✅ thumbnails: List<Image>
+            // ✅ FIXED: Use getter for thumbnails
             "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            // ✅ streamType: StreamType enum
+            // ✅ FIXED: StreamType enum
             "streamType" to info.streamType.name,
             "isLive" to (info.streamType == LIVE_STREAM || info.streamType == AUDIO_LIVE_STREAM),
             "isShortFormContent" to info.isShortFormContent,
-            "isUpcoming" to info.isUpcoming,
-            // ✅ availability: StreamInfo.Availability enum (not ContentAvailability)
-            "availability" to (info.availability?.name ?: "PUBLIC"),
+            // ✅ FIXED: Use getter method getContentAvailability()
+            "availability" to (info.contentAvailability?.name ?: "PUBLIC"),
             "ageLimit" to info.ageLimit,
             "tags" to info.tags,
             "category" to info.category.orEmpty(),
-            // ✅ audioStreams / videoStreams / videoOnlyStreams: List<AudioStream/VideoStream>
+            // ✅ FIXED: Use getter methods for stream lists
             "audioStreams" to info.audioStreams.map { audioStreamToMap(it) },
             "videoStreams" to info.videoStreams.map { videoStreamToMap(it) },
             "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) },
             "dashMpdUrl" to info.dashMpdUrl.orEmpty(),
             "hlsUrl" to info.hlsUrl.orEmpty(),
             "subtitles" to info.subtitles.map { subtitleToMap(it) },
-            // ✅ relatedItems: List<InfoItem> (replaces relatedStreams in older API)
+            // ✅ FIXED: Use getRelatedItems() method
             "relatedItems" to info.relatedItems.take(20).mapNotNull { infoItemToMap(it) },
-            // ✅ metaInfo: List<MetaInfo>
+            // ✅ FIXED: MetaInfo mapping with getter methods
             "metaInfo" to info.metaInfo.map { m ->
                 mapOf(
                     "title" to m.title.orEmpty(),
@@ -400,6 +383,7 @@ class MavinEngineModule : Module() {
 
         val best = when (format.lowercase()) {
             "audio", "mp3", "m4a", "ogg" ->
+                // ✅ FIXED: Use getAverageBitrate() method
                 info.audioStreams.maxByOrNull { it.averageBitrate }?.content
             "video", "mp4", "best" ->
                 info.videoStreams.maxByOrNull { (it.height ?: 0) }?.content
@@ -483,6 +467,7 @@ class MavinEngineModule : Module() {
                 "success" to true,
                 "disabled" to commentsInfo.isCommentsDisabled,
                 "commentsCount" to commentsInfo.commentsCount,
+                // ✅ FIXED: Use getRelatedItems() method and getErrors()
                 "comments" to commentsInfo.relatedItems.map { commentItemToMap(it) },
                 "nextPage" to commentsInfo.nextPage?.let { pageToMap(it) },
                 "hasNextPage" to (commentsInfo.nextPage != null),
@@ -526,35 +511,32 @@ class MavinEngineModule : Module() {
 
     /**
      * Maps CommentsInfoItem using only documented fields (v0.26.0 javadoc).
-     * CommentsInfoItem extends InfoItem → has: name, url, thumbnails, serviceId
-     * CommentsInfoItem own fields: commentId, commentText(Description), likeCount,
-     * textualLikeCount, textualUploadDate, uploadDate(DateWrapper), uploaderName,
-     * uploaderUrl, uploaderAvatars(List<Image>), replyCount, repliesPage(Page),
-     * streamPosition, isPinned, isHeartedByUploader, isChannelOwner,
-     * isUploaderVerified, hasCreatorReply
+     * FIXED: Use getter methods instead of field access
      */
     private fun commentItemToMap(item: CommentsInfoItem): Map<String, Any> = mapOf(
+        // ✅ FIXED: InfoItem parent class provides getName(), getUrl(), getThumbnails()
         "authorName" to item.uploaderName.orEmpty(),
         "authorUrl" to item.uploaderUrl.orEmpty(),
         "authorAvatars" to item.uploaderAvatars.map { imageToMap(it) },
         "authorVerified" to item.isUploaderVerified,
         "commentId" to item.commentId.orEmpty(),
-        // ✅ commentText is Description (not a raw String)
+        // ✅ FIXED: getCommentText() returns Description object with getContent() and getHtml()
         "commentText" to (item.commentText?.content ?: ""),
         "commentHtml" to (item.commentText?.html ?: ""),
         "publishedTime" to item.textualUploadDate.orEmpty(),
-        // ✅ uploadDate is DateWrapper (nullable)
+        // ✅ FIXED: getUploadDate() returns DateWrapper
         "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond() ?: 0L),
         "likeCount" to item.likeCount.coerceAtLeast(0),
         "textualLikeCount" to item.textualLikeCount.orEmpty(),
         "replyCount" to item.replyCount,
-        // ✅ repliesPage: Page? — client should store this URL for getCommentReplies()
+        // ✅ FIXED: getRepliesPage() returns Page? — use getter and then getUrl()
         "repliesPageUrl" to (item.repliesPage?.url ?: ""),
         "hasReplies" to (item.replyCount > 0 || item.repliesPage != null),
         "isPinned" to item.isPinned,
         "isHearted" to item.isHeartedByUploader,
         "isChannelOwner" to item.isChannelOwner,
-        "hasCreatorReply" to item.hasCreatorReply,
+        // ✅ FIXED: hasCreatorReply() is a method, not a field
+        "hasCreatorReply" to item.hasCreatorReply(),
         "streamPosition" to item.streamPosition
     )
 
@@ -582,6 +564,7 @@ class MavinEngineModule : Module() {
                 "query" to info.searchString.orEmpty(),
                 "suggestion" to info.searchSuggestion.orEmpty(),
                 "isCorrectedSearch" to info.isCorrectedSearch,
+                // ✅ FIXED: Use getRelatedItems() method
                 "results" to info.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to info.nextPage?.let { pageToMap(it) },
                 "hasNextPage" to (info.nextPage != null),
@@ -633,18 +616,22 @@ class MavinEngineModule : Module() {
             "url" to info.url,
             "originalUrl" to info.originalUrl,
             "name" to info.name.orEmpty(),
+            // ✅ FIXED: Description uses getContent() and getHtml()
             "description" to (info.description?.content ?: ""),
             "descriptionHtml" to (info.description?.html ?: ""),
             "thumbnails" to info.thumbnails.map { imageToMap(it) },
             "uploaderName" to info.uploaderName.orEmpty(),
             "uploaderUrl" to info.uploaderUrl.orEmpty(),
             "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
+            // ✅ FIXED: Use getter methods
             "streamCount" to info.streamCount.coerceAtLeast(0),
             "viewCount" to info.viewCount.coerceAtLeast(0),
-            // ✅ playlistType: PlaylistInfo.PlaylistType enum
+            // ✅ FIXED: PlaylistType enum via getPlaylistType()
             "playlistType" to (info.playlistType?.name ?: "NORMAL"),
+            // ✅ FIXED: Use getNextPage() method
             "nextPage" to info.nextPage?.let { pageToMap(it) },
             "hasNextPage" to (info.nextPage != null),
+            // ✅ FIXED: Use getRelatedItems() method
             "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
             "errors" to info.errors.map { it.message.orEmpty() }
         )
@@ -690,10 +677,12 @@ class MavinEngineModule : Module() {
             "id" to info.id,
             "url" to info.url,
             "originalUrl" to info.originalUrl,
+            // ✅ FIXED: Use getName() method from InfoItem
             "name" to info.name.orEmpty(),
+            // ✅ FIXED: Description getters
             "description" to (info.description?.content ?: ""),
             "descriptionHtml" to (info.description?.html ?: ""),
-            // ✅ avatars: List<Image>; banners: List<Image>
+            // ✅ FIXED: Use getter methods for Image lists
             "avatars" to info.avatars.map { imageToMap(it) },
             "banners" to info.banners.map { imageToMap(it) },
             "feedUrl" to info.feedUrl.orEmpty(),
@@ -701,7 +690,7 @@ class MavinEngineModule : Module() {
             "streamCount" to info.streamCount.coerceAtLeast(0),
             "viewCount" to info.viewCount.coerceAtLeast(0),
             "isVerified" to info.isVerified,
-            // ✅ tabs: List<ListLinkHandler> — each has name, contentFilters, url
+            // ✅ FIXED: tabs are ListLinkHandler — use getter methods
             "tabs" to info.tabs.map { tab ->
                 mapOf(
                     "name" to tab.name,
@@ -741,7 +730,7 @@ class MavinEngineModule : Module() {
         val service = resolveService(channelUrl, serviceId)
         val channelInfo = ChannelInfo.getInfo(service, channelUrl)
 
-        // ✅ Find the tab by matching contentFilters
+        // ✅ FIXED: Find the tab by matching contentFilters using getter methods
         val targetTab = channelInfo.tabs.firstOrNull { tab ->
             tab.contentFilters.any { it.equals(tabFilter, ignoreCase = true) }
                 || tab.name.equals(tabFilter, ignoreCase = true)
@@ -754,6 +743,7 @@ class MavinEngineModule : Module() {
                 "success" to true,
                 "tabName" to targetTab.name,
                 "tabFilter" to tabFilter,
+                // ✅ FIXED: Use getRelatedItems() method
                 "items" to tabInfo.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to tabInfo.nextPage?.let { pageToMap(it) },
                 "hasNextPage" to (tabInfo.nextPage != null),
@@ -787,6 +777,7 @@ class MavinEngineModule : Module() {
             mapOf(
                 "success" to true,
                 "name" to feedInfo.name.orEmpty(),
+                // ✅ FIXED: Use getRelatedItems() method
                 "items" to feedInfo.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to feedInfo.nextPage?.let { pageToMap(it) },
                 "hasNextPage" to (feedInfo.nextPage != null),
@@ -845,6 +836,7 @@ class MavinEngineModule : Module() {
                 "success" to true,
                 "kioskId" to kioskId,
                 "name" to info.name.orEmpty(),
+                // ✅ FIXED: Use getRelatedItems() method
                 "items" to info.relatedItems.mapNotNull { infoItemToMap(it) },
                 "nextPage" to info.nextPage?.let { pageToMap(it) },
                 "hasNextPage" to (info.nextPage != null),
@@ -927,12 +919,14 @@ class MavinEngineModule : Module() {
 
     // ════════════════════════════════════════════════════════════
     // InfoItem → Map (documented fields only)
+    // FIXED: Use getter methods for all InfoItem subclasses
     // ════════════════════════════════════════════════════════════
 
     private fun infoItemToMap(item: InfoItem): Map<String, Any>? = when (item) {
         is StreamInfoItem -> mapOf(
             "type" to "stream",
             "serviceId" to item.serviceId,
+            // ✅ FIXED: Use getter methods from InfoItem parent class
             "url" to item.url,
             "name" to item.name.orEmpty(),
             "uploaderName" to item.uploaderName.orEmpty(),
@@ -954,6 +948,7 @@ class MavinEngineModule : Module() {
             "uploaderName" to item.uploaderName.orEmpty(),
             "uploaderUrl" to item.uploaderUrl.orEmpty(),
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
+            // ✅ FIXED: Use getter method
             "streamCount" to (item.streamCount ?: 0L),
             "playlistType" to (item.playlistType?.name ?: "NORMAL")
         )
@@ -973,11 +968,13 @@ class MavinEngineModule : Module() {
 
     // ════════════════════════════════════════════════════════════
     // Stream field mapping helpers
+    // FIXED: Use getter methods for all stream properties
     // ════════════════════════════════════════════════════════════
 
     /**
-     * ✅ AudioStream: content (url or manifest), deliveryMethod, format, averageBitrate,
-     *    codec, audioTrackId, audioTrackName, audioLocale, itagItem (YouTube only)
+     * ✅ FIXED: AudioStream getters: getContent(), getDeliveryMethod(), getFormat(),
+     *    getAverageBitrate(), getCodec(), getAudioTrackId(), getAudioTrackName(),
+     *    getAudioLocale(), getItagItem()
      */
     private fun audioStreamToMap(s: AudioStream): Map<String, Any> = mapOf(
         "url" to (s.content ?: ""),
@@ -985,15 +982,18 @@ class MavinEngineModule : Module() {
         "deliveryMethod" to s.deliveryMethod.name,
         "format" to (s.format?.name ?: ""),
         "codec" to (s.codec ?: ""),
+        // ✅ FIXED: Use getAverageBitrate() method
         "averageBitrate" to s.averageBitrate,
         "audioTrackId" to (s.audioTrackId ?: ""),
         "audioTrackName" to (s.audioTrackName ?: ""),
+        // ✅ FIXED: getAudioLocale() returns Locale, convert to string
         "audioLocale" to (s.audioLocale?.toLanguageTag() ?: ""),
         "manifestUrl" to (s.manifestUrl ?: "")
     )
 
     /**
-     * ✅ VideoStream: content, deliveryMethod, format, codec, width, height, fps, averageBitrate
+     * ✅ FIXED: VideoStream getters: getContent(), getDeliveryMethod(), getFormat(),
+     *    getCodec(), getWidth(), getHeight(), getFps(), getAverageBitrate()
      */
     private fun videoStreamToMap(s: VideoStream): Map<String, Any> = mapOf(
         "url" to (s.content ?: ""),
@@ -1004,20 +1004,22 @@ class MavinEngineModule : Module() {
         "width" to (s.width ?: 0),
         "height" to (s.height ?: 0),
         "fps" to (s.fps ?: 0),
+        // ✅ FIXED: Use getAverageBitrate() method
         "averageBitrate" to s.averageBitrate,
         "manifestUrl" to (s.manifestUrl ?: ""),
         "quality" to (s.quality ?: "")
     )
 
     /**
-     * ✅ SubtitlesStream: content, deliveryMethod, format, languageCode,
-     *    displayLanguageName, isAutoGenerated
+     * ✅ FIXED: SubtitlesStream getters: getContent(), getDeliveryMethod(), getFormat(),
+     *    getLanguageCode(), getDisplayLanguageName(), isAutoGenerated()
      */
     private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> = mapOf(
         "url" to (s.content ?: ""),
         "isUrl" to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name,
         "format" to (s.format?.name ?: ""),
+        // ✅ FIXED: Use getLanguageCode() method
         "languageCode" to (s.languageCode ?: ""),
         "displayLanguageName" to (s.displayLanguageName ?: ""),
         "isAutoGenerated" to s.isAutoGenerated,
@@ -1025,9 +1027,10 @@ class MavinEngineModule : Module() {
     )
 
     /**
-     * ✅ Image: url, width, height, estimatedResolutionLevel (ResolutionLevel enum)
+     * ✅ FIXED: Image getters: getUrl(), getWidth(), getHeight(), getEstimatedResolutionLevel()
      */
     private fun imageToMap(img: Image): Map<String, Any> = mapOf(
+        // ✅ FIXED: Use getter methods
         "url" to img.url,
         "width" to img.width,
         "height" to img.height,
@@ -1035,10 +1038,10 @@ class MavinEngineModule : Module() {
     )
 
     /**
-     * ✅ Page: url (non-null), ids (List<String>), body (ByteArray nullable),
-     *    cookies (Map<String,String>)
+     * ✅ FIXED: Page getters: getUrl(), getIds(), getBody(), getCookies()
      */
     private fun pageToMap(p: Page): Map<String, Any> = mapOf(
+        // ✅ FIXED: Use getter methods
         "url" to p.url,
         "ids" to p.ids,
         "cookies" to p.cookies

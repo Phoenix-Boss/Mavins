@@ -1,4 +1,4 @@
-// app/(player)/equalizer.tsx - FULLY INTEGRATED WITH GLOBAL UI STATE
+// app/(player)/equalizer.tsx - FULLY INTEGRATED & REFINED
 
 import { screenPadding } from "@/constants/tokens";
 import { useImageColors } from "@/hooks/useImageColors";
@@ -14,6 +14,9 @@ import {
   Modal,
   FlatList,
   Alert,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -36,7 +39,7 @@ import { EQGraph } from "@/components/equalizer/EQGraph";
 import { NowPlayingBar } from "@/components/equalizer/NowPlayingBar";
 import { Watermark } from "@/components/equalizer/Watermark";
 import { FXControls } from "@/components/equalizer/FXControls";
-import { MasteringControls } from "@/components/equalizer/MasteringControls"; // Renamed from OutputControls
+import { MasteringControls } from "@/components/equalizer/MasteringControls";
 import { ParametricEQ } from "@/components/equalizer/parametricEq";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -52,24 +55,23 @@ type PlayerTrack = z.infer<typeof PlayerTrackSchema>;
 
 // ✅ UPDATED STATE TO MATCH NEW ARCHITECTURE
 interface EQState {
-  // Core EQ - applies to both graphic and parametric
   enabled: boolean;
   
   // Graphic EQ
   graphic: {
-    preamp: number;           // -15 to +15
-    bands: number[];          // 9 bands, -15 to +15 each
-    bass: number;             // 0-100
-    treble: number;           // 0-100
+    preamp: number;
+    bands: number[];
+    bass: number;
+    treble: number;
   };
   
   // Parametric EQ
   parametric: {
     selectedFilter: 'lowpass' | 'highpass' | 'bandpass' | 'lowshelf' | 'highshelf' | 'peaking' | 'notch';
     filterEnabled: boolean;
-    gain: number;           // -15 to +15
-    frequency: number;      // 20-20000 Hz
-    q: number;              // 0.1-10
+    gain: number;
+    frequency: number;
+    q: number;
   };
 
   // FX Page
@@ -84,19 +86,23 @@ interface EQState {
     mix: number;
   };
 
-  // Mastering Page (renamed from output)
+  // Mastering Page
   mastering: {
-    balance: number;        // 0-100 (L/R balance)
-    stereoWidth: number;    // 0-100 (stereo enhancement)
-    loudness: number;       // 0-100 (perceived loudness)
-    limiter: boolean;       // true/false
+    balance: number;
+    stereoWidth: number;
+    loudness: number;
+    limiter: boolean;
     mono: boolean;
   };
 
   // Preset management
   selectedPreset: string;
-  presetType: 'factory' | 'custom'; // Track if current preset is factory or custom
+  presetType: 'factory' | 'custom';
 }
+
+// Storage Keys
+const STORAGE_KEY_EQ_STATE = 'eqState_v2';
+const STORAGE_KEY_CUSTOM_PRESETS = 'eqCustomPresets_v2';
 
 const FREQUENCY_BANDS = [
   { label: "31", frequency: 31 },
@@ -110,24 +116,18 @@ const FREQUENCY_BANDS = [
   { label: "6.4k", frequency: 6400 },
 ];
 
-// Separate factory and custom presets
+// Factory presets are immutable
 const FACTORY_PRESETS = [
-  { id: '1', name: 'Flat', values: [0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, type: 'factory' },
-  { id: '2', name: 'Rock', values: [4, 3, 2, 1, 0, -1, -2, -3, -4], preamp: 2, type: 'factory' },
-  { id: '3', name: 'Pop', values: [2, 2, 1, 0, -1, -1, 0, 1, 2], preamp: 1, type: 'factory' },
-  { id: '4', name: 'Jazz', values: [3, 2, 1, 0, 1, 2, 3, 2, 1], preamp: 1.5, type: 'factory' },
-  { id: '5', name: 'Classical', values: [2, 1, 0, 0, 0, 0, 1, 2, 3], preamp: 0.5, type: 'factory' },
-  { id: '6', name: 'Hip Hop', values: [5, 4, 3, 2, 0, -2, -3, -4, -5], preamp: 2.5, type: 'factory' },
-  { id: '7', name: 'Electronic', values: [4, 3, 2, 0, -1, -2, 0, 2, 4], preamp: 2, type: 'factory' },
-  { id: '8', name: 'Acoustic', values: [1, 1, 0, -1, -1, 0, 1, 2, 3], preamp: 0, type: 'factory' },
-  { id: '9', name: 'Bass Boost', values: [6, 5, 4, 2, 0, -2, -4, -5, -6], preamp: 3, type: 'factory' },
-  { id: '10', name: 'Treble Boost', values: [-4, -3, -2, 0, 2, 3, 4, 5, 6], preamp: 2, type: 'factory' },
-];
-
-// Start with some example custom presets
-const CUSTOM_PRESETS = [
-  { id: 'c1', name: 'My Voice', values: [2, 1, 0, -1, 0, 1, 2, 3, 2], preamp: 1, type: 'custom' },
-  { id: 'c2', name: 'Night Listening', values: [-2, -1, 0, 1, 2, 1, 0, -1, -2], preamp: -1, type: 'custom' },
+  { id: '1', name: 'Flat', values: [0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, type: 'factory' as const },
+  { id: '2', name: 'Rock', values: [4, 3, 2, 1, 0, -1, -2, -3, -4], preamp: 2, type: 'factory' as const },
+  { id: '3', name: 'Pop', values: [2, 2, 1, 0, -1, -1, 0, 1, 2], preamp: 1, type: 'factory' as const },
+  { id: '4', name: 'Jazz', values: [3, 2, 1, 0, 1, 2, 3, 2, 1], preamp: 1.5, type: 'factory' as const },
+  { id: '5', name: 'Classical', values: [2, 1, 0, 0, 0, 0, 1, 2, 3], preamp: 0.5, type: 'factory' as const },
+  { id: '6', name: 'Hip Hop', values: [5, 4, 3, 2, 0, -2, -3, -4, -5], preamp: 2.5, type: 'factory' as const },
+  { id: '7', name: 'Electronic', values: [4, 3, 2, 0, -1, -2, 0, 2, 4], preamp: 2, type: 'factory' as const },
+  { id: '8', name: 'Acoustic', values: [1, 1, 0, -1, -1, 0, 1, 2, 3], preamp: 0, type: 'factory' as const },
+  { id: '9', name: 'Bass Boost', values: [6, 5, 4, 2, 0, -2, -4, -5, -6], preamp: 3, type: 'factory' as const },
+  { id: '10', name: 'Treble Boost', values: [-4, -3, -2, 0, 2, 3, 4, 5, 6], preamp: 2, type: 'factory' as const },
 ];
 
 export default function EqualizerScreen() {
@@ -135,11 +135,21 @@ export default function EqualizerScreen() {
   const insets = useSafeAreaInsets();
   const { isMusicPlaying } = useGlobalUIState();
 
-  // New state for header
+  // Navigation State
   const [activePage, setActivePage] = useState<"eq" | "fx" | "mastering">("eq");
   const [eqMode, setEqMode] = useState<'graphic' | 'parametric'>('graphic');
   
-  // ✅ UPDATED INITIAL STATE
+  // Data State
+  const [customPresets, setCustomPresets] = useState<any[]>([]);
+  
+  // UI State
+  const [isLoading, setIsLoading] = useState(true);
+  const [presetModalVisible, setPresetModalVisible] = useState(false);
+  const [presetFilter, setPresetFilter] = useState<'all' | 'factory' | 'custom'>('all');
+  const [saveModalVisible, setSaveModalVisible] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+
+  // Core EQ State
   const [eqState, setEqState] = useState<EQState>({
     enabled: false,
     graphic: {
@@ -176,10 +186,6 @@ export default function EqualizerScreen() {
     presetType: 'factory',
   });
 
-  const [presetModalVisible, setPresetModalVisible] = useState(false);
-  const [presetFilter, setPresetFilter] = useState<'all' | 'factory' | 'custom'>('all');
-  const [isLoading, setIsLoading] = useState(true);
-
   const currentTrack: PlayerTrack = useMemo(() => ({
     id: "1",
     title: "Don Bossblingz - something 202...",
@@ -197,40 +203,55 @@ export default function EqualizerScreen() {
     return ["#1a0f05", "#0b0b0b", "#050505"];
   }, [imageColors]);
 
-  // ✅ PERSISTENCE
+  // --- DATA PERSISTENCE ---
+
   useEffect(() => {
-    loadEQState();
+    const loadData = async () => {
+      try {
+        // Load both state and custom presets in parallel
+        const [stateJson, presetsJson] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY_EQ_STATE),
+          AsyncStorage.getItem(STORAGE_KEY_CUSTOM_PRESETS)
+        ]);
+
+        if (stateJson) {
+          const parsedState = JSON.parse(stateJson) as EQState;
+          setEqState(parsedState);
+        }
+        
+        if (presetsJson) {
+          setCustomPresets(JSON.parse(presetsJson));
+        }
+      } catch (error) {
+        console.log('Failed to load data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
   }, []);
 
   useEffect(() => {
-    if (!isLoading) saveEQState();
-  }, [eqState]);
-
-  const loadEQState = async () => {
-    try {
-      const saved = await AsyncStorage.getItem('eqState');
-      if (saved) {
-        const parsed = JSON.parse(saved) as EQState;
-        setEqState(parsed);
-      }
-    } catch (error) {
-      console.log('Failed to load EQ state:', error);
-    } finally {
-      setIsLoading(false);
+    if (!isLoading) {
+      AsyncStorage.setItem(STORAGE_KEY_EQ_STATE, JSON.stringify(eqState));
     }
-  };
+  }, [eqState, isLoading]);
 
-  const saveEQState = async () => {
-    try {
-      await AsyncStorage.setItem('eqState', JSON.stringify(eqState));
-    } catch (error) {
-      console.log('Failed to save EQ state:', error);
+  // --- HANDLERS ---
+
+  // Helper to check if we need to detach from factory preset
+  const detachFromFactory = useCallback(() => {
+    if (eqState.presetType === 'factory') {
+      setEqState(prev => ({
+        ...prev,
+        selectedPreset: 'Custom',
+        presetType: 'custom'
+      }));
     }
-  };
+  }, [eqState.presetType]);
 
-  // GRAPHIC EQ HANDLERS
   const handleBandChange = useCallback((index: number, value: number) => {
-    if (eqState.presetType === 'factory') return; // Can't edit factory presets
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       graphic: {
@@ -238,64 +259,66 @@ export default function EqualizerScreen() {
         bands: prev.graphic.bands.map((v, i) => i === index ? value : v)
       }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
   const handlePreampChange = useCallback((value: number) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       graphic: { ...prev.graphic, preamp: value }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
   const handleBassChange = useCallback((value: number) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       graphic: { ...prev.graphic, bass: value }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
   const handleTrebleChange = useCallback((value: number) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       graphic: { ...prev.graphic, treble: value }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
-  // PARAMETRIC EQ HANDLERS
   const handleParametricUpdate = useCallback((updates: Partial<EQState['parametric']>) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       parametric: { ...prev.parametric, ...updates }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
-  // FX HANDLERS
   const handleFXUpdate = useCallback((updates: Partial<EQState['fx']>) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       fx: { ...prev.fx, ...updates }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
-  // MASTERING HANDLERS
   const handleMasteringUpdate = useCallback((updates: Partial<EQState['mastering']>) => {
-    if (eqState.presetType === 'factory') return;
+    detachFromFactory();
     setEqState(prev => ({
       ...prev,
       mastering: { ...prev.mastering, ...updates }
     }));
-  }, [eqState.presetType]);
+  }, [detachFromFactory]);
 
-  // PRESET HANDLERS
+  const toggleEQ = useCallback(() => {
+    setEqState(prev => ({ ...prev, enabled: !prev.enabled }));
+  }, []);
+
+  // --- PRESET MANAGEMENT ---
+
   const selectPreset = useCallback((preset: any) => {
     setEqState(prev => ({
       ...prev,
-      enabled: true, // Auto-enable when selecting preset
+      enabled: true,
       graphic: {
         ...prev.graphic,
         preamp: preset.preamp,
@@ -309,51 +332,46 @@ export default function EqualizerScreen() {
     setPresetModalVisible(false);
   }, []);
 
-  const saveAsCustomPreset = useCallback(() => {
-    Alert.prompt(
-      'Save Custom Preset',
-      'Enter a name for your preset',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Save',
-          onPress: (presetName) => {
-            if (!presetName) return;
-            
-            // Create new custom preset
-            const newPreset = {
-              id: `c${Date.now()}`,
-              name: presetName,
-              values: eqState.graphic.bands,
-              preamp: eqState.graphic.preamp,
-              type: 'custom'
-            };
-            
-            // In a real app, you'd save this to AsyncStorage
-            Alert.alert('Success', 'Preset saved!');
-            
-            // Update state to show it's now a custom preset
-            setEqState(prev => ({
-              ...prev,
-              selectedPreset: presetName,
-              presetType: 'custom',
-            }));
-          }
-        }
-      ]
-    );
-  }, [eqState.graphic]);
+  const handleSavePreset = useCallback(async () => {
+    if (!newPresetName.trim()) {
+      Alert.alert("Error", "Please enter a preset name");
+      return;
+    }
 
-  const toggleEQ = useCallback(() => {
-    setEqState(prev => ({ ...prev, enabled: !prev.enabled }));
-  }, []);
+    const newPreset = {
+      id: `c${Date.now()}`,
+      name: newPresetName.trim(),
+      values: eqState.graphic.bands,
+      preamp: eqState.graphic.preamp,
+      type: 'custom' as const
+    };
 
-  // Get combined presets for modal
+    const updatedPresets = [...customPresets, newPreset];
+    setCustomPresets(updatedPresets);
+    
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY_CUSTOM_PRESETS, JSON.stringify(updatedPresets));
+      
+      // Update current state to reflect newly saved preset
+      setEqState(prev => ({
+        ...prev,
+        selectedPreset: newPreset.name,
+        presetType: 'custom'
+      }));
+      
+      setNewPresetName('');
+      setSaveModalVisible(false);
+      Alert.alert("Success", "Preset saved!");
+    } catch (e) {
+      Alert.alert("Error", "Failed to save preset");
+    }
+  }, [newPresetName, eqState.graphic, customPresets]);
+
   const allPresets = useMemo(() => {
     if (presetFilter === 'factory') return FACTORY_PRESETS;
-    if (presetFilter === 'custom') return CUSTOM_PRESETS;
-    return [...FACTORY_PRESETS, ...CUSTOM_PRESETS];
-  }, [presetFilter]);
+    if (presetFilter === 'custom') return customPresets;
+    return [...FACTORY_PRESETS, ...customPresets];
+  }, [presetFilter, customPresets]);
 
   const { enabled, graphic, parametric, fx, mastering, selectedPreset, presetType } = eqState;
 
@@ -373,10 +391,8 @@ export default function EqualizerScreen() {
       <LinearGradient style={{ flex: 1 }} colors={gradientColors}>
         <View style={{ flex: 1 }}>
 
-          {/* Watermark */}
           <Watermark source={require("@/assets/images/mavins.png")} />
 
-          {/* Updated Header with all new props */}
           <HeaderNavigation 
             activePage={activePage}
             onPageChange={setActivePage}
@@ -388,11 +404,10 @@ export default function EqualizerScreen() {
           />
 
           <View style={[styles.contentContainer, { 
-            paddingTop: insets.top + 100, // Increased to account for two-row header
+            paddingTop: insets.top + 100, 
             paddingBottom: insets.bottom + verticalScale(10)
           }]}>
             
-            {/* Now Playing Bar */}
             <NowPlayingBar 
               track={validatedTrack} 
               compact 
@@ -402,11 +417,10 @@ export default function EqualizerScreen() {
               onPress={() => router.push('/player')}
             />
 
-            {/* EQ PAGE - Shows either Graphic or Parametric based on mode */}
+            {/* EQ PAGE */}
             {activePage === "eq" && (
               <View style={styles.pageContainer}>
                 {eqMode === 'graphic' ? (
-                  // Graphic EQ View
                   <>
                     <View style={styles.eqSlidersContainer}>
                       <VerticalEQSlider
@@ -414,8 +428,7 @@ export default function EqualizerScreen() {
                         onChange={handlePreampChange}
                         isPreamp={true}
                         label="Level"
-                        enabled={enabled && presetType === 'custom'}
-                        isFactory={presetType === 'factory'}
+                        enabled={enabled} // Unlocked logic: allow editing, just switch mode internally
                       />
                       {FREQUENCY_BANDS.map((band, index) => (
                         <VerticalEQSlider
@@ -423,9 +436,8 @@ export default function EqualizerScreen() {
                           value={graphic.bands[index]}
                           onChange={(value) => handleBandChange(index, value)}
                           label={band.label}
-                          enabled={enabled && presetType === 'custom'}
+                          enabled={enabled}
                           frequency={band.frequency}
-                          isFactory={presetType === 'factory'}
                         />
                       ))}
                     </View>
@@ -433,7 +445,6 @@ export default function EqualizerScreen() {
                     <EQGraph values={graphic.bands} enabled={enabled} />
 
                     <View style={styles.controlRow}>
-                      {/* Preset selector - always works */}
                       <TouchableOpacity 
                         style={styles.presetButton} 
                         onPress={() => setPresetModalVisible(true)}
@@ -445,16 +456,13 @@ export default function EqualizerScreen() {
                         )}
                       </TouchableOpacity>
 
-                      {/* Save button - only for custom mode */}
-                      {presetType === 'custom' && (
-                        <TouchableOpacity 
-                          style={styles.saveButton}
-                          onPress={saveAsCustomPreset}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.saveButtonText}>SAVE</Text>
-                        </TouchableOpacity>
-                      )}
+                      <TouchableOpacity 
+                        style={styles.saveButton}
+                        onPress={() => setSaveModalVisible(true)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.saveButtonText}>SAVE</Text>
+                      </TouchableOpacity>
                     </View>
 
                     <View style={styles.toneSection}>
@@ -477,8 +485,7 @@ export default function EqualizerScreen() {
                           onChange={handleBassChange}
                           color={Colors.metallicBrown.primary}
                           size={70}
-                          enabled={enabled && presetType === 'custom'}
-                          isFactory={presetType === 'factory'}
+                          enabled={enabled}
                         />
                         <RotaryKnob
                           value={graphic.treble}
@@ -486,51 +493,46 @@ export default function EqualizerScreen() {
                           onChange={handleTrebleChange}
                           color={Colors.metallicBrown.secondary}
                           size={70}
-                          enabled={enabled && presetType === 'custom'}
-                          isFactory={presetType === 'factory'}
+                          enabled={enabled}
                         />
                       </View>
                     </View>
                   </>
                 ) : (
-                  // Parametric EQ View
                   <ParametricEQ 
-                    enabled={enabled && presetType === 'custom'}
+                    enabled={enabled}
                     parametricState={parametric}
                     onUpdate={handleParametricUpdate}
-                    isFactory={presetType === 'factory'}
                   />
                 )}
               </View>
             )}
 
-            {/* FX PAGE - Presets and effects */}
+            {/* FX PAGE */}
             {activePage === "fx" && (
               <View style={styles.pageContainer}>
                 <FXControls 
-                  enabled={enabled && presetType === 'custom'}
+                  enabled={enabled}
                   fxState={fx}
                   onUpdate={handleFXUpdate}
-                  isFactory={presetType === 'factory'}
                 />
               </View>
             )}
 
-            {/* MASTERING PAGE - All processing affects the playing song */}
+            {/* MASTERING PAGE */}
             {activePage === "mastering" && (
               <View style={styles.pageContainer}>
                 <MasteringControls 
-                  enabled={enabled && presetType === 'custom'}
+                  enabled={enabled}
                   masteringState={mastering}
                   onUpdate={handleMasteringUpdate}
-                  isFactory={presetType === 'factory'}
                 />
               </View>
             )}
 
           </View>
 
-          {/* Enhanced Preset Modal */}
+          {/* PRESET SELECTION MODAL */}
           <Modal
             animationType="slide"
             transparent={true}
@@ -546,26 +548,18 @@ export default function EqualizerScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {/* Filter tabs */}
                 <View style={styles.filterTabs}>
-                  <TouchableOpacity 
-                    style={[styles.filterTab, presetFilter === 'all' && styles.filterTabActive]}
-                    onPress={() => setPresetFilter('all')}
-                  >
-                    <Text style={[styles.filterTabText, presetFilter === 'all' && styles.filterTabTextActive]}>ALL</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.filterTab, presetFilter === 'factory' && styles.filterTabActive]}
-                    onPress={() => setPresetFilter('factory')}
-                  >
-                    <Text style={[styles.filterTabText, presetFilter === 'factory' && styles.filterTabTextActive]}>FACTORY</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.filterTab, presetFilter === 'custom' && styles.filterTabActive]}
-                    onPress={() => setPresetFilter('custom')}
-                  >
-                    <Text style={[styles.filterTabText, presetFilter === 'custom' && styles.filterTabTextActive]}>CUSTOM</Text>
-                  </TouchableOpacity>
+                  {(['all', 'factory', 'custom'] as const).map((filter) => (
+                    <TouchableOpacity 
+                      key={filter}
+                      style={[styles.filterTab, presetFilter === filter && styles.filterTabActive]}
+                      onPress={() => setPresetFilter(filter)}
+                    >
+                      <Text style={[styles.filterTabText, presetFilter === filter && styles.filterTabTextActive]}>
+                        {filter.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
 
                 <FlatList
@@ -600,9 +594,53 @@ export default function EqualizerScreen() {
                     </TouchableOpacity>
                   )}
                   showsVerticalScrollIndicator={false}
+                  ListEmptyComponent={<Text style={{color: '#666', textAlign: 'center', marginTop: 20}}>No custom presets yet</Text>}
                 />
               </View>
             </BlurView>
+          </Modal>
+
+          {/* SAVE PRESET MODAL (Cross-Platform) */}
+          <Modal
+            animationType="fade"
+            transparent
+            visible={saveModalVisible}
+            onRequestClose={() => setSaveModalVisible(false)}
+          >
+            <KeyboardAvoidingView 
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.modalOverlay}
+            >
+              <View style={styles.saveModalContainer}>
+                <View style={styles.saveModalContent}>
+                  <Text style={styles.modalTitle}>Save Preset</Text>
+                  
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Enter preset name"
+                    placeholderTextColor="#666"
+                    value={newPresetName}
+                    onChangeText={setNewPresetName}
+                    autoFocus
+                  />
+
+                  <View style={styles.saveModalButtons}>
+                    <TouchableOpacity 
+                      style={[styles.saveModalBtn, { backgroundColor: '#333' }]}
+                      onPress={() => setSaveModalVisible(false)}
+                    >
+                      <Text style={styles.saveModalBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.saveModalBtn, { backgroundColor: Colors.metallicBrown.primary }]}
+                      onPress={handleSavePreset}
+                    >
+                      <Text style={[styles.saveModalBtnText, { color: '#000' }]}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
           </Modal>
 
         </View>
@@ -790,5 +828,47 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.6)',
     fontSize: moderateScale(11),
     marginLeft: scale(10),
+  },
+  // Save Modal Styles
+  saveModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+  },
+  saveModalContent: {
+    width: SCREEN_WIDTH * 0.85,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 20,
+    padding: scale(25),
+    alignItems: 'center',
+  },
+  textInput: {
+    width: '100%',
+    height: verticalScale(50),
+    backgroundColor: '#333',
+    borderRadius: 10,
+    paddingHorizontal: scale(15),
+    color: '#fff',
+    fontSize: moderateScale(16),
+    marginVertical: verticalScale(20),
+  },
+  saveModalButtons: {
+    flexDirection: 'row',
+    gap: scale(15),
+    width: '100%',
+    justifyContent: 'space-between',
+  },
+  saveModalBtn: {
+    flex: 1,
+    height: verticalScale(45),
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveModalBtnText: {
+    color: '#fff',
+    fontSize: moderateScale(15),
+    fontWeight: '600',
   },
 });

@@ -4,13 +4,11 @@ import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Text } from 'react-native';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
-import { screenPadding } from '@/constants/tokens';
 import { Colors } from '@/constants/Colors';
 import Animated, { 
   useAnimatedStyle, 
   withSpring, 
-  withTiming,
-  interpolateColor
+  interpolateColor 
 } from 'react-native-reanimated';
 
 interface HeaderNavigationProps {
@@ -20,7 +18,7 @@ interface HeaderNavigationProps {
   onEqModeChange: (mode: 'graphic' | 'parametric') => void;
   eqEnabled: boolean;
   onEqToggle: () => void;
-  insets: any;
+  insets: { top: number; bottom: number; left: number; right: number };
 }
 
 export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
@@ -52,20 +50,15 @@ export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
     color: eqEnabled ? '#000' : '#fff'
   }));
 
-  // Mode indicator animation
-  const modeIndicatorStyle = useAnimatedStyle(() => ({
-    transform: [{
-      translateX: withSpring(eqMode === 'graphic' ? 0 : scale(70), {
-        damping: 20,
-        stiffness: 200
-      })
-    }]
-  }));
+  // Toggle EQ Mode handler
+  const toggleMode = () => {
+    onEqModeChange(eqMode === 'graphic' ? 'parametric' : 'graphic');
+  };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.container, { paddingTop: insets.top + verticalScale(5) }]}>
       
-      {/* Top Row: EQ Toggle + Mode Selector (only visible on EQ page) */}
+      {/* Top Row: EQ Toggle + Mode Switch */}
       <View style={styles.topRow}>
         {/* EQ On/Off Button */}
         <TouchableOpacity 
@@ -80,33 +73,23 @@ export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
           </Animated.View>
         </TouchableOpacity>
 
-        {/* EQ Mode Selector - only visible when EQ page is active */}
+        {/* EQ Mode Switch - Only visible on EQ page */}
         {activePage === 'eq' && (
-          <View style={styles.modeSelector}>
-            <Animated.View style={[styles.modeIndicator, modeIndicatorStyle]} />
-            
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => onEqModeChange('graphic')}
-              style={styles.modeButton}
-            >
-              <Text style={[
-                styles.modeButtonText,
-                eqMode === 'graphic' && styles.modeButtonTextActive
-              ]}>GRAPHIC</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => onEqModeChange('parametric')}
-              style={styles.modeButton}
-            >
-              <Text style={[
-                styles.modeButtonText,
-                eqMode === 'parametric' && styles.modeButtonTextActive
-              ]}>PARAMETRIC</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity 
+            activeOpacity={0.7}
+            onPress={toggleMode}
+            style={styles.modeSwitchContainer}
+          >
+            <MaterialCommunityIcons 
+              name="swap-horizontal" 
+              size={16} 
+              color="#fff" 
+              style={styles.switchIcon}
+            />
+            <Text style={styles.modeSwitchText}>
+              {eqMode === 'graphic' ? 'GRAPHIC' : 'PARAMETRIC'}
+            </Text>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -120,7 +103,7 @@ export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
         >
           <MaterialCommunityIcons 
             name="equalizer" 
-            size={24} 
+            size={moderateScale(24)} 
             color={activePage === 'eq' ? Colors.metallicBrown.primary : "#666"} 
           />
           {activePage === 'eq' && <View style={styles.activeDot} />}
@@ -133,14 +116,14 @@ export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
           style={styles.navItem}
         >
           <MaterialIcons 
-            name="adjust" 
-            size={24} 
+            name="auto-fix-high" 
+            size={moderateScale(24)} 
             color={activePage === 'fx' ? Colors.metallicBrown.primary : "#666"} 
           />
           {activePage === 'fx' && <View style={styles.activeDot} />}
         </TouchableOpacity>
         
-        {/* Mastering Page Icon (renamed from output) */}
+        {/* Mastering Page Icon */}
         <TouchableOpacity 
           activeOpacity={0.7}
           onPress={() => onPageChange('mastering')}
@@ -148,7 +131,7 @@ export const HeaderNavigation: React.FC<HeaderNavigationProps> = ({
         >
           <MaterialCommunityIcons 
             name="waveform" 
-            size={24} 
+            size={moderateScale(24)} 
             color={activePage === 'mastering' ? Colors.metallicBrown.primary : "#666"} 
           />
           {activePage === 'mastering' && <View style={styles.activeDot} />}
@@ -164,15 +147,18 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 1000,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.4)', // Slightly visible background
     paddingBottom: verticalScale(8),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: screenPadding.horizontal,
-    marginBottom: verticalScale(8),
+    paddingHorizontal: scale(20),
+    marginBottom: verticalScale(10),
+    height: verticalScale(36), // Fixed height for stability
   },
   eqToggleWrapper: {
     width: scale(60),
@@ -192,51 +178,42 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  modeSelector: {
+  // Mode Switch Styles (The new single button)
+  modeSwitchContainer: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    padding: scale(2),
-    width: scale(140),
-    height: scale(36),
-    position: 'relative',
-  },
-  modeIndicator: {
-    position: 'absolute',
-    width: scale(68),
-    height: scale(32),
-    backgroundColor: Colors.metallicBrown.primary,
-    borderRadius: 18,
-    top: scale(2),
-    left: scale(2),
-  },
-  modeButton: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: verticalScale(8),
+    paddingHorizontal: scale(16),
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    minWidth: scale(130),
   },
-  modeButtonText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: moderateScale(11),
-    fontWeight: '600',
+  switchIcon: {
+    marginRight: scale(6),
+    opacity: 0.8,
+  },
+  modeSwitchText: {
+    color: '#fff',
+    fontSize: moderateScale(12),
+    fontWeight: '700',
     letterSpacing: 0.5,
   },
-  modeButtonTextActive: {
-    color: '#000',
-    fontWeight: '700',
-  },
+  // Navigation Row
   navRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'space-around', // Distribute icons evenly
     alignItems: 'center',
-    paddingHorizontal: screenPadding.horizontal,
+    paddingHorizontal: scale(20),
   },
   navItem: {
     padding: scale(8),
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    width: scale(60), // Ensure equal width for spacing
   },
   activeDot: {
     position: 'absolute',

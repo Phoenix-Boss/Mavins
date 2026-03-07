@@ -315,8 +315,8 @@ export default function HomeScreen() {
           <MavinsBestSection />
         </SectionErrorBoundary>
         
-        <SectionErrorBoundary sectionName="Sponsored">
-          <SponsoredSection />
+        <SectionErrorBoundary sectionName="Featured">
+          <FeaturedSection />
         </SectionErrorBoundary>
         
         <SectionErrorBoundary sectionName="Podcasts">
