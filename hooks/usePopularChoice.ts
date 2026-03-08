@@ -1,34 +1,21 @@
 /**
- * usePopularChoice Hook
- *
- * Fetches popular/viral music via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
- *
- * No getPopularChoice() exists in Kotlin — popularity-focused
- * search queries are the correct approach via NewPipe extractor.
- *
- * ── Why filter="all" ────────────────────────────────────────────────────────
- * "songs" is a YouTube Music-specific content filter not registered
- * in the standard YouTube service (serviceId=0) searchQHFactory.
- * Passing it causes Kotlin to throw an invalid filter error.
- * "all" is always valid on serviceId=0 and returns StreamInfoItems.
+ * usePopularChoice Hook - Uses Charts API for true popular data
+ * 
+ * YouTube's mostPopular chart is the authoritative source for popular videos.
+ * This hook uses getTrendingWithFallback() to get real popular data.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { getTrendingWithFallback, StreamInfoItem } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
 export interface PopularItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
+  id: string;
+  videoId: string;
   title: string;
-  artist: string;   // uploaderName
+  artist: string;
   thumbnail: string;
-  duration: number; // seconds
+  duration: number;
   views: number;
 }
 
@@ -43,16 +30,9 @@ interface UsePopularChoiceResult {
 // Constants
 // ─────────────────────────────────────────────
 
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'popular:choice';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-const SEARCH_QUERIES = [
-  'most popular songs 2025',
-  'viral music hits 2025',
-  'top trending songs',
-];
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -85,35 +65,30 @@ function toPopularItem(item: StreamInfoItem): PopularItem | null {
 }
 
 // ─────────────────────────────────────────────
-// Fetcher — tries each query until items found
+// Fetcher - Uses Charts API for popular data
 // ─────────────────────────────────────────────
 
 async function fetchPopular(): Promise<PopularItem[]> {
-  for (const query of SEARCH_QUERIES) {
-    try {
-      // Calls Kotlin: performSearch(query, "all", null, 0)
-      // "all" is the only valid filter for standard YouTube (serviceId=0)
-      const result = await search(
-        query,
-        'all',            // ← was 'songs', invalid on serviceId=0
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
-
-      if (!result.success) continue;
-
-      const items = (result.results as StreamInfoItem[])
-        .filter(item => item.type === 'stream')
-        .map(toPopularItem)
-        .filter((item): item is PopularItem => item !== null)
-        .slice(0, MAX_ITEMS);
-
-      if (items.length > 0) return items;
-    } catch {
-      continue;
-    }
+  // Use getTrendingWithFallback with 'music' category for popular music videos
+  // This calls YouTube's chart=mostPopular API internally
+  const result = await getTrendingWithFallback('music', 0);
+  
+  if (!result.success || !result.items?.length) {
+    throw new Error(result.message || 'No popular data available');
   }
-  throw new Error('No popular music available');
+
+  const items = result.items
+    .filter((item): item is StreamInfoItem => item.type === 'stream')
+    .map(toPopularItem)
+    .filter((item): item is PopularItem => item !== null)
+    .slice(0, MAX_ITEMS);
+
+  if (items.length === 0) {
+    throw new Error('No valid popular items found');
+  }
+
+  console.log(`✅ [usePopularChoice] Got ${items.length} items from ${result.source}`);
+  return items;
 }
 
 // ─────────────────────────────────────────────
@@ -121,9 +96,9 @@ async function fetchPopular(): Promise<PopularItem[]> {
 // ─────────────────────────────────────────────
 
 export const usePopularChoice = (): UsePopularChoiceResult => {
-  const [data, setData]       = useState<PopularItem[]>([]);
+  const [data, setData] = useState<PopularItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchPopularChoice = useCallback(async () => {
     setLoading(true);
@@ -138,9 +113,8 @@ export const usePopularChoice = (): UsePopularChoiceResult => {
         return;
       }
 
-      console.log('🔍 [usePopularChoice] Fetching from native module...');
       const popular = await fetchPopular();
-
+      
       console.log(`✅ [usePopularChoice] Received ${popular.length} items`);
       await cache.set(CACHE_KEY, popular, CACHE_TTL_MS);
       setData(popular);

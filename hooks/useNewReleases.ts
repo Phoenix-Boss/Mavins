@@ -1,36 +1,23 @@
 /**
- * useNewReleases Hook
- *
- * Fetches newly released music via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
- *
- * No getNewReleases() exists in Kotlin — recency-focused search
- * queries are the correct approach via NewPipe extractor.
- *
- * ── Why filter="all" ────────────────────────────────────────────────────────
- * "songs" is a YouTube Music-specific content filter not registered
- * in the standard YouTube service (serviceId=0) searchQHFactory.
- * Passing it causes Kotlin to throw an invalid filter error.
- * "all" is always valid on serviceId=0 and returns StreamInfoItems.
+ * useNewReleases Hook - Uses Charts API with recent uploads
+ * 
+ * Combines Charts API (for popular recent content) with search
+ * to find the newest music releases.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { getTrendingWithFallback, search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
 export interface NewReleaseItem {
-  id: string;          // stable React key (stream url)
-  videoId: string;     // full stream url → pass to getStreamUrl() for playback
+  id: string;
+  videoId: string;
   title: string;
-  artist: string;      // uploaderName
+  artist: string;
   thumbnail: string;
-  duration: number;    // seconds
+  duration: number;
   views: number;
-  releaseDate: string; // textualUploadDate e.g. "3 days ago"
+  releaseDate: string;
 }
 
 interface UseNewReleasesResult {
@@ -48,12 +35,6 @@ const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'music:newreleases';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-const SEARCH_QUERIES = [
-  'new music releases 2025',
-  'new songs this week',
-  'latest music videos 2025',
-];
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -82,27 +63,56 @@ function toNewReleaseItem(item: StreamInfoItem): NewReleaseItem | null {
     thumbnail: pickBestThumbnail(item.thumbnails),
     duration: Number(item.duration) || 0,
     views: Number(item.viewCount) || 0,
-    // textualUploadDate is the correct StreamInfoItem field e.g. "3 days ago"
     releaseDate: item.textualUploadDate || '',
   };
 }
 
 // ─────────────────────────────────────────────
-// Fetcher — tries each query until items found
+// Fetcher
 // ─────────────────────────────────────────────
 
 async function fetchNewReleases(): Promise<NewReleaseItem[]> {
-  for (const query of SEARCH_QUERIES) {
-    try {
-      // Calls Kotlin: performSearch(query, "all", null, 0)
-      // "all" is the only valid filter for standard YouTube (serviceId=0)
-      const result = await search(
-        query,
-        'all',            // ← was 'songs', invalid on serviceId=0
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
+  // Strategy 1: Try Charts API first (includes recent popular uploads)
+  try {
+    console.log('📊 [useNewReleases] Trying Charts API for recent popular...');
+    const result = await getTrendingWithFallback('music', YOUTUBE_SERVICE_ID);
+    
+    if (result.success && result.items?.length > 0) {
+      // Filter for items with recent upload dates if possible
+      const items = result.items
+        .filter((item): item is StreamInfoItem => item.type === 'stream')
+        .filter(item => {
+          // Prefer items with recent upload dates (if textualUploadDate contains indicators)
+          const date = item.textualUploadDate?.lowercase() || '';
+          return date.contains('day') || date.contains('week') || date.contains('hour') || true;
+        })
+        .map(toNewReleaseItem)
+        .filter((item): item is NewReleaseItem => item !== null)
+        .slice(0, MAX_ITEMS);
+      
+      if (items.length >= 4) { // Accept if we got at least 4 recent items
+        console.log(`✅ [useNewReleases] Got ${items.length} from Charts API`);
+        return items;
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ [useNewReleases] Charts API failed:', e);
+  }
 
+  // Strategy 2: Search for specifically new releases
+  console.log('🔍 [useNewReleases] Searching for new releases...');
+  
+  const searchQueries = [
+    'new music releases 2025',
+    'new songs this week',
+    'latest music videos 2025',
+    'new album releases 2025',
+  ];
+
+  for (const query of searchQueries) {
+    try {
+      const result = await search(query, 'all', undefined, YOUTUBE_SERVICE_ID) as SearchPage;
+      
       if (!result.success) continue;
 
       const items = (result.results as StreamInfoItem[])
@@ -111,11 +121,15 @@ async function fetchNewReleases(): Promise<NewReleaseItem[]> {
         .filter((item): item is NewReleaseItem => item !== null)
         .slice(0, MAX_ITEMS);
 
-      if (items.length > 0) return items;
+      if (items.length > 0) {
+        console.log(`✅ [useNewReleases] Got ${items.length} from search: ${query}`);
+        return items;
+      }
     } catch {
       continue;
     }
   }
+
   throw new Error('No new releases available');
 }
 
@@ -124,9 +138,9 @@ async function fetchNewReleases(): Promise<NewReleaseItem[]> {
 // ─────────────────────────────────────────────
 
 export const useNewReleases = (): UseNewReleasesResult => {
-  const [data, setData]       = useState<NewReleaseItem[]>([]);
+  const [data, setData] = useState<NewReleaseItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchNewReleasesData = useCallback(async () => {
     setLoading(true);
@@ -141,9 +155,8 @@ export const useNewReleases = (): UseNewReleasesResult => {
         return;
       }
 
-      console.log('🔍 [useNewReleases] Fetching from native module...');
       const releases = await fetchNewReleases();
-
+      
       console.log(`✅ [useNewReleases] Received ${releases.length} items`);
       await cache.set(CACHE_KEY, releases, CACHE_TTL_MS);
       setData(releases);

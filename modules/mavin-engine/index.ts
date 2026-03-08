@@ -5,7 +5,7 @@
  * Every function maps 1-to-1 to an AsyncFunction in MavinEngineModule.kt.
  *
  * Kotlin module name:  "MavinEngine"
- * Extractor version:   NewPipeExtractor 0.26.0
+ * Extractor version:   NewPipeExtractor 0.26.0 + YouTube Charts API Integration
  *
  * Service IDs (NewPipe standard):
  *   0 = YouTube
@@ -462,6 +462,38 @@ export interface KioskPage {
 }
 
 // ─────────────────────────────────────────────
+// ENHANCED: Trending with 3-Layer Fallback (NEW)
+// ─────────────────────────────────────────────
+
+/**
+ * Source of trending data from getTrendingWithFallback()
+ */
+export type TrendingSource = 
+  | 'youtube_charts'           // Layer 1: YouTube Charts API (most reliable)
+  | 'kiosk_trending_music'     // Layer 2: NewPipe Kiosk - Trending Music
+  | 'kiosk_trending_movies_and_shows' // Layer 2: NewPipe Kiosk - Movies
+  | 'kiosk_Trending'           // Layer 2: NewPipe Kiosk - General Trending
+  | 'search'                   // Layer 3: Search fallback
+  | 'none';                    // All layers failed
+
+/**
+ * Result from getTrendingWithFallback() with full metadata
+ */
+export interface TrendingWithFallbackResult {
+  success: boolean;
+  /** Which source provided the data */
+  source: TrendingSource;
+  /** The trending items (max 6 by default) */
+  items: InfoItem[];
+  /** Total items available before slicing */
+  totalAvailable: number;
+  /** Error messages from failed layers */
+  errors: string[];
+  /** Human-readable message when all fail */
+  message?: string;
+}
+
+// ─────────────────────────────────────────────
 // URL Utilities (aligned with Kotlin v0.26.0)
 // ─────────────────────────────────────────────
 
@@ -698,9 +730,16 @@ export const getKioskInfo = (
 ): Promise<KioskPage> =>
   Native.getKioskInfo(kioskId, pageUrl ?? null, serviceId ?? null);
 
+/**
+ * @deprecated Use getTrendingWithFallback() for reliable trending data
+ * This legacy function uses broken kiosks in v0.26.0
+ */
 export const getTrending = (serviceId?: number): Promise<KioskPage> =>
   Native.getTrending(serviceId ?? null);
 
+/**
+ * @deprecated Use getTrendingWithFallback() for reliable popular data
+ */
 export const getMostPopular = (serviceId?: number): Promise<KioskPage> =>
   Native.getMostPopular(serviceId ?? null);
 
@@ -713,6 +752,7 @@ export const getMostPopular = (serviceId?: number): Promise<KioskPage> =>
  * - Only 'trending_music' and 'trending_movies_and_shows' are working in v0.26.0
  * - 'Trending', 'live', 'trending_gaming', 'trending_podcasts_episodes' are broken (null pointer exceptions)
  * 
+ * @deprecated For trending data, use getTrendingWithFallback() instead
  * @param kioskType - Kiosk type or ID (case-insensitive, spaces/underscores/hyphens normalized)
  * @param serviceId - Service ID (default: 0 for YouTube)
  */
@@ -732,6 +772,48 @@ export const getYouTubeKiosk = (
   serviceId: number = 0
 ): Promise<KioskPage> =>
   Native.getYouTubeKiosk(kioskType, serviceId);
+
+// ═════════════════════════════════════════════════════════════════
+// ENHANCED: Reliable Trending with 3-Layer Fallback (NEW)
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Get trending music with intelligent 3-layer fallback.
+ * 
+ * This is the RECOMMENDED way to fetch trending content. It implements:
+ * 
+ * Layer 1: YouTube Charts API (charts.youtube.com)
+ * - Most reliable source for trending/popular videos
+ * - Works despite YouTube's /feed/trending deprecation (July 2025)
+ * - Returns official YouTube trending data
+ * 
+ * Layer 2: NewPipe Kiosk (trending_music, trending_movies_and_shows)
+ * - Legacy fallback using NewPipeExtractor
+ * - May return empty in v0.26.0 due to YouTube changes
+ * 
+ * Layer 3: Search Query ("trending music")
+ * - Last resort using search
+ * - Always available but less curated
+ * 
+ * @param category - Content category filter ('music', 'movies', 'gaming', 'all')
+ * @param serviceId - Service ID (default: 0 for YouTube)
+ * @returns TrendingWithFallbackResult with source attribution
+ * 
+ * @example
+ * // Get trending music (primary use case)
+ * const result = await getTrendingWithFallback('music');
+ * 
+ * // Get trending movies
+ * const result = await getTrendingWithFallback('movies');
+ * 
+ * // Check which source provided data
+ * console.log(result.source); // 'youtube_charts' | 'kiosk_trending_music' | 'search'
+ */
+export const getTrendingWithFallback = (
+  category: 'music' | 'movies' | 'gaming' | 'all' = 'music',
+  serviceId?: number
+): Promise<TrendingWithFallbackResult> =>
+  Native.getTrendingWithFallback(category, serviceId ?? 0);
 
 // ═════════════════════════════════════════════════════════════════
 // URL UTILITIES
@@ -809,9 +891,15 @@ const MavinEngine = {
   
   getKioskList,
   getKioskInfo,
+  /** @deprecated Use getTrendingWithFallback() */
   getTrending,
+  /** @deprecated Use getTrendingWithFallback() */
   getMostPopular,
+  /** @deprecated Use getTrendingWithFallback() for trending data */
   getYouTubeKiosk,
+  
+  // NEW: Reliable trending function
+  getTrendingWithFallback,
   
   resolveUrl,
   canHandleUrl,

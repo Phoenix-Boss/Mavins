@@ -1,44 +1,24 @@
 /**
- * useTopCharts Hook
- *
+ * useTopCharts Hook - Enhanced with Charts API for top50
+ * 
  * chart type routing:
- *   'top50'   → getYouTubeKiosk("MUSIC")  → Kotlin: extractKioskInfo("Music", null, 0)
- *   'viral50' → search("top music videos") → Kotlin: SearchInfo(filter="all")
- *
- * ── Why NOT getTrending() ────────────────────────────────────────────────────
- * getTrending() calls Kotlin extractKioskInfo("Trending", null, serviceId).
- * YouTube's "Trending" kiosk page fails with "Could not get Trending name"
- * because NewPipe cannot resolve the trending kiosk display name at runtime.
- *
- * getYouTubeKiosk("MUSIC") calls Kotlin extractKioskInfo("Music", null, 0),
- * which is the stable YouTube Music kiosk and succeeds reliably.
- *
- * ── Why filter="all" for viral50 ────────────────────────────────────────────
- * "songs" is a YouTube Music-specific content filter not available on the
- * standard YouTube service (serviceId=0). Using "all" avoids a filter
- * rejection error from the Kotlin search handler factory.
- *
- * Only StreamInfoItem fields are consumed — live streams and shorts
- * are filtered out before data leaves this hook.
+ *   'top50'   → getTrendingWithFallback()  → YouTube Charts API
+ *   'viral50' → search("top music videos") → Search fallback
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { getYouTubeKiosk, search, StreamInfoItem, KioskPage, SearchPage } from '@/modules/mavin-engine';
+import { getTrendingWithFallback, search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape — only what the UI needs
-// ─────────────────────────────────────────────
-
 export interface ChartItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
+  id: string;
+  videoId: string;
   title: string;
   artist: string;
-  duration: number; // seconds
+  duration: number;
   thumbnail: string;
   views: number;
-  position: number; // 1-based
+  position: number;
 }
 
 interface UseTopChartsResult {
@@ -71,8 +51,8 @@ function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
 }
 
 function toChartItem(item: StreamInfoItem, index: number): ChartItem | null {
-  if (item.isLive) return null;           // skip live streams
-  if (item.isShortFormContent) return null; // skip Shorts
+  if (item.isLive) return null;
+  if (item.isShortFormContent) return null;
   if (!item.url) return null;
 
   return {
@@ -92,17 +72,13 @@ function toChartItem(item: StreamInfoItem, index: number): ChartItem | null {
 // ─────────────────────────────────────────────
 
 /**
- * Calls Kotlin: extractKioskInfo("Music", null, 0)
- * via getYouTubeKiosk("MUSIC", 0).
- *
- * DO NOT use getTrending() here — it maps to the "Trending" kiosk
- * which throws "Could not get Trending name" at runtime.
+ * Fetch top 50 using Charts API (most reliable)
  */
 async function fetchTop50(): Promise<ChartItem[]> {
-  const result: KioskPage = await getYouTubeKiosk('MUSIC', YOUTUBE_SERVICE_ID);
-
-  if (!result.success) {
-    throw new Error(result.errors?.[0] || 'Music kiosk unavailable');
+  const result = await getTrendingWithFallback('music', YOUTUBE_SERVICE_ID);
+  
+  if (!result.success || !result.items?.length) {
+    throw new Error(result.message || 'Top 50 unavailable');
   }
 
   const items = (result.items as StreamInfoItem[])
@@ -119,21 +95,18 @@ async function fetchTop50(): Promise<ChartItem[]> {
 }
 
 /**
- * Calls Kotlin: performSearch("top music videos", "all", null, 0)
- *
- * Filter must be "all" — "songs" is a YouTube Music-specific filter
- * not registered in the standard YouTube service searchQHFactory.
+ * Fetch viral 50 using search (trending/viral content)
  */
 async function fetchViral50(): Promise<ChartItem[]> {
   const result = await search(
-    'top music videos',
-    'all',            // ← "songs" filter does not exist on serviceId=0
+    'viral music videos trending',
+    'all',
     undefined,
     YOUTUBE_SERVICE_ID,
   ) as SearchPage;
 
   if (!result.success) {
-    throw new Error(result.errors?.[0] || 'Music search unavailable');
+    throw new Error(result.errors?.[0] || 'Viral search unavailable');
   }
 
   const items = (result.results as StreamInfoItem[])
@@ -163,9 +136,9 @@ async function fetchCharts(chartType: string): Promise<ChartItem[]> {
 // ─────────────────────────────────────────────
 
 export const useTopCharts = (chartType: string = 'top50'): UseTopChartsResult => {
-  const [data, setData]       = useState<ChartItem[]>([]);
+  const [data, setData] = useState<ChartItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
