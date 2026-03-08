@@ -6,12 +6,16 @@
  *
  * Podcasts on YouTube are playlists — we search with filter "all"
  * so PlaylistInfoItems are included, then keep only playlist-type
- * results that match podcast keywords.
- * No getPodcasts() exists in Kotlin.
+ * results. No getPodcasts() exists in Kotlin.
+ *
+ * filter="all" is correct here: it is the only filter valid on
+ * standard YouTube (serviceId=0) that returns mixed result types
+ * including PlaylistInfoItems.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, {
+import {
+  search,
   PlaylistInfoItem,
   InfoItem,
   SearchPage,
@@ -23,10 +27,10 @@ import { cache } from '@/libs/cache';
 // ─────────────────────────────────────────────
 
 export interface PodcastItem {
-  id: string;          // stable React key (playlist url)
-  videoId: string;     // playlist url → pass to getPlaylistInfo() for episodes
+  id: string;           // stable React key (playlist url)
+  videoId: string;      // playlist url → pass to getPlaylistInfo() for episodes
   title: string;
-  artist: string;      // uploaderName — the podcast creator
+  artist: string;       // uploaderName — the podcast creator
   thumbnail: string;
   episodeCount: number; // streamCount from PlaylistInfoItem
   type: 'podcast';
@@ -45,10 +49,9 @@ interface UsePodcastsResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'podcasts:featured'; // matches original
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours — matches original
+const CACHE_KEY = 'podcasts:featured';
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-// Fallback query chain
 const SEARCH_QUERIES = [
   'music podcast 2025',
   'top music podcasts',
@@ -61,7 +64,7 @@ const SEARCH_QUERIES = [
 
 function pickBestThumbnail(thumbnails: PlaylistInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -72,7 +75,7 @@ function pickBestThumbnail(thumbnails: PlaylistInfoItem['thumbnails']): string {
 function toPodcastItem(item: PlaylistInfoItem): PodcastItem {
   return {
     id: item.url,
-    videoId: item.url,    // pass to getPlaylistInfo() to load episodes
+    videoId: item.url,
     title: item.name?.trim() || 'Unknown Podcast',
     artist: item.uploaderName?.trim() || 'Unknown Creator',
     thumbnail: pickBestThumbnail(item.thumbnails),
@@ -88,9 +91,9 @@ function toPodcastItem(item: PlaylistInfoItem): PodcastItem {
 async function fetchPodcasts(): Promise<PodcastItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "all", null, 0)
-      // "all" filter so PlaylistInfoItems (podcasts) are included
-      const result = await MavinEngine.search(
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" returns mixed results including PlaylistInfoItems (podcasts)
+      const result = await search(
         query,
         'all',
         undefined,
@@ -99,7 +102,6 @@ async function fetchPodcasts(): Promise<PodcastItem[]> {
 
       if (!result.success) continue;
 
-      // Keep only playlist-type results — podcasts on YouTube are playlists
       const items = (result.results as InfoItem[])
         .filter((item): item is PlaylistInfoItem => item.type === 'playlist')
         .map(toPodcastItem)
@@ -127,16 +129,14 @@ export const usePodcasts = (): UsePodcastsResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [usePodcasts] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [usePodcasts] Fetching from native module...');
       const podcasts = await fetchPodcasts();
 
@@ -157,7 +157,5 @@ export const usePodcasts = (): UsePodcastsResult => {
     fetchPodcastsData();
   }, [fetchPodcastsData]);
 
-  const refetch = () => fetchPodcastsData();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchPodcastsData };
 };

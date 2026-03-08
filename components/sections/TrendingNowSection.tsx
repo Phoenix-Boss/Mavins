@@ -5,10 +5,10 @@
  *
  * Data flow:
  *   useTrending()
- *     → MavinEngine.getTrending(undefined, 0)
+ *     → MavinEngine.getYouTubeKiosk("MUSIC", 0)
  *       → Kotlin: extractKioskInfo("Music", null, 0)
  *
- * TrendingSongRow receives only fields present on TrendingItem.
+ * TrendingSongRow receives TrendingItem fields (already transformed by hook).
  */
 
 import React from 'react';
@@ -25,12 +25,12 @@ const formatDuration = (seconds: number): string => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-const formatViews = (views: number): string => {
-  if (!views) return '0';
-  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`;
-  if (views >= 1_000_000)     return `${(views / 1_000_000).toFixed(1)}M`;
-  if (views >= 1_000)         return `${(views / 1_000).toFixed(1)}K`;
-  return String(views);
+const formatViews = (viewCount: number): string => {
+  if (!viewCount) return '0';
+  if (viewCount >= 1_000_000_000) return `${(viewCount / 1_000_000_000).toFixed(1)}B`;
+  if (viewCount >= 1_000_000)     return `${(viewCount / 1_000_000).toFixed(1)}M`;
+  if (viewCount >= 1_000)         return `${(viewCount / 1_000).toFixed(1)}K`;
+  return String(viewCount);
 };
 
 export const TrendingNowSection = () => {
@@ -62,7 +62,7 @@ export const TrendingNowSection = () => {
           <TrendingSongRow
             key={item.id}
             item={{
-              id: item.videoId,                    // full stream url for playback
+              id: item.id,
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,

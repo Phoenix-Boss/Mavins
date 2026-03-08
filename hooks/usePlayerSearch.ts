@@ -1,23 +1,75 @@
 // src/hooks/usePlayerSearch.ts
+/**
+ * usePlayerSearch Hook
+ *
+ * Searches for a specific track by artist + title via MavinEngine.search().
+ * Calls Kotlin: performSearch(query, "all", null, 0)
+ *
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
+ */
+
 import { useState, useCallback } from 'react';
-import getPlayerSearch, { PlayerSearchResult } from '../services/api/player/search/get';
-import { TrackData, Source } from '../services/types/track';
+import { search, StreamInfoItem, SearchPage, NativeImage } from '@/modules/mavin-engine';
+
+// ─────────────────────────────────────────────
+// Public shape
+// ─────────────────────────────────────────────
+
+export interface PlayerSearchResult {
+  items: Array<{
+    id: string;
+    videoId: string;
+    title: string;
+    artist: string;
+    thumbnail: string;
+    duration: number;
+    views: number;
+  }>;
+  query: string;
+}
+
+interface TrackData {
+  artist: string;
+  title: string;
+}
 
 interface UsePlayerSearchReturn {
-  search: (trackData: TrackData, source?: Source) => Promise<void>;
+  search: (trackData: TrackData) => Promise<void>;
   results: PlayerSearchResult | null;
   loading: boolean;
   error: string | null;
   clearResults: () => void;
 }
 
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
+
+function pickBestThumbnail(thumbnails: NativeImage[]): string {
+  if (!thumbnails?.length) return '';
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
+  for (const level of priority) {
+    const match = thumbnails.find(t => t.resolutionLevel === level);
+    if (match?.url) return match.url;
+  }
+  return thumbnails[0]?.url ?? '';
+}
+
+// ─────────────────────────────────────────────
+// Hook
+// ─────────────────────────────────────────────
+
 export const usePlayerSearch = (): UsePlayerSearchReturn => {
   const [results, setResults] = useState<PlayerSearchResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
 
-  const search = useCallback(async (trackData: TrackData, source?: Source) => {
-    if (!trackData.artist || !trackData.title) {
+  const searchTracks = useCallback(async (trackData: TrackData) => {
+    if (!trackData.artist?.trim() || !trackData.title?.trim()) {
       setError('Track must have artist and title');
       return;
     }
@@ -26,23 +78,43 @@ export const usePlayerSearch = (): UsePlayerSearchReturn => {
     setError(null);
 
     try {
-      const result = await getPlayerSearch({
-        trackData: {
-          artist: trackData.artist,
-          title: trackData.title,
-          id: trackData.id,
-        },
-        source,
-      });
+      const query = `${trackData.artist.trim()} ${trackData.title.trim()}`;
 
-      if (result) {
-        setResults(result);
-      } else {
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" is the only valid filter for standard YouTube (serviceId=0)
+      const result = await search(
+        query,
+        'all',  // ← was 'songs', invalid on serviceId=0
+        undefined,
+        0,
+      ) as SearchPage;
+
+      if (!result.success || !result.results.length) {
         setError('No results found');
+        setResults(null);
+        return;
       }
+
+      const mappedItems = result.results
+        .filter((item): item is StreamInfoItem => item.type === 'stream')
+        .filter(item => !item.isLive && !item.isShortFormContent)
+        .map(item => ({
+          id: item.url,
+          videoId: item.url,
+          title: item.name?.trim() || 'Unknown Title',
+          artist: item.uploaderName?.trim() || 'Unknown Artist',
+          thumbnail: pickBestThumbnail(item.thumbnails),
+          duration: Number(item.duration) || 0,
+          views: Number(item.viewCount) || 0,
+        }));
+
+      setResults({
+        items: mappedItems,
+        query: result.query,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
-      console.error('Player search error:', err);
+      console.error('❌ [usePlayerSearch] error:', err);
     } finally {
       setLoading(false);
     }
@@ -54,7 +126,7 @@ export const usePlayerSearch = (): UsePlayerSearchReturn => {
   }, []);
 
   return {
-    search,
+    search: searchTracks,
     results,
     loading,
     error,

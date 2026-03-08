@@ -2,32 +2,20 @@
  * useCoverSongs Hook
  *
  * Fetches cover songs and acoustic versions via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "songs", null, 0)
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
- * "songs" is the YouTube Music content filter in NewPipe extractor —
- * returns music tracks only, no channels or playlists.
+ * filter="all" is correct — it is the only valid filter on standard
+ * YouTube (serviceId=0) and returns StreamInfoItems.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
-export interface CoverItem {
-  id: string;        // stable React key (stream url)
-  videoId: string;   // full stream url → pass to getStreamUrl() for playback
-  title: string;
-  artist: string;    // uploaderName — the performer of the cover
-  thumbnail: string;
-  duration: number;  // seconds
-  views: number;
-}
+export type { StreamInfoItem as CoverItem } from '@/modules/mavin-engine';
 
 interface UseCoverSongsResult {
-  data: CoverItem[];
+  data: StreamInfoItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -40,71 +28,40 @@ interface UseCoverSongsResult {
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'covers:popular';
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours — matches original
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-// Fallback query chain: try each until results come back
 const SEARCH_QUERIES = [
-  'cover songs acoustic 2025',
-  'best cover songs',
-  'acoustic cover versions',
+  'acoustic cover songs',
+  'best cover songs 2024',
+  'popular acoustic covers',
+  'cover songs',
+  'acoustic versions',
 ];
 
 // ─────────────────────────────────────────────
-// Helpers
+// Fetcher
 // ─────────────────────────────────────────────
 
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toCoverItem(item: StreamInfoItem): CoverItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetcher — tries each query until we have items
-// ─────────────────────────────────────────────
-
-async function fetchCovers(): Promise<CoverItem[]> {
+async function fetchCovers(): Promise<StreamInfoItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
+      const result = await search(
         query,
-        'songs',
+        'all',
         undefined,
         YOUTUBE_SERVICE_ID,
       ) as SearchPage;
 
       if (!result.success) continue;
 
-      const items = (result.results as StreamInfoItem[])
-        .filter(item => item.type === 'stream')
-        .map(toCoverItem)
-        .filter((item): item is CoverItem => item !== null)
+      const items = result.results
+        .filter((item): item is StreamInfoItem => item.type === 'stream')
+        .filter(item => !item.isLive && !item.isShortFormContent && item.url)
         .slice(0, MAX_ITEMS);
 
       if (items.length > 0) return items;
     } catch {
-      continue; // try next query
+      continue;
     }
   }
   throw new Error('No cover songs available');
@@ -115,7 +72,7 @@ async function fetchCovers(): Promise<CoverItem[]> {
 // ─────────────────────────────────────────────
 
 export const useCoverSongs = (): UseCoverSongsResult => {
-  const [data, setData]       = useState<CoverItem[]>([]);
+  const [data, setData]       = useState<StreamInfoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -124,23 +81,20 @@ export const useCoverSongs = (): UseCoverSongsResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useCoverSongs] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [useCoverSongs] Fetching from native module...');
       const covers = await fetchCovers();
 
       console.log(`✅ [useCoverSongs] Received ${covers.length} covers`);
       await cache.set(CACHE_KEY, covers, CACHE_TTL_MS);
       setData(covers);
-
     } catch (err: any) {
       console.error('❌ [useCoverSongs] Failed:', err);
       setError(err.message || 'Failed to load cover songs');
@@ -154,7 +108,5 @@ export const useCoverSongs = (): UseCoverSongsResult => {
     fetchCoverSongs();
   }, [fetchCoverSongs]);
 
-  const refetch = () => fetchCoverSongs();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchCoverSongs };
 };

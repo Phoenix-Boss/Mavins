@@ -179,13 +179,17 @@ class MavinEngineModule : Module() {
         }
         AsyncFunction("getYouTubeKiosk") { kioskType: String, serviceId: Int? ->
             ensureInit()
-            val id = when (kioskType.uppercase()) {
-                "LIVE"     -> "Live"
-                "MUSIC"    -> "Music"
-                "GAMING"   -> "Gaming"
-                "MOVIES"   -> "Movies"
-                "TRENDING" -> "Trending"
-                else       -> "Trending"
+            // Map friendly names to actual kiosk IDs used in NewPipeExtractor v0.26.0
+            // Based on debug output: trending_music, trending_movies_and_shows are working
+            // Trending, live, trending_gaming, trending_podcasts_episodes are broken (null pointer exceptions)
+            val id = when (kioskType.lowercase().replace(" ", "_").replace("-", "_")) {
+                "live" -> "live"
+                "trending" -> "Trending"
+                "music", "trending_music" -> "trending_music"
+                "gaming", "trending_gaming" -> "trending_gaming"
+                "movies", "trending_movies", "trending_movies_and_shows" -> "trending_movies_and_shows"
+                "podcasts", "trending_podcasts", "trending_podcasts_episodes" -> "trending_podcasts_episodes"
+                else -> kioskType  // Use as-is if not matched (allows direct ID usage)
             }
             extractKioskInfo(id, null, serviceId ?: 0)
         }

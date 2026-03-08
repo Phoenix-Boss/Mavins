@@ -1,7 +1,7 @@
 /**
  * Mavins Player - Premium Gold Edition
  * Main Home Screen with Real Data Integration - All Sections
- * v2.0 - With Error Boundaries and Service Debugging
+ * v2.1 - Fixed MavinEngine Integration
  */
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import {
@@ -14,7 +14,6 @@ import {
   RefreshControl,
   StyleSheet,
   Dimensions,
-  TextInput,
   Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,7 +21,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
-import MavinEngine from '@/modules/mavin-engine';
+
+// ✅ FIXED: Use named imports from MavinEngine wrapper
+import { 
+  ping, 
+  getVersion, 
+  services,
+  type ServiceInfo,
+  type PingResult 
+} from '@/modules/mavin-engine';
 
 // Import all sections
 import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
@@ -109,30 +116,41 @@ class SectionErrorBoundary extends React.Component<
 export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedTab, setSelectedTab] = useState("Hits");
-  const [searchQuery, setSearchQuery] = useState("");
   const [servicesOnline, setServicesOnline] = useState<boolean | null>(null);
+  const [mavinVersion, setMavinVersion] = useState<string>('');
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
 
-  // ✅ DEBUG: Test MavinEngine on mount
+  // ✅ FIXED: Test MavinEngine on mount using correct API
   useEffect(() => {
     const testServices = async () => {
       try {
         console.log('🔍 Testing MavinEngine...');
-        const ping = await MavinEngine.ping();
-        console.log('✅ MavinEngine online:', ping);
         
-        const status = await MavinEngine.getServiceStatus();
-        console.log('📡 Services:', status);
+        // ✅ Use named import ping() instead of MavinEngine.ping()
+        const pingResult: PingResult = await ping();
+        console.log('✅ MavinEngine online:', pingResult);
         
-        const availableServices = status.services.filter((s: any) => s.available);
-        setServicesOnline(availableServices.length > 0);
+        // ✅ Get version info
+        const versionInfo = await getVersion();
+        setMavinVersion(versionInfo.version);
+        console.log('📦 Version:', versionInfo);
         
-        if (availableServices.length === 0) {
+        // ✅ Check available services (from named import)
+        const availableServices: ServiceInfo[] = services;
+        console.log('📡 Available services:', availableServices);
+        
+        // YouTube service ID is 0
+        const youtubeService = availableServices.find(s => s.id === 0);
+        const isOnline = !!youtubeService;
+        
+        setServicesOnline(isOnline);
+        
+        if (!isOnline) {
           Alert.alert(
             'Service Unavailable',
-            'No music services are currently available. Please check your internet connection.'
+            'YouTube music service is currently unavailable. Please check your internet connection.'
           );
         }
       } catch (e) {
@@ -208,6 +226,13 @@ export default function HomeScreen() {
           )}
           {servicesOnline === true && (
             <Ionicons name="cloud" size={20} color={COLORS.success} style={{ marginRight: 12 }} />
+          )}
+          
+          {/* Version indicator (subtle) */}
+          {mavinVersion && (
+            <Text style={{ color: COLORS.textTertiary, fontSize: 10, marginRight: 8 }}>
+              v{mavinVersion}
+            </Text>
           )}
           
           <TouchableOpacity
@@ -294,12 +319,10 @@ export default function HomeScreen() {
         </SectionErrorBoundary>
         
         <SectionErrorBoundary sectionName="Create Mix">
-          {/* ✅ FIX: Ensure CreateMixSection passes string genre, not number */}
           <CreateMixSection />
         </SectionErrorBoundary>
         
         <SectionErrorBoundary sectionName="Music Channels">
-          {/* ✅ FIX: Pass string genres */}
           <MusicChannelsSection />
         </SectionErrorBoundary>
         

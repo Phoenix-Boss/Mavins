@@ -2,32 +2,25 @@
  * useGenreStations Hook
  *
  * Fetches genre-based music tracks via MavinEngine.search().
- * Calls Kotlin: performSearch("{genre} music", "songs", null, 0)
+ * Calls Kotlin: performSearch("{genre} music", "all", null, 0)
  *
- * "songs" is the YouTube Music content filter in NewPipe extractor —
- * returns music tracks only, no channels or playlists.
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
+ *
+ * Returns StreamInfoItem[] directly — no custom mapping.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
-export interface GenreItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
-  title: string;
-  artist: string;   // uploaderName
-  thumbnail: string;
-  duration: number; // seconds
-  views: number;
-}
+export type { StreamInfoItem as GenreItem } from '@/modules/mavin-engine';
 
 interface UseGenreStationsResult {
-  data: GenreItem[];
+  data: StreamInfoItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -39,47 +32,18 @@ interface UseGenreStationsResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 10;
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — matches original
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toGenreItem(item: StreamInfoItem): GenreItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-  };
-}
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
 
-async function fetchGenre(genre: string): Promise<GenreItem[]> {
-  // ✅ Calls Kotlin: performSearch("{genre} music", "songs", null, 0)
+async function fetchGenre(genre: string): Promise<StreamInfoItem[]> {
+  // Calls Kotlin: performSearch("{genre} music", "all", null, 0)
+  // "all" is the only valid filter for standard YouTube (serviceId=0)
   const result = await MavinEngine.search(
     `${genre} music`,
-    'songs',
+    'all',            // ← was 'songs', invalid on serviceId=0
     undefined,
     YOUTUBE_SERVICE_ID,
   ) as SearchPage;
@@ -88,10 +52,9 @@ async function fetchGenre(genre: string): Promise<GenreItem[]> {
     throw new Error(result.errors?.[0] || `No results for ${genre}`);
   }
 
-  const items = (result.results as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .map(toGenreItem)
-    .filter((item): item is GenreItem => item !== null)
+  const items = result.results
+    .filter((item): item is StreamInfoItem => item.type === 'stream')
+    .filter(item => !item.isLive && !item.isShortFormContent && item.url)
     .slice(0, MAX_ITEMS);
 
   if (!items.length) {
@@ -106,7 +69,7 @@ async function fetchGenre(genre: string): Promise<GenreItem[]> {
 // ─────────────────────────────────────────────
 
 export const useGenreStations = (genre: string): UseGenreStationsResult => {
-  const [data, setData]       = useState<GenreItem[]>([]);
+  const [data, setData]       = useState<StreamInfoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -119,23 +82,20 @@ export const useGenreStations = (genre: string): UseGenreStationsResult => {
     try {
       const cacheKey = `genre:${genre.toLowerCase().trim()}`;
 
-      // Cache read
       const cached = await cache.get(cacheKey);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log(`📦 [useGenreStations] Using cached data for ${genre}`);
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log(`🔍 [useGenreStations] Fetching ${genre} from native module...`);
       const stations = await fetchGenre(genre);
 
       console.log(`✅ [useGenreStations] Received ${stations.length} stations for ${genre}`);
       await cache.set(cacheKey, stations, CACHE_TTL_MS);
       setData(stations);
-
     } catch (err: any) {
       console.error(`❌ [useGenreStations] Failed for ${genre}:`, err);
       setError(err.message || `Failed to load ${genre} stations`);
@@ -149,7 +109,5 @@ export const useGenreStations = (genre: string): UseGenreStationsResult => {
     fetchGenreStations();
   }, [fetchGenreStations]);
 
-  const refetch = () => fetchGenreStations();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchGenreStations };
 };

@@ -1,6 +1,6 @@
 /**
  * Album Card Component - Displays an album/playlist in a square card format
- * v1.1 - With defensive checks for missing data
+ * v1.2 - Fixed Image source type (string | undefined, not null)
  */
 import React from "react";
 import {
@@ -57,12 +57,14 @@ export const AlbumCard = ({
     id: item?.id || `fallback_${Math.random()}`,
     title: item?.title || fallbackTitle,
     artist: item?.artist || "Unknown Artist",
-    thumbnail: item?.thumbnail || null,
+    // ✅ Fixed: Ensure thumbnail is string | undefined, never null
+    thumbnail: item?.thumbnail || undefined,
     position: item?.position,
     plays: item?.plays
   };
 
-  const hasValidImage = safeItem.thumbnail && safeItem.thumbnail.startsWith('http');
+  // ✅ Fixed: Check for string | undefined (not null)
+  const hasValidImage = !!safeItem.thumbnail && safeItem.thumbnail.startsWith('http');
 
   const handlePress = () => {
     triggerHaptic();
@@ -92,7 +94,7 @@ export const AlbumCard = ({
       {/* ✅ Image with fallback */}
       {hasValidImage ? (
         <Image
-          source={{ uri: safeItem.thumbnail }}
+          source={{ uri: safeItem.thumbnail }}  // ✅ Safe: string | undefined
           style={styles.albumImage}
           resizeMode="cover"
         />

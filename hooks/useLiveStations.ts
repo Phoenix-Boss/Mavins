@@ -1,40 +1,31 @@
 /**
  * useLiveStations Hook
  *
- * Fetches live music streams via MavinEngine.getKioskInfo("Live").
- * Calls Kotlin: extractKioskInfo("Live", null, 0)
+ * Fetches live music streams via MavinEngine.search().
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
- * The YouTube "Live" kiosk is the correct source for live streams —
- * it returns StreamInfoItem results with isLive=true.
- * No getLiveStations() exists in Kotlin.
+ * ── Why NOT getKioskInfo("Live") ────────────────────────────────────────────
+ * The "Live" kiosk ID does not exist in the YouTube service registered
+ * by NewPipeExtractor. Calling getKioskInfo("Live") throws:
+ *   ExtractionException: "No kiosk found with the type: Live"
  *
- * viewCount on a live StreamInfoItem = current concurrent viewers.
+ * The correct approach is search() with live-music-focused queries,
+ * then filter results to item.isLive === true.
+ *
+ * Note: viewCount on live StreamInfoItems = concurrent viewers.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, KioskPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
-export interface LiveStationItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
-  title: string;
-  artist: string;   // uploaderName — channel broadcasting live
-  thumbnail: string;
-  viewers: number;  // viewCount = concurrent viewers on a live stream
-  type: 'live';
-}
+export type { StreamInfoItem as LiveStationItem } from '@/modules/mavin-engine';
 
 interface UseLiveStationsResult {
-  data: LiveStationItem[];
+  data: StreamInfoItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
-  formatViewers: (viewers: number) => string;
 }
 
 // ─────────────────────────────────────────────
@@ -43,75 +34,56 @@ interface UseLiveStationsResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'radio:live'; // matches original
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — matches original
+const CACHE_KEY = 'radio:live';
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+// Queries targeting live music streams
+const SEARCH_QUERIES = [
+  'live music stream',
+  'live concert stream',
+  'music live now',
+];
 
 // ─────────────────────────────────────────────
-// Helpers
+// Helper: format viewers (viewCount on live = concurrent viewers)
 // ─────────────────────────────────────────────
 
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toLiveStationItem(item: StreamInfoItem): LiveStationItem | null {
-  // Live kiosk should only return live streams, but guard anyway
-  if (!item.isLive) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Station',
-    artist: item.uploaderName?.trim() || 'Unknown',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    // viewCount on live stream = concurrent viewers
-    viewers: Number(item.viewCount) || 0,
-    type: 'live',
-  };
-}
-
-export function formatViewers(viewers: number): string {
-  if (!viewers) return '0';
-  if (viewers >= 1_000_000) return `${(viewers / 1_000_000).toFixed(1)}M`;
-  if (viewers >= 1_000)     return `${(viewers / 1_000).toFixed(1)}K`;
-  return String(viewers);
+export function formatViewers(viewCount: number): string {
+  if (!viewCount) return '0';
+  if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
+  if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
+  return String(viewCount);
 }
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
 
-async function fetchLiveStations(): Promise<LiveStationItem[]> {
-  // ✅ Calls Kotlin: extractKioskInfo("Live", null, 0)
-  // YouTube "Live" kiosk is the dedicated source for live streams
-  const result: KioskPage = await MavinEngine.getKioskInfo(
-    'Live',
-    undefined,
-    YOUTUBE_SERVICE_ID,
-  );
+async function fetchLiveStations(): Promise<StreamInfoItem[]> {
+  // getKioskInfo("Live") throws "No kiosk found with the type: Live" on YouTube.
+  // Use search() with live-focused queries and filter to isLive === true instead.
+  for (const query of SEARCH_QUERIES) {
+    try {
+      const result = await search(
+        query,
+        'all',            // "all" is the only valid filter on serviceId=0
+        undefined,
+        YOUTUBE_SERVICE_ID,
+      ) as SearchPage;
 
-  if (!result.success) {
-    throw new Error(result.errors?.[0] || 'Live kiosk unavailable');
+      if (!result.success) continue;
+
+      const items = result.results
+        .filter((item): item is StreamInfoItem => item.type === 'stream')
+        .filter(item => item.isLive && item.url)
+        .slice(0, MAX_ITEMS);
+
+      if (items.length > 0) return items;
+    } catch {
+      continue;
+    }
   }
-
-  const items = (result.items as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .map(toLiveStationItem)
-    .filter((item): item is LiveStationItem => item !== null)
-    .slice(0, MAX_ITEMS);
-
-  if (!items.length) {
-    throw new Error('No live stations available');
-  }
-
-  return items;
+  throw new Error('No live stations available');
 }
 
 // ─────────────────────────────────────────────
@@ -119,7 +91,7 @@ async function fetchLiveStations(): Promise<LiveStationItem[]> {
 // ─────────────────────────────────────────────
 
 export const useLiveStations = (): UseLiveStationsResult => {
-  const [data, setData]       = useState<LiveStationItem[]>([]);
+  const [data, setData]       = useState<StreamInfoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -128,23 +100,20 @@ export const useLiveStations = (): UseLiveStationsResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useLiveStations] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [useLiveStations] Fetching from native module...');
       const stations = await fetchLiveStations();
 
       console.log(`✅ [useLiveStations] Received ${stations.length} stations`);
       await cache.set(CACHE_KEY, stations, CACHE_TTL_MS);
       setData(stations);
-
     } catch (err: any) {
       console.error('❌ [useLiveStations] Failed:', err);
       setError(err.message || 'Failed to load live stations');
@@ -158,7 +127,5 @@ export const useLiveStations = (): UseLiveStationsResult => {
     fetchLiveStationsData();
   }, [fetchLiveStationsData]);
 
-  const refetch = () => fetchLiveStationsData();
-
-  return { data, loading, error, refetch, formatViewers };
+  return { data, loading, error, refetch: fetchLiveStationsData };
 };

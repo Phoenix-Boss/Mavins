@@ -2,15 +2,28 @@
  * useTopCharts Hook
  *
  * chart type routing:
- *   'top50'   → MavinEngine.getTrending()  → Kotlin: KioskInfo("Music", null, 0)
- *   'viral50' → MavinEngine.search()       → Kotlin: SearchInfo(filter="songs")
+ *   'top50'   → getYouTubeKiosk("MUSIC")  → Kotlin: extractKioskInfo("Music", null, 0)
+ *   'viral50' → search("top music videos") → Kotlin: SearchInfo(filter="all")
+ *
+ * ── Why NOT getTrending() ────────────────────────────────────────────────────
+ * getTrending() calls Kotlin extractKioskInfo("Trending", null, serviceId).
+ * YouTube's "Trending" kiosk page fails with "Could not get Trending name"
+ * because NewPipe cannot resolve the trending kiosk display name at runtime.
+ *
+ * getYouTubeKiosk("MUSIC") calls Kotlin extractKioskInfo("Music", null, 0),
+ * which is the stable YouTube Music kiosk and succeeds reliably.
+ *
+ * ── Why filter="all" for viral50 ────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not available on the
+ * standard YouTube service (serviceId=0). Using "all" avoids a filter
+ * rejection error from the Kotlin search handler factory.
  *
  * Only StreamInfoItem fields are consumed — live streams and shorts
  * are filtered out before data leaves this hook.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, KioskPage, SearchPage } from '@/modules/mavin-engine';
+import { getYouTubeKiosk, search, StreamInfoItem, KioskPage, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
@@ -49,7 +62,7 @@ const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -58,9 +71,8 @@ function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
 }
 
 function toChartItem(item: StreamInfoItem, index: number): ChartItem | null {
-  // Music platform: skip live streams and short-form content
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
+  if (item.isLive) return null;           // skip live streams
+  if (item.isShortFormContent) return null; // skip Shorts
   if (!item.url) return null;
 
   return {
@@ -79,27 +91,43 @@ function toChartItem(item: StreamInfoItem, index: number): ChartItem | null {
 // Fetchers
 // ─────────────────────────────────────────────
 
+/**
+ * Calls Kotlin: extractKioskInfo("Music", null, 0)
+ * via getYouTubeKiosk("MUSIC", 0).
+ *
+ * DO NOT use getTrending() here — it maps to the "Trending" kiosk
+ * which throws "Could not get Trending name" at runtime.
+ */
 async function fetchTop50(): Promise<ChartItem[]> {
-  // Calls Kotlin: extractKioskInfo("Music", null, 0)
-  const result: KioskPage = await MavinEngine.getTrending(YOUTUBE_SERVICE_ID);
+  const result: KioskPage = await getYouTubeKiosk('MUSIC', YOUTUBE_SERVICE_ID);
 
   if (!result.success) {
     throw new Error(result.errors?.[0] || 'Music kiosk unavailable');
   }
 
-  return (result.items as StreamInfoItem[])
+  const items = (result.items as StreamInfoItem[])
     .filter(item => item.type === 'stream')
     .slice(0, MAX_ITEMS)
-    .map(toChartItem)
+    .map((item, idx) => toChartItem(item, idx))
     .filter((item): item is ChartItem => item !== null);
+
+  if (!items.length) {
+    throw new Error('No top chart tracks available');
+  }
+
+  return items;
 }
 
+/**
+ * Calls Kotlin: performSearch("top music videos", "all", null, 0)
+ *
+ * Filter must be "all" — "songs" is a YouTube Music-specific filter
+ * not registered in the standard YouTube service searchQHFactory.
+ */
 async function fetchViral50(): Promise<ChartItem[]> {
-  // Calls Kotlin: performSearch("top music videos", "songs", null, 0)
-  // "songs" is the YouTube Music content filter in NewPipe extractor
-  const result = await MavinEngine.search(
+  const result = await search(
     'top music videos',
-    'songs',
+    'all',            // ← "songs" filter does not exist on serviceId=0
     undefined,
     YOUTUBE_SERVICE_ID,
   ) as SearchPage;
@@ -108,12 +136,18 @@ async function fetchViral50(): Promise<ChartItem[]> {
     throw new Error(result.errors?.[0] || 'Music search unavailable');
   }
 
-  return (result.results as StreamInfoItem[])
+  const items = (result.results as StreamInfoItem[])
     .filter(item => item.type === 'stream')
     .filter(item => !item.isLive && !item.isShortFormContent)
     .slice(0, MAX_ITEMS)
-    .map(toChartItem)
+    .map((item, idx) => toChartItem(item, idx))
     .filter((item): item is ChartItem => item !== null);
+
+  if (!items.length) {
+    throw new Error('No viral chart tracks available');
+  }
+
+  return items;
 }
 
 async function fetchCharts(chartType: string): Promise<ChartItem[]> {
@@ -140,22 +174,16 @@ export const useTopCharts = (chartType: string = 'top50'): UseTopChartsResult =>
     try {
       const cacheKey = `charts:${chartType}`;
 
-      // Cache read
       const cached = await cache.get(cacheKey);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log(`📦 [useTopCharts] cache hit — ${chartType}`);
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log(`🔍 [useTopCharts] fetching ${chartType}…`);
       const items = await fetchCharts(chartType);
-
-      if (!items.length) {
-        throw new Error(`No ${chartType} charts available`);
-      }
 
       console.log(`✅ [useTopCharts] ${items.length} items — ${chartType}`);
       await cache.set(cacheKey, items, CACHE_TTL_MS);

@@ -1,6 +1,6 @@
 /**
  * Music Channel Card Component - Displays a music channel/station
- * v1.1 - With defensive checks for missing data
+ * v1.3 - Fixed TypeScript strict null checks for Image source
  */
 import React from "react";
 import {
@@ -13,6 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
+import { StreamInfoItem } from "@/modules/mavin-engine";
 
 // Metallic Gold Color Palette
 const COLORS = {
@@ -30,10 +31,17 @@ const COLORS = {
   border: '#333333',
 };
 
+// Updated interface to accept StreamInfoItem fields directly
 interface MusicChannelCardProps {
   item?: {
     id?: string;
-    name?: string;
+    // StreamInfoItem fields
+    name?: string;           // from StreamInfoItem.name (title)
+    uploaderName?: string;  // from StreamInfoItem.uploaderName (artist)
+    thumbnails?: Array<{ url: string }>;
+    duration?: number;
+    viewCount?: number;
+    // Legacy fields for backward compatibility
     logo?: string;
     tracks?: string[];
     plays?: string;
@@ -54,17 +62,28 @@ export const MusicChannelCard = ({
 }: MusicChannelCardProps) => {
   const router = useRouter();
 
-  // ✅ DEFENSIVE: Handle missing or invalid item
+  // ✅ DEFENSIVE: Handle missing or invalid item with StreamInfoItem mapping
   const safeItem = {
     id: item?.id || `fallback_${Math.random()}`,
-    name: item?.name || fallbackName,
-    logo: item?.logo || null,
-    tracks: Array.isArray(item?.tracks) ? item.tracks : [],
-    plays: item?.plays || "0",
-    genre: item?.genre
+    // Support both new StreamInfoItem fields and legacy fields
+    name: item?.name || item?.genre || fallbackName,
+    artist: item?.uploaderName || "",
+    // Ensure logo is string | undefined, never null
+    logo: item?.thumbnails?.[0]?.url || item?.logo || undefined,
+    // Convert duration (seconds) to track list or use legacy tracks
+    tracks: item?.tracks || (item?.duration ? [`${Math.floor(item.duration / 60)}:${(item.duration % 60).toString().padStart(2, '0')}`] : []),
+    plays: item?.plays || (item?.viewCount ? formatViewCount(item.viewCount) : "0"),
+    genre: item?.genre || item?.name || "Music",
   };
 
-  const hasValidLogo = safeItem.logo && safeItem.logo.startsWith('http');
+  function formatViewCount(count: number): string {
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+    if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
+    return count.toString();
+  }
+
+  // ✅ FIXED: Strict null check - logo is now string | undefined
+  const hasValidLogo = !!safeItem.logo && safeItem.logo.startsWith('http');
 
   const handlePress = () => {
     triggerHaptic();
@@ -88,7 +107,7 @@ export const MusicChannelCard = ({
         <View style={styles.channelLogoContainer}>
           {hasValidLogo ? (
             <Image
-              source={{ uri: safeItem.logo }}
+              source={{ uri: safeItem.logo }}  // ✅ Safe: string | undefined
               style={styles.channelLogo}
               resizeMode="cover"
             />
@@ -106,16 +125,16 @@ export const MusicChannelCard = ({
           ]} numberOfLines={1}>
             {safeItem.name}
           </Text>
-          <Text style={styles.channelPlays}>{safeItem.plays} plays</Text>
-          {safeItem.genre && (
-            <Text style={styles.channelGenre} numberOfLines={1}>
-              {safeItem.genre}
+          {safeItem.artist ? (
+            <Text style={styles.channelArtist} numberOfLines={1}>
+              {safeItem.artist}
             </Text>
-          )}
+          ) : null}
+          <Text style={styles.channelPlays}>{safeItem.plays} plays</Text>
         </View>
       </View>
       
-      {/* Only show tracks if we have them */}
+      {/* Show duration as track info or legacy tracks */}
       {safeItem.tracks.length > 0 && (
         <View style={styles.channelTracks}>
           {safeItem.tracks.slice(0, 3).map((track: string, idx: number) => (
@@ -175,7 +194,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.goldPrimary,
   },
   channelInfo: {
-    flexLeft: 1,
+    flex: 1,
     marginLeft: 10,
   },
   channelName: {
@@ -184,14 +203,14 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     marginBottom: 2,
   },
+  channelArtist: {
+    fontSize: 11,
+    color: COLORS.goldShimmer,
+    marginBottom: 2,
+  },
   channelPlays: {
     fontSize: 10,
     color: COLORS.textTertiary,
-  },
-  channelGenre: {
-    fontSize: 10,
-    color: COLORS.goldShimmer,
-    marginTop: 2,
   },
   channelTracks: {
     gap: 4,

@@ -5,37 +5,31 @@
  *
  * Data flow:
  *   useMonthlyTop()
- *     → MavinEngine.search("top songs this month 2025", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("top songs this month 2025", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * Top10MonthRow receives only fields present on MonthlyItem.
- * previousPosition is removed — it doesn't exist on StreamInfoItem.
- * position is always set (1-based from result order) so no fallback needed.
+ * Top10MonthRow receives MonthlyItem fields (already transformed by hook).
  */
 
-import React from 'react';
-import {
-  View,
-  Text,
-  ActivityIndicator,
-  StyleSheet,
-} from 'react-native';
-import { useMonthlyTop, MonthlyItem } from '../../hooks/useMonthlyTop';
-import { Top10MonthRow } from '../cards/Top10MonthRow';
-import { SectionHeader } from '../common/SectionHeader';
+import React from "react";
+import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import { useMonthlyTop, MonthlyItem } from "../../hooks/useMonthlyTop";  // ✅ Fixed: MonthlyItem not ChartItem
+import { Top10MonthRow } from "../cards/Top10MonthRow";
+import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
 };
 
-const formatViews = (views: number): string => {
-  if (!views) return '0';
-  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`;
-  if (views >= 1_000_000)     return `${(views / 1_000_000).toFixed(1)}M`;
-  if (views >= 1_000)         return `${(views / 1_000).toFixed(1)}K`;
-  return String(views);
+const formatViews = (viewCount: number): string => {
+  if (!viewCount) return "0";
+  if (viewCount >= 1_000_000_000)
+    return `${(viewCount / 1_000_000_000).toFixed(1)}B`;
+  if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
+  if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
+  return String(viewCount);
 };
 
 export const Top10MonthSection = () => {
@@ -62,18 +56,17 @@ export const Top10MonthSection = () => {
     <View style={styles.section}>
       <SectionHeader title="Top 10 for the Month" showPlayAll />
       <View style={styles.verticalList}>
-        {data.map((item: MonthlyItem) => (
+        {data.map((item: MonthlyItem) => (  // ✅ Fixed: MonthlyItem not ChartItem
           <Top10MonthRow
-            key={item.id}
+            key={item.id}  // ✅ Fixed: item.id not item.url
             item={{
-              id: item.videoId,              // full stream url for playback
-              // position prepended to title for display
+              id: item.id,
               title: `${item.position}. ${item.title}`,
               artist: item.artist,
               thumbnail: item.thumbnail,
               plays: formatViews(item.views),
-              position: item.position,       // always set — 1-based from result order
-              duration: item.duration,
+              position: item.position,
+          
             }}
           />
         ))}
@@ -92,7 +85,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 40,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,

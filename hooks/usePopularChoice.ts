@@ -2,14 +2,20 @@
  * usePopularChoice Hook
  *
  * Fetches popular/viral music via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "songs", null, 0)
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
  * No getPopularChoice() exists in Kotlin — popularity-focused
  * search queries are the correct approach via NewPipe extractor.
+ *
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
@@ -39,10 +45,9 @@ interface UsePopularChoiceResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'popular:choice'; // matches original
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours — matches original
+const CACHE_KEY = 'popular:choice';
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-// Fallback query chain
 const SEARCH_QUERIES = [
   'most popular songs 2025',
   'viral music hits 2025',
@@ -55,7 +60,7 @@ const SEARCH_QUERIES = [
 
 function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -86,10 +91,11 @@ function toPopularItem(item: StreamInfoItem): PopularItem | null {
 async function fetchPopular(): Promise<PopularItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" is the only valid filter for standard YouTube (serviceId=0)
+      const result = await search(
         query,
-        'songs',
+        'all',            // ← was 'songs', invalid on serviceId=0
         undefined,
         YOUTUBE_SERVICE_ID,
       ) as SearchPage;
@@ -124,16 +130,14 @@ export const usePopularChoice = (): UsePopularChoiceResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [usePopularChoice] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [usePopularChoice] Fetching from native module...');
       const popular = await fetchPopular();
 
@@ -154,7 +158,5 @@ export const usePopularChoice = (): UsePopularChoiceResult => {
     fetchPopularChoice();
   }, [fetchPopularChoice]);
 
-  const refetch = () => fetchPopularChoice();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchPopularChoice };
 };

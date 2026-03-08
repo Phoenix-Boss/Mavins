@@ -1,38 +1,28 @@
 /**
  * useFeatured Hook
  *
- * Replaces the fabricated useSponsored hook.
+ * Fetches curated featured tracks from the YouTube "Music" kiosk.
+ * Calls Kotlin: extractKioskInfo("Music", null, 0) via getYouTubeKiosk("MUSIC")
  *
- * getSponsoredContent() does not exist in Kotlin/NewPipeExtractor.
- * NewPipeExtractor has no concept of sponsored or promoted content —
- * it is a YouTube frontend; ad/sponsor metadata is not exposed via
- * any documented InfoItem field.
+ * ── Why NOT getTrending() ────────────────────────────────────────────────────
+ * getTrending() calls Kotlin extractKioskInfo("Trending", null, serviceId).
+ * At runtime, NewPipe fails to resolve the Trending kiosk display name:
+ *   ParsingException: "Could not get Trending name"
  *
- * Replacement: fetches curated featured tracks from the YouTube
- * "Music" kiosk via MavinEngine.getTrending().
- * Calls Kotlin: extractKioskInfo("Music", null, 0)
+ * getYouTubeKiosk("MUSIC") maps to extractKioskInfo("Music", null, 0),
+ * the YouTube Music kiosk, which is stable and returns music StreamInfoItems.
+ *
+ * Returns StreamInfoItem[] directly — no custom mapping.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, KioskPage } from '@/modules/mavin-engine';
+import { getYouTubeKiosk, StreamInfoItem, KioskPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
-export interface FeaturedItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
-  title: string;
-  artist: string;   // uploaderName
-  thumbnail: string;
-  duration: number; // seconds
-  views: number;
-}
+export type { StreamInfoItem as FeaturedItem } from '@/modules/mavin-engine';
 
 interface UseFeaturedResult {
-  data: FeaturedItem[];
+  data: StreamInfoItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -44,59 +34,25 @@ interface UseFeaturedResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'featured:music'; // replaces "sponsored:content"
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours — same as original
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toFeaturedItem(item: StreamInfoItem): FeaturedItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-  };
-}
+const CACHE_KEY = 'featured:music';
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
 
-async function fetchFeatured(): Promise<FeaturedItem[]> {
-  // ✅ Calls Kotlin: extractKioskInfo("Music", null, 0)
-  // YouTube "Music" kiosk — curated music picks
-  const result: KioskPage = await MavinEngine.getTrending(
-    undefined,
-    YOUTUBE_SERVICE_ID,
-  );
+async function fetchFeatured(): Promise<StreamInfoItem[]> {
+  // Calls Kotlin: extractKioskInfo("Music", null, 0)
+  // DO NOT use getTrending() — maps to broken "Trending" kiosk at runtime
+  const result: KioskPage = await getYouTubeKiosk('MUSIC', YOUTUBE_SERVICE_ID);
 
   if (!result.success) {
     throw new Error(result.errors?.[0] || 'Featured music unavailable');
   }
 
-  const items = (result.items as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .map(toFeaturedItem)
-    .filter((item): item is FeaturedItem => item !== null)
+  const items = result.items
+    .filter((item): item is StreamInfoItem => item.type === 'stream')
+    .filter(item => !item.isLive && !item.isShortFormContent && item.url)
     .slice(0, MAX_ITEMS);
 
   if (!items.length) {
@@ -111,7 +67,7 @@ async function fetchFeatured(): Promise<FeaturedItem[]> {
 // ─────────────────────────────────────────────
 
 export const useFeatured = (): UseFeaturedResult => {
-  const [data, setData]       = useState<FeaturedItem[]>([]);
+  const [data, setData]       = useState<StreamInfoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -121,7 +77,7 @@ export const useFeatured = (): UseFeaturedResult => {
 
     try {
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useFeatured] Using cached data');
         setData(cached);
         setLoading(false);
@@ -134,7 +90,6 @@ export const useFeatured = (): UseFeaturedResult => {
       console.log(`✅ [useFeatured] Received ${featured.length} items`);
       await cache.set(CACHE_KEY, featured, CACHE_TTL_MS);
       setData(featured);
-
     } catch (err: any) {
       console.error('❌ [useFeatured] Failed:', err);
       setError(err.message || 'Failed to load featured music');
@@ -148,7 +103,5 @@ export const useFeatured = (): UseFeaturedResult => {
     fetchFeaturedData();
   }, [fetchFeaturedData]);
 
-  const refetch = () => fetchFeaturedData();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchFeaturedData };
 };

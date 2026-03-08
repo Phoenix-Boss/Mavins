@@ -5,14 +5,13 @@
  *
  * Data flow:
  *   useGenreStations(selectedGenre)
- *     → MavinEngine.search("{genre} music", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("{genre} music", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * MusicChannelCard receives only fields present on GenreItem —
- * no fabricated properties.
+ * MusicChannelCard receives GenreItem fields (StreamInfoItem from hook).
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -20,32 +19,32 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useGenreStations, GenreItem } from '../../hooks/useGenreStations';
-import { MusicChannelCard } from '../cards/MusicChannelCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useGenreStations, GenreItem } from "../../hooks/useGenreStations";
+import { MusicChannelCard } from "../cards/MusicChannelCard";
+import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: '#121212',
-  surfaceLight: '#1F1F1F',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
-  border: '#333333',
-  danger: '#EF4444',
+  surface: "#121212",
+  surfaceLight: "#1F1F1F",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
+  textTertiary: "#808080",
+  border: "#333333",
+  danger: "#EF4444",
 };
 
 const CHANNEL_GENRES = [
-  { id: 'afrobeats',  name: 'Afrobeats',  icon: '🎵' },
-  { id: 'hip-hop',    name: 'Hip-Hop',    icon: '🎤' },
-  { id: 'rnb',        name: 'R&B',        icon: '🎹' },
-  { id: 'pop',        name: 'Pop',        icon: '🎸' },
-  { id: 'electronic', name: 'Electronic', icon: '🎧' },
-  { id: 'reggae',     name: 'Reggae',     icon: '🥁' },
+  { id: "afrobeats", name: "Afrobeats", icon: "🎵" },
+  { id: "hip-hop", name: "Hip-Hop", icon: "🎤" },
+  { id: "rnb", name: "R&B", icon: "🎹" },
+  { id: "pop", name: "Pop", icon: "🎸" },
+  { id: "electronic", name: "Electronic", icon: "🎧" },
+  { id: "reggae", name: "Reggae", icon: "🥁" },
 ] as const;
 
-type GenreId = typeof CHANNEL_GENRES[number]['id'];
+type GenreId = (typeof CHANNEL_GENRES)[number]["id"];
 
 // ─────────────────────────────────────────────
 // Sub-components
@@ -87,7 +86,7 @@ const GenreSelector = ({ active, onChange }: GenreSelectorProps) => (
 // ─────────────────────────────────────────────
 
 export const MusicChannelsSection = () => {
-  const [selectedGenre, setSelectedGenre] = useState<GenreId>('afrobeats');
+  const [selectedGenre, setSelectedGenre] = useState<GenreId>("afrobeats");
   const { data, loading, error, refetch } = useGenreStations(selectedGenre);
 
   const handleGenreChange = useCallback((id: GenreId) => {
@@ -119,7 +118,11 @@ export const MusicChannelsSection = () => {
         <SectionHeader title="Music Channels" showPlayAll />
         <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
         <View style={styles.centeredBox}>
-          <Ionicons name="alert-circle-outline" size={24} color={COLORS.danger} />
+          <Ionicons
+            name="alert-circle-outline"
+            size={24}
+            color={COLORS.danger}
+          />
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
             <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
@@ -137,8 +140,14 @@ export const MusicChannelsSection = () => {
         <SectionHeader title="Music Channels" showPlayAll />
         <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
         <View style={styles.centeredBox}>
-          <Ionicons name="musical-note-outline" size={24} color={COLORS.textTertiary} />
-          <Text style={styles.subtleText}>No channels found for {selectedGenre}</Text>
+          <Ionicons
+            name="musical-note-outline"
+            size={24}
+            color={COLORS.textTertiary}
+          />
+          <Text style={styles.subtleText}>
+            No channels found for {selectedGenre}
+          </Text>
           <Text style={styles.subtleText}>Try another genre</Text>
         </View>
       </View>
@@ -157,14 +166,14 @@ export const MusicChannelsSection = () => {
       >
         {data.map((item: GenreItem) => (
           <MusicChannelCard
-            key={item.id}
+            key={item.url}
             item={{
-              id: item.videoId,       // full stream url for playback
-              title: item.title,
-              artist: item.artist,
-              thumbnail: item.thumbnail,
+              id: item.url,
+              name: item.name,
+              uploaderName: item.uploaderName,
+              thumbnails: item.thumbnails,
               duration: item.duration,
-              views: item.views,
+              viewCount: item.viewCount,
             }}
           />
         ))}
@@ -172,10 +181,6 @@ export const MusicChannelsSection = () => {
     </View>
   );
 };
-
-// ─────────────────────────────────────────────
-// Styles
-// ─────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   section: {
@@ -189,8 +194,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   genreChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
@@ -209,11 +214,11 @@ const styles = StyleSheet.create({
   genreText: {
     color: COLORS.textSecondary,
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   genreTextActive: {
-    color: '#000',
-    fontWeight: '700',
+    color: "#000",
+    fontWeight: "700",
   },
   horizontalScroll: {
     paddingHorizontal: 16,
@@ -221,7 +226,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 36,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,
@@ -230,19 +235,19 @@ const styles = StyleSheet.create({
   subtleText: {
     color: COLORS.textTertiary,
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
   },
   errorText: {
     color: COLORS.danger,
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
   },
   retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: COLORS.goldPrimary + '20',
+    backgroundColor: COLORS.goldPrimary + "20",
     borderRadius: 20,
     borderWidth: 1,
     borderColor: COLORS.goldPrimary,
@@ -251,6 +256,6 @@ const styles = StyleSheet.create({
   retryText: {
     color: COLORS.goldPrimary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

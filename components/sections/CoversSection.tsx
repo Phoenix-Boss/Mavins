@@ -5,14 +5,14 @@
  *
  * Data flow:
  *   useCoverSongs()
- *     → MavinEngine.search("cover songs acoustic 2025", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("acoustic cover songs", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * MixCard receives only fields present on CoverItem —
- * no fabricated properties (originalArtist does not exist on StreamInfoItem).
+ * MixCard receives only fields present on StreamInfoItem —
+ * no fabricated properties.
  */
 
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
@@ -20,17 +20,18 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useCoverSongs } from '../../hooks/useCoverSongs';
-import { MixCard } from '../cards/MixCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useCoverSongs } from "../../hooks/useCoverSongs";
+import { MixCard } from "../cards/MixCard";
+import { SectionHeader } from "../common/SectionHeader";
+import { StreamInfoItem } from "@/modules/mavin-engine";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
+  textTertiary: "#808080",
 };
 
 export const CoversSection = () => {
@@ -51,22 +52,6 @@ export const CoversSection = () => {
 
   // ── Error / Empty — section hides silently ─
   if (error || !data.length) {
-    // Non-critical section: don't break the home screen layout.
-    // Uncomment the block below to show a retry instead of hiding.
-    //
-    // return (
-    //   <View style={styles.section}>
-    //     <SectionHeader title="Covers" showPlayAll />
-    //     <View style={styles.centeredBox}>
-    //       <Ionicons name="musical-note-outline" size={28} color={COLORS.textTertiary} />
-    //       <Text style={styles.subtleText}>Covers unavailable</Text>
-    //       <TouchableOpacity style={styles.retryButton} onPress={refetch}>
-    //         <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
-    //         <Text style={styles.retryText}>Retry</Text>
-    //       </TouchableOpacity>
-    //     </View>
-    //   </View>
-    // );
     return null;
   }
 
@@ -79,15 +64,15 @@ export const CoversSection = () => {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map(item => (
+        {data.map((item: StreamInfoItem) => (
           <MixCard
-            key={item.id}
+            key={item.url}
             item={{
-              id: item.videoId,     // full stream url for playback
-              title: item.title,
-              artist: item.artist,
-              thumbnail: item.thumbnail,
-              duration: item.duration,
+              id: item.url, // full stream url for playback
+              title: item.name, // StreamInfoItem.name
+              artist: item.uploaderName, // StreamInfoItem.uploaderName
+              thumbnail: item.thumbnails[0]?.url ?? "",
+             
             }}
           />
         ))}
@@ -106,7 +91,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 36,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,
@@ -117,12 +102,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginTop: 4,
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: COLORS.goldPrimary + '20',
+    backgroundColor: COLORS.goldPrimary + "20",
     borderRadius: 20,
     borderWidth: 1,
     borderColor: COLORS.goldPrimary,
@@ -131,6 +116,6 @@ const styles = StyleSheet.create({
   retryText: {
     color: COLORS.goldPrimary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

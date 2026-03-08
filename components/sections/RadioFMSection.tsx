@@ -1,37 +1,41 @@
 /**
  * RadioFMSection
  *
- * Displays live music streams from the YouTube "Live" kiosk.
+ * Displays live music streams sourced from YouTube search.
  *
  * Data flow:
  *   useLiveStations()
- *     → MavinEngine.getKioskInfo("Live", undefined, 0)
- *       → Kotlin: extractKioskInfo("Live", null, 0)
+ *     → MavinEngine.search("live music stream", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
+ *       → filters results to item.isLive === true
  *
- * RadioFMCard receives only fields present on LiveStationItem.
- * viewers is formatted via formatViewers exported from the hook.
+ * NOTE: getKioskInfo("Live") is NOT used — YouTube does not register
+ * a "Live" kiosk in NewPipeExtractor and throws ExtractionException.
+ * Search with isLive filtering is the correct approach.
+ *
+ * RadioFMCard receives LiveStationItem fields (StreamInfoItem from hook).
  */
 
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { useLiveStations, LiveStationItem } from '../../hooks/useLiveStations';
-import { RadioFMCard } from '../cards/RadioFMCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { useLiveStations, LiveStationItem, formatViewers } from "../../hooks/useLiveStations";
+import { RadioFMCard } from "../cards/RadioFMCard";
+import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
 };
 
 export const RadioFMSection = () => {
-  const { data, loading, error, formatViewers } = useLiveStations();
+  const { data, loading, error } = useLiveStations();
 
   // ── Loading ───────────────────────────────
   if (loading) {
@@ -60,14 +64,14 @@ export const RadioFMSection = () => {
       >
         {data.map((item: LiveStationItem) => (
           <RadioFMCard
-            key={item.id}
+            key={item.url}
             item={{
-              id: item.videoId,                  // full stream url for playback
-              title: item.title,
-              artist: item.artist,
-              thumbnail: item.thumbnail,
-              viewers: formatViewers(item.viewers), // formatted e.g. "12.3K"
-              live: true,                          // always true — Live kiosk only
+              id: item.url,
+              title: item.name,
+              artist: item.uploaderName,
+              thumbnail: item.thumbnails[0]?.url ?? "",
+              viewers: formatViewers(item.viewCount),
+              live: true,
             }}
           />
         ))}
@@ -86,7 +90,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 40,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,

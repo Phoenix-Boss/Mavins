@@ -5,20 +5,18 @@
  *
  * Data flow:
  *   useNewReleases()
- *     → MavinEngine.search("new music releases 2025", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("new music releases 2025", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * MixCard receives only fields present on NewReleaseItem —
- * releaseDate is mapped from textualUploadDate (the real
- * StreamInfoItem field, e.g. "3 days ago").
+ * MixCard receives NewReleaseItem fields (already transformed by hook).
  */
 
-import React from 'react';
-import { View, ScrollView, StyleSheet } from 'react-native';
-import { useNewReleases, NewReleaseItem } from '../../hooks/useNewReleases';
-import { MixCard } from '../cards/MixCard';
-import { SectionHeader } from '../common/SectionHeader';
-import { SkeletonLoader } from '../common/SkeletonLoader';
+import React from "react";
+import { View, ScrollView, StyleSheet } from "react-native";
+import { useNewReleases, NewReleaseItem } from "../../hooks/useNewReleases";
+import { MixCard } from "../cards/MixCard";
+import { SectionHeader } from "../common/SectionHeader";
+import { SkeletonLoader } from "../common/SkeletonLoader";
 
 export const NewReleasesSection = () => {
   const { data, loading, error } = useNewReleases();
@@ -33,7 +31,7 @@ export const NewReleasesSection = () => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.horizontalScroll}
         >
-          {[1, 2, 3, 4, 5].map(i => (
+          {[1, 2, 3, 4, 5].map((i) => (
             <SkeletonLoader key={i} type="mix" />
           ))}
         </ScrollView>
@@ -57,13 +55,12 @@ export const NewReleasesSection = () => {
           <MixCard
             key={item.id}
             item={{
-              id: item.videoId,         // full stream url for playback
+              id: item.id,
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              duration: item.duration,
-              // ✅ textualUploadDate → releaseDate e.g. "3 days ago"
-              releaseDate: item.uploadDate || undefined,
+           
+              releaseDate: item.releaseDate || undefined,
             }}
           />
         ))}

@@ -2,15 +2,21 @@
  * useMonthlyTop Hook
  *
  * Fetches monthly top chart via MavinEngine.search().
- * Calls Kotlin: performSearch("top songs this month", "songs", null, 0)
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
  * No getMonthlyTop() exists in Kotlin. Position is derived from
  * result order (1-based index) — NewPipeExtractor returns results
  * in relevance/chart order for music queries.
+ *
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
@@ -41,10 +47,9 @@ interface UseMonthlyTopResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 10;
-const CACHE_KEY = 'top:monthly'; // matches original
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — matches original
+const CACHE_KEY = 'top:monthly';
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Fallback query chain
 const SEARCH_QUERIES = [
   'top songs this month 2025',
   'most played songs this month',
@@ -57,7 +62,7 @@ const SEARCH_QUERIES = [
 
 function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -78,7 +83,7 @@ function toMonthlyItem(item: StreamInfoItem, index: number): MonthlyItem | null 
     thumbnail: pickBestThumbnail(item.thumbnails),
     duration: Number(item.duration) || 0,
     views: Number(item.viewCount) || 0,
-    position: index + 1, // 1-based position from result order
+    position: index + 1,
   };
 }
 
@@ -89,10 +94,11 @@ function toMonthlyItem(item: StreamInfoItem, index: number): MonthlyItem | null 
 async function fetchMonthlyTop(): Promise<MonthlyItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" is the only valid filter for standard YouTube (serviceId=0)
+      const result = await search(
         query,
-        'songs',
+        'all',            // ← was 'songs', invalid on serviceId=0
         undefined,
         YOUTUBE_SERVICE_ID,
       ) as SearchPage;
@@ -101,7 +107,7 @@ async function fetchMonthlyTop(): Promise<MonthlyItem[]> {
 
       const items = (result.results as StreamInfoItem[])
         .filter(item => item.type === 'stream')
-        .reduce<MonthlyItem[]>((acc, item, index) => {
+        .reduce<MonthlyItem[]>((acc, item) => {
           const mapped = toMonthlyItem(item, acc.length);
           if (mapped) acc.push(mapped);
           return acc;
@@ -131,7 +137,7 @@ export const useMonthlyTop = (): UseMonthlyTopResult => {
 
     try {
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useMonthlyTop] Using cached data');
         setData(cached);
         setLoading(false);

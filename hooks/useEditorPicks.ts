@@ -2,33 +2,25 @@
  * useEditorPicks Hook
  *
  * Fetches curated/editorial music picks via MavinEngine.search().
- * Calls Kotlin: performSearch("best music videos 2025", "songs", null, 0)
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
- * "songs" is the YouTube Music content filter in NewPipe extractor.
- * No getEditorPicks() exists in Kotlin — closest equivalent is a
- * curated search query returning high-quality music tracks.
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
+ *
+ * Returns StreamInfoItem[] directly — no custom mapping.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape — only what MavinsBestSection needs
-// ─────────────────────────────────────────────
-
-export interface EditorPickItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
-  title: string;
-  artist: string;   // uploaderName
-  thumbnail: string;
-  duration: number; // seconds
-  views: number;
-}
+export type { StreamInfoItem as EditorPickItem } from '@/modules/mavin-engine';
 
 interface UseEditorPicksResult {
-  data: EditorPickItem[];
+  data: StreamInfoItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -41,9 +33,8 @@ interface UseEditorPicksResult {
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'editor:picks';
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — matches original
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// Fallback query chain — tries each until results are found
 const SEARCH_QUERIES = [
   'best music videos 2025',
   'must listen music 2025',
@@ -51,56 +42,26 @@ const SEARCH_QUERIES = [
 ];
 
 // ─────────────────────────────────────────────
-// Helpers
+// Fetcher
 // ─────────────────────────────────────────────
 
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toEditorPickItem(item: StreamInfoItem): EditorPickItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetcher — tries each query until items found
-// ─────────────────────────────────────────────
-
-async function fetchEditorPicks(): Promise<EditorPickItem[]> {
+async function fetchEditorPicks(): Promise<StreamInfoItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" is the only valid filter for standard YouTube (serviceId=0)
+      const result = await search(
         query,
-        'songs',
+        'all',            // ← was 'songs', invalid on serviceId=0
         undefined,
         YOUTUBE_SERVICE_ID,
       ) as SearchPage;
 
       if (!result.success) continue;
 
-      const items = (result.results as StreamInfoItem[])
-        .filter(item => item.type === 'stream')
-        .map(toEditorPickItem)
-        .filter((item): item is EditorPickItem => item !== null)
+      const items = result.results
+        .filter((item): item is StreamInfoItem => item.type === 'stream')
+        .filter(item => !item.isLive && !item.isShortFormContent && item.url)
         .slice(0, MAX_ITEMS);
 
       if (items.length > 0) return items;
@@ -116,7 +77,7 @@ async function fetchEditorPicks(): Promise<EditorPickItem[]> {
 // ─────────────────────────────────────────────
 
 export const useEditorPicks = (): UseEditorPicksResult => {
-  const [data, setData]       = useState<EditorPickItem[]>([]);
+  const [data, setData]       = useState<StreamInfoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -125,23 +86,20 @@ export const useEditorPicks = (): UseEditorPicksResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useEditorPicks] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [useEditorPicks] Fetching from native module...');
       const picks = await fetchEditorPicks();
 
       console.log(`✅ [useEditorPicks] Received ${picks.length} items`);
       await cache.set(CACHE_KEY, picks, CACHE_TTL_MS);
       setData(picks);
-
     } catch (err: any) {
       console.error('❌ [useEditorPicks] Failed:', err);
       setError(err.message || 'Failed to load editor picks');
@@ -155,7 +113,5 @@ export const useEditorPicks = (): UseEditorPicksResult => {
     load();
   }, [load]);
 
-  const refetch = () => load();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: load };
 };

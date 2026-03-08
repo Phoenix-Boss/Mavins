@@ -5,45 +5,38 @@
  *
  * Data flow:
  *   usePopularChoice()
- *     → MavinEngine.search("most popular songs 2025", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("most popular songs 2025", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * AlbumCard receives only fields present on PopularItem.
+ * AlbumCard receives PopularItem fields (already transformed by hook).
  */
 
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { usePopularChoice, PopularItem } from '../../hooks/usePopularChoice';
-import { AlbumCard } from '../cards/AlbumCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { usePopularChoice, PopularItem } from "../../hooks/usePopularChoice";
+import { AlbumCard } from "../cards/AlbumCard";
+import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
 };
 
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-const formatViews = (views: number): string => {
-  if (!views) return '0';
-  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`;
-  if (views >= 1_000_000)     return `${(views / 1_000_000).toFixed(1)}M`;
-  if (views >= 1_000)         return `${(views / 1_000).toFixed(1)}K`;
-  return String(views);
+const formatViews = (viewCount: number): string => {
+  if (!viewCount) return "0";
+  if (viewCount >= 1_000_000_000)
+    return `${(viewCount / 1_000_000_000).toFixed(1)}B`;
+  if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
+  if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
+  return String(viewCount);
 };
-
-// ─────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────
 
 export const PeoplesChoiceSection = () => {
   const { data, loading, error } = usePopularChoice();
@@ -77,11 +70,11 @@ export const PeoplesChoiceSection = () => {
           <AlbumCard
             key={item.id}
             item={{
-              id: item.videoId,               // full stream url for playback
+              id: item.id,
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-              duration: item.duration,
+             
               plays: formatViews(item.views),
             }}
             showPlayButton={false}
@@ -91,10 +84,6 @@ export const PeoplesChoiceSection = () => {
     </View>
   );
 };
-
-// ─────────────────────────────────────────────
-// Styles
-// ─────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   section: {
@@ -106,7 +95,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 40,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,

@@ -1,29 +1,38 @@
 /**
- * useTrending Hook
+ * useTrending Hook (FIXED for NewPipeExtractor v0.26.0)
  *
- * Fetches trending music via MavinEngine.getTrending().
- * Calls Kotlin: extractKioskInfo("Music", null, 0)
- *
- * No getTrendingMusic() exists in Kotlin — getTrending() maps to
- * the YouTube "Music" kiosk which is the correct source for
- * trending music tracks.
+ * CRITICAL: Based on debug output, only these kiosks work:
+ * - "trending_music" ✅ (Trending Music Videos)
+ * - "trending_movies_and_shows" ✅ (Trending Movie Trailers)
+ * 
+ * These are BROKEN in v0.26.0 (null pointer exceptions):
+ * - "Trending" ❌
+ * - "live" ❌  
+ * - "trending_gaming" ❌
+ * - "trending_podcasts_episodes" ❌
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, KioskPage } from '@/modules/mavin-engine';
+import { search, getYouTubeKiosk, getKioskList, StreamInfoItem, SearchPage, KioskPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
+
+// ACTUAL working kiosk IDs from debug log (lowercase with underscores)
+// NOTE: "Trending", "live", "trending_gaming" are broken in v0.26.0
+type WorkingKioskId = 
+  | 'trending_music'           // ✅ Works - Trending Music Videos
+  | 'trending_movies_and_shows'; // ✅ Works - Trending Movie Trailers
 
 // ─────────────────────────────────────────────
 // Public shape
 // ─────────────────────────────────────────────
 
 export interface TrendingItem {
-  id: string;       // stable React key (stream url)
-  videoId: string;  // full stream url → pass to getStreamUrl() for playback
+  id: string;
+  videoId: string;
   title: string;
-  artist: string;   // uploaderName
+  artist: string;
   thumbnail: string;
-  duration: number; // seconds
+  duration: number;
   views: number;
 }
 
@@ -41,8 +50,16 @@ interface UseTrendingResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 6;
-const CACHE_KEY = 'trending:now'; // matches original
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — matches original
+const CACHE_KEY = 'trending:now';
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+const SEARCH_QUERIES = [
+  'trending music',
+  'popular songs',
+  'viral hits',
+  'top music 2024',
+  'best new music',
+];
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -50,7 +67,7 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — matches original
 
 function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -59,10 +76,7 @@ function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
 }
 
 function toTrendingItem(item: StreamInfoItem): TrendingItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
   if (!item.url) return null;
-
   return {
     id: item.url,
     videoId: item.url,
@@ -78,28 +92,123 @@ function toTrendingItem(item: StreamInfoItem): TrendingItem | null {
 // Fetcher
 // ─────────────────────────────────────────────
 
+async function tryKiosk(kioskId: WorkingKioskId): Promise<TrendingItem[] | null> {
+  try {
+    console.log(`🏪 [useTrending] Trying kiosk: "${kioskId}"`);
+    
+    // Use direct kiosk ID - getYouTubeKiosk now handles the mapping
+    const kioskResult = await getYouTubeKiosk(kioskId, YOUTUBE_SERVICE_ID) as KioskPage;
+
+    console.log(`📊 [useTrending] "${kioskId}" success=${kioskResult.success} items=${kioskResult.items?.length ?? 0}`);
+
+    if (kioskResult.success && kioskResult.items?.length > 0) {
+      const streams = kioskResult.items.filter(
+        (item): item is StreamInfoItem => item.type === 'stream',
+      );
+
+      const items = streams
+        .filter(item => !!item.url)
+        .map(toTrendingItem)
+        .filter((item): item is TrendingItem => item !== null)
+        .slice(0, MAX_ITEMS);
+
+      if (items.length > 0) {
+        console.log(`✅ [useTrending] Got ${items.length} items from "${kioskId}"`);
+        return items;
+      }
+    }
+
+    if (kioskResult.errors?.length) {
+      console.warn(`⚠️ [useTrending] "${kioskId}" errors:`, kioskResult.errors);
+    }
+    return null;
+  } catch (e: any) {
+    console.warn(`⚠️ [useTrending] "${kioskId}" threw:`, e?.message || String(e));
+    return null;
+  }
+}
+
+/**
+ * Debug: List all kiosks and their status
+ */
+async function debugListKiosks(): Promise<void> {
+  try {
+    const kioskList = await getKioskList(YOUTUBE_SERVICE_ID);
+    console.log('🔍 [useTrending] Available kiosks:', JSON.stringify(kioskList, null, 2));
+    
+    // Log which ones are working vs broken
+    const working = kioskList.kiosks?.filter((k: any) => k.available) || [];
+    const broken = kioskList.kiosks?.filter((k: any) => !k.available) || [];
+    console.log(`✅ Working kiosks: ${working.map((k: any) => k.id).join(', ')}`);
+    console.log(`❌ Broken kiosks: ${broken.map((k: any) => k.id).join(', ')}`);
+  } catch (e) {
+    console.warn('⚠️ [useTrending] Could not list kiosks:', e);
+  }
+}
+
 async function fetchTrending(): Promise<TrendingItem[]> {
-  // ✅ Calls Kotlin: extractKioskInfo("Music", null, 0)
-  const result: KioskPage = await MavinEngine.getTrending(
-    undefined,
-    YOUTUBE_SERVICE_ID,
-  );
+  let lastError: string = '';
 
-  if (!result.success) {
-    throw new Error(result.errors?.[0] || 'Trending music unavailable');
+  // Debug: Check available kiosks
+  await debugListKiosks();
+
+  // ─────────────────────────────────────────────
+  // Strategy 1: Try working kiosks directly by ID
+  // Only trending_music and trending_movies_and_shows work in v0.26.0
+  // ─────────────────────────────────────────────
+  const workingKiosks: WorkingKioskId[] = [
+    'trending_music',           // Most relevant for music
+    'trending_movies_and_shows', // Fallback (movie trailers)
+  ];
+
+  for (const kioskId of workingKiosks) {
+    const result = await tryKiosk(kioskId);
+    if (result) return result;
   }
 
-  const items = (result.items as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .map(toTrendingItem)
-    .filter((item): item is TrendingItem => item !== null)
-    .slice(0, MAX_ITEMS);
+  // ─────────────────────────────────────────────
+  // Strategy 2: Fall back to search
+  // ─────────────────────────────────────────────
+  console.log('🔍 [useTrending] Falling back to search queries...');
 
-  if (!items.length) {
-    throw new Error('No trending music available');
+  for (const query of SEARCH_QUERIES) {
+    try {
+      console.log(`🔍 [useTrending] Searching: "${query}"`);
+      const result = await search(query, 'all', undefined, YOUTUBE_SERVICE_ID) as SearchPage;
+
+      console.log(`📊 [useTrending] success=${result.success} total=${result.results?.length ?? 0}`);
+
+      if (!result.success) {
+        lastError = result.errors?.[0] || 'Search failed';
+        continue;
+      }
+
+      if (!result.results?.length) {
+        lastError = 'Empty results';
+        continue;
+      }
+
+      const streams = result.results.filter(
+        (item): item is StreamInfoItem => item.type === 'stream',
+      );
+
+      const items = streams
+        .filter(item => !!item.url)
+        .map(toTrendingItem)
+        .filter((item): item is TrendingItem => item !== null)
+        .slice(0, MAX_ITEMS);
+
+      if (items.length > 0) {
+        console.log(`✅ [useTrending] Got ${items.length} items from search`);
+        return items;
+      }
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+      console.warn(`⚠️ [useTrending] Search failed:`, lastError);
+    }
   }
 
-  return items;
+  throw new Error(`No trending music available. Last error: ${lastError}`);
 }
 
 // ─────────────────────────────────────────────
@@ -107,9 +216,9 @@ async function fetchTrending(): Promise<TrendingItem[]> {
 // ─────────────────────────────────────────────
 
 export const useTrending = (): UseTrendingResult => {
-  const [data, setData]       = useState<TrendingItem[]>([]);
+  const [data, setData] = useState<TrendingItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchTrendingData = useCallback(async () => {
     setLoading(true);
@@ -124,7 +233,7 @@ export const useTrending = (): UseTrendingResult => {
         return;
       }
 
-      console.log('🔍 [useTrending] Fetching from native module...');
+      console.log('🔍 [useTrending] Fetching...');
       const trending = await fetchTrending();
 
       console.log(`✅ [useTrending] Received ${trending.length} items`);

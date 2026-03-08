@@ -5,15 +5,14 @@
  *
  * Data flow:
  *   useGenreStations(selectedGenre)
- *     → MavinEngine.search("{genre} music", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("{genre} music", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * MixCard receives only fields present on GenreItem —
- * no fabricated properties (logo, genre, plays, reason do not
- * exist on StreamInfoItem).
+ * MixCard receives only fields present on StreamInfoItem —
+ * no fabricated properties.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -21,34 +20,35 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useGenreStations, GenreItem } from '../../hooks/useGenreStations';
-import { MixCard } from '../cards/MixCard';
-import { SectionHeader } from '../common/SectionHeader';
-import { CreateMixButton } from '../common/CreateMixButton';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useGenreStations } from "../../hooks/useGenreStations";
+import { MixCard } from "../cards/MixCard";
+import { SectionHeader } from "../common/SectionHeader";
+import { CreateMixButton } from "../common/CreateMixButton";
+import { StreamInfoItem } from "@/modules/mavin-engine";
 
 const COLORS = {
-  surface: '#121212',
-  surfaceLight: '#1F1F1F',
-  goldPrimary: '#D4AF37',
-  text: '#FFFFFF',
-  textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
-  border: '#333333',
-  danger: '#EF4444',
+  surface: "#121212",
+  surfaceLight: "#1F1F1F",
+  goldPrimary: "#D4AF37",
+  text: "#FFFFFF",
+  textSecondary: "#B3B3B3",
+  textTertiary: "#808080",
+  border: "#333333",
+  danger: "#EF4444",
 };
 
 const GENRE_OPTIONS = [
-  { id: 'afrobeats',   name: 'Afrobeats',   icon: '🎵' },
-  { id: 'hip-hop',     name: 'Hip-Hop',     icon: '🎤' },
-  { id: 'rnb',         name: 'R&B',         icon: '🎹' },
-  { id: 'pop',         name: 'Pop',         icon: '🎸' },
-  { id: 'electronic',  name: 'Electronic',  icon: '🎧' },
-  { id: 'reggae',      name: 'Reggae',      icon: '🥁' },
+  { id: "afrobeats", name: "Afrobeats", icon: "🎵" },
+  { id: "hip-hop", name: "Hip-Hop", icon: "🎤" },
+  { id: "rnb", name: "R&B", icon: "🎹" },
+  { id: "pop", name: "Pop", icon: "🎸" },
+  { id: "electronic", name: "Electronic", icon: "🎧" },
+  { id: "reggae", name: "Reggae", icon: "🥁" },
 ] as const;
 
-type GenreId = typeof GENRE_OPTIONS[number]['id'];
+type GenreId = (typeof GENRE_OPTIONS)[number]["id"];
 
 // ─────────────────────────────────────────────
 // Sub-components
@@ -90,7 +90,7 @@ const GenreSelector = ({ active, onChange }: GenreSelectorProps) => (
 // ─────────────────────────────────────────────
 
 export const CreateMixSection = () => {
-  const [selectedGenre, setSelectedGenre] = useState<GenreId>('afrobeats');
+  const [selectedGenre, setSelectedGenre] = useState<GenreId>("afrobeats");
   const { data, loading, error, refetch } = useGenreStations(selectedGenre);
 
   const handleGenreChange = useCallback((id: GenreId) => {
@@ -123,7 +123,11 @@ export const CreateMixSection = () => {
         <View style={styles.createRow}>
           <CreateMixButton />
           <View style={styles.centeredBox}>
-            <Ionicons name="alert-circle-outline" size={22} color={COLORS.danger} />
+            <Ionicons
+              name="alert-circle-outline"
+              size={22}
+              color={COLORS.danger}
+            />
             <Text style={styles.errorText}>{error}</Text>
             <TouchableOpacity style={styles.retryButton} onPress={refetch}>
               <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
@@ -144,7 +148,11 @@ export const CreateMixSection = () => {
         <View style={styles.createRow}>
           <CreateMixButton />
           <View style={styles.centeredBox}>
-            <Ionicons name="musical-note-outline" size={22} color={COLORS.textTertiary} />
+            <Ionicons
+              name="musical-note-outline"
+              size={22}
+              color={COLORS.textTertiary}
+            />
             <Text style={styles.subtleText}>No tracks for {selectedGenre}</Text>
             <Text style={styles.subtleText}>Try another genre</Text>
           </View>
@@ -165,15 +173,15 @@ export const CreateMixSection = () => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.horizontalScroll}
         >
-          {data.map((item: GenreItem) => (
+          {data.map((item: StreamInfoItem) => (
             <MixCard
-              key={item.id}
+              key={item.url}
               item={{
-                id: item.videoId,       // full stream url for playback
-                title: item.title,
-                artist: item.artist,
-                thumbnail: item.thumbnail,
-                duration: item.duration,
+                id: item.url, // full stream url for playback
+                title: item.name, // StreamInfoItem.name
+                artist: item.uploaderName, // StreamInfoItem.uploaderName
+                thumbnail: item.thumbnails[0]?.url ?? "",
+             
               }}
             />
           ))}
@@ -182,10 +190,6 @@ export const CreateMixSection = () => {
     </View>
   );
 };
-
-// ─────────────────────────────────────────────
-// Styles
-// ─────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   section: {
@@ -199,8 +203,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   genreChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
@@ -219,15 +223,15 @@ const styles = StyleSheet.create({
   genreText: {
     color: COLORS.textSecondary,
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   genreTextActive: {
-    color: '#000',
-    fontWeight: '700',
+    color: "#000",
+    fontWeight: "700",
   },
   createRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
   },
   horizontalScroll: {
     paddingRight: 16,
@@ -237,26 +241,26 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 20,
     paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     gap: 6,
   },
   subtleText: {
     color: COLORS.textTertiary,
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
   },
   errorText: {
     color: COLORS.danger,
     fontSize: 12,
-    textAlign: 'center',
+    textAlign: "center",
   },
   retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: COLORS.goldPrimary + '20',
+    backgroundColor: COLORS.goldPrimary + "20",
     borderRadius: 20,
     borderWidth: 1,
     borderColor: COLORS.goldPrimary,
@@ -265,6 +269,6 @@ const styles = StyleSheet.create({
   retryText: {
     color: COLORS.goldPrimary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

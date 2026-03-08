@@ -5,32 +5,37 @@
  *
  * Data flow:
  *   useEditorPicks()
- *     → MavinEngine.search("best music videos 2025", "songs")
- *       → Kotlin: performSearch(query, "songs", null, 0)
+ *     → MavinEngine.search("best music videos 2025", "all", undefined, 0)
+ *       → Kotlin: performSearch(query, "all", null, 0)
  *
- * AlbumCard receives only fields present on EditorPickItem —
- * description and curator do not exist on StreamInfoItem and
- * are not passed.
+ * AlbumCard receives only fields present on StreamInfoItem.
  */
 
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { useEditorPicks, EditorPickItem } from '../../hooks/useEditorPicks';
-import { AlbumCard } from '../cards/AlbumCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { useEditorPicks } from "../../hooks/useEditorPicks";
+import { AlbumCard } from "../cards/AlbumCard";
+import { SectionHeader } from "../common/SectionHeader";
+import { StreamInfoItem } from "@/modules/mavin-engine";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
+  textTertiary: "#808080",
 };
+
+function formatViews(viewCount: number): string {
+  if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
+  if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
+  return String(viewCount);
+}
 
 export const MavinsBestSection = () => {
   const { data, loading, error } = useEditorPicks();
@@ -60,16 +65,17 @@ export const MavinsBestSection = () => {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: EditorPickItem) => (
+        {data.map((item: StreamInfoItem) => (
           <AlbumCard
-            key={item.id}
+            key={item.url}
             item={{
-              id: item.videoId,       // full stream url for playback
-              title: item.title,
-              artist: item.artist,
-              thumbnail: item.thumbnail,
-              duration: item.duration,
-              plays: item.views > 0 ? formatViews(item.views) : undefined,
+              id: item.url, // full stream url for playback
+              title: item.name, // StreamInfoItem.name
+              artist: item.uploaderName, // StreamInfoItem.uploaderName
+              thumbnail: item.thumbnails[0]?.url ?? "",
+            
+              plays:
+                item.viewCount > 0 ? formatViews(item.viewCount) : undefined,
             }}
             showPlayButton
           />
@@ -78,12 +84,6 @@ export const MavinsBestSection = () => {
     </View>
   );
 };
-
-function formatViews(views: number): string {
-  if (views >= 1_000_000) return `${(views / 1_000_000).toFixed(1)}M`;
-  if (views >= 1_000)     return `${(views / 1_000).toFixed(1)}K`;
-  return String(views);
-}
 
 const styles = StyleSheet.create({
   section: {
@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 40,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,

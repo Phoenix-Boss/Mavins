@@ -2,14 +2,20 @@
  * useNewReleases Hook
  *
  * Fetches newly released music via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "songs", null, 0)
+ * Calls Kotlin: performSearch(query, "all", null, 0)
  *
  * No getNewReleases() exists in Kotlin — recency-focused search
  * queries are the correct approach via NewPipe extractor.
+ *
+ * ── Why filter="all" ────────────────────────────────────────────────────────
+ * "songs" is a YouTube Music-specific content filter not registered
+ * in the standard YouTube service (serviceId=0) searchQHFactory.
+ * Passing it causes Kotlin to throw an invalid filter error.
+ * "all" is always valid on serviceId=0 and returns StreamInfoItems.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
@@ -17,12 +23,12 @@ import { cache } from '@/libs/cache';
 // ─────────────────────────────────────────────
 
 export interface NewReleaseItem {
-  id: string;         // stable React key (stream url)
-  videoId: string;    // full stream url → pass to getStreamUrl() for playback
+  id: string;          // stable React key (stream url)
+  videoId: string;     // full stream url → pass to getStreamUrl() for playback
   title: string;
-  artist: string;     // uploaderName
+  artist: string;      // uploaderName
   thumbnail: string;
-  duration: number;   // seconds
+  duration: number;    // seconds
   views: number;
   releaseDate: string; // textualUploadDate e.g. "3 days ago"
 }
@@ -40,10 +46,9 @@ interface UseNewReleasesResult {
 
 const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'music:newreleases'; // matches original cache key
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — matches original
+const CACHE_KEY = 'music:newreleases';
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Fallback query chain — tries each until results come back
 const SEARCH_QUERIES = [
   'new music releases 2025',
   'new songs this week',
@@ -56,7 +61,7 @@ const SEARCH_QUERIES = [
 
 function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
   if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
   for (const level of priority) {
     const match = thumbnails.find(t => t.resolutionLevel === level);
     if (match?.url) return match.url;
@@ -77,7 +82,7 @@ function toNewReleaseItem(item: StreamInfoItem): NewReleaseItem | null {
     thumbnail: pickBestThumbnail(item.thumbnails),
     duration: Number(item.duration) || 0,
     views: Number(item.viewCount) || 0,
-    // ✅ textualUploadDate is the real StreamInfoItem field e.g. "3 days ago"
+    // textualUploadDate is the correct StreamInfoItem field e.g. "3 days ago"
     releaseDate: item.textualUploadDate || '',
   };
 }
@@ -89,10 +94,11 @@ function toNewReleaseItem(item: StreamInfoItem): NewReleaseItem | null {
 async function fetchNewReleases(): Promise<NewReleaseItem[]> {
   for (const query of SEARCH_QUERIES) {
     try {
-      // ✅ Calls Kotlin: performSearch(query, "songs", null, 0)
-      const result = await MavinEngine.search(
+      // Calls Kotlin: performSearch(query, "all", null, 0)
+      // "all" is the only valid filter for standard YouTube (serviceId=0)
+      const result = await search(
         query,
-        'songs',
+        'all',            // ← was 'songs', invalid on serviceId=0
         undefined,
         YOUTUBE_SERVICE_ID,
       ) as SearchPage;
@@ -127,22 +133,16 @@ export const useNewReleases = (): UseNewReleasesResult => {
     setError(null);
 
     try {
-      // Cache read
       const cached = await cache.get(CACHE_KEY);
-      if (cached) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useNewReleases] Using cached data');
         setData(cached);
         setLoading(false);
         return;
       }
 
-      // Network fetch
       console.log('🔍 [useNewReleases] Fetching from native module...');
       const releases = await fetchNewReleases();
-
-      if (!releases.length) {
-        throw new Error('No new releases available');
-      }
 
       console.log(`✅ [useNewReleases] Received ${releases.length} items`);
       await cache.set(CACHE_KEY, releases, CACHE_TTL_MS);
@@ -161,7 +161,5 @@ export const useNewReleases = (): UseNewReleasesResult => {
     fetchNewReleasesData();
   }, [fetchNewReleasesData]);
 
-  const refetch = () => fetchNewReleasesData();
-
-  return { data, loading, error, refetch };
+  return { data, loading, error, refetch: fetchNewReleasesData };
 };

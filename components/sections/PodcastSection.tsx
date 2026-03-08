@@ -1,35 +1,36 @@
 /**
  * PodcastSection
  *
- * Displays podcast playlists sourced from YouTube Music search.
+ * Displays podcast playlists sourced from YouTube search.
  *
  * Data flow:
  *   usePodcasts()
- *     → MavinEngine.search("music podcast 2025", "all")
+ *     → MavinEngine.search("music podcast 2025", "all", undefined, 0)
  *       → Kotlin: performSearch(query, "all", null, 0)
  *       → filters to PlaylistInfoItem results only
  *
- * PodcastCard receives only fields present on PodcastItem.
- * item.artist replaces the fabricated item.artist that was
- * previously passed but never existed on PodcastItem.
+ * "all" filter is required so PlaylistInfoItems (podcasts) are included
+ * alongside StreamInfoItems in the result set.
+ *
+ * PodcastCard receives PodcastItem fields (already transformed by hook).
  */
 
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { usePodcasts, PodcastItem } from '../../hooks/usePodcasts';
-import { PodcastCard } from '../cards/PodcastCard';
-import { SectionHeader } from '../common/SectionHeader';
+} from "react-native";
+import { usePodcasts, PodcastItem } from "../../hooks/usePodcasts";
+import { PodcastCard } from "../cards/PodcastCard";
+import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  textSecondary: '#B3B3B3',
+  surface: "#121212",
+  goldPrimary: "#D4AF37",
+  textSecondary: "#B3B3B3",
 };
 
 export const PodcastSection = () => {
@@ -64,12 +65,12 @@ export const PodcastSection = () => {
           <PodcastCard
             key={item.id}
             item={{
-              id: item.videoId,           // playlist url → getPlaylistInfo()
+              id: item.id,
               title: item.title,
-              artist: item.artist,        // uploaderName — podcast creator
+              artist: item.artist,
               thumbnail: item.thumbnail,
               episodeCount: item.episodeCount,
-              type: 'podcast',
+              type: item.type,
             }}
           />
         ))}
@@ -88,7 +89,7 @@ const styles = StyleSheet.create({
   },
   centeredBox: {
     padding: 40,
-    alignItems: 'center',
+    alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     marginHorizontal: 16,
