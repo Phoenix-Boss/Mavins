@@ -1,0 +1,177 @@
+// filename: section_2_popular_episodes.json
+{
+  "section_name": "Popular episodes",
+  "section_type": "podcast_carousel",
+  "items": [
+    {
+      "title": "Father Chad Ripperger - Signs of the Mark of the Beast & Rise of the Antichrist | SRS #285",
+      "creator": "Shawn Ryan Show",
+      "creator_id": "MPSPPL4pqo9Uoh0WuUKxw0BmaK1yrg9Kd7E4lk",
+      "creator_url": "https://music.youtube.com/playlist?list=PL4pqo9Uoh0WuUKxw0BmaK1yrg9Kd7E4lk",
+      "item_type": "Podcast Episode",
+      "video_id": "I2p_cfipbEw",
+      "item_id": "MPEDI2p_cfipbEw",
+      "url": "https://music.youtube.com/watch?v=I2p_cfipbEw",
+      "duration": "4 hr 8 min",
+      "published": "4d ago",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/I2p_cfipbEw/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/I2p_cfipbEw/hqdefault.jpg?sqp=-oaymwEWCOADEI4CIAQqCggAEOADGC0guwJIWg&rs=AMzJL3m493FO5DPNE4yEvar3MzNd09TCWA",
+          "width": 480,
+          "height": 270
+        },
+        {
+          "url": "https://i.ytimg.com/vi/I2p_cfipbEw/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3lN3Ju_odFF3h8Ha1kKseiwLrb4Ow",
+          "width": 800,
+          "height": 450
+        },
+        {
+          "url": "https://i.ytimg.com/vi/I2p_cfipbEw/hq720.jpg",
+          "width": 1280,
+          "height": 720
+        }
+      ]
+    },
+    {
+      "title": "Sarah J Maas: The Wait Is Over",
+      "creator": "Call Her Daddy Podcast",
+      "creator_id": "MPSPPLGqHFvYjXKcipJd5WZKt-oG4Xaau9aR4D",
+      "creator_url": "https://music.youtube.com/playlist?list=PLGqHFvYjXKcipJd5WZKt-oG4Xaau9aR4D",
+      "item_type": "Podcast Episode",
+      "video_id": "M5iKSzjzTCw",
+      "item_id": "MPEDM5iKSzjzTCw",
+      "url": "https://music.youtube.com/watch?v=M5iKSzjzTCw",
+      "duration": "1 hr 52 min",
+      "published": "4d ago",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/M5iKSzjzTCw/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/M5iKSzjzTCw/hqdefault.jpg?sqp=-oaymwEWCOADEI4CIAQqCggAEOADGC0guwJIWg&rs=AMzJL3mW581VQQ8h2EwE1eg-fNZzocyBnA",
+          "width": 480,
+          "height": 270
+        },
+        {
+          "url": "https://i.ytimg.com/vi/M5iKSzjzTCw/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3lA8LG_PyiOxCSOaieznnbhU4lZfA",
+          "width": 800,
+          "height": 450
+        },
+        {
+          "url": "https://i.ytimg.com/vi/M5iKSzjzTCw/hq720.jpg",
+          "width": 1280,
+          "height": 720
+        }
+      ]
+    },
+    {
+      "title": "WW3 Threat Assessment: Trump Bombing Iran Makes WW3 More Likely!",
+      "creator": "The Diary Of A CEO",
+      "creator_id": "MPSPPL22egh3ok4cNqo10K5wOZOCdPflfWMyF1",
+      "creator_url": "https://music.youtube.com/playlist?list=PL22egh3ok4cNqo10K5wOZOCdPflfWMyF1",
+      "item_type": "Podcast Episode",
+      "video_id": "e9dljIL4rBk",
+      "item_id": "MPEDe9dljIL4rBk",
+      "url": "https://music.youtube.com/watch?v=e9dljIL4rBk",
+      "duration": "2 hr 16 min",
+      "published": "5d ago",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/e9dljIL4rBk/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/e9dljIL4rBk/hqdefault.jpg?sqp=-oaymwEWCOADEI4CIAQqCggAEOADGC0guwJIWg&rs=AMzJL3lMHwiZMxRjF7JwJ3pm179wV3vkPA",
+          "width": 480,
+          "height": 270
+        },
+        {
+          "url": "https://i.ytimg.com/vi/e9dljIL4rBk/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3k0MAPVDVlKsAffUNRe1dQnCyAGPg",
+          "width": 800,
+          "height": 450
+        },
+        {
+          "url": "https://i.ytimg.com/vi/e9dljIL4rBk/hq720.jpg",
+          "width": 1280,
+          "height": 720
+        }
+      ]
+    },
+    {
+      "title": "UT v. Kouri Richins - Trial Day 8 - Insurance, Estates and the Paramour testifies!",
+      "creator": "Live Trials with Emily D. Baker",
+      "creator_id": "MPSPPLsbUyvZas7gKOJlfL__9F027hlETVU-vo",
+      "creator_url": "https://music.youtube.com/playlist?list=PLsbUyvZas7gKOJlfL__9F027hlETVU-vo",
+      "item_type": "Podcast Episode",
+      "video_id": "-pr_ALNGSw4",
+      "item_id": "MPED-pr_ALNGSw4",
+      "url": "https://music.youtube.com/watch?v=-pr_ALNGSw4",
+      "duration": "9 hr 26 min",
+      "published": "4d ago",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/-pr_ALNGSw4/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/-pr_ALNGSw4/hqdefault.jpg?sqp=-oaymwEWCOADEI4CIAQqCggAEOADGC0guwJIWg&rs=AMzJL3nEB43sJMXsaotF6V74vnQJg3X5gQ",
+          "width": 480,
+          "height": 270
+        },
+        {
+          "url": "https://i.ytimg.com/vi/-pr_ALNGSw4/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3lkbolfYuXDp8csif5Jo9wXkIw8cA",
+          "width": 800,
+          "height": 450
+        },
+        {
+          "url": "https://i.ytimg.com/vi/-pr_ALNGSw4/hq720.jpg",
+          "width": 1280,
+          "height": 720
+        }
+      ]
+    },
+    {
+      "title": "Man Faints After Realizing He Accidentally Killed His Wife",
+      "creator": "Dr. Insanity Podcasts",
+      "creator_id": "MPSPPLbuShuUyOZf38uFsn2BTTeUOiqpcH0fNS",
+      "creator_url": "https://music.youtube.com/playlist?list=PLbuShuUyOZf38uFsn2BTTeUOiqpcH0fNS",
+      "item_type": "Podcast Episode",
+      "video_id": "QHAYwcCeKms",
+      "item_id": "MPEDQHAYwcCeKms",
+      "url": "https://music.youtube.com/watch?v=QHAYwcCeKms",
+      "duration": "55 min",
+      "published": "6d ago",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/QHAYwcCeKms/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/QHAYwcCeKms/hqdefault.jpg?sqp=-oaymwEWCOADEI4CIAQqCggAEOADGC0guwJIWg&rs=AMzJL3lEeNqDOZFeom-HNWsmUfOWlu7Y7g",
+          "width": 480,
+          "height": 270
+        },
+        {
+          "url": "https://i.ytimg.com/vi/QHAYwcCeKms/hq720.jpg?sqp=-oaymwEKCKAGEMIDIABIWg&rs=AMzJL3njyWloKyGj-u3UoWbJRCvOD0lnCg",
+          "width": 800,
+          "height": 450
+        },
+        {
+          "url": "https://i.ytimg.com/vi/QHAYwcCeKms/hq720.jpg",
+          "width": 1280,
+          "height": 720
+        }
+      ]
+    }
+  ]
+}

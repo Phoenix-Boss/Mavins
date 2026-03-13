@@ -30,13 +30,13 @@ export class DeviceCache {
       console.error('❌ Config or config.device is undefined! Using fallback values');
       this.prefix = '@mavin_cache_';
       this.maxItems = 100;
-      this.ttl = 86400;
+      this.ttl = 86400 * 1000; // 24 hours in ms
       this.enabled = true;
     } else {
       console.log('✅ Config.device found:', config.device);
       this.prefix = config.device.storagePrefix;
       this.maxItems = config.device.maxItems;
-      this.ttl = config.device.ttlSeconds;
+      this.ttl = config.device.ttlSeconds * 1000; // convert config seconds → ms
       this.enabled = config.device.enabled;
     }
     
@@ -168,7 +168,7 @@ export class DeviceCache {
     const fullKey = this.prefix + key;
     const ttl = customTtl || this.ttl;
     
-    console.log(`💾 Setting cache: ${fullKey} (TTL: ${ttl}s)`);
+    console.log(`💾 Setting cache: ${fullKey} (TTL: ${ttl}ms)`);
     
     try {
       const entry: DeviceCacheEntry<T> = {

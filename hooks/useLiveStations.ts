@@ -1,28 +1,33 @@
 /**
- * useLiveStations Hook
+ * useLiveStations Hook — Supabase DB Edition
  *
- * Fetches live music streams via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
+ * Data flow:
+ * sections (section_type = 'radio_fm')
+ *   → section_items (radio_station_id)
+ *     → radio_stations (name, stream_url, thumbnail, genre, listeners)
  *
- * ── Why NOT getKioskInfo("Live") ────────────────────────────────────────────
- * The "Live" kiosk ID does not exist in the YouTube service registered
- * by NewPipeExtractor. Calling getKioskInfo("Live") throws:
- *   ExtractionException: "No kiosk found with the type: Live"
- *
- * The correct approach is search() with live-music-focused queries,
- * then filter results to item.isLive === true.
- *
- * Note: viewCount on live StreamInfoItems = concurrent viewers.
+ * Note: radio_stations table needs to be populated before this hook
+ * returns data. The section and section_items linkage is already in place.
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-export type { StreamInfoItem as LiveStationItem } from '@/modules/mavin-engine';
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+export interface LiveStationItem {
+  id: string;
+  name: string;
+  streamUrl: string;
+  thumbnail: string;
+  genre: string;
+  listeners: number;
+  isLive: boolean;
+}
 
 interface UseLiveStationsResult {
-  data: StreamInfoItem[];
+  data: LiveStationItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -31,74 +36,89 @@ interface UseLiveStationsResult {
 // ─────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'radio:live';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-// Queries targeting live music streams
-const SEARCH_QUERIES = [
-  'live music stream',
-  'live concert stream',
-  'music live now',
-];
-
 // ─────────────────────────────────────────────
-// Helper: format viewers (viewCount on live = concurrent viewers)
+// Helper
 // ─────────────────────────────────────────────
-
-export function formatViewers(viewCount: number): string {
-  if (!viewCount) return '0';
-  if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
-  if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
-  return String(viewCount);
+export function formatViewers(count: number): string {
+  if (!count) return '0';
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return String(count);
 }
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
+async function fetchLiveStations(): Promise<LiveStationItem[]> {
+  const { data: section, error: sectionError } = await supabase
+    .from('sections')
+    .select('id')
+    .eq('section_type', 'radio_fm')
+    .eq('is_visible', true)
+    .single();
 
-async function fetchLiveStations(): Promise<StreamInfoItem[]> {
-  // getKioskInfo("Live") throws "No kiosk found with the type: Live" on YouTube.
-  // Use search() with live-focused queries and filter to isLive === true instead.
-  for (const query of SEARCH_QUERIES) {
-    try {
-      const result = await search(
-        query,
-        'all',            // "all" is the only valid filter on serviceId=0
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
-
-      if (!result.success) continue;
-
-      const items = result.results
-        .filter((item): item is StreamInfoItem => item.type === 'stream')
-        .filter(item => item.isLive && item.url)
-        .slice(0, MAX_ITEMS);
-
-      if (items.length > 0) return items;
-    } catch {
-      continue;
-    }
+  if (sectionError || !section) {
+    throw new Error(`Radio FM section not found: ${sectionError?.message}`);
   }
-  throw new Error('No live stations available');
+
+  const { data: sectionItems, error: itemsError } = await supabase
+    .from('section_items')
+    .select('radio_station_id, display_order')
+    .eq('section_id', section.id)
+    .not('radio_station_id', 'is', null)
+    .order('display_order', { ascending: true })
+    .limit(MAX_ITEMS);
+
+  if (itemsError) throw new Error(`Failed to fetch section items: ${itemsError.message}`);
+  if (!sectionItems?.length) throw new Error('Radio FM section has no stations linked yet');
+
+  const stationIds = sectionItems.map(si => si.radio_station_id);
+
+  const { data: stations, error: stationsError } = await supabase
+    .from('radio_stations')
+    .select('*')
+    .in('id', stationIds);
+
+  if (stationsError) throw new Error(`Failed to fetch radio stations: ${stationsError.message}`);
+  if (!stations?.length) throw new Error('No radio stations found — populate the radio_stations table first');
+
+  const stationMap = new Map(stations.map(s => [s.id, s]));
+
+  const items: LiveStationItem[] = sectionItems
+    .map(si => {
+      const station = stationMap.get(si.radio_station_id);
+      if (!station) return null;
+      return {
+        id: station.id,
+        name: station.name ?? 'Unknown Station',
+        streamUrl: station.stream_url ?? '',
+        thumbnail: station.thumbnail_url ?? station.artwork_url ?? '',
+        genre: station.genre ?? '',
+        listeners: station.listeners ?? station.listener_count ?? 0,
+        isLive: true,
+      };
+    })
+    .filter((item): item is LiveStationItem => item !== null);
+
+  if (!items.length) throw new Error('Could not map any radio stations');
+  return items;
 }
 
 // ─────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────
-
 export const useLiveStations = (): UseLiveStationsResult => {
-  const [data, setData]       = useState<StreamInfoItem[]>([]);
+  const [data, setData]       = useState<LiveStationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
   const fetchLiveStationsData = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
@@ -107,25 +127,21 @@ export const useLiveStations = (): UseLiveStationsResult => {
         setLoading(false);
         return;
       }
-
-      console.log('🔍 [useLiveStations] Fetching from native module...');
+      console.log('🔍 [useLiveStations] Fetching from Supabase...');
       const stations = await fetchLiveStations();
-
       console.log(`✅ [useLiveStations] Received ${stations.length} stations`);
       await cache.set(CACHE_KEY, stations, CACHE_TTL_MS);
       setData(stations);
     } catch (err: any) {
       console.error('❌ [useLiveStations] Failed:', err);
-      setError(err.message || 'Failed to load live stations');
+      setError(err.message || 'Failed to load radio stations');
       setData([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    fetchLiveStationsData();
-  }, [fetchLiveStationsData]);
+  useEffect(() => { fetchLiveStationsData(); }, [fetchLiveStationsData]);
 
   return { data, loading, error, refetch: fetchLiveStationsData };
 };

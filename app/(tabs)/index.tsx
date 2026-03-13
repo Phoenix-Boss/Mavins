@@ -1,7 +1,6 @@
 /**
- * Mavins Player - Premium Gold Edition
- * Main Home Screen with Real Data Integration - All Sections
- * v2.1 - Fixed MavinEngine Integration
+ * Mavin Player — Home Screen
+ * Data served entirely from Supabase via TanStack Query
  */
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import {
@@ -14,84 +13,78 @@ import {
   RefreshControl,
   StyleSheet,
   Dimensions,
-  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
+import { queryClient } from "@/libs/supabase";
 
-// ✅ FIXED: Use named imports from MavinEngine wrapper
-import { 
-  ping, 
-  getVersion, 
-  services,
-  type ServiceInfo,
-  type PingResult 
-} from '@/modules/mavin-engine';
-
-// Import all sections
-import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
-import { BiggestHitsSection } from "@/components/sections/BiggestHitsSection";
-import { CreateMixSection } from "@/components/sections/CreateMixSection";
+// ── Section components ────────────────────────────────────────────────────────
+import { TrendingNowSection }   from "@/components/sections/TrendingNowSection";
+import { BiggestHitsSection }   from "@/components/sections/BiggestHitsSection";
+import { CreateMixSection }     from "@/components/sections/CreateMixSection";
 import { MusicChannelsSection } from "@/components/sections/MusicChannelsSection";
 import { PeoplesChoiceSection } from "@/components/sections/PeoplesChoiceSection";
-import { Top10MonthSection } from "@/components/sections/Top10MonthSection";
-import { MavinsBestSection } from "@/components/sections/MavinsBestSection";
-import { FeaturedSection } from "@/components/sections/FeaturedSection";
-import { PodcastSection } from "@/components/sections/PodcastSection";
-import { RadioFMSection } from "@/components/sections/RadioFMSection";
-import { CoversSection } from "@/components/sections/CoversSection";
-import { NewReleasesSection } from "@/components/sections/NewReleasesSection";
+import { Top10MonthSection }    from "@/components/sections/Top10MonthSection";
+import { MavinsBestSection }    from "@/components/sections/MavinsBestSection";
+import { FeaturedSection }      from "@/components/sections/FeaturedSection";
+import { PodcastSection }       from "@/components/sections/PodcastSection";
+import { RadioFMSection }       from "@/components/sections/RadioFMSection";
+import { ThrowbacksSection }    from "@/components/sections/ThrowbacksSection"; // renamed from CoversSection
+import { NewReleasesSection }   from "@/components/sections/NewReleasesSection";
 
-const { width } = Dimensions.get('window');
+const { width } = Dimensions.get("window");
 
-// Metallic Gold Color Palette - Premium Luxury Edition
+// ─────────────────────────────────────────────
+// Theme
+// ─────────────────────────────────────────────
 const COLORS = {
-  background: '#000000',
-  surface: '#121212',
-  surfaceLight: '#1F1F1F',
-  surfaceDark: '#0A0A0A',
-  goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldRich: '#BF9B30',
-  goldShimmer: '#E6C16A',
-  goldBronze: '#8C6F0E',
-  goldMuted: '#C9A96A',
-  text: '#FFFFFF',
-  textSecondary: '#B3B3B3',
-  textTertiary: '#808080',
-  textQuaternary: '#666666',
-  border: '#333333',
-  borderLight: '#444444',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#EF4444',
-  searchBackground: '#1A1A1A',
-  searchPlaceholder: '#666666',
-  liveTag: '#3B82F6',
+  background:        "#000000",
+  surface:           "#121212",
+  surfaceLight:      "#1F1F1F",
+  surfaceDark:       "#0A0A0A",
+  goldPrimary:       "#D4AF37",
+  goldShiny:         "#FFD700",
+  goldRich:          "#BF9B30",
+  goldShimmer:       "#E6C16A",
+  goldBronze:        "#8C6F0E",
+  goldMuted:         "#C9A96A",
+  text:              "#FFFFFF",
+  textSecondary:     "#B3B3B3",
+  textTertiary:      "#808080",
+  textQuaternary:    "#666666",
+  border:            "#333333",
+  borderLight:       "#444444",
+  success:           "#22C55E",
+  warning:           "#F59E0B",
+  danger:            "#EF4444",
+  searchBackground:  "#1A1A1A",
+  searchPlaceholder: "#666666",
+  liveTag:           "#3B82F6",
 };
 
-// Top categories for horizontal scroll
-const TOP_CATEGORIES = ["Hits", "Mixes", "Charts", "Genres", "Workout", "Chill", "Energize", "Feel Good", "Focus", "Party"];
+const TOP_CATEGORIES = [
+  "Hits", "Mixes", "Charts", "Genres",
+  "Workout", "Chill", "Energize", "Feel Good", "Focus", "Party",
+];
 
-// ✅ ERROR BOUNDARY: Prevents one failing section from crashing entire screen
+// ─────────────────────────────────────────────
+// Error boundary — one failing section won't crash the screen
+// ─────────────────────────────────────────────
 class SectionErrorBoundary extends React.Component<
   { children: React.ReactNode; sectionName: string },
-  { hasError: boolean; error: Error | null }
+  { hasError: boolean }
 > {
-  constructor(props: { children: React.ReactNode; sectionName: string }) {
-    super(props);
-    this.state = { hasError: false, error: null };
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error(`❌ [${this.props.sectionName}] Error:`, error);
+  componentDidCatch(error: Error) {
+    console.error(`❌ [${this.props.sectionName}]`, error);
   }
 
   render() {
@@ -100,8 +93,8 @@ class SectionErrorBoundary extends React.Component<
         <View style={styles.errorContainer}>
           <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
           <Text style={styles.errorText}>{this.props.sectionName} unavailable</Text>
-          <TouchableOpacity 
-            onPress={() => this.setState({ hasError: false, error: null })}
+          <TouchableOpacity
+            onPress={() => this.setState({ hasError: false })}
             style={styles.retryButton}
           >
             <Text style={styles.retryText}>Retry</Text>
@@ -113,101 +106,44 @@ class SectionErrorBoundary extends React.Component<
   }
 }
 
+// ─────────────────────────────────────────────
+// Home screen
+// ─────────────────────────────────────────────
 export default function HomeScreen() {
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing]   = useState(false);
   const [selectedTab, setSelectedTab] = useState("Hits");
-  const [servicesOnline, setServicesOnline] = useState<boolean | null>(null);
-  const [mavinVersion, setMavinVersion] = useState<string>('');
-  const { top, bottom } = useSafeAreaInsets();
-  const router = useRouter();
-  const watermarkPulse = useRef(new Animated.Value(1)).current;
+  const { top }                       = useSafeAreaInsets();
+  const router                        = useRouter();
+  const watermarkPulse                = useRef(new Animated.Value(1)).current;
 
-  // ✅ FIXED: Test MavinEngine on mount using correct API
-  useEffect(() => {
-    const testServices = async () => {
-      try {
-        console.log('🔍 Testing MavinEngine...');
-        
-        // ✅ Use named import ping() instead of MavinEngine.ping()
-        const pingResult: PingResult = await ping();
-        console.log('✅ MavinEngine online:', pingResult);
-        
-        // ✅ Get version info
-        const versionInfo = await getVersion();
-        setMavinVersion(versionInfo.version);
-        console.log('📦 Version:', versionInfo);
-        
-        // ✅ Check available services (from named import)
-        const availableServices: ServiceInfo[] = services;
-        console.log('📡 Available services:', availableServices);
-        
-        // YouTube service ID is 0
-        const youtubeService = availableServices.find(s => s.id === 0);
-        const isOnline = !!youtubeService;
-        
-        setServicesOnline(isOnline);
-        
-        if (!isOnline) {
-          Alert.alert(
-            'Service Unavailable',
-            'YouTube music service is currently unavailable. Please check your internet connection.'
-          );
-        }
-      } catch (e) {
-        console.error('❌ MavinEngine test failed:', e);
-        setServicesOnline(false);
-        Alert.alert(
-          'Module Error',
-          'Music engine failed to initialize. Please restart the app.'
-        );
-      }
-    };
-    
-    testServices();
-  }, []);
-
-  // Start pulse animation for watermark
+  // Watermark pulse animation
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(watermarkPulse, {
-          toValue: 1.06,
-          duration: 3000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(watermarkPulse, {
-          toValue: 1,
-          duration: 3000,
-          useNativeDriver: true,
-        }),
-      ]),
+        Animated.timing(watermarkPulse, { toValue: 1.06, duration: 3000, useNativeDriver: true }),
+        Animated.timing(watermarkPulse, { toValue: 1,    duration: 3000, useNativeDriver: true }),
+      ])
     ).start();
   }, []);
 
+  // Pull-to-refresh — invalidates all home section queries so TanStack refetches
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Clear all caches and refresh
-    try {
-      // Force refresh all sections by clearing cache
-      const cache = (await import('@/libs/cache')).cache;
-      await cache.clear?.(); // If clear method exists
-    } catch (e) {
-      console.log('Cache clear not available');
-    }
-    setTimeout(() => setRefreshing(false), 2000);
+    await queryClient.invalidateQueries({ queryKey: ['homeSection'] });
+    setRefreshing(false);
   }, []);
 
   const handleSearchPress = () => {
     triggerHaptic();
-    router.navigate('/search');
+    router.navigate("/search");
   };
 
-  // Combined Header Component (Search Bar + Categories)
+  // ── Header ────────────────────────────────────────────────────────────────
   const CombinedHeader = () => (
     <View style={{ backgroundColor: COLORS.background }}>
-      {/* Search Bar */}
+      {/* Search bar */}
       <View style={[styles.header, { paddingTop: top }]}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.searchContainer}
           onPress={handleSearchPress}
           activeOpacity={0.7}
@@ -217,29 +153,10 @@ export default function HomeScreen() {
             Search music, artists, albums...
           </Text>
         </TouchableOpacity>
-        
-        {/* Right Icons */}
+
         <View style={styles.headerRight}>
-          {/* ✅ SERVICE STATUS INDICATOR */}
-          {servicesOnline === false && (
-            <Ionicons name="cloud-offline" size={20} color={COLORS.danger} style={{ marginRight: 12 }} />
-          )}
-          {servicesOnline === true && (
-            <Ionicons name="cloud" size={20} color={COLORS.success} style={{ marginRight: 12 }} />
-          )}
-          
-          {/* Version indicator (subtle) */}
-          {mavinVersion && (
-            <Text style={{ color: COLORS.textTertiary, fontSize: 10, marginRight: 8 }}>
-              v{mavinVersion}
-            </Text>
-          )}
-          
           <TouchableOpacity
-            onPress={() => {
-              triggerHaptic();
-              router.navigate('/settings');
-            }}
+            onPress={() => { triggerHaptic(); router.navigate("/settings"); }}
             style={styles.iconButton}
             hitSlop={12}
           >
@@ -248,7 +165,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Top Categories */}
+      {/* Category tabs */}
       <View style={styles.categoriesContainer}>
         <ScrollView
           horizontal
@@ -260,16 +177,13 @@ export default function HomeScreen() {
               key={category}
               style={[
                 styles.categoryButton,
-                selectedTab === category && styles.categoryButtonActive
+                selectedTab === category && styles.categoryButtonActive,
               ]}
-              onPress={() => {
-                triggerHaptic();
-                setSelectedTab(category);
-              }}
+              onPress={() => { triggerHaptic(); setSelectedTab(category); }}
             >
               <Text style={[
                 styles.categoryText,
-                selectedTab === category && styles.categoryTextActive
+                selectedTab === category && styles.categoryTextActive,
               ]}>
                 {category}
               </Text>
@@ -280,19 +194,10 @@ export default function HomeScreen() {
     </View>
   );
 
-  // Refresh Control Component
-  const refreshControl = (
-    <RefreshControl
-      refreshing={refreshing}
-      onRefresh={onRefresh}
-      colors={[COLORS.goldPrimary]}
-      tintColor={COLORS.goldPrimary}
-    />
-  );
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
-      {/* WATERMARK */}
+      {/* Watermark */}
       <Animated.View pointerEvents="none" style={styles.watermarkWrapper}>
         <Animated.Image
           source={require("@/assets/images/mavins.png")}
@@ -301,70 +206,76 @@ export default function HomeScreen() {
         />
       </Animated.View>
 
-      {/* ScrollControllerWrapper with combined header */}
       <ScrollControllerWrapper
         headerComponent={<CombinedHeader />}
         showHeader={true}
-        refreshControl={refreshControl}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[COLORS.goldPrimary]}
+            tintColor={COLORS.goldPrimary}
+          />
+        }
         contentContainerStyle={styles.scrollContent}
       >
-        {/* ✅ WRAPPED SECTIONS: Each in Error Boundary to prevent crashes */}
-        
         <SectionErrorBoundary sectionName="Trending Now">
           <TrendingNowSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Biggest Hits">
           <BiggestHitsSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Create Mix">
           <CreateMixSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Music Channels">
           <MusicChannelsSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="People's Choice">
           <PeoplesChoiceSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Top 10 This Month">
           <Top10MonthSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Mavin's Best">
           <MavinsBestSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Featured">
           <FeaturedSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Podcasts">
           <PodcastSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="Radio FM">
           <RadioFMSection />
         </SectionErrorBoundary>
-        
-        <SectionErrorBoundary sectionName="Covers">
-          <CoversSection />
+
+        <SectionErrorBoundary sectionName="Throwbacks">
+          <ThrowbacksSection />
         </SectionErrorBoundary>
-        
+
         <SectionErrorBoundary sectionName="New Releases">
           <NewReleasesSection />
         </SectionErrorBoundary>
 
-        {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollControllerWrapper>
     </View>
   );
 }
 
+// ─────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -382,24 +293,24 @@ const styles = StyleSheet.create({
     opacity: 0.08,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 10,
     paddingTop: 10,
     backgroundColor: COLORS.background,
   },
   searchContainer: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: COLORS.searchBackground,
     borderRadius: 24,
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginRight: 16,
     borderWidth: 1,
-    borderColor: COLORS.goldPrimary + '40',
+    borderColor: COLORS.goldPrimary + "40",
   },
   searchIcon: {
     marginRight: 10,
@@ -410,8 +321,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 16,
   },
   iconButton: {
@@ -441,12 +352,12 @@ const styles = StyleSheet.create({
   },
   categoryText: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: "500",
     color: COLORS.textTertiary,
   },
   categoryTextActive: {
     color: COLORS.goldPrimary,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -455,15 +366,14 @@ const styles = StyleSheet.create({
   bottomSpacing: {
     height: 60,
   },
-  // ✅ ERROR BOUNDARY STYLES
   errorContainer: {
     padding: 20,
     marginVertical: 10,
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.danger + '40',
-    alignItems: 'center',
+    borderColor: COLORS.danger + "40",
+    alignItems: "center",
   },
   errorText: {
     color: COLORS.textSecondary,
@@ -474,7 +384,7 @@ const styles = StyleSheet.create({
   retryButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: COLORS.goldPrimary + '20',
+    backgroundColor: COLORS.goldPrimary + "20",
     borderRadius: 20,
     borderWidth: 1,
     borderColor: COLORS.goldPrimary,
@@ -482,6 +392,6 @@ const styles = StyleSheet.create({
   retryText: {
     color: COLORS.goldPrimary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

@@ -1,0 +1,64 @@
+{
+  "genre_playlists": [
+    {
+      "title": "Classic Rock's Greatest Hits",
+      "artists": "Led Zeppelin, Fleetwood Mac, Creedence Clearwater Revival, Tom Petty and the Heartbreakers",
+      "playlist_id": "RDCLAK5uy_nZiG9ehz_MQoWQxY5yElsLHCcG0tv9PRg",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_nZiG9ehz_MQoWQxY5yElsLHCcG0tv9PRg"
+    },
+    {
+      "title": "Pop's Biggest Hits",
+      "artists": "Taylor Swift, Sabrina Carpenter, Justin Bieber, Bruno Mars",
+      "playlist_id": "RDCLAK5uy_nmS3YoxSwVVQk9lEQJ0UX4ZCjXsW_psU8",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_nmS3YoxSwVVQk9lEQJ0UX4ZCjXsW_psU8"
+    },
+    {
+      "title": "Christian Music's Biggest Hits",
+      "artists": "Casting Crowns, Chris Tomlin, Elevation Worship, TobyMac",
+      "playlist_id": "RDCLAK5uy_lMzXQA761IIDTLJJwgpD67INZ8lL6UsVU",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_lMzXQA761IIDTLJJwgpD67INZ8lL6UsVU"
+    },
+    {
+      "title": "Hip-Hop Classics",
+      "artists": "The Notorious B.I.G., Eminem, Snoop Dogg, Dr. Dre",
+      "playlist_id": "RDCLAK5uy_kP2172rQNb3KFXz880xp6M98R_ME5CIKA",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_kP2172rQNb3KFXz880xp6M98R_ME5CIKA"
+    },
+    {
+      "title": "Endless R&B Throwbacks",
+      "artists": "Usher, Mariah Carey, Toni Braxton, Ginuwine",
+      "playlist_id": "RDCLAK5uy_k4QxtdDiyPtN17wezA186nbXuqO36QOiU",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_k4QxtdDiyPtN17wezA186nbXuqO36QOiU"
+    },
+    {
+      "title": "Bachata Mix",
+      "artists": "Prince Royce, Romeo Santos, Aventura, Monchy & Alexandra",
+      "playlist_id": "RDCLAK5uy_kLYyE7wnPy-CdtP7hzzpru0iPr-eY2ea4",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_kLYyE7wnPy-CdtP7hzzpru0iPr-eY2ea4"
+    },
+    {
+      "title": "Dance Hits",
+      "artists": "Avicii, Calvin Harris, Alan Walker, Daft Punk",
+      "playlist_id": "RDCLAK5uy_k6PkYWus1Mt-aKrbb0Ne8SkA2BgAk1Yy4",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_k6PkYWus1Mt-aKrbb0Ne8SkA2BgAk1Yy4"
+    },
+    {
+      "title": "Himnos Rancheros",
+      "artists": "Vicente Fernández, Cornelio Reyna, José Alfredo Jiménez, Antonio Aguilar",
+      "playlist_id": "RDCLAK5uy_kiqUWUaTZlApaxEidmdEekxjQbalc8MhY",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_kiqUWUaTZlApaxEidmdEekxjQbalc8MhY"
+    },
+    {
+      "title": "Essential Heavy Metal",
+      "artists": "Metallica, Iron Maiden, Slipknot, Korn",
+      "playlist_id": "RDCLAK5uy_lhO-w4BZWObj7daKVuBz_A2wORvjyBCZU",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_lhO-w4BZWObj7daKVuBz_A2wORvjyBCZU"
+    },
+    {
+      "title": "Cumbia Megamix",
+      "artists": "Grupo Frontera, Los Ángeles Azules, Selena, Ke Personajes",
+      "playlist_id": "RDCLAK5uy_k6ACq4WNfG-uJSz_jML9ZkUEULUoCzWIw",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_k6ACq4WNfG-uJSz_jML9ZkUEULUoCzWIw"
+    }
+  ]
+}

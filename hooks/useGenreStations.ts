@@ -1,26 +1,35 @@
 /**
- * useGenreStations Hook
+ * useGenreStations Hook — Supabase DB Edition
  *
- * Fetches genre-based music tracks via MavinEngine.search().
- * Calls Kotlin: performSearch("{genre} music", "all", null, 0)
+ * Data flow (genre filter provided):
+ * sections (section_type = 'navigation_buttons')
+ *   → section_items (genre_id, playlist_id, custom_title matching genre)
+ *     → playlists (title, thumbnail, custom_metadata)
  *
- * ── Why filter="all" ────────────────────────────────────────────────────────
- * "songs" is a YouTube Music-specific content filter not registered
- * in the standard YouTube service (serviceId=0) searchQHFactory.
- * Passing it causes Kotlin to throw an invalid filter error.
- * "all" is always valid on serviceId=0 and returns StreamInfoItems.
- *
- * Returns StreamInfoItem[] directly — no custom mapping.
+ * Data flow (no genre filter — returns all moods & genres):
+ * sections (section_type = 'navigation_buttons')
+ *   → section_items (all items ordered by display_order)
+ *     → genre details via custom_title + custom_subtitle
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import MavinEngine, { StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-export type { StreamInfoItem as GenreItem } from '@/modules/mavin-engine';
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+export interface GenreItem {
+  id: string;
+  playlistId: string | null;
+  title: string;
+  subtitle: string;
+  thumbnail: string;
+  genre: string;
+  metadata: Record<string, any>;
+}
 
 interface UseGenreStationsResult {
-  data: StreamInfoItem[];
+  data: GenreItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -29,85 +38,99 @@ interface UseGenreStationsResult {
 // ─────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 10;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
+async function fetchGenreStations(genre?: string): Promise<GenreItem[]> {
+  const { data: section, error: sectionError } = await supabase
+    .from('sections')
+    .select('id')
+    .eq('section_type', 'navigation_buttons')
+    .eq('is_visible', true)
+    .single();
 
-async function fetchGenre(genre: string): Promise<StreamInfoItem[]> {
-  // Calls Kotlin: performSearch("{genre} music", "all", null, 0)
-  // "all" is the only valid filter for standard YouTube (serviceId=0)
-  const result = await MavinEngine.search(
-    `${genre} music`,
-    'all',            // ← was 'songs', invalid on serviceId=0
-    undefined,
-    YOUTUBE_SERVICE_ID,
-  ) as SearchPage;
-
-  if (!result.success) {
-    throw new Error(result.errors?.[0] || `No results for ${genre}`);
+  if (sectionError || !section) {
+    throw new Error(`Moods & Genres section not found: ${sectionError?.message}`);
   }
 
-  const items = result.results
-    .filter((item): item is StreamInfoItem => item.type === 'stream')
-    .filter(item => !item.isLive && !item.isShortFormContent && item.url)
-    .slice(0, MAX_ITEMS);
+  // Build query — filter by genre title if provided
+  let query = supabase
+    .from('section_items')
+    .select(`
+      id,
+      playlist_id,
+      genre_id,
+      display_order,
+      custom_title,
+      custom_subtitle,
+      custom_thumbnail_url,
+      custom_metadata
+    `)
+    .eq('section_id', section.id)
+    .order('display_order', { ascending: true })
+    .limit(MAX_ITEMS);
 
-  if (!items.length) {
-    throw new Error(`No ${genre} tracks available`);
+  // If genre param given, filter to matching custom_title (case-insensitive)
+  if (genre?.trim()) {
+    query = query.ilike('custom_title', `%${genre.trim()}%`);
   }
 
-  return items;
+  const { data: items, error: itemsError } = await query;
+
+  if (itemsError) throw new Error(`Failed to fetch genre items: ${itemsError.message}`);
+  if (!items?.length) throw new Error(`No genre stations found${genre ? ` for "${genre}"` : ''}`);
+
+  return items.map(item => ({
+    id: item.id,
+    playlistId: item.playlist_id ?? null,
+    title: item.custom_title ?? 'Unknown Genre',
+    subtitle: item.custom_subtitle ?? '',
+    thumbnail: item.custom_thumbnail_url ?? '',
+    genre: item.custom_subtitle ?? item.custom_title ?? '',
+    metadata: item.custom_metadata ?? {},
+  }));
 }
 
 // ─────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────
-
-export const useGenreStations = (genre: string): UseGenreStationsResult => {
-  const [data, setData]       = useState<StreamInfoItem[]>([]);
+export const useGenreStations = (genre?: string): UseGenreStationsResult => {
+  const [data, setData]       = useState<GenreItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const fetchGenreStations = useCallback(async () => {
-    if (!genre?.trim()) return;
-
+  const fetchGenreStationsData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
-    try {
-      const cacheKey = `genre:${genre.toLowerCase().trim()}`;
+    const cacheKey = `genre:${genre?.toLowerCase().trim() ?? 'all'}`;
 
+    try {
       const cached = await cache.get(cacheKey);
       if (cached && Array.isArray(cached) && cached.length > 0) {
-        console.log(`📦 [useGenreStations] Using cached data for ${genre}`);
+        console.log(`📦 [useGenreStations] Using cached data for "${genre ?? 'all'}"`);
         setData(cached);
         setLoading(false);
         return;
       }
-
-      console.log(`🔍 [useGenreStations] Fetching ${genre} from native module...`);
-      const stations = await fetchGenre(genre);
-
-      console.log(`✅ [useGenreStations] Received ${stations.length} stations for ${genre}`);
+      console.log(`🔍 [useGenreStations] Fetching "${genre ?? 'all'}" from Supabase...`);
+      const stations = await fetchGenreStations(genre);
+      console.log(`✅ [useGenreStations] Received ${stations.length} items`);
       await cache.set(cacheKey, stations, CACHE_TTL_MS);
       setData(stations);
     } catch (err: any) {
-      console.error(`❌ [useGenreStations] Failed for ${genre}:`, err);
-      setError(err.message || `Failed to load ${genre} stations`);
+      console.error(`❌ [useGenreStations] Failed for "${genre ?? 'all'}":`, err);
+      setError(err.message || `Failed to load ${genre ?? 'genre'} stations`);
       setData([]);
     } finally {
       setLoading(false);
     }
   }, [genre]);
 
-  useEffect(() => {
-    fetchGenreStations();
-  }, [fetchGenreStations]);
+  useEffect(() => { fetchGenreStationsData(); }, [fetchGenreStationsData]);
 
-  return { data, loading, error, refetch: fetchGenreStations };
+  return { data, loading, error, refetch: fetchGenreStationsData };
 };

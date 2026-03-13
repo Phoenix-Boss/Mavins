@@ -1,21 +1,33 @@
 /**
- * useCoverSongs Hook
+ * useCoverSongs Hook — Supabase DB Edition
+ * 
+ * NOTE: The "Covers" section has been renamed to "Throwbacks" in the DB.
+ * This hook now fetches from section_type = 'throwbacks'.
  *
- * Fetches cover songs and acoustic versions via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
- *
- * filter="all" is correct — it is the only valid filter on standard
- * YouTube (serviceId=0) and returns StreamInfoItems.
+ * Data flow:
+ * sections (section_type = 'throwbacks')
+ *   → section_items (track_id)
+ *     → songs (title, artist, artwork_url, video_id, play_count, duration)
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import { search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-export type { StreamInfoItem as CoverItem } from '@/modules/mavin-engine';
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+export interface CoverItem {
+  id: string;
+  videoId: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  duration: number;
+  views: number;
+}
 
 interface UseCoverSongsResult {
-  data: StreamInfoItem[];
+  data: CoverItem[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -24,62 +36,79 @@ interface UseCoverSongsResult {
 // ─────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 8;
-const CACHE_KEY = 'covers:popular';
+const CACHE_KEY = 'covers:throwbacks';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-const SEARCH_QUERIES = [
-  'acoustic cover songs',
-  'best cover songs 2024',
-  'popular acoustic covers',
-  'cover songs',
-  'acoustic versions',
-];
 
 // ─────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────
+async function fetchCovers(): Promise<CoverItem[]> {
+  const { data: section, error: sectionError } = await supabase
+    .from('sections')
+    .select('id')
+    .eq('section_type', 'throwbacks')
+    .eq('is_visible', true)
+    .single();
 
-async function fetchCovers(): Promise<StreamInfoItem[]> {
-  for (const query of SEARCH_QUERIES) {
-    try {
-      const result = await search(
-        query,
-        'all',
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
-
-      if (!result.success) continue;
-
-      const items = result.results
-        .filter((item): item is StreamInfoItem => item.type === 'stream')
-        .filter(item => !item.isLive && !item.isShortFormContent && item.url)
-        .slice(0, MAX_ITEMS);
-
-      if (items.length > 0) return items;
-    } catch {
-      continue;
-    }
+  if (sectionError || !section) {
+    throw new Error(`Throwbacks section not found: ${sectionError?.message}`);
   }
-  throw new Error('No cover songs available');
+
+  const { data: sectionItems, error: itemsError } = await supabase
+    .from('section_items')
+    .select('track_id, display_order')
+    .eq('section_id', section.id)
+    .not('track_id', 'is', null)
+    .order('display_order', { ascending: true })
+    .limit(MAX_ITEMS);
+
+  if (itemsError) throw new Error(`Failed to fetch section items: ${itemsError.message}`);
+  if (!sectionItems?.length) throw new Error('Throwbacks section has no items');
+
+  const trackIds = sectionItems.map(si => si.track_id);
+
+  const { data: songs, error: songsError } = await supabase
+    .from('songs')
+    .select('id, title, artist, artwork_url, artwork_thumbnail, video_id, play_count, duration')
+    .in('id', trackIds);
+
+  if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
+  if (!songs?.length) throw new Error('No songs found for throwbacks section');
+
+  const songMap = new Map(songs.map(s => [s.id, s]));
+
+  const items: CoverItem[] = sectionItems
+    .map(si => {
+      const song = songMap.get(si.track_id);
+      if (!song) return null;
+      return {
+        id: song.id,
+        videoId: song.video_id ?? '',
+        title: song.title ?? 'Unknown Title',
+        artist: song.artist ?? 'Unknown Artist',
+        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
+        duration: song.duration ?? 0,
+        views: song.play_count ?? 0,
+      };
+    })
+    .filter((item): item is CoverItem => item !== null);
+
+  if (!items.length) throw new Error('Could not map any throwback songs');
+  return items;
 }
 
 // ─────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────
-
 export const useCoverSongs = (): UseCoverSongsResult => {
-  const [data, setData]       = useState<StreamInfoItem[]>([]);
+  const [data, setData]       = useState<CoverItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
   const fetchCoverSongs = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
@@ -88,25 +117,21 @@ export const useCoverSongs = (): UseCoverSongsResult => {
         setLoading(false);
         return;
       }
-
-      console.log('🔍 [useCoverSongs] Fetching from native module...');
+      console.log('🔍 [useCoverSongs] Fetching from Supabase...');
       const covers = await fetchCovers();
-
-      console.log(`✅ [useCoverSongs] Received ${covers.length} covers`);
+      console.log(`✅ [useCoverSongs] Received ${covers.length} items`);
       await cache.set(CACHE_KEY, covers, CACHE_TTL_MS);
       setData(covers);
     } catch (err: any) {
       console.error('❌ [useCoverSongs] Failed:', err);
-      setError(err.message || 'Failed to load cover songs');
+      setError(err.message || 'Failed to load throwback songs');
       setData([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    fetchCoverSongs();
-  }, [fetchCoverSongs]);
+  useEffect(() => { fetchCoverSongs(); }, [fetchCoverSongs]);
 
   return { data, loading, error, refetch: fetchCoverSongs };
 };

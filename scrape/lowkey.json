@@ -1,0 +1,58 @@
+{
+  "mood_playlists": [
+    {
+      "title": "Mellow Pop Classics",
+      "artists": "Avril Lavigne, Lewis Capaldi, Robbie Williams, Ed Sheeran",
+      "playlist_id": "RDCLAK5uy_nDL8KeBrUagwyISwNmyEiSfYgz1gVCesg",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_nDL8KeBrUagwyISwNmyEiSfYgz1gVCesg"
+    },
+    {
+      "title": "'00s Rock Chillout",
+      "artists": "Nickelback, Coldplay, 3 Doors Down, John Mayer",
+      "playlist_id": "RDCLAK5uy_k54Zr5UY8lb-LJx1XLj0q4rH355y9dJV8",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_k54Zr5UY8lb-LJx1XLj0q4rH355y9dJV8"
+    },
+    {
+      "title": "'80s Rock Ballads",
+      "artists": "Journey, Bon Jovi, REO Speedwagon, Heart",
+      "playlist_id": "RDCLAK5uy_maCVamCosYLtz7MRW_uNPyqCdMwZ1FTLs",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_maCVamCosYLtz7MRW_uNPyqCdMwZ1FTLs"
+    },
+    {
+      "title": "Soft Rock Ballads",
+      "artists": "Eagles, Fleetwood Mac, Chicago, Foreigner",
+      "playlist_id": "RDCLAK5uy_nyKVppE-RpLkeCcwLct4rvN9e8AAsS_qw",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_nyKVppE-RpLkeCcwLct4rvN9e8AAsS_qw"
+    },
+    {
+      "title": "Classic Rock Relaxation",
+      "artists": "The Beatles, Simon & Garfunkel, The Rolling Stones, Fleetwood Mac",
+      "playlist_id": "RDCLAK5uy_m3bF5-eHO_vIUFnJkclyxJzcUed0ytWf0",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_m3bF5-eHO_vIUFnJkclyxJzcUed0ytWf0"
+    },
+    {
+      "title": "Lofi Loft",
+      "artists": "Evil Needle, Brenk Sinatra, Kupla, Philanthrope",
+      "playlist_id": "RDCLAK5uy_kb7EBi6y3GrtJri4_ZH56Ms786DFEimbM",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_kb7EBi6y3GrtJri4_ZH56Ms786DFEimbM"
+    },
+    {
+      "title": "The Smoothest of Smooth Jazz",
+      "artists": "Boney James, Kenny G, Norman Brown, Dave Koz",
+      "playlist_id": "RDCLAK5uy_nm4NA8cldZNPqj1D0ayZxfySeY89qedRs",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_nm4NA8cldZNPqj1D0ayZxfySeY89qedRs"
+    },
+    {
+      "title": "Gentle Piano",
+      "artists": "Chad Lawson, The Chillest, Matthew Mayer, Star Age",
+      "playlist_id": "RDCLAK5uy_ldooV6iHaoPy6VKyVuHDq0DT4lh-3tRqQ",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_ldooV6iHaoPy6VKyVuHDq0DT4lh-3tRqQ"
+    },
+    {
+      "title": "Kick-Back Country",
+      "artists": "Zach Bryan, Luke Combs, Thomas Rhett, Chris Stapleton",
+      "playlist_id": "RDCLAK5uy_kaf_YgdM_0fuv59B_ImJMRZG738-q9KJs",
+      "url": "https://music.youtube.com/playlist?list=RDCLAK5uy_kaf_YgdM_0fuv59B_ImJMRZG738-q9KJs"
+    }
+  ]
+}

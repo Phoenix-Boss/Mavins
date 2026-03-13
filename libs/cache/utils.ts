@@ -76,9 +76,10 @@ export function isExpired(timestamp: number): boolean {
 
 /**
  * Calculate expiry timestamp
+ * @param msFromNow - duration in milliseconds
  */
-export function expiryTime(secondsFromNow: number): number {
-  return Date.now() + secondsFromNow * 1000;
+export function expiryTime(msFromNow: number): number {
+  return Date.now() + msFromNow;
 }
 
 /**

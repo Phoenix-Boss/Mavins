@@ -1,14 +1,17 @@
 /**
- * useTrending Hook - PRODUCTION READY (NewPipeExtractor only, Nigeria-focused)
+ * useTrending Hook - Supabase DB Edition
  *
- * Layers in order of priority:
- * 1. NewPipe Kiosk → 'trending_music' (primary) → 'trending_movies_and_shows' (secondary)
- * 2. Targeted search fallback using Nigeria/Afrobeats trending-relevant queries
+ * Data flow:
+ * sections (section_type = 'trending')
+ *   → section_items (track_id)
+ *     → songs (title, artist, artwork_url, video_id, play_count, duration)
  *
- * Goal: Get recent/hot music videos even when kiosks return empty results
+ * Cache layers:
+ * 1. In-memory cache (libs/cache) — 6 hours TTL
+ * 2. Supabase DB — source of truth
  */
 import { useState, useEffect, useCallback } from 'react';
-import { search, getYouTubeKiosk, StreamInfoItem, SearchPage, KioskPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
 // ─────────────────────────────────────────────
@@ -30,148 +33,100 @@ interface UseTrendingResult {
   error: string | null;
   refetch: () => void;
   isEmpty: boolean;
-  source: string | null; // 'kiosk_trending_music' | 'kiosk_trending_movies_and_shows' | 'search' | 'cache' | null
+  source: string | null; // 'supabase' | 'cache' | null
 }
 
 // ─────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────
-const YOUTUBE_SERVICE_ID = 0;
-const MAX_ITEMS = 6;
-const CACHE_KEY = 'trending:now_ng';
+const MAX_ITEMS = 10;
+const CACHE_KEY = 'trending:now';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-// Updated March 2026 Nigeria-relevant search queries
-// Ordered roughly from most specific → broader
-const NIGERIA_SEARCH_QUERIES = [
-  'Mavo official music video',
-  'Mofe Mavo official',
-  'Aura Salad Mavo',
-  'Big Bum Bum Kidd Carder',
-  'ODUMODUBLVCK official video',
-  'Wizkid new release 2026',
-  'Asake official music video',
-  'Afrobeats new release Nigeria',
-  'Naija music video March 2026',
-  'new Nigerian music video',
-  'Afrobeats 2026 official',
-];
-
-// Working kiosks (from your logs)
-const WORKING_KIOSKS: readonly string[] = ['trending_music', 'trending_movies_and_shows'];
-
 // ─────────────────────────────────────────────
-// Helpers
+// Fetch from Supabase
 // ─────────────────────────────────────────────
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
+async function fetchFromSupabase(): Promise<{ items: TrendingItem[]; source: string }> {
+  // Step 1: Get the trending section id
+  const { data: section, error: sectionError } = await supabase
+    .from('sections')
+    .select('id')
+    .eq('section_type', 'trending')
+    .eq('is_visible', true)
+    .single();
 
-function toTrendingItem(item: StreamInfoItem): TrendingItem | null {
-  if (!item.url || !item.name?.trim()) return null;
-  return {
-    id: item.url,
-    videoId: item.url.split('v=')[1] || item.url,
-    title: item.name.trim(),
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetch logic
-// ─────────────────────────────────────────────
-async function fetchFromNewPipe(): Promise<{ items: TrendingItem[]; source: string }> {
-  let items: TrendingItem[] = [];
-  let source = 'unknown';
-
-  // ── Layer 1: Try kiosks ────────────────────────────────────────
-  for (const kioskId of WORKING_KIOSKS) {
-    try {
-      console.log(`🏪 [useTrending] Trying kiosk: "${kioskId}"`);
-      const kioskResult = await getYouTubeKiosk(kioskId, YOUTUBE_SERVICE_ID) as KioskPage;
-
-      if (kioskResult.success && kioskResult.items?.length > 0) {
-        items = kioskResult.items
-          .filter((it): it is StreamInfoItem => it.type === 'stream' && !it.isLive)
-          .map(toTrendingItem)
-          .filter((it): it is TrendingItem => !!it)
-          .slice(0, MAX_ITEMS);
-
-        if (items.length > 0) {
-          source = `kiosk_${kioskId}`;
-          console.log(`✅ [useTrending] Success from kiosk "${kioskId}" → ${items.length} items`);
-          return { items, source };
-        }
-      } else {
-        console.log(`📊 [useTrending] kiosk "${kioskId}" returned ${kioskResult.items?.length ?? 0} items`);
-      }
-    } catch (err: any) {
-      console.warn(`⚠️ [useTrending] kiosk "${kioskId}" failed:`, err?.message || String(err));
-    }
+  if (sectionError || !section) {
+    throw new Error(`Trending section not found: ${sectionError?.message}`);
   }
 
-  // ── Layer 2: Search fallback ───────────────────────────────────
-  console.log('🔍 [useTrending] All kiosks empty → falling back to search');
+  // Step 2: Get section_items for that section, ordered by display_order
+  const { data: sectionItems, error: itemsError } = await supabase
+    .from('section_items')
+    .select('track_id, display_order')
+    .eq('section_id', section.id)
+    .not('track_id', 'is', null)
+    .order('display_order', { ascending: true })
+    .limit(MAX_ITEMS);
 
-  // First try with 'video' filter (preferred)
-  for (const query of NIGERIA_SEARCH_QUERIES) {
-    try {
-      console.log(`🔎 Searching: "${query}"  (filter: video)`);
-      const result = await search(query, 'video', undefined, YOUTUBE_SERVICE_ID) as SearchPage;
-
-      if (result.success && result.results?.length > 0) {
-        items = result.results
-          .filter((it): it is StreamInfoItem => it.type === 'stream' && !it.isLive)
-          .map(toTrendingItem)
-          .filter((it): it is TrendingItem => !!it)
-          .slice(0, MAX_ITEMS);
-
-        if (items.length > 0) {
-          source = 'search';
-          console.log(`✅ Found ${items.length} items from "${query}"`);
-          return { items, source };
-        }
-      }
-    } catch (err: any) {
-      console.warn(`Search "${query}" (video) failed:`, err?.message || String(err));
-    }
+  if (itemsError) {
+    throw new Error(`Failed to fetch section items: ${itemsError.message}`);
   }
 
-  // Last resort: try broader 'all' filter on the first few queries
-  console.log('🔍 [useTrending] No results with "video" filter → trying broader "all" filter');
-  for (const query of NIGERIA_SEARCH_QUERIES.slice(0, 4)) {  // only first 4 to avoid too many calls
-    try {
-      console.log(`🔎 Searching (all): "${query}"`);
-      const result = await search(query, 'all', undefined, YOUTUBE_SERVICE_ID) as SearchPage;
-
-      if (result.success && result.results?.length > 0) {
-        items = result.results
-          .filter((it): it is StreamInfoItem => it.type === 'stream' && !it.isLive)
-          .map(toTrendingItem)
-          .filter((it): it is TrendingItem => !!it)
-          .slice(0, MAX_ITEMS);
-
-        if (items.length > 0) {
-          source = 'search_broad';
-          console.log(`✅ Found ${items.length} items from broad search "${query}"`);
-          return { items, source };
-        }
-      }
-    } catch (err: any) {
-      console.warn(`Broad search "${query}" failed:`, err?.message || String(err));
-    }
+  if (!sectionItems || sectionItems.length === 0) {
+    throw new Error('Trending section has no items');
   }
 
-  throw new Error('No trending music items could be retrieved (kiosks and all search attempts empty)');
+  const trackIds = sectionItems.map(si => si.track_id);
+
+  // Step 3: Fetch the songs for those track IDs
+  const { data: songs, error: songsError } = await supabase
+    .from('songs')
+    .select(`
+      id,
+      title,
+      artist,
+      artwork_url,
+      artwork_thumbnail,
+      video_id,
+      play_count,
+      duration,
+      popularity
+    `)
+    .in('id', trackIds);
+
+  if (songsError) {
+    throw new Error(`Failed to fetch songs: ${songsError.message}`);
+  }
+
+  if (!songs || songs.length === 0) {
+    throw new Error('No songs found for trending section');
+  }
+
+  // Step 4: Re-order songs to match section display_order
+  const songMap = new Map(songs.map(s => [s.id, s]));
+
+  const items: TrendingItem[] = sectionItems
+    .map(si => {
+      const song = songMap.get(si.track_id);
+      if (!song) return null;
+      return {
+        id: song.id,
+        videoId: song.video_id ?? '',
+        title: song.title ?? 'Unknown Title',
+        artist: song.artist ?? 'Unknown Artist',
+        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
+        duration: song.duration ?? 0,
+        views: song.play_count ?? 0,
+      };
+    })
+    .filter((item): item is TrendingItem => item !== null);
+
+  if (items.length === 0) {
+    throw new Error('Could not map any trending songs');
+  }
+
+  console.log(`✅ [useTrending] Loaded ${items.length} items from Supabase`);
+  return { items, source: 'supabase' };
 }
 
 // ─────────────────────────────────────────────
@@ -188,25 +143,27 @@ export const useTrending = (): UseTrendingResult => {
     setError(null);
 
     try {
+      // Layer 1: Check local cache first
       const cached = await cache.get(CACHE_KEY);
       if (cached?.items?.length > 0) {
         console.log('📦 [useTrending] Using cached data');
         setData(cached.items);
-        setSource(cached.source || 'cache');
+        setSource('cache');
         setLoading(false);
         return;
       }
 
-      const result = await fetchFromNewPipe();
+      // Layer 2: Fetch from Supabase
+      const result = await fetchFromSupabase();
 
-      const payload = { items: result.items, source: result.source };
-      await cache.set(CACHE_KEY, payload, CACHE_TTL_MS);
+      // Store in local cache
+      await cache.set(CACHE_KEY, { items: result.items, source: result.source }, CACHE_TTL_MS);
 
       setData(result.items);
       setSource(result.source);
     } catch (err: any) {
-      console.error('❌ [useTrending] Complete failure:', err);
-      setError(err.message || 'Could not load trending music — all sources returned empty');
+      console.error('❌ [useTrending] Failed:', err);
+      setError(err.message || 'Could not load trending music');
       setData([]);
       setSource(null);
     } finally {

@@ -1,0 +1,251 @@
+// filename: section_3_trending.json
+{
+  "section_name": "Trending",
+  "section_type": "music_video_carousel",
+  "playlist_info": {
+    "playlist_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+    "playlist_url": "https://music.youtube.com/playlist?list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM"
+  },
+  "items": [
+    {
+      "rank": 1,
+      "title": "Risk It All",
+      "creator": "Bruno Mars",
+      "creator_id": "UCZn4r7heNOPY-C43YIywnVA",
+      "creator_url": "https://music.youtube.com/channel/UCZn4r7heNOPY-C43YIywnVA",
+      "item_type": "Music Video",
+      "video_id": "lY5V4hSLWY8",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=lY5V4hSLWY8&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "29M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/lY5V4hSLWY8/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/lY5V4hSLWY8/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3nKsSL32yraRGI4EVmKuAeLq2fT8Q",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "title": "American Girls (Official Video)",
+      "creator": "Harry Styles",
+      "creator_id": "UCVacQ2t5GUZ2t_J3Ia9BynA",
+      "creator_url": "https://music.youtube.com/channel/UCVacQ2t5GUZ2t_J3Ia9BynA",
+      "item_type": "Music Video",
+      "video_id": "o6jQo3-iCao",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=o6jQo3-iCao&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "6.4M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/o6jQo3-iCao/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/o6jQo3-iCao/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3koY8BhA1Qd3dlUez9gYb_eB0ovkg",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "title": "LET 'EM KNOW",
+      "creator": "T.I.",
+      "creator_id": "UCwwHxdscieNH0dzWmOwnuqw",
+      "creator_url": "https://music.youtube.com/channel/UCwwHxdscieNH0dzWmOwnuqw",
+      "item_type": "Music Video",
+      "video_id": "mcg4z1gGbEw",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=mcg4z1gGbEw&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "3.8M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/mcg4z1gGbEw/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/mcg4z1gGbEw/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3nskgxoc6mXY8StGDjR7wSoF-UrJA",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "title": "Highly",
+      "creator": "YoungBoy Never Broke Again",
+      "creator_id": "UCR28YDxjDE3ogQROaNdnRbQ",
+      "creator_url": "https://music.youtube.com/channel/UCR28YDxjDE3ogQROaNdnRbQ",
+      "item_type": "Music Video",
+      "video_id": "k4ganUMRw6U",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=k4ganUMRw6U&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "2.1M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/k4ganUMRw6U/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/k4ganUMRw6U/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3kAf3JzcYv3k4NWrMjs-n_WwPAMzA",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "title": "GO",
+      "creator": "BLACKPINK",
+      "creator_id": "UCkbbMCA40i18i7UdjayMPAg",
+      "creator_url": "https://music.youtube.com/channel/UCkbbMCA40i18i7UdjayMPAg",
+      "item_type": "Music Video",
+      "video_id": "2GJfWMYCWY0",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=2GJfWMYCWY0&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "45M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/2GJfWMYCWY0/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/2GJfWMYCWY0/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3m5KIXK1N_1VVxwknNq2wf5HHqtxA",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "title": "Tweak",
+      "creator": "GIRLSET",
+      "creator_id": "UCHJn6i4MXz7DwAZp26CAo-w",
+      "creator_url": "https://music.youtube.com/channel/UCHJn6i4MXz7DwAZp26CAo-w",
+      "item_type": "Music Video",
+      "video_id": "xLNmyB1iCig",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=xLNmyB1iCig&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "8.1M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/xLNmyB1iCig/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/xLNmyB1iCig/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3najUod3RSmwZmvoxab79Tt_qFqUg",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "title": "We Don't Get Along (Official Video)",
+      "creator": "Juice WRLD",
+      "creator_id": "UCcYrJbkFKe5jH-d-xm-Ut_Q",
+      "creator_url": "https://music.youtube.com/channel/UCcYrJbkFKe5jH-d-xm-Ut_Q",
+      "item_type": "Music Video",
+      "video_id": "LW_BSEjgBss",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=LW_BSEjgBss&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "1.7M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/LW_BSEjgBss/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/LW_BSEjgBss/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3ltp7DqHu2wQFtSoNKrpxOGkjd4rA",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 8,
+      "title": "Good Flirts (feat. Kendrick Lamar & Momo Boyd)",
+      "creator": "Baby Keem",
+      "creator_id": "UCtWW-fcdt2gOE6mGHf-_dlw",
+      "creator_url": "https://music.youtube.com/channel/UCtWW-fcdt2gOE6mGHf-_dlw",
+      "item_type": "Music Video",
+      "video_id": "N8bI6FYLqgc",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=N8bI6FYLqgc&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "1.2M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/N8bI6FYLqgc/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/N8bI6FYLqgc/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3kkGTeDeL0UozTNdHqBUVnPzXvdIg",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 9,
+      "title": "Berghain (Live) (feat. Björk)",
+      "creator": "ROSALÍA",
+      "creator_id": "UCeYz6rzUGhVwqxRM37FUo8w",
+      "creator_url": "https://music.youtube.com/channel/UCeYz6rzUGhVwqxRM37FUo8w",
+      "item_type": "Music Video",
+      "video_id": "7fyufPkXLbs",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=7fyufPkXLbs&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "8.3M views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/7fyufPkXLbs/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/7fyufPkXLbs/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mvvBh9TEF2cORpkvqMV_vr4Sx_mg",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    },
+    {
+      "rank": 10,
+      "title": "No More Tricks, No More Tries (feat. Max B)",
+      "creator": "50 Cent",
+      "creator_id": "UCOcnYBwT1jb6EHlS0cwhNkA",
+      "creator_url": "https://music.youtube.com/channel/UCOcnYBwT1jb6EHlS0cwhNkA",
+      "item_type": "Music Video",
+      "video_id": "XqSFycfUtMw",
+      "item_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "url": "https://music.youtube.com/watch?v=XqSFycfUtMw&list=OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "views": "482K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/XqSFycfUtMw/sddefault.jpg",
+        "width": 400,
+        "height": 225
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/XqSFycfUtMw/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mLWGfPseejIaZXnBdnOrUeS6ZgJA",
+          "width": 400,
+          "height": 225
+        }
+      ]
+    }
+  ]
+}

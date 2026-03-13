@@ -1,0 +1,349 @@
+// filename: section_5_moods_and_genres.json
+{
+  "section_name": "Moods & genres",
+  "section_type": "navigation_buttons",
+  "items": [
+    {
+      "category": "Mood",
+      "title": "Chill",
+      "left_stripe_color": "#a4c5ff",
+      "color_rgba": "rgba(164,197,255,1.000)",
+      "params": "n_RNAfEx0rsbf",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_RNAfEx0rsbf"
+    },
+    {
+      "category": "Mood",
+      "title": "Commute",
+      "left_stripe_color": "#ffc200",
+      "color_rgba": "rgba(255,194,0,1.000)",
+      "params": "n_O8gj9XDKrJT",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_O8gj9XDKrJT"
+    },
+    {
+      "category": "Mood",
+      "title": "Energize",
+      "left_stripe_color": "#ffe780",
+      "color_rgba": "rgba(255,231,128,1.000)",
+      "params": "n_iQeFf2skBrV",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_iQeFf2skBrV"
+    },
+    {
+      "category": "Mood",
+      "title": "Feel good",
+      "left_stripe_color": "#a4ffa4",
+      "color_rgba": "rgba(164,255,164,1.000)",
+      "params": "n_6Pl0y8yKE47",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_6Pl0y8yKE47"
+    },
+    {
+      "category": "Mood",
+      "title": "Focus",
+      "left_stripe_color": "#cccccc",
+      "color_rgba": "rgba(204,204,204,1.000)",
+      "params": "n_Co4caY8Lada",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_Co4caY8Lada"
+    },
+    {
+      "category": "Mood",
+      "title": "Gaming",
+      "left_stripe_color": "#606060",
+      "color_rgba": "rgba(96,96,96,1.000)",
+      "params": "n_sfQUxV9wXd4",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_sfQUxV9wXd4"
+    },
+    {
+      "category": "Mood",
+      "title": "Party",
+      "left_stripe_color": "#b47bff",
+      "color_rgba": "rgba(180,123,255,1.000)",
+      "params": "n_l5imBD1SIC",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_l5imBD1SIC"
+    },
+    {
+      "category": "Mood",
+      "title": "Romance",
+      "left_stripe_color": "#cc0000",
+      "color_rgba": "rgba(204,0,0,1.000)",
+      "params": "n_RBBpvAuXTB3",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_RBBpvAuXTB3"
+    },
+    {
+      "category": "Mood",
+      "title": "Sad",
+      "left_stripe_color": "#8c8c8c",
+      "color_rgba": "rgba(140,140,140,1.000)",
+      "params": "n_sHI8xRkVpX3",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_sHI8xRkVpX3"
+    },
+    {
+      "category": "Mood",
+      "title": "Sleep",
+      "left_stripe_color": "#7b3edb",
+      "color_rgba": "rgba(123,62,219,1.000)",
+      "params": "n_S1hT7gBLfCx",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_S1hT7gBLfCx"
+    },
+    {
+      "category": "Mood",
+      "title": "Workout",
+      "left_stripe_color": "#ff8d40",
+      "color_rgba": "rgba(255,141,64,1.000)",
+      "params": "n_21bCacmXgft",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_21bCacmXgft"
+    },
+    {
+      "category": "Genre",
+      "title": "African",
+      "left_stripe_color": "#00a513",
+      "color_rgba": "rgba(0,165,19,1.000)",
+      "params": "n_E3XleDNc05d",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_E3XleDNc05d"
+    },
+    {
+      "category": "Genre",
+      "title": "Arabic",
+      "left_stripe_color": "#e24b00",
+      "color_rgba": "rgba(226,75,0,1.000)",
+      "params": "n_uNAllnUYLSD",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_uNAllnUYLSD"
+    },
+    {
+      "category": "Genre",
+      "title": "Blues",
+      "left_stripe_color": "#337dff",
+      "color_rgba": "rgba(51,125,255,1.000)",
+      "params": "n_cWSRg1um3Pri",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_cWSRg1um3Pri"
+    },
+    {
+      "category": "Genre",
+      "title": "Bollywood & Indian",
+      "left_stripe_color": "#7b3edb",
+      "color_rgba": "rgba(123,62,219,1.000)",
+      "params": "n_hZq4I9NJKrwC",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_hZq4I9NJKrwC"
+    },
+    {
+      "category": "Genre",
+      "title": "Brazilian",
+      "left_stripe_color": "#ffe780",
+      "color_rgba": "rgba(255,231,128,1.000)",
+      "params": "n_ufocWbGKHpsT",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_ufocWbGKHpsT"
+    },
+    {
+      "category": "Genre",
+      "title": "Christian & gospel",
+      "left_stripe_color": "#4deeff",
+      "color_rgba": "rgba(77,238,255,1.000)",
+      "params": "n_q5VzRDhxKTIG",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_q5VzRDhxKTIG"
+    },
+    {
+      "category": "Genre",
+      "title": "Classical",
+      "left_stripe_color": "#cccccc",
+      "color_rgba": "rgba(204,204,204,1.000)",
+      "params": "n_SxVgnNngTDwf",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_SxVgnNngTDwf"
+    },
+    {
+      "category": "Genre",
+      "title": "Country & Americana",
+      "left_stripe_color": "#337dff",
+      "color_rgba": "rgba(51,125,255,1.000)",
+      "params": "n_TWpFlydJR1oW",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_TWpFlydJR1oW"
+    },
+    {
+      "category": "Genre",
+      "title": "Dance & electronic",
+      "left_stripe_color": "#0092bf",
+      "color_rgba": "rgba(0,146,191,1.000)",
+      "params": "n_SONLwSD3wXk8",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_SONLwSD3wXk8"
+    },
+    {
+      "category": "Genre",
+      "title": "Decades",
+      "left_stripe_color": "#a4ffa4",
+      "color_rgba": "rgba(164,255,164,1.000)",
+      "params": "n_scfYl4eD2Fh",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_scfYl4eD2Fh"
+    },
+    {
+      "category": "Genre",
+      "title": "Family",
+      "left_stripe_color": "#0092bf",
+      "color_rgba": "rgba(0,146,191,1.000)",
+      "params": "n_32crvHc4mXy",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_32crvHc4mXy"
+    },
+    {
+      "category": "Genre",
+      "title": "Folk & acoustic",
+      "left_stripe_color": "#00a513",
+      "color_rgba": "rgba(0,165,19,1.000)",
+      "params": "n_0SDFpQCsx0Dz",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_0SDFpQCsx0Dz"
+    },
+    {
+      "category": "Genre",
+      "title": "Hip-hop",
+      "left_stripe_color": "#e24b00",
+      "color_rgba": "rgba(226,75,0,1.000)",
+      "params": "n_MsVU0pVWcpB1",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_MsVU0pVWcpB1"
+    },
+    {
+      "category": "Genre",
+      "title": "Indie & alternative",
+      "left_stripe_color": "#cccccc",
+      "color_rgba": "rgba(204,204,204,1.000)",
+      "params": "n_mMWYjBamU5H82",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_mMWYjBamU5H82"
+    },
+    {
+      "category": "Genre",
+      "title": "J-Pop",
+      "left_stripe_color": "#ff78ff",
+      "color_rgba": "rgba(255,120,255,1.000)",
+      "params": "n_00J5HL0YrcJR",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_00J5HL0YrcJR"
+    },
+    {
+      "category": "Genre",
+      "title": "Jazz",
+      "left_stripe_color": "#a4c5ff",
+      "color_rgba": "rgba(164,197,255,1.000)",
+      "params": "n_yOPp1qEhOp1PR",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_yOPp1qEhOp1PR"
+    },
+    {
+      "category": "Genre",
+      "title": "K-Pop",
+      "left_stripe_color": "#b47bff",
+      "color_rgba": "rgba(180,123,255,1.000)",
+      "params": "n_BkjnB0C8OOKz2V",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_BkjnB0C8OOKz2V"
+    },
+    {
+      "category": "Genre",
+      "title": "Latin",
+      "left_stripe_color": "#ffc200",
+      "color_rgba": "rgba(255,194,0,1.000)",
+      "params": "n_opWY4j0u1uuc5",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_opWY4j0u1uuc5"
+    },
+    {
+      "category": "Genre",
+      "title": "Mandopop & cantopop",
+      "left_stripe_color": "#ff8983",
+      "color_rgba": "rgba(255,137,131,1.000)",
+      "params": "n_hWUQd0pCST5yE",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_hWUQd0pCST5yE"
+    },
+    {
+      "category": "Genre",
+      "title": "Metal",
+      "left_stripe_color": "#8c8c8c",
+      "color_rgba": "rgba(140,140,140,1.000)",
+      "params": "n_7eIxKJg0hLVZ4",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_7eIxKJg0hLVZ4"
+    },
+    {
+      "category": "Genre",
+      "title": "OPM",
+      "left_stripe_color": "#ffc200",
+      "color_rgba": "rgba(255,194,0,1.000)",
+      "params": "n_bRcPlyLGr4xjy",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_bRcPlyLGr4xjy"
+    },
+    {
+      "category": "Genre",
+      "title": "Pop",
+      "left_stripe_color": "#ff78ff",
+      "color_rgba": "rgba(255,120,255,1.000)",
+      "params": "n_PfN772vj0tar5",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_PfN772vj0tar5"
+    },
+    {
+      "category": "Genre",
+      "title": "R&B & soul",
+      "left_stripe_color": "#7b3edb",
+      "color_rgba": "rgba(123,62,219,1.000)",
+      "params": "n_bqQhCqcsb5yPXQ",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_bqQhCqcsb5yPXQ"
+    },
+    {
+      "category": "Genre",
+      "title": "Reggae & caribbean",
+      "left_stripe_color": "#ffe780",
+      "color_rgba": "rgba(255,231,128,1.000)",
+      "params": "n_RTlsIqFp1nuQK",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_RTlsIqFp1nuQK"
+    },
+    {
+      "category": "Genre",
+      "title": "Rock",
+      "left_stripe_color": "#cc0000",
+      "color_rgba": "rgba(204,0,0,1.000)",
+      "params": "n_2JKNncjPFSy9n",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_2JKNncjPFSy9n"
+    },
+    {
+      "category": "Genre",
+      "title": "Songwriters & producers",
+      "left_stripe_color": "#ff8d40",
+      "color_rgba": "rgba(255,141,64,1.000)",
+      "params": "n_G2znsv2nVadupBC",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_G2znsv2nVadupBC"
+    },
+    {
+      "category": "Genre",
+      "title": "Soundtracks & musicals",
+      "left_stripe_color": "#4deeff",
+      "color_rgba": "rgba(77,238,255,1.000)",
+      "params": "n_kVezp1lRm9p5sQ",
+      "browse_id": "FEmusic_moods_and_genres_category",
+      "url": "https://music.youtube.com/browse/FEmusic_moods_and_genres_category?params=n_kVezp1lRm9p5sQ"
+    }
+  ]
+}

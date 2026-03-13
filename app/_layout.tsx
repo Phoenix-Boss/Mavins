@@ -2,27 +2,18 @@
 
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import {
-  Stack,
-  useSegments,
-  useRootNavigationState,
-} from "expo-router";
+import { Stack, useSegments, useRootNavigationState } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
-import {
-  configureReanimatedLogger,
-  ReanimatedLogLevel,
-} from "react-native-reanimated";
+import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import {
-  SafeAreaProvider,
-  initialWindowMetrics,
-} from "react-native-safe-area-context";
+import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
 import TrackPlayer from "react-native-track-player";
 import { StatusBar, View, ActivityIndicator } from "react-native";
 import { Provider } from "react-redux";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 
+// ── Internal ──────────────────────────────────────────────────────────────────
 import { store, initializeLibrary } from "@/store/library";
 import { playbackService } from "@/constants/playbackService";
 import { MusicPlayerProvider } from "@/components/MusicPlayerContext";
@@ -32,31 +23,32 @@ import FloatingPlayer from "@/components/FloatingPlayer";
 import { UpdateModal } from "@/components/UpdateModal";
 import { MessageModal } from "@/components/MessageModal";
 
+// ── Mavin libs ────────────────────────────────────────────────────────────────
+import { queryClient } from "@/libs/supabase";   // ✅ singleton, not inline
+import { initCache } from "@/libs/cache";         // ✅ initialise cache on boot
+
+// ─────────────────────────────────────────────
+// App bootstrap (runs once outside component tree)
+// ─────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
 TrackPlayer.registerPlaybackService(() => playbackService);
+configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
+initCache({ startBackgroundJobs: true }); // ✅ boot cache system + background jobs
 
-configureReanimatedLogger({
-  level: ReanimatedLogLevel.warn,
-  strict: false,
-});
-
-const queryClient = new QueryClient();
-
+// ─────────────────────────────────────────────
+// Loading screen
+// ─────────────────────────────────────────────
 function LoadingScreen() {
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "#000",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
+    <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
       <ActivityIndicator size="large" color="#D4AF37" />
     </View>
   );
 }
 
+// ─────────────────────────────────────────────
+// Root layout
+// ─────────────────────────────────────────────
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
@@ -66,10 +58,9 @@ export default function RootLayout() {
   const [libraryReady, setLibraryReady] = useState(false);
   const navigationState = useRootNavigationState();
   const segments = useSegments();
-
   const isPlayerScreen = segments.includes("(player)");
 
-  // Initialize app library (NO NAVIGATION HERE)
+  // Initialise app library (no navigation side effects here)
   useEffect(() => {
     async function prepare() {
       try {
@@ -80,22 +71,20 @@ export default function RootLayout() {
         setLibraryReady(true);
       }
     }
-
     prepare();
   }, []);
 
-  // Hide splash only after everything AND navigation mounted
+  // Hide splash only after fonts, library, and navigation are all ready
   useEffect(() => {
     if (fontsLoaded && libraryReady && navigationState?.key) {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, libraryReady, navigationState]);
 
-  // IMPORTANT:
-  // We ALWAYS render Stack on first render.
-  // We do NOT block it.
   return (
+    // ── Server state (TanStack Query) ───────────────────────────────────────
     <QueryClientProvider client={queryClient}>
+      {/* ── Local/UI state (Redux) ──────────────────────────────────────── */}
       <Provider store={store}>
         <MusicPlayerProvider>
           <LyricsProvider>
@@ -110,7 +99,7 @@ export default function RootLayout() {
                     />
 
                     <View style={{ flex: 1, backgroundColor: "#000" }}>
-                      {/* Navigator MUST mount immediately */}
+                      {/* Navigator must mount immediately — never gate it */}
                       <Stack
                         screenOptions={{
                           headerShown: false,
@@ -123,9 +112,7 @@ export default function RootLayout() {
                           options={{
                             presentation: "transparentModal",
                             animation: "slide_from_bottom",
-                            contentStyle: {
-                              backgroundColor: "transparent",
-                            },
+                            contentStyle: { backgroundColor: "transparent" },
                           }}
                         />
                         <Stack.Screen name="(modals)/addToPlaylist" />
@@ -154,7 +141,7 @@ export default function RootLayout() {
                         </View>
                       )}
 
-                      {/* Optional loading overlay */}
+                      {/* Loading overlay — shown until fonts + library ready */}
                       {(!fontsLoaded || !libraryReady) && <LoadingScreen />}
                     </View>
 

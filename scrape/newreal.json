@@ -1,0 +1,277 @@
+// filename: section_4_new_music_videos.json
+{
+  "section_name": "New music videos",
+  "section_type": "music_video_carousel",
+  "items": [
+    {
+      "title": "Моя любовь",
+      "creator": "Маша Космач",
+      "creator_id": "UCpQB9rv4_Eejn20s9ITAImw",
+      "creator_url": "https://music.youtube.com/channel/UCpQB9rv4_Eejn20s9ITAImw",
+      "item_type": "Music Video",
+      "video_id": "TSgXOaW8VEI",
+      "url": "https://music.youtube.com/watch?v=TSgXOaW8VEI",
+      "views": "22K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/TSgXOaW8VEI/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/TSgXOaW8VEI/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mcnS6JVEFQjaGFTcSEf8oaHNSpeg",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/TSgXOaW8VEI/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3nKt32YLjM-_9oZyC-z0m_THy9GyA",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Perdóname - El Pereño de Oaxaca ft Luis Gonzales [Video Oficial 2026]",
+      "creator": "El PEREÑO DE OAXACA FT LUIS GONZÁLEZ",
+      "creator_id": "UCOGLGAmwDTXmrm9NW_Zfh4w",
+      "creator_url": "https://music.youtube.com/channel/UCOGLGAmwDTXmrm9NW_Zfh4w",
+      "item_type": "Music Video",
+      "video_id": "VytngTVZ4I8",
+      "url": "https://music.youtube.com/watch?v=VytngTVZ4I8",
+      "views": "15K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/VytngTVZ4I8/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/VytngTVZ4I8/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mf5-TrTfvy9zb298USLEzdM_XZ0w",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/VytngTVZ4I8/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3lEmSxuEyOZWsDEyBmkQA1Vs9qBQg",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Me Voy",
+      "creator": "Dj Chawala & Mc Car",
+      "creator_id": "UCcJNkvVrseEJciben9uq7og",
+      "creator_url": "https://music.youtube.com/channel/UCcJNkvVrseEJciben9uq7og",
+      "item_type": "Music Video",
+      "video_id": "ETIOvOZONJ0",
+      "url": "https://music.youtube.com/watch?v=ETIOvOZONJ0",
+      "views": "42K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/ETIOvOZONJ0/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/ETIOvOZONJ0/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3l9VDZ175osSmsMUm_Ebi9oMQBWuQ",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/ETIOvOZONJ0/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3kii0yzsdcUBJo6sCIWANs0WXuW5g",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "AWANTA - FUFU (OFFICIAL MUSIC VIDEO)",
+      "creator": "FUFU",
+      "creator_id": "UCfjMFqJrwF8FBN5TecK5Z1w",
+      "creator_url": "https://music.youtube.com/channel/UCfjMFqJrwF8FBN5TecK5Z1w",
+      "item_type": "Music Video",
+      "video_id": "3dZjZiHPfNM",
+      "url": "https://music.youtube.com/watch?v=3dZjZiHPfNM",
+      "views": "33K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/3dZjZiHPfNM/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/3dZjZiHPfNM/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mY4f5HEObbSRSwZzz5b5H5QKKK6A",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/3dZjZiHPfNM/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3mkhshK8WiW_lZ5q2qEUHNwidrBDQ",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Sara Saal Pive",
+      "creator": "Ms Verma",
+      "creator_id": "UC-UuFklXmD6fTZzjYXq-tCg",
+      "creator_url": "https://music.youtube.com/channel/UC-UuFklXmD6fTZzjYXq-tCg",
+      "item_type": "Music Video",
+      "video_id": "efBPxAslO4w",
+      "url": "https://music.youtube.com/watch?v=efBPxAslO4w",
+      "views": "39K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/efBPxAslO4w/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/efBPxAslO4w/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mG20NZ32QXEBRMe8GsiNS4hRMvJA",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/efBPxAslO4w/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3kjD_LaCoRuIgZ2IRi4xGDUxb8yQQ",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Tu infame engaño - Aldo Mormend",
+      "creator": "Aldo Mormend",
+      "creator_id": "UCY9QUDve-zGmZqCfjYiI61w",
+      "creator_url": "https://music.youtube.com/channel/UCY9QUDve-zGmZqCfjYiI61w",
+      "item_type": "Music Video",
+      "video_id": "LZI3sdhHQCI",
+      "url": "https://music.youtube.com/watch?v=LZI3sdhHQCI",
+      "views": "11K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/LZI3sdhHQCI/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/LZI3sdhHQCI/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3kvezcVwNM4LpP-kkdGLw64saZXfg",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/LZI3sdhHQCI/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3l9tO1L3-nPj4gjJrLhXHDt0hcGKw",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Ajay Basendua - Aakhari Raat (आवे से याद तेरी) New Haryanvi Sad Song - Aman Matloda",
+      "creator": "Ajay Basendua & Narendra Jogi",
+      "creator_id": "UCXslcauy79mT-lo4Buw_mAw",
+      "creator_url": "https://music.youtube.com/channel/UCXslcauy79mT-lo4Buw_mAw",
+      "item_type": "Music Video",
+      "video_id": "7ChMIdp38Jk",
+      "url": "https://music.youtube.com/watch?v=7ChMIdp38Jk",
+      "views": "19K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/7ChMIdp38Jk/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/7ChMIdp38Jk/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3lTReE1eqtQOm8eiqCBUqaA6ojgbg",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/7ChMIdp38Jk/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3n0ovZdadtSh4f-kDxZg3MH5J2JGQ",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Dónde Estarás",
+      "creator": "Los Embajadores Vallenatos",
+      "creator_id": "UCOJN1EMzSzKoa28Df-rqGzw",
+      "creator_url": "https://music.youtube.com/channel/UCOJN1EMzSzKoa28Df-rqGzw",
+      "item_type": "Music Video",
+      "video_id": "xZxTtb0mqWg",
+      "url": "https://music.youtube.com/watch?v=xZxTtb0mqWg",
+      "views": "61K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/xZxTtb0mqWg/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/xZxTtb0mqWg/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mokZoPMcIRVzGX3N36Ss2i_Zn_7w",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/xZxTtb0mqWg/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3n_g13P1x8XLgRs-WBxHGJEQMSIaw",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Thaai Manasu",
+      "creator": "Malaysia Vasudevan",
+      "creator_id": "UCTRvHuvF7cmqDA9tTALhdBg",
+      "creator_url": "https://music.youtube.com/channel/UCTRvHuvF7cmqDA9tTALhdBg",
+      "item_type": "Music Video",
+      "video_id": "T8f8SrC1rFE",
+      "url": "https://music.youtube.com/watch?v=T8f8SrC1rFE",
+      "views": "22K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/T8f8SrC1rFE/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/T8f8SrC1rFE/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3mrpKQMP1NrPf0LqouWuT-v6LY2Sw",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/T8f8SrC1rFE/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3ncuEC1A8lgE4Xx6lMQiqPALR2UcA",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    },
+    {
+      "title": "Traviezoz De La Zierra -Y Nosotros Que?(Visualizer)TDLZRecords",
+      "creator": "Traviezoz De La Zierra",
+      "creator_id": "UCtBB3ngJTSH1HWIQkt_2uSw",
+      "creator_url": "https://music.youtube.com/channel/UCtBB3ngJTSH1HWIQkt_2uSw",
+      "item_type": "Music Video",
+      "video_id": "Eps_CwHqXKE",
+      "url": "https://music.youtube.com/watch?v=Eps_CwHqXKE",
+      "views": "13K views",
+      "thumbnail": {
+        "url": "https://i.ytimg.com/vi/Eps_CwHqXKE/hq720.jpg",
+        "width": 1280,
+        "height": 720
+      },
+      "thumbnails": [
+        {
+          "url": "https://i.ytimg.com/vi/Eps_CwHqXKE/sddefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3ngVwfj0CKbzuTK5F27po6lDtx3dw",
+          "width": 400,
+          "height": 225
+        },
+        {
+          "url": "https://i.ytimg.com/vi/Eps_CwHqXKE/hq720.jpg?sqp=-oaymwEXCKAGEMIDIAQqCwjVARCqCBh4INgESFo&rs=AMzJL3kkvDB0Z09KYZ0ijyoSjP7Q92tYUQ",
+          "width": 800,
+          "height": 450
+        }
+      ]
+    }
+  ]
+}

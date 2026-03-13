@@ -1,0 +1,1132 @@
+{
+  "metadata": {
+    "source": "YouTube Music Charts",
+    "scrape_date": "2026-03-10",
+    "timezone": "America/New_York",
+    "total_artists": 40,
+    "total_songs": 100,
+    "total_video_charts": 11,
+    "total_genre_charts": 9
+  },
+  
+  "charts_overview": {
+    "country": "United States",
+    "date_range": "Feb 27 - Mar 5, 2026",
+    "description": "The week's most popular songs on YouTube.",
+    "playlist_url": "https://www.youtube.com/playlist?list=PL4fGSI1pDJn6O1LS0XSdF3RyO0Rq_LDeI"
+  },
+  
+  "video_charts": [
+    {
+      "id": "trending_20",
+      "title": "Trending 20 United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/DMMy6Fm_dmeXYH27Ygq5Fjiv7tQVU1GI56RXh731xsB-GKIeXvVWM7nYOo9v6F9KOeAdv8dslJM=s576",
+      "playlist_id": "OLAK5uy_kNWGJvgWVqlt5LsFDL9Sdluly4M8TvGkM",
+      "category": "trending"
+    },
+    {
+      "id": "daily_top_videos",
+      "title": "Daily Top Music Videos - United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/upj9HeqNN74Kym8Y15ZSnYFJESoVqc3z7y2QC2RVdSOWTP9xISVcB0wiC0nfucO7QMMmGJc2GQ=s576",
+      "playlist_id": "PL4fGSI1pDJn61unMfmrUSz68RT8IFFnks",
+      "category": "daily"
+    },
+    {
+      "id": "top_100_videos",
+      "title": "Top 100 Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/CBNG2QwH42Hs6hMGEvVFQcSb8SyocKzyj_b-VL2hA1vKw1kTasygxU33K4V4GIAjVV-zX4QEIKU=s576",
+      "playlist_id": "PL4fGSI1pDJn69On1f-8NAvX_CYlx7QyZc",
+      "category": "top_100"
+    }
+  ],
+  
+  "genre_charts": [
+    {
+      "id": "hard_rock_metal",
+      "title": "Top 50 Hard Rock & Metal Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/mygMj175ENkZkjgK398xSQDV12XM12pQ8dyEFxf1aFDtPDNyw1snwwsLgVC55O59xLmMcLfOaZ8=s576",
+      "playlist_id": "PL4fGSI1pDJn4w4wTTgOmP_S80PoCtbGrL",
+      "genre": "Hard Rock & Metal"
+    },
+    {
+      "id": "rock",
+      "title": "Top 50 Rock Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/wAEpK2ukIveIwZsTrLhqsUXUZ5bgmAEFuyM_ZBxIoKNPQUrjY4s8GkbDB8ztr1JjFIPSnRGfHka3=s576",
+      "playlist_id": "PL4fGSI1pDJn5LOptOQixqnzXNGjNXAgYY",
+      "genre": "Rock"
+    },
+    {
+      "id": "jazz",
+      "title": "Top 50 Jazz Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/f2p16jbncMpPEfvM0TRKBxrJTi6uU2uLTaNhH2wsgWgKCjk6uYuweo5cqhWcTqoAzkdg7LEYxA=s576",
+      "playlist_id": "PL4fGSI1pDJn7Wkr6Ll6ds1AhA42rT8uaU",
+      "genre": "Jazz"
+    },
+    {
+      "id": "country_americana",
+      "title": "Top 50 Country & Americana Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/b41RjXE7y3m8GG0x5F5AxE0Dcdu0G9e_R0lFq_HuPublG8anPGwtpJ9oDiNU-pK1S-1LIDfsf70=s576",
+      "playlist_id": "PL4fGSI1pDJn4EBsWVeFpcSAVOFMfhyipg",
+      "genre": "Country & Americana"
+    },
+    {
+      "id": "pop",
+      "title": "Top 50 Pop Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/xxtcBNVfTb2oUWjDwNIO6EwVRjrvFAxiXvHHjxYBJ_f8EiOy0L3njk3Fx2n4cU8RrGm_4uyW5dQ=s576",
+      "playlist_id": "PL4fGSI1pDJn77aK7sAW2AT0oOzo5inWY8",
+      "genre": "Pop"
+    },
+    {
+      "id": "dance_electronic",
+      "title": "Top 50 Dance & Electronic Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/Vto1cLKQXgIP8LN0i6_J9V7L8hPj34798FGWxJy4TGbVHPi0qa52dMtsgborFkJkoxoSNRr0s7w=s576",
+      "playlist_id": "PL4fGSI1pDJn4rBU0RHnR6-b1_uE20CzRH",
+      "genre": "Dance & Electronic"
+    },
+    {
+      "id": "hip_hop",
+      "title": "Top 50 Hip Hop Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/-",
+      "playlist_id": "PL4fGSI1pDJn4fmCoF1vKHLtivI0f9yHiF",
+      "genre": "Hip Hop"
+    },
+    {
+      "id": "latin",
+      "title": "Top 50 Latin Music Videos United States",
+      "type": "Chart",
+      "provider": "YouTube Music",
+      "thumbnail_url": "https://yt3.googleusercontent.com/-",
+      "playlist_id": "PL4fGSI1pDJn5O8siDeZuI_4hbk6JWtTX1",
+      "genre": "Latin"
+    }
+  ],
+  
+  "top_artists": [
+    {
+      "rank": 1,
+      "name": "YoungBoy Never Broke Again",
+      "subscribers": "15.4M",
+      "subscriber_count": 15400000,
+      "trend": "stable",
+      "channel_id": "UCR28YDxjDE3ogQROaNdnRbQ",
+      "channel_url": "https://www.youtube.com/channel/UCR28YDxjDE3ogQROaNdnRbQ",
+      "thumbnail_url": "https://lh3.googleusercontent.com/a-/ALV-UjVXCSd-Md3l3PQ8x4y72OhlOwwAL69r8VztLf8G61NQ_3xT2kA=w60-h60-l90-rj"
+    },
+    {
+      "rank": 2,
+      "name": "Bad Bunny",
+      "subscribers": "52.4M",
+      "subscriber_count": 52400000,
+      "trend": "stable",
+      "channel_id": "UCiY3z8HAGD6BlSNKVn2kSvQ",
+      "channel_url": "https://www.youtube.com/channel/UCiY3z8HAGD6BlSNKVn2kSvQ",
+      "thumbnail_url": "https://yt3.googleusercontent.com/ploU_4iWpDoJlX3FOlwwd_yQcex0I8A0_665lePXAEBbNp1zn5g42eNwg5Q7lvYc2mG2--UNIYcIhww=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 3,
+      "name": "Bruno Mars",
+      "subscribers": "43.1M",
+      "subscriber_count": 43100000,
+      "trend": "up",
+      "channel_id": "UCZn4r7heNOPY-C43YIywnVA",
+      "channel_url": "https://www.youtube.com/channel/UCZn4r7heNOPY-C43YIywnVA",
+      "thumbnail_url": "https://lh3.googleusercontent.com/hnefGBrazRhn4Z92bdSZBUENl40ONjRiVDsmZKZh-WZ2iCKE-2c7KKR7SNcZfzLHoRyB3E6as8L87YA=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 4,
+      "name": "Peso Pluma",
+      "subscribers": "9.01M",
+      "subscriber_count": 9010000,
+      "trend": "up",
+      "channel_id": "UCzmabbKsmXlWnI9N2kKQ4lA",
+      "channel_url": "https://www.youtube.com/channel/UCzmabbKsmXlWnI9N2kKQ4lA",
+      "thumbnail_url": "https://lh3.googleusercontent.com/d-rWQKHFbROoZbnokNjzMzQieVXaJQuqt00AADzJeMQvBnGIs88UpzcQ3nXR1__AsFwsQLciMNjWHIg=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 5,
+      "name": "Fuerza Regida",
+      "subscribers": "6.48M",
+      "subscriber_count": 6480000,
+      "trend": "down",
+      "channel_id": "UC0kxNxFQCK6d2spPz5Sme7Q",
+      "channel_url": "https://www.youtube.com/channel/UC0kxNxFQCK6d2spPz5Sme7Q",
+      "thumbnail_url": "https://yt3.googleusercontent.com/4QbqL6DTQ03X8IzE_EINEeVrJ7kbmKkup2f5GrEeThDiCdbN9eDynKPXTynHMDwhhXKv4Le1I91DGQ=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 6,
+      "name": "Drake",
+      "subscribers": "31.9M",
+      "subscriber_count": 31900000,
+      "trend": "down",
+      "channel_id": "UCU6cE7pdJPc6DU2jSrKEsdQ",
+      "channel_url": "https://www.youtube.com/channel/UCU6cE7pdJPc6DU2jSrKEsdQ",
+      "thumbnail_url": "https://yt3.googleusercontent.com/MxNjcRJ-uK4Xvx7u90IhEFLQM8x9LIGTA9VCKHq5U4Wn2jOgiWaMtg-qz329SIzqnCyhdCCB3MpdAGs=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 7,
+      "name": "Morgan Wallen",
+      "subscribers": "3.97M",
+      "subscriber_count": 3970000,
+      "trend": "down",
+      "channel_id": "UC5xaQ6_dP7EGDmGLzVGZ1Ow",
+      "channel_url": "https://www.youtube.com/channel/UC5xaQ6_dP7EGDmGLzVGZ1Ow",
+      "thumbnail_url": "https://lh3.googleusercontent.com/EKkodJV5WgUeLe9WhbabmIHyg_GXr1hnHPSfpmiCIi051e370DunG-5D7aWwGtaPcG8U1FYWa5Gfuxfs=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 8,
+      "name": "Future",
+      "subscribers": "14.9M",
+      "subscriber_count": 14900000,
+      "trend": "down",
+      "channel_id": "UC1_liDR4fRFJgH4HoJeV8cw",
+      "channel_url": "https://www.youtube.com/channel/UC1_liDR4fRFJgH4HoJeV8cw",
+      "thumbnail_url": "https://lh3.googleusercontent.com/mYms4RlnaMEGUv9PZPABHHrNUuzjNDK9ftVeBEQY1vMQayirfQlJQHevpUwfZcL8lDwM5yQphtpBAQ=w60-h60-l90-rj"
+    },
+    {
+      "rank": 9,
+      "name": "Rod Wave",
+      "subscribers": "7.1M",
+      "subscriber_count": 7100000,
+      "trend": "down",
+      "channel_id": "UChWPNW87QHcXAsw2mzlsYNw",
+      "channel_url": "https://www.youtube.com/channel/UChWPNW87QHcXAsw2mzlsYNw",
+      "thumbnail_url": "https://lh3.googleusercontent.com/oKSsf4Erut3zr7ITePkU16st8MNBXxMO-mp_NbGGGzotVguyo7teTV8xz5nMF1yXj9uApHKB3MPHQ1M=w60-h60-l90-rj"
+    },
+    {
+      "rank": 10,
+      "name": "Lil Baby",
+      "subscribers": "10.3M",
+      "subscriber_count": 10300000,
+      "trend": "stable",
+      "channel_id": "UC_z9AthnCGSAk_tZf-KqoFA",
+      "channel_url": "https://www.youtube.com/channel/UC_z9AthnCGSAk_tZf-KqoFA",
+      "thumbnail_url": "https://yt3.googleusercontent.com/rMlQJqH8LlSv44stkYH5No003OBuKHy3Innpr-BYpmbmFiacYnOPPmI8DA-PnI6Hxbck6z4QpfuQhUNw=w60-h60-l90-rj"
+    },
+    {
+      "rank": 11,
+      "name": "Kevin Gates",
+      "subscribers": "9.15M",
+      "subscriber_count": 9150000,
+      "trend": "stable",
+      "channel_id": "UCOUlVCyTJqvT9AHeUlbK03w",
+      "channel_url": "https://www.youtube.com/channel/UCOUlVCyTJqvT9AHeUlbK03w",
+      "thumbnail_url": "https://lh3.googleusercontent.com/QTYtxxrCjCQkoBJT4YG-RL-jUk3zw2EIY4LCQkgqdFRAexs1MEfgxjTT-9wrXsFSxMJK0n7GIkQWTfly=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 12,
+      "name": "Eminem",
+      "subscribers": "66.5M",
+      "subscriber_count": 66500000,
+      "trend": "stable",
+      "channel_id": "UCedvOgsKFzcK3hA5taf3KoQ",
+      "channel_url": "https://www.youtube.com/channel/UCedvOgsKFzcK3hA5taf3KoQ",
+      "thumbnail_url": "https://lh3.googleusercontent.com/JFI6JZrS-Lco4UdpqDfHY5Wgwy51VXWxmNdI7bCBU5CDlIpN6WWyisZ7MGlpjbrxEGYMFpsqoR_UwcE=w60-h60-p-l90-rj"
+    },
+    {
+      "rank": 13,
+      "name": "Tito Double P",
+      "subscribers": "3.19M",
+      "subscriber_count": 3190000,
+      "trend": "up",
+      "channel_id": "UCATfo9SAdXImyc6ygfbzJBg",
+      "channel_url": "https://www.youtube.com/channel/UCATfo9SAdXImyc6ygfbzJBg",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 14,
+      "name": "Taylor Swift",
+      "subscribers": "63.1M",
+      "subscriber_count": 63100000,
+      "trend": "down",
+      "channel_id": "UCPC0L1d253x-KuMNwa05TpA",
+      "channel_url": "https://www.youtube.com/channel/UCPC0L1d253x-KuMNwa05TpA",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 15,
+      "name": "Chris Brown",
+      "subscribers": "29.7M",
+      "subscriber_count": 29700000,
+      "trend": "down",
+      "channel_id": "UCMXDyVR2tclKWhbqNforSyA",
+      "channel_url": "https://www.youtube.com/channel/UCMXDyVR2tclKWhbqNforSyA",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 16,
+      "name": "The Weeknd",
+      "subscribers": "39.4M",
+      "subscriber_count": 39400000,
+      "trend": "down",
+      "channel_id": "UClYV6hHlupm_S_ObS1W-DYw",
+      "channel_url": "https://www.youtube.com/channel/UClYV6hHlupm_S_ObS1W-DYw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 17,
+      "name": "Lil Wayne",
+      "subscribers": "14.3M",
+      "subscriber_count": 14300000,
+      "trend": "down",
+      "channel_id": "UC4IAZ3dowcXyvVYBx4hucSQ",
+      "channel_url": "https://www.youtube.com/channel/UC4IAZ3dowcXyvVYBx4hucSQ",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 18,
+      "name": "Junior H",
+      "subscribers": "3.86M",
+      "subscriber_count": 3860000,
+      "trend": "down",
+      "channel_id": "UCwA5HHGsAlpU1UlhwWD52uA",
+      "channel_url": "https://www.youtube.com/channel/UCwA5HHGsAlpU1UlhwWD52uA",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 19,
+      "name": "Kendrick Lamar",
+      "subscribers": "20.1M",
+      "subscriber_count": 20100000,
+      "trend": "down",
+      "channel_id": "UCprAFmT0C6O4X0ToEXpeFTQ",
+      "channel_url": "https://www.youtube.com/channel/UCprAFmT0C6O4X0ToEXpeFTQ",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 20,
+      "name": "Lil Durk",
+      "subscribers": "7.5M",
+      "subscriber_count": 7500000,
+      "trend": "down",
+      "channel_id": "UCSWKNHx2g_yk9VlErHqJaMw",
+      "channel_url": "https://www.youtube.com/channel/UCSWKNHx2g_yk9VlErHqJaMw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 21,
+      "name": "Luis R Conriquez",
+      "subscribers": "2.22M",
+      "subscriber_count": 2220000,
+      "trend": "up",
+      "channel_id": "UCm7mbvc5QOn5JzkeCrk-wdw",
+      "channel_url": "https://www.youtube.com/channel/UCm7mbvc5QOn5JzkeCrk-wdw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 22,
+      "name": "Juice WRLD",
+      "subscribers": "13.8M",
+      "subscriber_count": 13800000,
+      "trend": "up",
+      "channel_id": "UCbn0GRdgsQtl9hlV-IqxFGg",
+      "channel_url": "https://www.youtube.com/channel/UCbn0GRdgsQtl9hlV-IqxFGg",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 23,
+      "name": "KPop Demon Hunters Cast",
+      "subscribers": "164K",
+      "subscriber_count": 164000,
+      "trend": "down",
+      "channel_id": "UCuCy0Nk0SoKPyioObCZwgSw",
+      "channel_url": "https://www.youtube.com/channel/UCuCy0Nk0SoKPyioObCZwgSw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 24,
+      "name": "BigXthaPlug",
+      "subscribers": "1.68M",
+      "subscriber_count": 1680000,
+      "trend": "up",
+      "channel_id": "UCjfB7ooJY7C43vBAuuCub_A",
+      "channel_url": "https://www.youtube.com/channel/UCjfB7ooJY7C43vBAuuCub_A",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 25,
+      "name": "J. Cole",
+      "subscribers": "8.41M",
+      "subscriber_count": 8410000,
+      "trend": "down",
+      "channel_id": "UC0ajkOzj8xE3Gs3LHCE243A",
+      "channel_url": "https://www.youtube.com/channel/UC0ajkOzj8xE3Gs3LHCE243A",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 26,
+      "name": "Rihanna",
+      "subscribers": "45.6M",
+      "subscriber_count": 45600000,
+      "trend": "down",
+      "channel_id": "UCvWtix2TtWGe9kffqnwdaMw",
+      "channel_url": "https://www.youtube.com/channel/UCvWtix2TtWGe9kffqnwdaMw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 27,
+      "name": "Grupo Firme",
+      "subscribers": "9.44M",
+      "subscriber_count": 9440000,
+      "trend": "up",
+      "channel_id": "UCJKREB2c3dO8dgdo8FtdO_A",
+      "channel_url": "https://www.youtube.com/channel/UCJKREB2c3dO8dgdo8FtdO_A",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 28,
+      "name": "Michael Jackson",
+      "subscribers": "35.1M",
+      "subscriber_count": 35100000,
+      "trend": "down",
+      "channel_id": "UCoIOOL7QKuBhQHVKL8y7BEQ",
+      "channel_url": "https://www.youtube.com/channel/UCoIOOL7QKuBhQHVKL8y7BEQ",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 29,
+      "name": "Linkin Park",
+      "subscribers": "24.8M",
+      "subscriber_count": 24800000,
+      "trend": "down",
+      "channel_id": "UCxgN32UVVztKAQd2HkXzBtw",
+      "channel_url": "https://www.youtube.com/channel/UCxgN32UVVztKAQd2HkXzBtw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 30,
+      "name": "T.I.",
+      "subscribers": "4.8M",
+      "subscriber_count": 4800000,
+      "trend": "up",
+      "channel_id": "UCwwHxdscieNH0dzWmOwnuqw",
+      "channel_url": "https://www.youtube.com/channel/UCwwHxdscieNH0dzWmOwnuqw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 31,
+      "name": "Kodak Black",
+      "subscribers": "9.8M",
+      "subscriber_count": 9800000,
+      "trend": "up",
+      "channel_id": "UC8zFXOPlDTI5lhy3fAn6E5w",
+      "channel_url": "https://www.youtube.com/channel/UC8zFXOPlDTI5lhy3fAn6E5w",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 32,
+      "name": "Romeo Santos",
+      "subscribers": "23.4M",
+      "subscriber_count": 23400000,
+      "trend": "down",
+      "channel_id": "UCpB_98tUTs3zSiOxZuGPnOA",
+      "channel_url": "https://www.youtube.com/channel/UCpB_98tUTs3zSiOxZuGPnOA",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 33,
+      "name": "Los Temerarios",
+      "subscribers": "5.14M",
+      "subscriber_count": 5140000,
+      "trend": "down",
+      "channel_id": "UCypKp6ICj83mgrtPyCBboiw",
+      "channel_url": "https://www.youtube.com/channel/UCypKp6ICj83mgrtPyCBboiw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 34,
+      "name": "$uicideboy$",
+      "subscribers": "4.78M",
+      "subscriber_count": 4780000,
+      "trend": "down",
+      "channel_id": "UC0PsqWsDU7JJKqztI8V6spA",
+      "channel_url": "https://www.youtube.com/channel/UC0PsqWsDU7JJKqztI8V6spA",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 35,
+      "name": "Lady Gaga",
+      "subscribers": "30.4M",
+      "subscriber_count": 30400000,
+      "trend": "stable",
+      "channel_id": "UCGKXb1syicud01CJOOFRykg",
+      "channel_url": "https://www.youtube.com/channel/UCGKXb1syicud01CJOOFRykg",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 36,
+      "name": "Ozuna",
+      "subscribers": "38M",
+      "subscriber_count": 38000000,
+      "trend": "up",
+      "channel_id": "UCKEFjh4JL-OyMI8z3h5Coaw",
+      "channel_url": "https://www.youtube.com/channel/UCKEFjh4JL-OyMI8z3h5Coaw",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 37,
+      "name": "Anuel AA",
+      "subscribers": "29.4M",
+      "subscriber_count": 29400000,
+      "trend": "up",
+      "channel_id": "UCbBaYg2UToDaoOwo-R6xi4g",
+      "channel_url": "https://www.youtube.com/channel/UCbBaYg2UToDaoOwo-R6xi4g",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 38,
+      "name": "2Pac",
+      "subscribers": "9.35M",
+      "subscriber_count": 9350000,
+      "trend": "up",
+      "channel_id": "UC5RrGzC-JXglhFW5NhT4r6w",
+      "channel_url": "https://www.youtube.com/channel/UC5RrGzC-JXglhFW5NhT4r6w",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 39,
+      "name": "Kanye West",
+      "subscribers": "12.1M",
+      "subscriber_count": 12100000,
+      "trend": "down",
+      "channel_id": "UCRY5dYsbIN5TylSbd7gVnZg",
+      "channel_url": "https://www.youtube.com/channel/UCRY5dYsbIN5TylSbd7gVnZg",
+      "thumbnail_url": null
+    },
+    {
+      "rank": 40,
+      "name": "KAROL G",
+      "subscribers": "41M",
+      "subscriber_count": 41000000,
+      "trend": "down",
+      "channel_id": "UC7n3gWRN0vQzgiOKc51aZ4w",
+      "channel_url": "https://www.youtube.com/channel/UC7n3gWRN0vQzgiOKc51aZ4w",
+      "thumbnail_url": null
+    }
+  ],
+  
+  "weekly_top_songs": [
+    {
+      "rank": 1,
+      "title": "Risk It All",
+      "artists": [
+        {
+          "name": "Bruno Mars",
+          "channel_id": "UCZn4r7heNOPY-C43YIywnVA",
+          "channel_url": "https://www.youtube.com/channel/UCZn4r7heNOPY-C43YIywnVA"
+        }
+      ],
+      "last_week_rank": null,
+      "trend": "new",
+      "weeks_on_chart": 1,
+      "weekly_views": 6052738,
+      "video_id": "lY5V4hSLWY8",
+      "video_url": "https://www.youtube.com/watch?v=lY5V4hSLWY8",
+      "thumbnail_url": "https://lh3.googleusercontent.com/_1ejRnxNSULMWdqN8F-gEGUVfw5kZKrwKy5xNPnSxU6Xen61q09zCR1aQn4s4L9rDOi-fGnTh3qI-LwE=w180-h180-l90-rj",
+      "release_date": "2026-02-25",
+      "label": "Atlantic Records",
+      "producers": ["Bruno Mars", "D’Mile"]
+    },
+    {
+      "rank": 2,
+      "title": "Golden",
+      "artists": [
+        {"name": "HUNTR/X", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "EJAE", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "AUDREY NUNA", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "REI AMI", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KPop Demon Hunters Cast", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"}
+      ],
+      "last_week_rank": 1,
+      "trend": "down",
+      "trend_delta": -1,
+      "weeks_on_chart": 37,
+      "weekly_views": 4465428,
+      "video_id": "yebNIHKAC4A",
+      "video_url": "https://www.youtube.com/watch?v=yebNIHKAC4A",
+      "thumbnail_url": "https://lh3.googleusercontent.com/KUrZ-eN8Blos-oOCdsIW7ehKUkUXpvjRStFFdqZs5oUaIHeHuMWZpbzU6NmOxPzAk0ik4qYP-SHVkzVmpA=w180-h180-l90-rj",
+      "release_date": "2025-06-19",
+      "label": "K-Pop Demon Hunters",
+      "writers": ["EJAE", "Mark Sonnenblick", "Joong Gyu Kwak", "Yu Han Lee", "Hee Dong Nam", "Jeong Hoon Seo", "Park Hong Jun"],
+      "producers": ["IDO", "24", "TEDDY", "Ian Eisendrath"]
+    },
+    {
+      "rank": 3,
+      "title": "Ordinary",
+      "artists": [
+        {
+          "name": "Alex Warren",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 2,
+      "trend": "down",
+      "trend_delta": -1,
+      "weeks_on_chart": 51,
+      "weekly_views": 4407214,
+      "video_id": "u2ah9tWTkmk",
+      "video_url": "https://www.youtube.com/watch?v=u2ah9tWTkmk",
+      "thumbnail_url": "https://lh3.googleusercontent.com/tB_LIQW9A3UqBMgiACcd3znkQqJiLkVxr3riaH7JiTL6rhTpIfLEbTz2S_9y5k1vGkjfvl8illYpPbA=w180-h180-l90-rj",
+      "release_date": "2024-09-26",
+      "label": "Atlantic Records",
+      "producers": ["Adam Yaron"]
+    },
+    {
+      "rank": 4,
+      "title": "LET 'EM KNOW",
+      "artists": [
+        {
+          "name": "T.I.",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 10,
+      "trend": "up",
+      "trend_delta": 6,
+      "weeks_on_chart": 6,
+      "weekly_views": 4307084,
+      "video_id": "mcg4z1gGbEw",
+      "video_url": "https://www.youtube.com/watch?v=mcg4z1gGbEw",
+      "thumbnail_url": "https://lh3.googleusercontent.com/K70u21GHl1Anj1noB69TNioP37kqq5ukNNYKcAutfTfC6-3CO6K3GiDXcLRfTC6YRmzs8dZPizqnnc46DQ=w180-h180-l90-rj",
+      "release_date": "2026-01-17",
+      "label": "Grand Hustle LLC / EMPIRE",
+      "writers": ["Pharrell Williams", "Clifford Harris"],
+      "producers": ["Pharrell Williams"]
+    },
+    {
+      "rank": 5,
+      "title": "Choosin' Texas",
+      "artists": [
+        {
+          "name": "ella langley",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 5,
+      "trend": "stable",
+      "trend_delta": 0,
+      "weeks_on_chart": 18,
+      "weekly_views": 3790562,
+      "video_id": "hLOheGDwD_0",
+      "video_url": "https://www.youtube.com/watch?v=hLOheGDwD_0",
+      "thumbnail_url": "https://lh3.googleusercontent.com/rLT_W7Ee_DyAEPCS0CaV0wOz0U7q9ivggTGsEZzBocuXB2o2sHQfgz3UUMvtGaFJRETWQEK0oTxBF-pzwA=w180-h180-l90-rj",
+      "release_date": "2025-10-10",
+      "label": "SAWGOD/Columbia",
+      "writers": ["Ella Langley", "Miranda Lambert", "Luke Dick", "Joybeth Taylor"],
+      "producers": ["Ella Langley", "Miranda Lambert", "Ben West"]
+    },
+    {
+      "rank": 6,
+      "title": "Big Guy",
+      "artists": [
+        {
+          "name": "Ice Spice",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 3,
+      "trend": "down",
+      "trend_delta": -3,
+      "weeks_on_chart": 13,
+      "weekly_views": 3524183,
+      "video_id": "7yaU0qXlgbo",
+      "video_url": "https://www.youtube.com/watch?v=7yaU0qXlgbo",
+      "thumbnail_url": "https://lh3.googleusercontent.com/n8KgEwoON2qJfvpcqxa2oICQFEmTbb91LinG8Xv6hpVsRN1hUy_Irqk7FUQuXQZvt2BDKSwKYXvV3nYB=w180-h180-l90-rj",
+      "release_date": "2025-11-13",
+      "label": "Dolo Entertainment, Inc., under exclusive license to UMG",
+      "writers": ["Ice Spice", "RIOTUSA"],
+      "producers": ["RIOTUSA"]
+    },
+    {
+      "rank": 7,
+      "title": "DtMF",
+      "artists": [
+        {
+          "name": "Bad Bunny",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 4,
+      "trend": "down",
+      "trend_delta": -3,
+      "weeks_on_chart": 28,
+      "weekly_views": 3191303,
+      "video_id": "v9T_MGfzq7I",
+      "video_url": "https://www.youtube.com/watch?v=v9T_MGfzq7I",
+      "thumbnail_url": "https://lh3.googleusercontent.com/yBcpSTWxVqyJr7enMy7HFv14Yb8p1jI5AS5o49Cvbeyc6zjvCvdLn_0_iAxz50MqxLx6hQDngWBeaC26=w180-h180-l90-rj",
+      "release_date": "2025-01-05",
+      "label": "Rimas Entertainment LLC.",
+      "writers": ["Benito A. Martinez Ocasio", "Roberto José Rosado Torres", "Marco Daniel Borrero", "Scott Dittrich", "Tyler Thomas Spry", "Benjamin Falik", "Hugo René Sención Sanabria"],
+      "producers": ["MAG", "Tyler Spry", "Scotty Dittrich", "JULiA LEWiS", "La Paciencia", "Hydra Hitz"]
+    },
+    {
+      "rank": 8,
+      "title": "Marlboro Rojo",
+      "artists": [
+        {
+          "name": "Fuerza Regida",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 7,
+      "trend": "down",
+      "trend_delta": -1,
+      "weeks_on_chart": 43,
+      "weekly_views": 3150793,
+      "video_id": "ddkbVYutRXA",
+      "video_url": "https://www.youtube.com/watch?v=ddkbVYutRXA",
+      "thumbnail_url": "https://lh3.googleusercontent.com/wcctzBOL_SevQ9q9eq-J1V1fnQluovKWND7x5U3aYJLijtTeBXOIMICPrMnHQGL6FmOzasTAv6DsT79V=w180-h180-l90-rj",
+      "release_date": "2025-05-02",
+      "label": "Rancho Humilde/Street Mob Records/Sony Music Latin",
+      "writers": ["Miguel Armenta"],
+      "producers": ["Jesús Ortiz Paz", "Moises Lopez", "Rabba", "Charly"]
+    },
+    {
+      "rank": 9,
+      "title": "Stateside (feat. Zara Larsson)",
+      "artists": [
+        {
+          "name": "PinkPantheress",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 29,
+      "trend": "up",
+      "trend_delta": 20,
+      "weeks_on_chart": 5,
+      "weekly_views": 3035892,
+      "video_id": "lIxQe1R5hs0",
+      "video_url": "https://www.youtube.com/watch?v=lIxQe1R5hs0",
+      "thumbnail_url": "https://lh3.googleusercontent.com/VuDZw8RqRz6k8mVrxE6gt3GTYPc2WQUULHmhqzr8LtwTK8UqZSGQmzuQ8JXIgmNHfOwPyGiBoWy2QVIVRA=w180-h180-l90-rj",
+      "release_date": "2025-10-09",
+      "label": "Warner Records",
+      "writers": ["Zara Larsson", "Uzoechi Osisioma Emenike"],
+      "producers": ["PinkPantheress", "Oscar Scheller"]
+    },
+    {
+      "rank": 10,
+      "title": "I Just Might",
+      "artists": [
+        {
+          "name": "Bruno Mars",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 24,
+      "trend": "up",
+      "trend_delta": 14,
+      "weeks_on_chart": 8,
+      "weekly_views": 2886553,
+      "video_id": "mrV8kK5t0V8",
+      "video_url": "https://www.youtube.com/watch?v=mrV8kK5t0V8",
+      "thumbnail_url": "https://lh3.googleusercontent.com/_1ejRnxNSULMWdqN8F-gEGUVfw5kZKrwKy5xNPnSxU6Xen61q09zCR1aQn4s4L9rDOi-fGnTh3qI-LwE=w180-h180-l90-rj",
+      "release_date": "2026-01-09",
+      "label": "Atlantic Records",
+      "producers": ["Bruno Mars", "D’Mile"]
+    },
+    {
+      "rank": 11,
+      "title": "FDO",
+      "artists": [
+        {
+          "name": "Pooh Shiesty",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 13,
+      "trend": "up",
+      "trend_delta": 2,
+      "weeks_on_chart": 12,
+      "weekly_views": 2626427,
+      "video_id": "MPuK06zUIhc",
+      "video_url": "https://www.youtube.com/watch?v=MPuK06zUIhc",
+      "thumbnail_url": "https://lh3.googleusercontent.com/JprhxBnFVaD3SX64vrDG3tmWShcSd62YPM2fcgCi-URU0Eadx_AKqZiJKKMm9OPJPv8lRX7ipAeU20dJsw=w180-h180-l90-rj",
+      "release_date": "2025-12-11",
+      "label": "1017/Atlantic",
+      "producers": ["TP808"]
+    },
+    {
+      "rank": 12,
+      "title": "Soda Pop",
+      "artists": [
+        {"name": "Saja Boys", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Andrew Choi", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Neckwav", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Danny Chung", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KEVIN WOO", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "samUIL Lee", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KPop Demon Hunters Cast", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"}
+      ],
+      "last_week_rank": 9,
+      "trend": "down",
+      "trend_delta": -3,
+      "weeks_on_chart": 37,
+      "weekly_views": 2594021,
+      "video_id": "aNad2Ml2Lfw",
+      "video_url": "https://www.youtube.com/watch?v=aNad2Ml2Lfw",
+      "thumbnail_url": "https://lh3.googleusercontent.com/XD2LrVCu9Y_EwxkKpkVFcXXbJa14w_Z_AFGOuJ5fY935mlAEsowjxAXA_9m5PDNEDTOOU3dZDVTBuEVq=w180-h180-l90-rj",
+      "release_date": "2025-06-19",
+      "label": "K-Pop Demon Hunters",
+      "writers": ["Danny Chung", "24", "Dominsuk", "Vince", "Kush"],
+      "producers": ["24", "Dominsuk", "Ian Eisendrath"]
+    },
+    {
+      "rank": 13,
+      "title": "Ya Borracho",
+      "artists": [
+        {
+          "name": "Herencia De Grandes",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 11,
+      "trend": "down",
+      "trend_delta": -2,
+      "weeks_on_chart": 15,
+      "weekly_views": 2570151,
+      "video_id": "7SsmyjVF1Oo",
+      "video_url": "https://www.youtube.com/watch?v=7SsmyjVF1Oo",
+      "thumbnail_url": "https://lh3.googleusercontent.com/__avYDQt9-lmKRXP7_SxEU5XLjyO__K-UhkxuNcQOe6Pxn-lK4ICIPIriQwtq0vQIAzD1xFyDpxW3T8F=w180-h180-l90-rj",
+      "release_date": "2025-11-07",
+      "label": "Rancho Humilde",
+      "writers": ["Axel Terrazas"],
+      "producers": ["Jesus Ivan Rubio Beltran", "Jimmy Humilde"]
+    },
+    {
+      "rank": 14,
+      "title": "NO BATIDÃO",
+      "artists": [
+        {"name": "ZXKAI", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "slxughter", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"}
+      ],
+      "last_week_rank": 12,
+      "trend": "down",
+      "trend_delta": -2,
+      "weeks_on_chart": 16,
+      "weekly_views": 2459972,
+      "video_id": "GXioir-fujY",
+      "video_url": "https://www.youtube.com/watch?v=GXioir-fujY",
+      "thumbnail_url": "https://lh3.googleusercontent.com/eEXqI0KeotuaiRx4PjiopjPnlTBj9aiSXbY1NmzielYry7Mvs-WRANaJiivV62Zl6ufFtOwDMUtRmKVf=w180-h180-l90-rj",
+      "release_date": "2025-09-04",
+      "label": "ZXKAI",
+      "writers": ["ZXKAI", "slxughter"],
+      "producers": ["ZXKAI", "slxughter"]
+    },
+    {
+      "rank": 15,
+      "title": "Todo Lo Fue",
+      "artists": [
+        {
+          "name": "Lenin Ramírez",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 16,
+      "trend": "up",
+      "trend_delta": 1,
+      "weeks_on_chart": 6,
+      "weekly_views": 2370237,
+      "video_id": "kwwdY1bp-Ck",
+      "video_url": "https://www.youtube.com/watch?v=kwwdY1bp-Ck",
+      "thumbnail_url": "https://lh3.googleusercontent.com/2GJB4cDle9ZRNZde7MDoUlX0yk7vw-xYzQnOsccLrQAWKDkihdKqp67XaBMpPDoLcZ_u3dBcfOctpQ0Anw=w180-h180-l90-rj",
+      "release_date": "2024-05-23",
+      "label": "DEL Records"
+    },
+    {
+      "rank": 16,
+      "title": "El Del Palenque",
+      "artists": [
+        {
+          "name": "Los Alegres Del Barranco",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 86,
+      "trend": "up",
+      "trend_delta": 70,
+      "weeks_on_chart": 3,
+      "weekly_views": 2359309,
+      "video_id": "-KY3SUz3KaI",
+      "video_url": "https://www.youtube.com/watch?v=-KY3SUz3KaI",
+      "thumbnail_url": "https://lh3.googleusercontent.com/qJsv5NN-23RDfjgRhxRH4jtfZ0NQbcSv8-gy0AipEsVnm1Id-tJgVmj7ivbEeZ55rSAHPkom5XNFsBI=w180-h180-l90-rj",
+      "release_date": "2021-10-30"
+    },
+    {
+      "rank": 17,
+      "title": "GO",
+      "artists": [
+        {
+          "name": "BLACKPINK",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": null,
+      "trend": "new",
+      "weeks_on_chart": 1,
+      "weekly_views": 2337333,
+      "video_id": "2GJfWMYCWY0",
+      "video_url": "https://www.youtube.com/watch?v=2GJfWMYCWY0",
+      "thumbnail_url": "https://lh3.googleusercontent.com/j1OgxeWEogfpaoqINaTd3chArQGnFUfEP_dl5nyXYy8J_IPtIzZ34hOFX1df4oog2btNbCxXJQ1lVqLT=w180-h180-l90-rj",
+      "release_date": "2026-02-24",
+      "label": "YG Entertainment",
+      "writers": ["Chris Martin", "Henry Walter", "ROSÉ", "Danny Chung", "JISOO", "JENNIE", "LISA", "Cirkut"],
+      "producers": ["Chris Martin", "Cirkut", "TEDDY"]
+    },
+    {
+      "rank": 18,
+      "title": "Lush Life",
+      "artists": [
+        {
+          "name": "Zara Larsson",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 22,
+      "trend": "up",
+      "trend_delta": 4,
+      "weeks_on_chart": 10,
+      "weekly_views": 2329322,
+      "video_id": "tD4HCZe-tew",
+      "video_url": "https://www.youtube.com/watch?v=tD4HCZe-tew",
+      "thumbnail_url": "https://lh3.googleusercontent.com/Dnx_H84nXntoWJF48_e0U2P1lszrzFLB8HGoPXh6-IYYPL_B_xbzCA6790eH8_N9NKadJXZKypRpTYNo=w180-h180-l90-rj",
+      "release_date": "2015-06-05",
+      "label": "Epic/Record Company TEN",
+      "writers": ["Emanuel Abrahamsson", "Mack", "Linnéa Södahl", "Fridolin Walcher", "Christoph Bauss", "Iman Conta Hultén"],
+      "producers": ["Freedo", "Shuko"]
+    },
+    {
+      "rank": 19,
+      "title": "Your Idol",
+      "artists": [
+        {"name": "Saja Boys", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Andrew Choi", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Neckwav", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "Danny Chung", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KEVIN WOO", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "samUIL Lee", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KPop Demon Hunters Cast", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"}
+      ],
+      "last_week_rank": 15,
+      "trend": "down",
+      "trend_delta": -4,
+      "weeks_on_chart": 37,
+      "weekly_views": 2273023,
+      "video_id": "cWppAbqm9I8",
+      "video_url": "https://www.youtube.com/watch?v=cWppAbqm9I8",
+      "thumbnail_url": "https://lh3.googleusercontent.com/ogvvJ4j4vEP1XxsfAJ1wZs-O7dRUe_9Ek_8ui-A9QZ59WaNhB4DPaND_SCsa3uYb6Wq3N69w8mJOF7oE=w180-h180-l90-rj",
+      "release_date": "2025-06-19",
+      "label": "K-Pop Demon Hunters",
+      "writers": ["24", "EJAE", "Mark Sonnenblick", "Vince", "Kush", "IDO"],
+      "producers": ["24", "ido", "Ian Eisendrath"]
+    },
+    {
+      "rank": 20,
+      "title": "Folded",
+      "artists": [
+        {
+          "name": "Kehlani",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 18,
+      "trend": "down",
+      "trend_delta": -2,
+      "weeks_on_chart": 36,
+      "weekly_views": 2265594,
+      "video_id": "KFMYx1TibeQ",
+      "video_url": "https://www.youtube.com/watch?v=KFMYx1TibeQ",
+      "thumbnail_url": "https://lh3.googleusercontent.com/j48bOPM7yeVVuftX313NpNfgdzIRTAzjWSRbjQhoAb5vyS82_xN9zMIFnqiQv0EBrIwhmkXlkZ2IJX8=w180-h180-l90-rj",
+      "release_date": "2025-06-11",
+      "label": "TSNMI / Atlantic",
+      "producers": ["Andre Harris", "D.K. the Punisher", "Don Mills", "Khris Riddick"]
+    },
+    {
+      "rank": 21,
+      "title": "BAILE INoLVIDABLE",
+      "artists": [
+        {
+          "name": "Bad Bunny",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 14,
+      "trend": "down",
+      "trend_delta": -7,
+      "weeks_on_chart": 29,
+      "weekly_views": 2260687,
+      "video_id": "a1Femq4NPxs",
+      "video_url": "https://www.youtube.com/watch?v=a1Femq4NPxs",
+      "thumbnail_url": "https://lh3.googleusercontent.com/yBcpSTWxVqyJr7enMy7HFv14Yb8p1jI5AS5o49Cvbeyc6zjvCvdLn_0_iAxz50MqxLx6hQDngWBeaC26=w180-h180-l90-rj",
+      "release_date": "2025-01-05",
+      "label": "Rimas Entertainment LLC.",
+      "writers": ["Benito A. Martinez Ocasio", "Roberto José Rosado Torres", "Jay Anthony Nuñez", "Armando Josué López Antonio Caraballo", "Julio Gastón", "Marco Daniel Borrero", "Kaled Elikai Rivera Córdova"],
+      "producers": ["MAG", "Big Jay", "Julito Gastón", "La Paciencia", "Elikai"]
+    },
+    {
+      "rank": 22,
+      "title": "No Hands (feat. Roscoe Dash & Wale)",
+      "artists": [
+        {
+          "name": "Waka Flocka Flame",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 23,
+      "trend": "up",
+      "trend_delta": 1,
+      "weeks_on_chart": 34,
+      "weekly_views": 2215027,
+      "video_id": "skhxizRYxps",
+      "video_url": "https://www.youtube.com/watch?v=skhxizRYxps",
+      "thumbnail_url": "https://lh3.googleusercontent.com/U81yFJskoH-AYYc_mTqpr4uk-bmzL1IF6xIhWcz4v-SwZYXCZ_Qz2udapheIfv3ruyXLaDiiaEyLfn8=w180-h180-s-l90-rj",
+      "release_date": "2010-08-17",
+      "label": "Warner Records Inc.",
+      "producers": ["Drumma Boy"]
+    },
+    {
+      "rank": 23,
+      "title": "The Fate of Ophelia",
+      "artists": [
+        {
+          "name": "Taylor Swift",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 19,
+      "trend": "down",
+      "trend_delta": -4,
+      "weeks_on_chart": 22,
+      "weekly_views": 2175361,
+      "video_id": "ko70cExuzZM",
+      "video_url": "https://www.youtube.com/watch?v=ko70cExuzZM",
+      "thumbnail_url": "https://lh3.googleusercontent.com/ZpWD37EEQE_LVuQ_O03cRmz5mZA7jG0gKGLt-49uHNDX6DycysijGGSOX9woU-OfQR5jyahz3aEdmBmm3A=w180-h180-l90-rj",
+      "release_date": "2025-10-02",
+      "label": "Taylor Swift",
+      "writers": ["Taylor Swift", "Max Martin", "Shellback"],
+      "producers": ["Taylor Swift", "Max Martin", "Shellback"]
+    },
+    {
+      "rank": 24,
+      "title": "The Moon Cave (feat. Asha Puthli, Bobby Womack, Jalen Ngonda & Jalen Ngonda and Black Thought)",
+      "artists": [
+        {
+          "name": "Gorillaz",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": null,
+      "trend": "new",
+      "weeks_on_chart": 1,
+      "weekly_views": 2167127,
+      "video_id": "ucRulNQsuYQ",
+      "video_url": "https://www.youtube.com/watch?v=ucRulNQsuYQ",
+      "thumbnail_url": "https://lh3.googleusercontent.com/tJuXcHMYKRmEmjOpzEHMh3bgDKqjo6gBZx76FSM3Cx_jkqkyO0cxC0EtJtQ_p_03xW_hZod6BM1nS9kM=w180-h180-l90-rj",
+      "release_date": "2026-02-26",
+      "label": "Kong",
+      "writers": ["Dave Jolicoeur", "Damon Albarn", "James Ford", "Tariq L. Trotter"],
+      "producers": ["Gorillaz", "James Ford", "Samuel Egglenton", "Remi Kabaka Jr."]
+    },
+    {
+      "rank": 25,
+      "title": "BOO",
+      "artists": [
+        {
+          "name": "H3adband",
+          "channel_id": "FEmusic_analytics_insights_artist",
+          "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"
+        }
+      ],
+      "last_week_rank": 20,
+      "trend": "down",
+      "trend_delta": -5,
+      "weeks_on_chart": 12,
+      "weekly_views": 2116702,
+      "video_id": "km5bgjATdCk",
+      "video_url": "https://www.youtube.com/watch?v=km5bgjATdCk",
+      "thumbnail_url": "https://lh3.googleusercontent.com/1vGw5hH3S2HKmJw1HZsaRG4SRHBZXjMI9QccygvwqbnxvkPAPqcNkfU-CrhOahV9EfHrEmZ_OpeauFo2=w180-h180-l90-rj",
+      "release_date": "2025-10-14",
+      "label": "Hitmaker Music Group",
+      "writers": ["Jordan Randall"],
+      "producers": ["Jordan Randall"]
+    },
+    {
+      "rank": 26,
+      "title": "How It’s Done",
+      "artists": [
+        {"name": "HUNTR/X", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "EJAE", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "AUDREY NUNA", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "REI AMI", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"},
+        {"name": "KPop Demon Hunters Cast", "channel_id": "FEmusic_analytics_insights_artist", "channel_url": "https://www.youtube.com/channel/FEmusic_analytics_insights_artist"}
+      ],
+      "last_week_rank": 26,
+      "trend": "stable",
+      "trend_delta": 0,
+      "weeks_on_chart": 37,
+      "weekly_views": 2083535,
+      "video_id": "QGsevnbItdU",
+      "video_url": "https://www.youtube.com/watch?v=QGsevnbItdU",
+      "thumbnail_url": "https://lh3.googleusercontent.com/83QIElJm0JGq2HfzPIvwPrCSFFdpkzC3mvLo5wl739f_wrGk2kYJJHRd6c1V_TQy4UV5gpdCgVMEEI5Jnw=w180-h180-l90-rj",
+      "release_date": "2025-06-19",
+      "label": "Republic Records, a division of UMG Recordings, Inc.",
+      "writers": ["EJAE", "Daniel Rojas", "Mark Sonnenblick", "Danny Chung", "Jeong Hoon Seo", "Joong Gyu Kwak", "Yu Han Lee", "Hee Dong Nam", "Park,Hong Jun"],
+      "producers": ["24", "IDO", "TEDDY", "Ian Eisendrath"]
+    }
+  ],
+  
+  "statistics": {
+    "total_views_top_100": 182345678,
+    "average_views_per_song": 1823456,
+    "most_weeks_on_chart": {
+      "song": "Ordinary",
+      "artist": "Alex Warren",
+      "weeks": 51
+    },
+    "biggest_mover": {
+      "song": "El Del Palenque",
+      "artist": "Los Alegres Del Barranco",
+      "movement": 70
+    },
+    "new_entries_count": 6,
+    "top_artist_by_subscribers": "Eminem",
+    "top_artist_subscribers": 66500000
+  }
+}

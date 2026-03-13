@@ -1,0 +1,223 @@
+// filename: section_1_new_albums_and_singles.json
+{
+  "section_name": "New albums & singles",
+  "section_type": "music_carousel",
+  "items": [
+    {
+      "title": "TRON Ares: Divergence",
+      "creator": "Nine Inch Nails",
+      "creator_id": "UC8txE2ZyN2Sh8XxH5OkHLSw",
+      "creator_url": "https://music.youtube.com/channel/UC8txE2ZyN2Sh8XxH5OkHLSw",
+      "item_type": "Album",
+      "item_id": "MPREb_7Ikszgbczxr",
+      "url": "https://music.youtube.com/browse/MPREb_7Ikszgbczxr",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/VGplcnY4QC-rtqLBOEXYIG2Cs5ABWl-YbNyy4Hr7G1k6GxF5hV1nKmch2NxysOrHR5goIlGU9GmJUT20",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/VGplcnY4QC-rtqLBOEXYIG2Cs5ABWl-YbNyy4Hr7G1k6GxF5hV1nKmch2NxysOrHR5goIlGU9GmJUT20=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/VGplcnY4QC-rtqLBOEXYIG2Cs5ABWl-YbNyy4Hr7G1k6GxF5hV1nKmch2NxysOrHR5goIlGU9GmJUT20=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "I'm Intrigued (feat. Jahlil Stone)",
+      "creator": "The Trap-Soul Collective",
+      "creator_id": "UCuFZRiMBi-YGLoQxc9GfAUw",
+      "creator_url": "https://music.youtube.com/channel/UCuFZRiMBi-YGLoQxc9GfAUw",
+      "item_type": "Single",
+      "item_id": "MPREb_tU4KOEWfi8L",
+      "url": "https://music.youtube.com/browse/MPREb_tU4KOEWfi8L",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/_vJX49TkThqtr7II6j_A8Ebe-8QYDlbKOCAbiy4ATkDCbxpzU6_RbG4bMuZrrlz53-zcwYHc7DlG8rgJ",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/_vJX49TkThqtr7II6j_A8Ebe-8QYDlbKOCAbiy4ATkDCbxpzU6_RbG4bMuZrrlz53-zcwYHc7DlG8rgJ=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/_vJX49TkThqtr7II6j_A8Ebe-8QYDlbKOCAbiy4ATkDCbxpzU6_RbG4bMuZrrlz53-zcwYHc7DlG8rgJ=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "NOISE",
+      "creator": "ivri",
+      "creator_id": "UC2rRJEe_R447OuoW_PfYpow",
+      "creator_url": "https://music.youtube.com/channel/UC2rRJEe_R447OuoW_PfYpow",
+      "item_type": "Single",
+      "item_id": "MPREb_W4EUFe3q7PW",
+      "url": "https://music.youtube.com/browse/MPREb_W4EUFe3q7PW",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/I2vBpRyktdwhV26Zw7CO0jRiTWwRAqi3VteugQ8N6JMct2z30q50zeEl98DmRHQ0gZ81Y-EV6KDb7ys",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/I2vBpRyktdwhV26Zw7CO0jRiTWwRAqi3VteugQ8N6JMct2z30q50zeEl98DmRHQ0gZ81Y-EV6KDb7ys=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/I2vBpRyktdwhV26Zw7CO0jRiTWwRAqi3VteugQ8N6JMct2z30q50zeEl98DmRHQ0gZ81Y-EV6KDb7ys=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "らくえん",
+      "creator": "初音ミク & Liv Anderdatter",
+      "creator_id": "UCR29q3hGlpPRDrR1bk_8XqQ",
+      "creator_url": "https://music.youtube.com/channel/UCR29q3hGlpPRDrR1bk_8XqQ",
+      "item_type": "EP",
+      "item_id": "MPREb_6nMIdbBLq3M",
+      "url": "https://music.youtube.com/browse/MPREb_6nMIdbBLq3M",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://yt3.googleusercontent.com/MtzX_T4SBW-xLFRr9nde46ofq393NaPJaprhl57iVz1Ma0HSXbIkKmYYpetBZUYVd1vJ-iseF5uykII",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://yt3.googleusercontent.com/MtzX_T4SBW-xLFRr9nde46ofq393NaPJaprhl57iVz1Ma0HSXbIkKmYYpetBZUYVd1vJ-iseF5uykII=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://yt3.googleusercontent.com/MtzX_T4SBW-xLFRr9nde46ofq393NaPJaprhl57iVz1Ma0HSXbIkKmYYpetBZUYVd1vJ-iseF5uykII=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "LOS AMIGOS FUNK",
+      "creator": "NZXT, FUKLAB & DXRKVIXL",
+      "creator_id": "UCT-2JzfrNboVwV0WgM7-lTQ",
+      "creator_url": "https://music.youtube.com/channel/UCT-2JzfrNboVwV0WgM7-lTQ",
+      "item_type": "Album",
+      "item_id": "MPREb_rKK1i8UDJvy",
+      "url": "https://music.youtube.com/browse/MPREb_rKK1i8UDJvy",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/0Ur77sctpyeCQGHpy2k9gbb65X3kU-5LTtuMQqd10Pw9VPyMSDQ3gntjVHQxKXobdDcXOGwgq1QXhak",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/0Ur77sctpyeCQGHpy2k9gbb65X3kU-5LTtuMQqd10Pw9VPyMSDQ3gntjVHQxKXobdDcXOGwgq1QXhak=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/0Ur77sctpyeCQGHpy2k9gbb65X3kU-5LTtuMQqd10Pw9VPyMSDQ3gntjVHQxKXobdDcXOGwgq1QXhak=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "The Bridge",
+      "creator": "501Bryze",
+      "creator_id": "UC6C9R0SeucXatbz7SwEmjrw",
+      "creator_url": "https://music.youtube.com/channel/UC6C9R0SeucXatbz7SwEmjrw",
+      "item_type": "Album",
+      "item_id": "MPREb_XeTxIh7o8Tz",
+      "url": "https://music.youtube.com/browse/MPREb_XeTxIh7o8Tz",
+      "explicit": true,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/3P3rw0pfZACUiw0tULQkD2H3PPCv7CrNud3cc_0sJDzyU3XctL6F0ZijbjvatVuoioTd3oc8E4N5uwrB",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/3P3rw0pfZACUiw0tULQkD2H3PPCv7CrNud3cc_0sJDzyU3XctL6F0ZijbjvatVuoioTd3oc8E4N5uwrB=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/3P3rw0pfZACUiw0tULQkD2H3PPCv7CrNud3cc_0sJDzyU3XctL6F0ZijbjvatVuoioTd3oc8E4N5uwrB=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "The Story of Us",
+      "creator": "milet",
+      "creator_id": "UCM3FfEkGhmE07vydCY4LUMQ",
+      "creator_url": "https://music.youtube.com/channel/UCM3FfEkGhmE07vydCY4LUMQ",
+      "item_type": "EP",
+      "item_id": "MPREb_YJYu3rnx7EW",
+      "url": "https://music.youtube.com/browse/MPREb_YJYu3rnx7EW",
+      "explicit": false,
+      "thumbnail": {
+        "url": "https://yt3.googleusercontent.com/xdhp1eTuSI2fykAMCkboy7ZTtxxm1wNlKn3ADOczSAjwFifmFEmpfDh7qPtNQ1MX7OGdmCWIBoQ-tK-phw",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://yt3.googleusercontent.com/xdhp1eTuSI2fykAMCkboy7ZTtxxm1wNlKn3ADOczSAjwFifmFEmpfDh7qPtNQ1MX7OGdmCWIBoQ-tK-phw=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://yt3.googleusercontent.com/xdhp1eTuSI2fykAMCkboy7ZTtxxm1wNlKn3ADOczSAjwFifmFEmpfDh7qPtNQ1MX7OGdmCWIBoQ-tK-phw=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    },
+    {
+      "title": "You Only Die 1nce",
+      "creator": "Freddie Gibbs",
+      "creator_id": "UCTwMinUabRPEhNiMP9wgXAA",
+      "creator_url": "https://music.youtube.com/channel/UCTwMinUabRPEhNiMP9wgXAA",
+      "item_type": "Album",
+      "item_id": "MPREb_feZjWEW7MDt",
+      "url": "https://music.youtube.com/browse/MPREb_feZjWEW7MDt",
+      "explicit": true,
+      "thumbnail": {
+        "url": "https://lh3.googleusercontent.com/CadHaGMus_3J3yj86TYqz5VNZnf3jWWS4fzncrnkl22qGUo68G6DN541p9EHr2oP4t6Roe_fmr-Lb9I",
+        "width": 544,
+        "height": 544
+      },
+      "thumbnails": [
+        {
+          "url": "https://lh3.googleusercontent.com/CadHaGMus_3J3yj86TYqz5VNZnf3jWWS4fzncrnkl22qGUo68G6DN541p9EHr2oP4t6Roe_fmr-Lb9I=w226-h226-l90-rj",
+          "width": 226,
+          "height": 226
+        },
+        {
+          "url": "https://lh3.googleusercontent.com/CadHaGMus_3J3yj86TYqz5VNZnf3jWWS4fzncrnkl22qGUo68G6DN541p9EHr2oP4t6Roe_fmr-Lb9I=w544-h544-l90-rj",
+          "width": 544,
+          "height": 544
+        }
+      ]
+    }
+  ]
+}
