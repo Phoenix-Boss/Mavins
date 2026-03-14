@@ -1,17 +1,14 @@
 @file:Suppress("unused", "MemberVisibilityCanBePrivate")
 package expo.modules.mavinengine
 
-import android.content.Context
 import android.util.Log
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,6 +29,7 @@ import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.stream.*
 import org.schabi.newpipe.extractor.stream.StreamType.*
 import java.io.IOException
@@ -44,8 +42,6 @@ import java.util.concurrent.atomic.AtomicInteger
  * v8.0.0 — Self-healing InnerTube config + 6-layer fallback + connection pooling + caching
  */
 class MavinEngineModule : Module() {
-    private val context: Context
-        get() = requireNotNull(appContext.reactContext) { "React context unavailable" }
 
     companion object {
         private const val TAG = "MavinEngine"
@@ -91,7 +87,8 @@ class MavinEngineModule : Module() {
             "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc"
         )
         private val currentKeyIndex = AtomicInteger(0)
-        private val failedKeys = mutableSetOf<String>()
+        private val failedKeys: MutableSet<String> =
+            java.util.Collections.synchronizedSet(mutableSetOf())
 
         // ── Trending cache (5 minutes) ───────────────────────────────────────
         @Volatile private var trendingCache: List<Map<String, Any>>? = null
@@ -111,9 +108,6 @@ class MavinEngineModule : Module() {
             "$CHARTS_BASE_URL/charts/TopSongs/us/weekly"              // US Weekly Top Songs
         )
         private const val MAX_TRENDING_ITEMS = 6
-
-        // ── InnerTube context cache (unused in v8 but kept for compat) ──────────
-        @Volatile private var innerTubeContext: JSONObject? = null
     }
 
     override fun definition() = ModuleDefinition {
@@ -154,8 +148,9 @@ class MavinEngineModule : Module() {
         }
 
         // ── Search ────────────────────────────────────────────────────────────
+        // Default filter: YoutubeSearchQueryHandlerFactory.ALL = no filter (returns all content types)
         AsyncFunction("search") { query: String, filter: String?, pageUrl: String?, serviceId: Int? ->
-            ensureInit(); performSearch(query, filter ?: "all", pageUrl, serviceId)
+            ensureInit(); performSearch(query, filter ?: YoutubeSearchQueryHandlerFactory.ALL, pageUrl, serviceId)
         }
         AsyncFunction("getSearchSuggestions") { query: String, serviceId: Int? ->
             ensureInit(); getSearchSuggestions(query, serviceId)
@@ -175,9 +170,6 @@ class MavinEngineModule : Module() {
         // ── Channel ───────────────────────────────────────────────────────────
         AsyncFunction("getChannelInfo") { url: String, serviceId: Int? ->
             ensureInit(); extractChannelInfo(url, serviceId)
-        }
-        AsyncFunction("getChannelTabs") { url: String, serviceId: Int? ->
-            ensureInit(); extractChannelTabs(url, serviceId)
         }
         AsyncFunction("getChannelTabItems") { url: String, tabFilter: String, pageUrl: String?, serviceId: Int? ->
             ensureInit(); extractChannelTabItems(url, tabFilter, pageUrl, serviceId)
@@ -311,7 +303,7 @@ class MavinEngineModule : Module() {
                 "notes"        to listOf(
                     "YouTube Trending page removed 2025-07-21 — FEtrending is dead",
                     "Primary source now: YouTube Music Charts (FEmusic_charts)",
-                    "PoToken: library supports PoTokenProvider but WebView impl needed from app layer",
+                    "PoToken: call YoutubeStreamExtractor.setPoTokenProvider(provider) after NewPipe.init() — WebView BotGuard impl needed from app layer",
                     "Stream extraction works without poToken but some formats may be limited"
                 )
             )
@@ -334,13 +326,15 @@ class MavinEngineModule : Module() {
                 )
                 isInitialized = true
                 // ── PoToken note ─────────────────────────────────────────────
-                // NewPipeExtractor v0.26.0 supports PoTokenProvider via:
+                // NewPipeExtractor v0.26.0 exposes PoToken support via a static
+                // method on YoutubeStreamExtractor:
                 //   YoutubeStreamExtractor.setPoTokenProvider(provider)
-                // Without a provider, the extractor falls back to Android/iOS
-                // clients for stream URLs (these don't yet require poTokens).
-                // To fully support WEB client streams, the app layer must
-                // implement PoTokenProvider using a WebView BotGuard challenge.
-                // See: NewPipe app repo → util/potoken/ for reference implementation.
+                // Call this AFTER NewPipe.init() to enable WEB client streams.
+                // Without a provider the extractor uses Android/iOS clients which
+                // do not currently require poTokens (some formats may be absent).
+                // To implement: create a PoTokenProvider using a WebView BotGuard
+                // challenge at the app layer.
+                // See: NewPipe app repo → util/potoken/ for reference.
                 // For metadata-only usage (search, channel, comments) no poToken needed.
                 Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${ServiceList.all().size} services loaded")
                 Log.i(TAG, "ℹ️  PoToken: not set — stream URLs use Android/iOS clients (limited formats)")
@@ -355,7 +349,6 @@ class MavinEngineModule : Module() {
 
     private fun resetNewPipe(): Map<String, Any> {
         isInitialized = false
-        innerTubeContext = null
         cachedConfig = null
         trendingCache = null
         synchronized(failedKeys) { failedKeys.clear(); currentKeyIndex.set(0) }
@@ -1658,7 +1651,7 @@ class MavinEngineModule : Module() {
             put("metaInfo",                info.metaInfo.map { m ->
                 mapOf<String, Any>(
                     "title"    to m.title.orEmpty(),
-                    "content"  to m.content.content,
+                    "content"  to (m.content?.content ?: ""),
                     "urls"     to m.urls.map { it.toString() },
                     "urlTexts" to m.urlTexts
                 )
@@ -1762,7 +1755,7 @@ class MavinEngineModule : Module() {
         "likeCount"              to item.likeCount.coerceAtLeast(0),
         "textualLikeCount"       to item.textualLikeCount.orEmpty(),
         "replyCount"             to item.replyCount,
-        "repliesPageUrl"         to (item.getReplies()?.getUrl() ?: ""),
+        "repliesPageUrl"         to (item.getReplies()?.url ?: ""),
         "hasReplies"             to (item.replyCount > 0 || item.getReplies() != null),
         "isPinned"               to item.isPinned,
         "isHearted"              to item.isHeartedByUploader,
@@ -1775,7 +1768,8 @@ class MavinEngineModule : Module() {
 
     private fun performSearch(query: String, filter: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = if (serviceId != null) getService(serviceId) else getDefaultService()
-        val handler = service.searchQHFactory.fromQuery(query, listOf(filter), "")
+        val contentFilters = if (filter.isBlank()) emptyList() else listOf(filter)
+        val handler = service.searchQHFactory.fromQuery(query, contentFilters, "")
         return if (pageUrl.isNullOrEmpty()) {
             val info = SearchInfo.getInfo(service, handler)
             mapOf<String, Any>(
@@ -1870,13 +1864,6 @@ class MavinEngineModule : Module() {
         )
     }
 
-    private fun extractChannelTabs(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
-        val info = ChannelInfo.getInfo(service, url)
-        return mapOf<String, Any>("success" to true, "channelName" to info.name.orEmpty(),
-            "tabs" to info.tabs.map { tabLinkHandlerToMap(it) })
-    }
-
     private fun tabLinkHandlerToMap(tab: ListLinkHandler): Map<String, Any> = mapOf<String, Any>(
         "name" to (tab.contentFilters.firstOrNull() ?: ""),
         "contentFilters" to tab.contentFilters, "url" to tab.url
@@ -1885,9 +1872,10 @@ class MavinEngineModule : Module() {
     private fun extractChannelTabItems(channelUrl: String, tabFilter: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = resolveService(channelUrl, serviceId)
         val channelInfo = ChannelInfo.getInfo(service, channelUrl)
-        val targetTab = if (tabFilter.isBlank()) channelInfo.tabs.firstOrNull()
+        val targetTab: ListLinkHandler = (
+            if (tabFilter.isBlank()) channelInfo.tabs.firstOrNull()
             else channelInfo.tabs.firstOrNull { t -> t.contentFilters.any { it.equals(tabFilter, ignoreCase = true) } }
-            ?: throw ExtractionException("No tab matching filter '$tabFilter'")
+        ) ?: throw ExtractionException("No tab matching filter '$tabFilter'")
 
         return if (pageUrl.isNullOrEmpty()) {
             val tabInfo = ChannelTabInfo.getInfo(service, targetTab)
@@ -1937,11 +1925,24 @@ class MavinEngineModule : Module() {
             entry
         }
         return mapOf<String, Any>("success" to true, "serviceId" to service.serviceId,
-            "defaultKioskId" to (kioskList.defaultKioskId ?: ""), "kiosks" to kiosks)
+            "defaultKioskId" to kioskList.defaultKioskId, "kiosks" to kiosks)
     }
 
     private fun extractKioskInfo(kioskId: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
         val service = if (serviceId != null) getService(serviceId) else getDefaultService()
+        // Guard: "Trending" kiosk was removed by YouTube on 2025-07-21 and from
+        // NewPipeExtractor in v0.24.8. Attempting to use it throws inside getExtractorById.
+        // The default kiosk is now "Live". Callers should use getTrendingWithFallback instead.
+        val availableKiosks = service.kioskList.availableKiosks
+        if (!availableKiosks.contains(kioskId)) {
+            return mapOf(
+                "success" to false,
+                "kioskId" to kioskId,
+                "error"   to "KIOSK_NOT_FOUND",
+                "message" to "Kiosk '$kioskId' does not exist. Available: $availableKiosks",
+                "items"   to emptyList<Map<String, Any>>()
+            )
+        }
         val kioskUrl = service.kioskList.getExtractorById(kioskId, null).url
         return if (pageUrl.isNullOrEmpty()) {
             val info = KioskInfo.getInfo(service, kioskUrl)
@@ -1964,44 +1965,98 @@ class MavinEngineModule : Module() {
 
     // ── URL Utilities ─────────────────────────────────────────────────────────
 
+    /**
+     * Extract the canonical content ID for a given URL and link type.
+     * Guards against null factories — services like MediaCCC don't support all link types.
+     * getLinkTypeByUrl() is always called before this, so NONE is already excluded.
+     */
+    private fun extractIdForLinkType(
+        service: StreamingService,
+        linkType: StreamingService.LinkType,
+        url: String
+    ): String = when (linkType) {
+        StreamingService.LinkType.STREAM -> service.streamLHFactory.fromUrl(url).id
+        StreamingService.LinkType.CHANNEL -> {
+            val factory = service.channelLHFactory
+                ?: throw ExtractionException("Service '${service.serviceInfo.name}' does not support channels")
+            factory.fromUrl(url).id
+        }
+        StreamingService.LinkType.PLAYLIST -> {
+            val factory = service.playlistLHFactory
+                ?: throw ExtractionException("Service '${service.serviceInfo.name}' does not support playlists")
+            factory.fromUrl(url).id
+        }
+        StreamingService.LinkType.NONE -> throw ExtractionException("URL not handled: $url")
+    }
+
     private fun resolveUrl(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val linkType = service.getLinkTypeByUrl(url)
-        val id = when (linkType) {
-            StreamingService.LinkType.STREAM   -> service.streamLHFactory.fromUrl(url).id
-            StreamingService.LinkType.CHANNEL  -> service.channelLHFactory.fromUrl(url).id
-            StreamingService.LinkType.PLAYLIST -> service.playlistLHFactory.fromUrl(url).id
-            StreamingService.LinkType.NONE     -> throw ExtractionException("URL not handled: $url")
+        val linkType = try {
+            service.getLinkTypeByUrl(url)
+        } catch (e: Exception) {
+            throw ExtractionException("Could not determine link type for URL: $url — ${e.message}", e)
         }
-        return mapOf<String, Any>("type" to linkType.name.lowercase(), "id" to id,
-            "url" to url, "serviceId" to service.serviceId, "serviceName" to service.serviceInfo.name)
+        if (linkType == StreamingService.LinkType.NONE)
+            throw ExtractionException("URL not handled by service '${service.serviceInfo.name}': $url")
+        val id = extractIdForLinkType(service, linkType, url)
+        return mapOf<String, Any>(
+            "type"        to linkType.name.lowercase(),
+            "id"          to id,
+            "url"         to url,
+            "serviceId"   to service.serviceId,
+            "serviceName" to service.serviceInfo.name
+        )
     }
 
     private fun checkCanHandle(url: String, serviceId: Int?): Map<String, Any> {
         if (serviceId != null) {
             val service = getService(serviceId)
-            val linkType = service.getLinkTypeByUrl(url)
-            return mapOf<String, Any>("canHandle" to (linkType != StreamingService.LinkType.NONE),
-                "linkType" to linkType.name.lowercase(), "serviceId" to service.serviceId, "url" to url)
+            val linkType = try {
+                service.getLinkTypeByUrl(url)
+            } catch (_: Exception) {
+                StreamingService.LinkType.NONE
+            }
+            return mapOf<String, Any>(
+                "canHandle"   to (linkType != StreamingService.LinkType.NONE),
+                "linkType"    to linkType.name.lowercase(),
+                "serviceId"   to service.serviceId,
+                "serviceName" to service.serviceInfo.name,
+                "url"         to url
+            )
         }
+        // No serviceId — probe all services
+        var matchedLinkType = StreamingService.LinkType.NONE
         val match = ServiceList.all().firstOrNull { s ->
-            try { s.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE } catch (_: Exception) { false }
+            try {
+                val lt = s.getLinkTypeByUrl(url)
+                if (lt != StreamingService.LinkType.NONE) { matchedLinkType = lt; true } else false
+            } catch (_: Exception) { false }
         }
-        return mapOf<String, Any>("canHandle" to (match != null), "serviceId" to (match?.serviceId ?: -1),
-            "serviceName" to (match?.serviceInfo?.name ?: ""), "url" to url)
+        return mapOf<String, Any>(
+            "canHandle"   to (match != null),
+            "linkType"    to matchedLinkType.name.lowercase(),
+            "serviceId"   to (match?.serviceId ?: -1),
+            "serviceName" to (match?.serviceInfo?.name ?: ""),
+            "url"         to url
+        )
     }
 
     private fun extractIdFromUrl(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val linkType = service.getLinkTypeByUrl(url)
-        val id = when (linkType) {
-            StreamingService.LinkType.STREAM   -> service.streamLHFactory.fromUrl(url).id
-            StreamingService.LinkType.CHANNEL  -> service.channelLHFactory.fromUrl(url).id
-            StreamingService.LinkType.PLAYLIST -> service.playlistLHFactory.fromUrl(url).id
-            StreamingService.LinkType.NONE     -> throw ExtractionException("Cannot extract ID: $url")
+        val linkType = try {
+            service.getLinkTypeByUrl(url)
+        } catch (e: Exception) {
+            throw ExtractionException("Could not determine link type for URL: $url — ${e.message}", e)
         }
-        return mapOf<String, Any>("id" to id, "type" to linkType.name.lowercase(),
-            "url" to url, "serviceId" to service.serviceId)
+        if (linkType == StreamingService.LinkType.NONE)
+            throw ExtractionException("Cannot extract ID — URL not handled: $url")
+        val id = extractIdForLinkType(service, linkType, url)
+        return mapOf<String, Any>(
+            "id"        to id,
+            "type"      to linkType.name.lowercase(),
+            "url"       to url,
+            "serviceId" to service.serviceId
+        )
     }
 
     // ── InfoItem mapping ──────────────────────────────────────────────────────
@@ -2014,7 +2069,8 @@ class MavinEngineModule : Module() {
             "uploaderUrl" to item.uploaderUrl.orEmpty(),
             "uploaderVerified" to item.isUploaderVerified,
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "duration" to (item.duration ?: 0L), "viewCount" to (item.viewCount ?: 0L),
+            "duration" to item.duration.coerceAtLeast(0L),
+            "viewCount" to item.viewCount.coerceAtLeast(0L),
             "textualUploadDate" to item.textualUploadDate.orEmpty(),
             "streamType" to item.streamType.name,
             "isLive" to (item.streamType == LIVE_STREAM || item.streamType == AUDIO_LIVE_STREAM),
@@ -2026,15 +2082,15 @@ class MavinEngineModule : Module() {
             "uploaderName" to item.uploaderName.orEmpty(),
             "uploaderUrl" to item.uploaderUrl.orEmpty(),
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "streamCount" to (item.streamCount ?: 0L),
+            "streamCount" to item.streamCount.coerceAtLeast(0L),
             "playlistType" to (item.playlistType?.name ?: "NORMAL")
         )
         is ChannelInfoItem -> mapOf<String, Any>(
             "type" to "channel", "serviceId" to item.serviceId,
             "url" to item.url, "name" to item.name.orEmpty(),
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
-            "subscriberCount" to (item.subscriberCount ?: 0L),
-            "streamCount" to (item.streamCount ?: 0L),
+            "subscriberCount" to item.subscriberCount.coerceAtLeast(0L),
+            "streamCount" to item.streamCount.coerceAtLeast(0L),
             "isVerified" to item.isVerified, "description" to item.description.orEmpty()
         )
         else -> null
@@ -2043,9 +2099,9 @@ class MavinEngineModule : Module() {
     // ── Stream field mapping ──────────────────────────────────────────────────
 
     private fun audioStreamToMap(s: AudioStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""), "isUrl" to s.isUrl,
+        "url" to s.content, "isUrl" to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name, "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""), "bitrate" to s.getBitrate(),
+        "codec" to s.getCodec(), "bitrate" to s.getBitrate(),
         "audioTrackId" to (s.getAudioTrackId() ?: ""),
         "audioTrackName" to (s.getAudioTrackName() ?: ""),
         "audioLocale" to (s.getAudioLocale()?.toLanguageTag() ?: ""),
@@ -2054,15 +2110,15 @@ class MavinEngineModule : Module() {
     )
 
     private fun videoStreamToMap(s: VideoStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""), "isUrl" to s.isUrl,
+        "url" to s.content, "isUrl" to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name, "format" to (s.format?.name ?: ""),
-        "codec" to (s.codec ?: ""), "width" to s.getWidth(), "height" to s.getHeight(),
+        "codec" to s.getCodec(), "width" to s.getWidth(), "height" to s.getHeight(),
         "fps" to s.getFps(), "bitrate" to s.getBitrate(),
         "quality" to s.getQuality(), "manifestUrl" to (s.manifestUrl ?: "")
     )
 
     private fun subtitleToMap(s: SubtitlesStream): Map<String, Any> = mapOf<String, Any>(
-        "url" to (s.content ?: ""), "isUrl" to s.isUrl,
+        "url" to s.content, "isUrl" to s.isUrl,
         "deliveryMethod" to s.deliveryMethod.name, "format" to (s.format?.name ?: ""),
         "languageTag" to s.getLanguageTag(),
         "displayLanguageName" to (s.displayLanguageName ?: ""),
@@ -2077,9 +2133,9 @@ class MavinEngineModule : Module() {
     private fun pageOrEmpty(p: Page?): Map<String, Any> = p?.let { pageToMap(it) } ?: emptyMap()
 
     private fun pageToMap(p: Page): Map<String, Any> = mapOf<String, Any>(
-        "url" to (p.getUrl() ?: ""),
-        "ids" to (p.getIds() ?: emptyList<String>()),
-        "cookies" to (p.getCookies() ?: emptyMap<String, String>())
+        "url"     to (p.url ?: ""),
+        "ids"     to (p.ids ?: emptyList<String>()),
+        "cookies" to (p.cookies ?: emptyMap<String, String>())
     )
 
     // ── Downloader ────────────────────────────────────────────────────────────
@@ -2092,9 +2148,9 @@ class MavinEngineModule : Module() {
                     val body = request.dataToSend()
                     builder.post(
                         if (body != null)
-                            RequestBody.create("application/x-www-form-urlencoded".toMediaTypeOrNull(), body)
+                            body.toRequestBody("application/x-www-form-urlencoded".toMediaType())
                         else
-                            RequestBody.create(null, ByteArray(0))
+                            ByteArray(0).toRequestBody()
                     )
                 }
                 "HEAD" -> builder.head()
@@ -2108,14 +2164,15 @@ class MavinEngineModule : Module() {
             request.headers().forEach { (key, values) ->
                 values.forEach { value -> builder.addHeader(key, value) }
             }
-            val okResponse = client.newCall(builder.build()).execute()
-            return Response(
-                okResponse.code,
-                okResponse.message,
-                okResponse.headers.toMultimap(),
-                okResponse.body?.string() ?: "",
-                okResponse.request.url.toString()
-            )
+            return client.newCall(builder.build()).execute().use { r ->
+                Response(
+                    r.code,
+                    r.message,
+                    r.headers.toMultimap(),
+                    r.body?.string() ?: "",
+                    r.request.url.toString()
+                )
+            }
         }
     }
 }
