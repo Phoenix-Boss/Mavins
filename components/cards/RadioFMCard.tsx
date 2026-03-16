@@ -1,5 +1,10 @@
 /**
- * Radio FM Card Component - Displays a live radio station
+ * Radio FM Card Component - Circular station card
+ * - Circular shape
+ * - Cover art if available, initials fallback
+ * - Clean readable name (no Radio/FM/AM/special chars)
+ * - LIVE badge + play button
+ * - No view count
  */
 import React from "react";
 import {
@@ -9,220 +14,186 @@ import {
   Image,
   StyleSheet,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 
-// Metallic Gold Color Palette
 const COLORS = {
-  background: '#000000',
-  surfaceLight: '#1F1F1F',
-  goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  text: '#FFFFFF',
-  textSecondary: '#B3B3B3',
-  liveTag: '#3B82F6',
+  background:   "#000000",
+  surfaceLight: "#1F1F1F",
+  goldPrimary:  "#D4AF37",
+  goldShiny:    "#FFD700",
+  goldShimmer:  "#E6C16A",
+  text:         "#FFFFFF",
+  textSecondary:"#B3B3B3",
+  liveTag:      "#3B82F6",
 };
+
+const CARD_SIZE = 80; // diameter of the circle
 
 interface RadioFMCardProps {
   item: {
     id: string;
     title: string;
-    artist: string;
-    thumbnail: string;
-    viewers: string;
-    live: boolean;
+    artist?: string;
+    thumbnail?: string;
   };
   isCurrentTrack?: boolean;
   isPlaying?: boolean;
   onPress?: () => void;
 }
 
-export const RadioFMCard = ({ 
-  item, 
+// Strip noise words and special characters, return readable station name
+function cleanStationName(name: string): string {
+  if (!name) return "Station";
+  return name
+    .replace(/\b(Radio|FM|AM|Online|Live|Stream|Music|Station)\b/gi, "")
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || name.trim();
+}
+
+function getInitials(name: string): string {
+  const cleaned = cleanStationName(name);
+  const words = cleaned.split(" ").filter(w => w.length > 0);
+  if (words.length === 0) return "ST";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+function getColorFromName(name: string): string {
+  const colors = ["#D4AF37", "#FFD700", "#E6C16A", "#C9A227", "#B8941F"];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
+export const RadioFMCard = ({
+  item,
   isCurrentTrack = false,
-  isPlaying = false,
-  onPress 
+  onPress,
 }: RadioFMCardProps) => {
   const router = useRouter();
 
+  const cleanedName   = cleanStationName(item.title);
+  const initials      = getInitials(item.title);
+  const bgColor       = getColorFromName(item.title);
+  const hasValidImage =
+    !!item.thumbnail &&
+    item.thumbnail.startsWith("http") &&
+    !item.thumbnail.includes("placeholder");
+
   const handlePress = () => {
     triggerHaptic();
-    if (onPress) {
-      onPress();
-    } else {
-      // Default behavior - navigate to radio station
-      router.navigate(`/radio/${item.id}`);
-    }
-  };
-
-  const handlePlayPress = (e: any) => {
-    e.stopPropagation();
-    triggerHaptic();
-    // Play live stream
-    router.navigate('/(player)');
+    if (onPress) onPress();
+    else router.navigate(`/radio/${item.id}`);
   };
 
   return (
     <TouchableOpacity
-      style={[
-        styles.radioCard,
-        isCurrentTrack && styles.currentPlayingTrack
-      ]}
+      style={styles.wrapper}
       onPress={handlePress}
-      activeOpacity={0.9}
+      activeOpacity={0.85}
     >
-      <Image
-        source={{ uri: item.thumbnail }}
-        style={styles.radioImage}
-      />
-      
-      <View style={styles.radioBadge}>
-        <View style={styles.liveDot} />
-        <Text style={styles.radioBadgeText}>LIVE</Text>
-      </View>
-      
-      {item.viewers && (
-        <View style={styles.viewerBadge}>
-          <Ionicons name="eye-outline" size={10} color={COLORS.goldShiny} />
-          <Text style={styles.viewerText}>{item.viewers}</Text>
+      {/* Circle + LIVE badge in a relative container so badge sits in front */}
+      <View style={styles.circleWrapper}>
+        <View style={[styles.circle, isCurrentTrack && styles.circleActive]}>
+          {hasValidImage ? (
+            <Image source={{ uri: item.thumbnail }} style={styles.image} />
+          ) : (
+            <View style={[styles.fallback, { backgroundColor: bgColor + "28" }]}>
+              <Text style={[styles.initials, { color: bgColor }]}>{initials}</Text>
+            </View>
+          )}
         </View>
-      )}
-      
-      {/* Play button top right */}
-      <View style={styles.radioPlayButtonContainer}>
-        <TouchableOpacity 
-          style={[
-            styles.metallicPlayButtonOutline,
-            isCurrentTrack && styles.activePlayButton
-          ]}
-          onPress={handlePlayPress}
-        >
-          <Ionicons 
-            name={isCurrentTrack && isPlaying ? "pause" : "play"} 
-            size={14} 
-            color={COLORS.goldShiny} 
-          />
-        </TouchableOpacity>
+
+        {/* LIVE badge — absolutely positioned in front of circle, bottom center */}
+        <View style={styles.liveBadge}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>LIVE</Text>
+        </View>
       </View>
-      
-      <View style={styles.radioInfo}>
-        <Text style={styles.radioTitle} numberOfLines={1}>
-          {item.title}
-        </Text>
-        <Text style={styles.radioArtist} numberOfLines={1}>
-          {item.artist}
-        </Text>
-      </View>
+
+      {/* Station name */}
+      <Text style={styles.name} numberOfLines={2}>{cleanedName}</Text>
     </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  radioCard: {
-    width: 130,
-    height: 170,
-    borderRadius: 10,
-    overflow: 'hidden',
-    position: 'relative',
+  wrapper: {
+    alignItems: "center",
+    width: CARD_SIZE + 8,
   },
-  radioImage: {
-    width: '100%',
-    height: '100%',
+  circleWrapper: {
+    width: CARD_SIZE,
+    height: CARD_SIZE,
+    position: "relative",
+  },
+  circle: {
+    width: CARD_SIZE,
+    height: CARD_SIZE,
+    borderRadius: CARD_SIZE / 2,
+    overflow: "hidden",
     backgroundColor: COLORS.surfaceLight,
-  },
-  radioBadge: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    backgroundColor: COLORS.liveTag,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 10,
-    gap: 3,
-    zIndex: 2,
-  },
-  liveDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: COLORS.background,
-  },
-  radioBadgeText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: COLORS.background,
-  },
-  viewerBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 40,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    zIndex: 2,
-  },
-  viewerText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: COLORS.goldShiny,
-  },
-  radioPlayButtonContainer: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    zIndex: 2,
-  },
-  metallicPlayButtonOutline: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     borderWidth: 1.5,
-    borderColor: COLORS.goldShiny,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.6,
-    shadowRadius: 3,
-    elevation: 3,
+    borderColor: "rgba(212,175,55,0.2)",
   },
-  activePlayButton: {
-    backgroundColor: COLORS.goldPrimary + '30',
+  circleActive: {
+    borderColor: COLORS.goldPrimary,
+    borderWidth: 2,
     shadowColor: COLORS.goldShiny,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
+    shadowOpacity: 0.7,
+    shadowRadius: 8,
     elevation: 6,
   },
-  radioInfo: {
-    position: 'absolute',
-    bottom: 0,
+  image: {
+    width: "100%",
+    height: "100%",
+  },
+  fallback: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  initials: {
+    fontSize: 22,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  liveBadge: {
+    position: "absolute",
+    top: 10,
     left: 0,
-    right: 0,
-    padding: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: COLORS.liveTag,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 2,
+    zIndex: 10,
   },
-  radioTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+  liveDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#fff",
+  },
+  liveText: {
+    fontSize: 7,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  name: {
+    marginTop: 6,
+    fontSize: 10,
+    fontWeight: "600",
     color: COLORS.text,
-    marginBottom: 2,
-  },
-  radioArtist: {
-    fontSize: 12,
-    color: COLORS.goldShimmer,
-  },
-  currentPlayingTrack: {
-    borderWidth: 2,
-    borderColor: COLORS.goldPrimary,
+    textAlign: "center",
+    lineHeight: 13,
   },
 });

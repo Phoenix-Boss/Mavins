@@ -1,13 +1,10 @@
 /**
- * useMonthlyTop Hook - Uses Charts API for accurate monthly data
- * 
- * The YouTube Charts API provides historical trending data that can be
- * filtered by time range, making it ideal for monthly top charts.
+ * useMonthlyTop Hook — Supabase DB Edition
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import { getTrendingWithFallback, search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
+import type { ChartRanking } from '@/libs/supabase';
 
 export interface MonthlyItem {
   id: string;
@@ -27,137 +24,99 @@ interface UseMonthlyTopResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 10;
 const CACHE_KEY = 'top:monthly';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
+// Fisher-Yates shuffle
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  return thumbnails[0]?.url ?? '';
+  return shuffled;
 }
-
-function toMonthlyItem(item: StreamInfoItem, index: number): MonthlyItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    duration: Number(item.duration) || 0,
-    views: Number(item.viewCount) || 0,
-    position: index + 1,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetcher - Uses Charts API first, then search
-// ─────────────────────────────────────────────
 
 async function fetchMonthlyTop(): Promise<MonthlyItem[]> {
-  // Strategy 1: Try Charts API for trending (most reliable for popular content)
-  try {
-    console.log('📊 [useMonthlyTop] Trying Charts API...');
-    const result = await getTrendingWithFallback('music', YOUTUBE_SERVICE_ID);
-    
-    if (result.success && result.items?.length > 0) {
-      const items = result.items
-        .filter((item): item is StreamInfoItem => item.type === 'stream')
-        .map((item, idx) => toMonthlyItem(item, idx))
-        .filter((item): item is MonthlyItem => item !== null)
-        .slice(0, MAX_ITEMS);
-      
-      if (items.length > 0) {
-        console.log(`✅ [useMonthlyTop] Got ${items.length} from Charts API`);
-        return items;
-      }
-    }
-  } catch (e) {
-    console.warn('⚠️ [useMonthlyTop] Charts API failed:', e);
+  const { data: latestDateData, error: dateError } = await supabase
+    .from('chart_rankings')
+    .select('date')
+    .order('date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (dateError) throw new Error(`Failed to get latest chart date: ${dateError.message}`);
+
+  const latestDate = latestDateData?.date;
+
+  let query = supabase
+    .from('chart_rankings')
+    .select(`position, song_id, streams_today`)
+    .order('position', { ascending: true })
+    .limit(MAX_ITEMS);
+
+  if (latestDate) {
+    query = query.eq('date', latestDate);
   }
 
-  // Strategy 2: Search fallback with monthly-focused queries
-  console.log('🔍 [useMonthlyTop] Falling back to search...');
-  
-  const searchQueries = [
-    'top songs this month 2025',
-    'most played songs this month',
-    'monthly music chart 2025',
-    'billboard hot 100 this month',
-  ];
+  const { data: rankings, error: rankingsError } = await query;
 
-  for (const query of searchQueries) {
-    try {
-      const result = await search(query, 'all', undefined, YOUTUBE_SERVICE_ID) as SearchPage;
-      
-      if (!result.success) continue;
+  if (rankingsError) throw new Error(`Failed to fetch chart rankings: ${rankingsError.message}`);
+  if (!rankings?.length) throw new Error('No monthly top chart available');
 
-      const items = (result.results as StreamInfoItem[])
-        .filter(item => item.type === 'stream')
-        .reduce<MonthlyItem[]>((acc, item) => {
-          const mapped = toMonthlyItem(item, acc.length);
-          if (mapped) acc.push(mapped);
-          return acc;
-        }, [])
-        .slice(0, MAX_ITEMS);
+  const songIds = rankings.map(r => r.song_id);
 
-      if (items.length > 0) {
-        console.log(`✅ [useMonthlyTop] Got ${items.length} from search: ${query}`);
-        return items;
-      }
-    } catch {
-      continue;
-    }
-  }
+  const { data: songs, error: songsError } = await supabase
+    .from('songs')
+    .select('id, title, artist, artwork_thumbnail, artwork_url, video_id, duration, play_count')
+    .in('id', songIds);
 
-  throw new Error('No monthly top chart available');
+  if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
+
+  const songMap = new Map(songs?.map(song => [song.id, song]));
+
+  const items = rankings
+    .map((ranking: ChartRanking) => {
+      const song = songMap.get(ranking.song_id);
+      if (!song) return null;
+      return {
+        id: song.id,
+        videoId: song.video_id ?? '',
+        title: song.title ?? 'Unknown Title',
+        artist: song.artist ?? 'Unknown Artist',
+        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
+        duration: song.duration ?? 0,
+        views: ranking.streams_today ?? song.play_count ?? 0,
+        position: ranking.position,
+      };
+    })
+    .filter((item): item is MonthlyItem => item !== null);
+
+  return shuffleArray(items);
 }
-
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
 
 export const useMonthlyTop = (): UseMonthlyTopResult => {
   const [data, setData] = useState<MonthlyItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMonthlyTopData = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useMonthlyTop] Using cached data');
-        setData(cached);
+        setData(shuffleArray(cached));
         setLoading(false);
         return;
       }
-
+      console.log('🔍 [useMonthlyTop] Fetching from Supabase...');
       const monthly = await fetchMonthlyTop();
-      
       console.log(`✅ [useMonthlyTop] Received ${monthly.length} items`);
       await cache.set(CACHE_KEY, monthly, CACHE_TTL_MS);
       setData(monthly);
-
     } catch (err: any) {
       console.error('❌ [useMonthlyTop] Failed:', err);
       setError(err.message || 'Failed to load monthly top chart');
@@ -167,9 +126,7 @@ export const useMonthlyTop = (): UseMonthlyTopResult => {
     }
   }, []);
 
-  useEffect(() => {
-    fetchMonthlyTopData();
-  }, [fetchMonthlyTopData]);
+  useEffect(() => { load(); }, [load]);
 
-  return { data, loading, error, refetch: fetchMonthlyTopData };
+  return { data, loading, error, refetch: load };
 };

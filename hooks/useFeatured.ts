@@ -1,18 +1,11 @@
 /**
- * useFeatured Hook — Supabase DB Edition
- *
- * Data flow:
- * sections (section_type = 'featured')
- *   → section_items (track_id)
- *     → songs (title, artist, artwork_url, video_id, play_count, duration)
+ * useFeatured Hook — Supabase DB Edition (FIXED with types)
  */
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
+import type { Song } from '@/libs/supabase';
 
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
 export interface FeaturedItem {
   id: string;
   videoId: string;
@@ -31,54 +24,74 @@ interface UseFeaturedResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
 const MAX_ITEMS = 8;
 const CACHE_KEY = 'featured:music';
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
-// ─────────────────────────────────────────────
-// Fetcher
-// ─────────────────────────────────────────────
 async function fetchFeatured(): Promise<FeaturedItem[]> {
+  // Find the featured section
   const { data: section, error: sectionError } = await supabase
     .from('sections')
     .select('id')
-    .eq('section_type', 'featured')
+    .or('name.ilike.%featured%,section_type.eq.featured')
     .eq('is_visible', true)
-    .single();
+    .maybeSingle();
 
-  if (sectionError || !section) {
-    throw new Error(`Featured section not found: ${sectionError?.message}`);
+  if (sectionError) throw new Error(`Failed to find featured section: ${sectionError.message}`);
+  
+  // If no section, fallback to popular songs
+  if (!section) {
+    const { data: songs, error: songsError } = await supabase
+      .from('songs')
+      .select('id, title, artist, artwork_thumbnail, artwork_url, video_id, duration, play_count, popularity')
+      .not('artwork_thumbnail', 'is', null)
+      .order('popularity', { ascending: false, nullsFirst: false })
+      .order('play_count', { ascending: false })
+      .limit(MAX_ITEMS);
+
+    if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
+    if (!songs?.length) throw new Error('No songs found');
+
+    return songs.map((song: Song) => ({
+      id: song.id,
+      videoId: song.video_id ?? '',
+      title: song.title ?? 'Unknown Title',
+      artist: song.artist ?? 'Unknown Artist',
+      thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
+      duration: song.duration ?? 0,
+      views: song.play_count ?? 0,
+      popularity: song.popularity ?? 0,
+    }));
   }
 
+  // Get section items with track_ids
   const { data: sectionItems, error: itemsError } = await supabase
     .from('section_items')
-    .select('track_id, display_order')
+    .select('track_id, display_order, position')
     .eq('section_id', section.id)
     .not('track_id', 'is', null)
-    .order('display_order', { ascending: true })
+    .order('display_order', { ascending: true, nullsFirst: false })
+    .order('position', { ascending: true, nullsFirst: false })
     .limit(MAX_ITEMS);
 
   if (itemsError) throw new Error(`Failed to fetch section items: ${itemsError.message}`);
   if (!sectionItems?.length) throw new Error('Featured section has no items');
 
-  const trackIds = sectionItems.map(si => si.track_id);
+  const trackIds = sectionItems.map(item => item.track_id).filter(Boolean) as string[];
 
+  // Fetch the actual songs
   const { data: songs, error: songsError } = await supabase
     .from('songs')
-    .select('id, title, artist, artwork_url, artwork_thumbnail, video_id, play_count, duration, popularity')
+    .select('id, title, artist, artwork_thumbnail, artwork_url, video_id, duration, play_count, popularity')
     .in('id', trackIds);
 
   if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
-  if (!songs?.length) throw new Error('No songs found for featured section');
+  
+  const songMap = new Map(songs?.map(song => [song.id, song]));
 
-  const songMap = new Map(songs.map(s => [s.id, s]));
-
-  const items: FeaturedItem[] = sectionItems
-    .map(si => {
-      const song = songMap.get(si.track_id);
+  return sectionItems
+    .map(item => {
+      const song = songMap.get(item.track_id!);
       if (!song) return null;
       return {
         id: song.id,
@@ -92,18 +105,12 @@ async function fetchFeatured(): Promise<FeaturedItem[]> {
       };
     })
     .filter((item): item is FeaturedItem => item !== null);
-
-  if (!items.length) throw new Error('Could not map any featured songs');
-  return items;
 }
 
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
 export const useFeatured = (): UseFeaturedResult => {
-  const [data, setData]       = useState<FeaturedItem[]>([]);
+  const [data, setData] = useState<FeaturedItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchFeaturedData = useCallback(async () => {
     setLoading(true);

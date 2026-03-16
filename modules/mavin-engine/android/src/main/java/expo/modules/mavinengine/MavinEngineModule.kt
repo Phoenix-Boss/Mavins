@@ -29,7 +29,6 @@ import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
 import org.schabi.newpipe.extractor.search.SearchInfo
-import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.stream.*
 import org.schabi.newpipe.extractor.stream.StreamType.*
 import java.io.IOException
@@ -148,9 +147,16 @@ class MavinEngineModule : Module() {
         }
 
         // ── Search ────────────────────────────────────────────────────────────
-        // Default filter: YoutubeSearchQueryHandlerFactory.ALL = no filter (returns all content types)
+        // Per NewPipe API docs:
+        //   service.getSearchExtractor(query, contentFilter, sortFilter)
+        //   contentFilter = List<String>  — empty list = no filter (all results)
+        //   Valid YouTube filters: "videos","channels","playlists",
+        //   "music_songs","music_videos","music_albums","music_playlists"
+        //   DO NOT pass "all" — it is not a NewPipe filter value.
         AsyncFunction("search") { query: String, filter: String?, pageUrl: String?, serviceId: Int? ->
-            ensureInit(); performSearch(query, filter ?: YoutubeSearchQueryHandlerFactory.ALL, pageUrl, serviceId)
+            ensureInit()
+            // filter null/"" → emptyList (no filter). Any other string → listOf(filter).
+            performSearch(query, filter?.takeIf { it.isNotBlank() }, pageUrl, serviceId)
         }
         AsyncFunction("getSearchSuggestions") { query: String, serviceId: Int? ->
             ensureInit(); getSearchSuggestions(query, serviceId)
@@ -336,7 +342,7 @@ class MavinEngineModule : Module() {
                 // challenge at the app layer.
                 // See: NewPipe app repo → util/potoken/ for reference.
                 // For metadata-only usage (search, channel, comments) no poToken needed.
-                Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${ServiceList.all().size} services loaded")
+                Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${NewPipe.getServices().size} services loaded")
                 Log.i(TAG, "ℹ️  PoToken: not set — stream URLs use Android/iOS clients (limited formats)")
             } catch (e: Exception) {
                 Log.e(TAG, "NewPipe init failed", e)
@@ -1570,27 +1576,43 @@ class MavinEngineModule : Module() {
 
     // ── Service Resolution ────────────────────────────────────────────────────
 
+    /**
+     * Get a StreamingService by ID using the canonical NewPipe API.
+     * Per NewPipe.java javadoc: NewPipe.getService(int serviceId)
+     * throws ExtractionException if no service with that ID is registered.
+     * Service IDs: 0=YouTube, 1=SoundCloud, 2=MediaCCC, 3=PeerTube, 4=Bandcamp.
+     */
     private fun getService(serviceId: Int): StreamingService =
-        ServiceList.all().firstOrNull { it.serviceId == serviceId }
-            ?: throw ExtractionException("No service with id=$serviceId")
+        NewPipe.getService(serviceId)
 
+    /**
+     * YouTube (serviceId=0) is the default service per NewPipe convention.
+     */
     private fun getDefaultService(): StreamingService =
-        ServiceList.all().firstOrNull { it.serviceId == 0 }
-            ?: ServiceList.all().firstOrNull()
-            ?: throw ExtractionException("No streaming services registered")
+        NewPipe.getService(0)
 
+    /**
+     * Resolve a service from a URL by probing registered services.
+     * Used when caller does not specify a serviceId — iterates NewPipe.getServices()
+     * and checks each service's getLinkTypeByUrl().
+     */
     private fun getServiceForUrl(url: String): StreamingService =
-        ServiceList.all().firstOrNull { service ->
+        NewPipe.getServices().firstOrNull { service ->
             try { service.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE }
             catch (_: Exception) { false }
         } ?: throw ExtractionException("No service can handle URL: $url")
 
+    /**
+     * If serviceId is provided use it directly via NewPipe.getService(id).
+     * Otherwise auto-detect service from the URL.
+     */
     private fun resolveService(url: String, serviceId: Int?): StreamingService =
         if (serviceId != null) getService(serviceId) else getServiceForUrl(url)
 
     private fun getServicesList(): List<Map<String, Any>> {
         if (!isInitialized) return emptyList()
-        return ServiceList.all().map { s ->
+        // NewPipe.getServices() is the canonical public API per docs.
+        return NewPipe.getServices().map { s ->
             mapOf<String, Any>(
                 "id"                to s.serviceId,
                 "name"              to s.serviceInfo.name,
@@ -1766,27 +1788,64 @@ class MavinEngineModule : Module() {
 
     // ── Search ────────────────────────────────────────────────────────────────
 
-    private fun performSearch(query: String, filter: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
-        val contentFilters = if (filter.isBlank()) emptyList() else listOf(filter)
-        val handler = service.searchQHFactory.fromQuery(query, contentFilters, "")
+    /**
+     * Search via NewPipe API.
+     *
+     * Per StreamingService javadoc:
+     *   getSearchExtractor(String query, List<String> contentFilter, String sortFilter)
+     *   Returns a SearchExtractor. Call fetchPage() then SearchInfo.getInfo(extractor).
+     *
+     * Per SearchQueryHandlerFactory javadoc:
+     *   fromQuery(String query, List<String> contentFilter, String sortFilter)
+     *   contentFilter = emptyList() means NO filter (all content types).
+     *   DO NOT pass listOf("all") — "all" is not a valid NewPipe filter token.
+     *
+     * Per SearchInfo javadoc:
+     *   getInfo(StreamingService, SearchQueryHandler) for first page.
+     *   getMoreItems(StreamingService, SearchQueryHandler, Page) for pagination.
+     *   The handler must be re-created with the same query+filters for getMoreItems.
+     *
+     * filter: null or blank → emptyList() (no filter, returns all content types)
+     *         non-blank     → listOf(filter) e.g. listOf("music_songs")
+     */
+    private fun performSearch(query: String, filter: String?, pageUrl: String?, serviceId: Int?): Map<String, Any> {
+        // NewPipe.getService(id) is the canonical lookup per API docs.
+        // serviceId null → service 0 (YouTube) via NewPipe.getService(0).
+        val service = NewPipe.getService(serviceId ?: 0)
+
+        // Build contentFilter list. emptyList() = no filter per API docs.
+        val contentFilters: List<String> = if (filter.isNullOrBlank()) emptyList() else listOf(filter)
+
+        // sortFilter: "" = no sort (default relevance). NewPipe docs: pass "" for default.
+        val sortFilter = ""
+
         return if (pageUrl.isNullOrEmpty()) {
-            val info = SearchInfo.getInfo(service, handler)
+            // First page: use service.getSearchExtractor(query, contentFilters, sortFilter)
+            // per StreamingService javadoc. Then SearchInfo.getInfo(extractor).
+            val extractor = service.getSearchExtractor(query, contentFilters, sortFilter)
+            extractor.fetchPage()
+            val info = SearchInfo.getInfo(extractor)
             mapOf<String, Any>(
-                "success" to true, "query" to info.searchString.orEmpty(),
-                "suggestion" to info.searchSuggestion.orEmpty(),
+                "success"          to true,
+                "query"            to info.searchString.orEmpty(),
+                "suggestion"       to info.searchSuggestion.orEmpty(),
                 "isCorrectedSearch" to info.isCorrectedSearch,
-                "results" to info.relatedItems.mapNotNull { infoItemToMap(it) },
-                "nextPage" to pageOrEmpty(info.nextPage), "hasNextPage" to (info.nextPage != null),
-                "errors" to info.errors.map { it.message.orEmpty() }
+                "results"          to info.relatedItems.mapNotNull { infoItemToMap(it) },
+                "nextPage"         to pageOrEmpty(info.nextPage),
+                "hasNextPage"      to (info.nextPage != null),
+                "errors"           to info.errors.map { it.message.orEmpty() }
             )
         } else {
+            // Subsequent pages: SearchInfo.getMoreItems(service, handler, page).
+            // handler must be re-built with same query+filters per API docs.
+            val handler = service.searchQHFactory.fromQuery(query, contentFilters, sortFilter)
             val more = SearchInfo.getMoreItems(service, handler, Page(pageUrl))
             mapOf<String, Any>(
-                "success" to true,
-                "results" to more.items.mapNotNull { infoItemToMap(it) },
-                "nextPage" to pageOrEmpty(more.nextPage), "hasNextPage" to (more.nextPage != null),
-                "errors" to more.errors.map { it.message.orEmpty() }
+                "success"     to true,
+                "results"     to more.items.mapNotNull { infoItemToMap(it) },
+                "nextPage"    to pageOrEmpty(more.nextPage),
+                "hasNextPage" to (more.nextPage != null),
+                "errors"      to more.errors.map { it.message.orEmpty() }
             )
         }
     }
@@ -1797,7 +1856,8 @@ class MavinEngineModule : Module() {
     }
 
     private fun getAvailableSearchFilters(serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
+        // NewPipe.getService(id) per API docs. 0=YouTube is default.
+        val service = NewPipe.getService(serviceId ?: 0)
         return mapOf<String, Any>(
             "serviceId" to service.serviceId,
             "serviceName" to service.serviceInfo.name,
@@ -2024,9 +2084,9 @@ class MavinEngineModule : Module() {
                 "url"         to url
             )
         }
-        // No serviceId — probe all services
+        // No serviceId — probe all services via canonical NewPipe.getServices() API
         var matchedLinkType = StreamingService.LinkType.NONE
-        val match = ServiceList.all().firstOrNull { s ->
+        val match = NewPipe.getServices().firstOrNull { s ->
             try {
                 val lt = s.getLinkTypeByUrl(url)
                 if (lt != StreamingService.LinkType.NONE) { matchedLinkType = lt; true } else false

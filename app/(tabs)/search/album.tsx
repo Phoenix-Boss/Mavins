@@ -1,8 +1,16 @@
 /**
- * This file defines the `AlbumPageScreen` component, which displays detailed
- * information about a specific music album. It fetches album data from YouTube Music,
- * including its artwork, title, artist, and a list of its songs. Users can play
- * individual songs or the entire album from this screen.
+ * AlbumPageScreen
+ *
+ * Displays detailed information about a specific album/playlist:
+ * artwork, title, artist, and a numbered song list.
+ *
+ * Data source: MavinEngine.getPlaylistInfo() — albums on YouTube Music
+ * are exposed by NewPipe as playlists, so their URLs are full playlist URLs
+ * passed from ArtistPageScreen as the `id` param.
+ *
+ * Route params:
+ *   id     — full playlist URL (e.g. "https://music.youtube.com/playlist?list=…")
+ *   artist — artist name string to label each song
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -11,9 +19,12 @@ import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-import { innertube, processAlbumPageData } from "@/services/youtube";
+import MavinEngine, {
+  PlaylistInfo,
+  StreamInfoItem,
+} from "@/modules/mavin-engine";
 import { FlashList } from "@shopify/flash-list";
-import { Image } from "@d11/react-native-fast-image";
+import { Image } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
 import color from "color";
 import { LinearGradient } from "expo-linear-gradient";
@@ -25,21 +36,84 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   ScaledSheet,
   moderateScale,
-  scale,
   verticalScale,
 } from "react-native-size-matters/extend";
 import { useActiveTrack } from "react-native-track-player";
 
-/**
- * `AlbumPageScreen` component.
- * Displays a detailed page for a specific album.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Local types
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AlbumSong {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  url: string;
+  duration: string;
+}
+
+interface AlbumPageData {
+  title: string;
+  subtitle: string;
+  second_subtitle: string;
+  thumbnail: string;
+  songs: AlbumSong[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const formatDuration = (seconds: number): string => {
+  if (seconds <= 0) return "";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+};
+
+const playlistInfoToAlbumData = (
+  info: PlaylistInfo,
+  artistOverride: string
+): AlbumPageData => {
+  const thumbnail =
+    info.thumbnails.find((t) => t.resolutionLevel === "HIGH")?.url ??
+    info.thumbnails[0]?.url ??
+    unknownTrackImageUri;
+
+  const songs: AlbumSong[] = info.items
+    .filter((i): i is StreamInfoItem => i.type === "stream")
+    .map((s) => ({
+      id: s.url.split("v=")[1]?.split("&")[0] ?? s.url,
+      title: s.name,
+      artist: artistOverride || s.uploaderName,
+      thumbnail:
+        s.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
+        s.thumbnails[0]?.url ??
+        thumbnail,
+      url: s.url,
+      duration: formatDuration(s.duration),
+    }));
+
+  return {
+    title: info.name,
+    subtitle: info.uploaderName,
+    second_subtitle: `${info.streamCount} songs`,
+    thumbnail,
+    songs,
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function AlbumPageScreen() {
   const [isScrolling, setIsScrolling] = useState<boolean>(false);
   const [showHeaderTitle, setShowHeaderTitle] = useState<boolean>(false);
   const { top, bottom } = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const [albumData, setAlbumData] = useState<AlbumPageData>();
+  const [albumData, setAlbumData] = useState<AlbumPageData | null>(null);
   const router = useRouter();
   const lastActiveTrack = useLastActiveTrack();
   const activeTrack = useActiveTrack();
@@ -48,52 +122,33 @@ export default function AlbumPageScreen() {
   const { id, artist } = useLocalSearchParams<{ id: string; artist: string }>();
 
   const { imageColors } = useImageColors(
-    albumData?.thumbnail ?? unknownTrackImageUri,
+    albumData?.thumbnail ?? unknownTrackImageUri
   );
-
-  const playableSongList =
-    albumData?.songs?.map(({ duration, ...rest }) => ({
-      ...rest,
-      artist: artist,
-      thumbnail: albumData?.thumbnail ?? unknownTrackImageUri,
-    })) ?? [];
 
   const isFloatingPlayerNotVisible = !(activeTrack ?? lastActiveTrack);
 
   useEffect(() => {
-    /**
-     * Fetches the album's data from the YouTube Music API.
-     */
     const fetchAlbumData = async () => {
       if (!id) {
         setLoading(false);
         return;
       }
-
       setLoading(true);
       try {
-        console.log(`Fetching data for album: ${id}`);
-        const yt = await innertube;
-        const album = await yt.music.getAlbum(id);
-        const albumPage = processAlbumPageData(album);
-        setAlbumData(albumPage);
+        console.log(`[AlbumPage] fetching playlist: ${id}`);
+        const info: PlaylistInfo = await MavinEngine.getPlaylistInfo(id, 0);
+        setAlbumData(playlistInfoToAlbumData(info, artist ?? ""));
       } catch (error) {
-        console.error("Error fetching artist data:", error);
+        console.error("[AlbumPage] error fetching album:", error);
       } finally {
         setLoading(false);
       }
     };
-
     fetchAlbumData();
-  }, [id]);
+  }, [id, artist]);
 
-  /**
-   * Handles playing a selected song from the playlist.
-   * @param song - The `Song` object to play.
-   * @param playList - An optional list of songs to play after the selected song.
-   */
-  const handleSongSelect = (song: Song, playList?: Song[]) => {
-    playAudio(song, playList);
+  const handleSongSelect = (song: AlbumSong, playlist?: AlbumSong[]) => {
+    playAudio(song, playlist);
   };
 
   if (loading) {
@@ -104,20 +159,14 @@ export default function AlbumPageScreen() {
     );
   }
 
-  /**
-   * Renders the header component for the album page.
-   * @returns The rendered header component.
-   */
   const ListHeader = () => (
     <>
-      {/* Artwork Image */}
       <View style={styles.artworkImageContainer}>
-        <FastImage
-          source={{
-            uri: albumData?.thumbnail ?? unknownTrackImageUri,
-            priority: FastImage.priority.high,
-          }}
+        <Image
+          source={{ uri: albumData?.thumbnail ?? unknownTrackImageUri }}
           style={styles.artworkImage}
+          contentFit="cover"
+          priority="high"
         />
       </View>
 
@@ -154,27 +203,19 @@ export default function AlbumPageScreen() {
     </>
   );
 
-  /**
-   * Renders a song item from the album.
-   * @param item - The song item to render.
-   * @param index - The index of the song in the list.
-   * @returns The rendered song item component.
-   */
-  const renderSongItem = ({ item, index }: { item: any; index: number }) => (
+  const renderSongItem = ({
+    item,
+    index,
+  }: {
+    item: AlbumSong;
+    index: number;
+  }) => (
     <View key={item.id + index} style={styles.songItem}>
       <TouchableOpacity
         style={styles.songItemTouchableArea}
         onPress={() => {
           triggerHaptic();
-          handleSongSelect(
-            {
-              id: item.id,
-              title: item.title,
-              artist: artist,
-              thumbnail: albumData?.thumbnail ?? unknownTrackImageUri,
-            },
-            playableSongList,
-          );
+          handleSongSelect(item, albumData?.songs);
         }}
       >
         <View style={styles.indexContainer}>
@@ -189,20 +230,19 @@ export default function AlbumPageScreen() {
           </Text>
         </View>
       </TouchableOpacity>
+
       <TouchableOpacity
         onPress={() => {
           triggerHaptic();
-          // Convert the song object to a JSON string
           const songData = JSON.stringify({
             id: item.id,
             title: item.title,
-            artist: artist,
-            thumbnail: albumData?.thumbnail ?? unknownTrackImageUri,
+            artist: item.artist,
+            thumbnail: item.thumbnail,
           });
-
           router.push({
             pathname: "/(modals)/menu",
-            params: { songData: songData, type: "song" },
+            params: { songData, type: "song" },
           });
         }}
         hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
@@ -237,20 +277,15 @@ export default function AlbumPageScreen() {
             name="arrow-back"
             size={moderateScale(28)}
             color={Colors.text}
-            style={{
-              paddingLeft: 15,
-              paddingRight: 10,
-              marginTop: 2,
-            }}
+            style={{ paddingLeft: 15, paddingRight: 10, marginTop: 2 }}
             onPress={() => {
               triggerHaptic();
               router.back();
             }}
           />
-
           <Text
             numberOfLines={1}
-            style={[styles.headerText, !showHeaderTitle && { opacity: 0 }, ,]}
+            style={[styles.headerText, !showHeaderTitle && { opacity: 0 }]}
           >
             {albumData?.title}
           </Text>
@@ -267,27 +302,25 @@ export default function AlbumPageScreen() {
         )}
 
         <FlashList
-          data={albumData?.songs}
+          data={albumData?.songs ?? []}
           renderItem={renderSongItem}
-          keyExtractor={(item: any) => item.id}
+          keyExtractor={(item: AlbumSong) => item.id}
           ListHeaderComponent={ListHeader}
+          estimatedItemSize={55}
           contentContainerStyle={{
             paddingHorizontal: 15,
             paddingBottom: verticalScale(190) + bottom,
           }}
           showsVerticalScrollIndicator={false}
           onScroll={(e) => {
-            const currentScrollPosition =
-              Math.floor(e.nativeEvent.contentOffset.y) || 0;
-            setIsScrolling(currentScrollPosition > 0);
-            setShowHeaderTitle(
-              currentScrollPosition > titleLayout.y + titleLayout.height,
-            );
+            const pos = Math.floor(e.nativeEvent.contentOffset.y) || 0;
+            setIsScrolling(pos > 0);
+            setShowHeaderTitle(pos > titleLayout.y + titleLayout.height);
           }}
           scrollEventThrottle={16}
         />
 
-        {albumData?.songs && albumData?.songs.length > 0 && (
+        {(albumData?.songs?.length ?? 0) > 0 && (
           <FAB
             style={{
               position: "absolute",
@@ -303,8 +336,8 @@ export default function AlbumPageScreen() {
             color="black"
             onPress={async () => {
               triggerHaptic();
-              if (albumData?.songs.length === 0) return;
-              await playPlaylist(playableSongList);
+              if (!albumData?.songs.length) return;
+              await playPlaylist(albumData.songs);
               await router.navigate("/player");
             }}
           />
@@ -314,7 +347,10 @@ export default function AlbumPageScreen() {
   );
 }
 
-// Styles for the AlbumPageScreen component.
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+
 const styles = ScaledSheet.create({
   container: {
     flex: 1,
@@ -356,7 +392,6 @@ const styles = ScaledSheet.create({
   artworkImage: {
     width: "240@ms",
     height: "240@ms",
-    resizeMode: "cover",
     borderRadius: 12,
   },
   titleText: {
@@ -374,9 +409,9 @@ const styles = ScaledSheet.create({
     paddingLeft: 0,
   },
   songItemTouchableArea: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    width: scale(370) - 60,
   },
   indexContainer: {
     width: "40@ms",

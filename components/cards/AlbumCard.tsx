@@ -1,6 +1,6 @@
 /**
  * Album Card Component - Displays an album/playlist in a square card format
- * v1.2 - Fixed Image source type (string | undefined, not null)
+ * v1.3 - Compact size (110x140) for grid layouts
  */
 import React from "react";
 import {
@@ -57,13 +57,11 @@ export const AlbumCard = ({
     id: item?.id || `fallback_${Math.random()}`,
     title: item?.title || fallbackTitle,
     artist: item?.artist || "Unknown Artist",
-    // ✅ Fixed: Ensure thumbnail is string | undefined, never null
     thumbnail: item?.thumbnail || undefined,
     position: item?.position,
     plays: item?.plays
   };
 
-  // ✅ Fixed: Check for string | undefined (not null)
   const hasValidImage = !!safeItem.thumbnail && safeItem.thumbnail.startsWith('http');
 
   const handlePress = () => {
@@ -91,16 +89,16 @@ export const AlbumCard = ({
       onPress={handlePress}
       activeOpacity={0.9}
     >
-      {/* ✅ Image with fallback */}
+      {/* Image with fallback */}
       {hasValidImage ? (
         <Image
-          source={{ uri: safeItem.thumbnail }}  // ✅ Safe: string | undefined
+          source={{ uri: safeItem.thumbnail }}
           style={styles.albumImage}
           resizeMode="cover"
         />
       ) : (
         <View style={[styles.albumImage, styles.fallbackImage]}>
-          <Ionicons name="musical-note" size={40} color={COLORS.goldShimmer} />
+          <Ionicons name="musical-note" size={32} color={COLORS.goldShimmer} />
         </View>
       )}
       
@@ -140,7 +138,7 @@ export const AlbumCard = ({
           >
             <Ionicons 
               name={isCurrentTrack && isPlaying ? "pause" : "play"} 
-              size={14} 
+              size={12} 
               color={COLORS.goldShiny} 
             />
           </TouchableOpacity>
@@ -152,9 +150,9 @@ export const AlbumCard = ({
 
 const styles = StyleSheet.create({
   albumCard: {
-    width: 130,
-    height: 170,
-    borderRadius: 10,
+    width: 110,           // Reduced from 130
+    height: 140,          // Reduced from 170
+    borderRadius: 8,      // Slightly smaller radius
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: COLORS.surfaceLight,
@@ -178,7 +176,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    padding: 10,
+    padding: 8,           // Reduced from 10
     backgroundColor: 'rgba(0, 0, 0, 0.8)',
   },
   albumTextContainer: {
@@ -186,60 +184,60 @@ const styles = StyleSheet.create({
   },
   positionBadge: {
     position: 'absolute',
-    top: -25,
+    top: -20,             // Adjusted for smaller padding
     left: 0,
     backgroundColor: COLORS.goldPrimary,
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    borderRadius: 3,      // Smaller radius
+    paddingHorizontal: 5, // Reduced from 6
+    paddingVertical: 1,   // Reduced from 2
   },
   positionText: {
     color: '#000',
-    fontSize: 10,
+    fontSize: 9,          // Reduced from 10
     fontWeight: 'bold',
   },
   albumTitle: {
-    fontSize: 14,
+    fontSize: 12,         // Reduced from 14
     fontWeight: '600',
     color: COLORS.text,
-    marginBottom: 2,
+    marginBottom: 1,      // Reduced from 2
   },
   albumArtist: {
-    fontSize: 12,
+    fontSize: 10,         // Reduced from 12
     color: COLORS.goldShimmer,
-    marginBottom: 2,
+    marginBottom: 1,      // Reduced from 2
   },
   playsText: {
-    fontSize: 10,
+    fontSize: 9,          // Reduced from 10
     color: COLORS.textMuted,
   },
   albumPlayButtonContainerTopRight: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 6,               // Reduced from 8
+    right: 6,             // Reduced from 8
   },
   metallicPlayButtonOutline: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,            // Reduced from 28
+    height: 24,           // Reduced from 28
+    borderRadius: 12,     // Reduced from 14
     backgroundColor: 'transparent',
-    borderWidth: 1.5,
+    borderWidth: 1.2,     // Slightly thinner
     borderColor: COLORS.goldShiny,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: COLORS.goldShiny,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.6,
-    shadowRadius: 3,
-    elevation: 3,
+    shadowRadius: 2,      // Reduced from 3
+    elevation: 2,         // Reduced from 3
   },
   activePlayButton: {
     backgroundColor: COLORS.goldPrimary + '30',
     shadowColor: COLORS.goldShiny,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.9,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowRadius: 4,      // Reduced from 6
+    elevation: 4,         // Reduced from 6
   },
   currentPlayingTrack: {
     borderWidth: 2,

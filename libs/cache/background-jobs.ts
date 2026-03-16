@@ -1,9 +1,30 @@
-// src/cache/background-jobs.ts
+// libs/cache/background-jobs.ts
 
 import { cacheManager } from './cache-manager';
 import { supabaseCache } from './supabase-cache';
-import { config } from './config';
+import { getConfig } from './config';
 import { StreamData, TrackMetadata } from './types';
+
+// `config` was previously imported as a static named export but `config.ts`
+// exports a function `getConfig()` — there is no `config` named export, so
+// `config` was `undefined` at runtime, crashing every access to
+// `config.background.*`.
+//
+// Additionally, `CacheConfig` has no `background` key at all, so those
+// property paths (`maxPreCache`, `popularThreshold`, `refreshIntervalMinutes`)
+// do not exist anywhere in the config shape.
+//
+// Fix: call `getConfig()` where we actually need config values, and use
+// local constants for values that were never in the config.
+
+/** How often background jobs run (ms). Defaults to 60 minutes. */
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+
+/** Max popular searches to pre-cache per run. */
+const MAX_PRE_CACHE = 50;
+
+/** Minimum hit count to qualify as a "popular" search. */
+const POPULAR_THRESHOLD = 10;
 
 /**
  * Background Jobs - Run every hour
@@ -29,7 +50,7 @@ export class BackgroundJobs {
     // Then run every hour
     this.interval = setInterval(() => {
       this.runAllJobs();
-    }, config.background.refreshIntervalMinutes * 60 * 1000);
+    }, REFRESH_INTERVAL_MS);
   }
 
   /**
@@ -109,13 +130,16 @@ export class BackgroundJobs {
 
   /**
    * Job 2: Cache popular searches
+   * Previously crashed with "Cannot read property 'background' of undefined"
+   * because it read config.background.maxPreCache / config.background.popularThreshold
+   * — neither property path exists. Now uses local constants instead.
    */
   private async cachePopularSearches(): Promise<void> {
     console.log('  🔄 Caching popular searches...');
 
     const popular = await supabaseCache.getPopularSearches(
-      config.background.maxPreCache,
-      config.background.popularThreshold
+      MAX_PRE_CACHE,
+      POPULAR_THRESHOLD
     );
 
     if (!popular || popular.length === 0) {

@@ -2,20 +2,17 @@
  * useLiveStations Hook — Supabase DB Edition
  *
  * Data flow:
- * sections (section_type = 'radio_fm')
- *   → section_items (radio_station_id)
- *     → radio_stations (name, stream_url, thumbnail, genre, listeners)
- *
- * Note: radio_stations table needs to be populated before this hook
- * returns data. The section and section_items linkage is already in place.
+ *   radio_stations
+ *     → is_active = true, stream_url not null
+ *     → full pool of 24 cached
+ *     → each load picks 8 that were NOT in the previous 8
+ *       so all 8 slots always change completely
  */
-import { useState, useEffect, useCallback } from 'react';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
 export interface LiveStationItem {
   id: string;
   name: string;
@@ -33,16 +30,11 @@ interface UseLiveStationsResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-const MAX_ITEMS = 8;
-const CACHE_KEY = 'radio:live';
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const FETCH_COUNT   = 24; // full pool stored in cache
+const DISPLAY_COUNT = 8;  // shown at once — all 8 change every load
+const CACHE_KEY     = 'radio:live:v4';
+const CACHE_TTL_MS  = 6 * 60 * 60 * 1000;
 
-// ─────────────────────────────────────────────
-// Helper
-// ─────────────────────────────────────────────
 export function formatViewers(count: number): string {
   if (!count) return '0';
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -50,88 +42,95 @@ export function formatViewers(count: number): string {
   return String(count);
 }
 
-// ─────────────────────────────────────────────
-// Fetcher
-// ─────────────────────────────────────────────
-async function fetchLiveStations(): Promise<LiveStationItem[]> {
-  const { data: section, error: sectionError } = await supabase
-    .from('sections')
-    .select('id')
-    .eq('section_type', 'radio_fm')
-    .eq('is_visible', true)
-    .single();
-
-  if (sectionError || !section) {
-    throw new Error(`Radio FM section not found: ${sectionError?.message}`);
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-
-  const { data: sectionItems, error: itemsError } = await supabase
-    .from('section_items')
-    .select('radio_station_id, display_order')
-    .eq('section_id', section.id)
-    .not('radio_station_id', 'is', null)
-    .order('display_order', { ascending: true })
-    .limit(MAX_ITEMS);
-
-  if (itemsError) throw new Error(`Failed to fetch section items: ${itemsError.message}`);
-  if (!sectionItems?.length) throw new Error('Radio FM section has no stations linked yet');
-
-  const stationIds = sectionItems.map(si => si.radio_station_id);
-
-  const { data: stations, error: stationsError } = await supabase
-    .from('radio_stations')
-    .select('*')
-    .in('id', stationIds);
-
-  if (stationsError) throw new Error(`Failed to fetch radio stations: ${stationsError.message}`);
-  if (!stations?.length) throw new Error('No radio stations found — populate the radio_stations table first');
-
-  const stationMap = new Map(stations.map(s => [s.id, s]));
-
-  const items: LiveStationItem[] = sectionItems
-    .map(si => {
-      const station = stationMap.get(si.radio_station_id);
-      if (!station) return null;
-      return {
-        id: station.id,
-        name: station.name ?? 'Unknown Station',
-        streamUrl: station.stream_url ?? '',
-        thumbnail: station.thumbnail_url ?? station.artwork_url ?? '',
-        genre: station.genre ?? '',
-        listeners: station.listeners ?? station.listener_count ?? 0,
-        isLive: true,
-      };
-    })
-    .filter((item): item is LiveStationItem => item !== null);
-
-  if (!items.length) throw new Error('Could not map any radio stations');
-  return items;
+  return shuffled;
 }
 
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
+/**
+ * Pick DISPLAY_COUNT items from pool that are NOT in lastShownIds.
+ * If the remaining pool is smaller than DISPLAY_COUNT, reset and
+ * pick from the full pool (guarantees we always get 8).
+ */
+function pickFresh(
+  pool: LiveStationItem[],
+  lastShownIds: Set<string>
+): LiveStationItem[] {
+  const fresh = pool.filter(s => !lastShownIds.has(s.id));
+
+  if (fresh.length >= DISPLAY_COUNT) {
+    // Enough unseen items — shuffle and take 8
+    return shuffleArray(fresh).slice(0, DISPLAY_COUNT);
+  }
+
+  // Pool exhausted — reset and pick from full shuffled pool
+  return shuffleArray(pool).slice(0, DISPLAY_COUNT);
+}
+
+async function fetchLiveStations(): Promise<LiveStationItem[]> {
+  const { data, error } = await supabase
+    .from('radio_stations')
+    .select('id, name, stream_url, logo_url, language, listener_count, metadata')
+    .eq('is_active', true)
+    .not('stream_url', 'is', null)
+    .order('listener_count', { ascending: false, nullsFirst: false })
+    .limit(FETCH_COUNT);
+
+  if (error) throw new Error(`Failed to fetch radio stations: ${error.message}`);
+  if (!data?.length) throw new Error('No radio stations available');
+
+  return data.map(station => {
+    const meta = (station.metadata ?? {}) as Record<string, any>;
+    return {
+      id: station.id,
+      name: station.name ?? 'Unknown Station',
+      streamUrl: station.stream_url ?? '',
+      thumbnail: station.logo_url ?? '',
+      genre: meta.tags?.split(',')[0]?.trim() ?? 'Radio',
+      listeners: station.listener_count ?? 0,
+      isLive: true,
+    };
+  });
+}
+
 export const useLiveStations = (): UseLiveStationsResult => {
   const [data, setData]       = useState<LiveStationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const fetchLiveStationsData = useCallback(async () => {
+  // Track which IDs were shown last time so next load picks different ones
+  const lastShownIds = useRef<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      // ── Try cache first ───────────────────────────────────
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
-        console.log('📦 [useLiveStations] Using cached data');
-        setData(cached);
+        console.log('📦 [useLiveStations] Using cached pool');
+        const picked = pickFresh(cached, lastShownIds.current);
+        lastShownIds.current = new Set(picked.map(s => s.id));
+        setData(picked);
         setLoading(false);
         return;
       }
+
+      // ── Fetch fresh from Supabase ─────────────────────────
       console.log('🔍 [useLiveStations] Fetching from Supabase...');
-      const stations = await fetchLiveStations();
-      console.log(`✅ [useLiveStations] Received ${stations.length} stations`);
-      await cache.set(CACHE_KEY, stations, CACHE_TTL_MS);
-      setData(stations);
+      const pool = await fetchLiveStations();
+      console.log(`✅ [useLiveStations] Received ${pool.length} stations`);
+
+      await cache.set(CACHE_KEY, pool, CACHE_TTL_MS); // store full pool
+
+      const picked = pickFresh(pool, lastShownIds.current);
+      lastShownIds.current = new Set(picked.map(s => s.id));
+      setData(picked);
+
     } catch (err: any) {
       console.error('❌ [useLiveStations] Failed:', err);
       setError(err.message || 'Failed to load radio stations');
@@ -141,7 +140,7 @@ export const useLiveStations = (): UseLiveStationsResult => {
     }
   }, []);
 
-  useEffect(() => { fetchLiveStationsData(); }, [fetchLiveStationsData]);
+  useEffect(() => { load(); }, [load]);
 
-  return { data, loading, error, refetch: fetchLiveStationsData };
+  return { data, loading, error, refetch: load };
 };

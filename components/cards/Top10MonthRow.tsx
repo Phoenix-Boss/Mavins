@@ -1,5 +1,5 @@
 /**
- * Top 10 Month Row Component - Displays a single top 10 chart row with position
+ * Top 10 Month Row Component - Displays a single chart row without position numbers
  */
 import React from "react";
 import {
@@ -13,7 +13,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 
-// Metallic Gold Color Palette
 const COLORS = {
   background: '#000000',
   surface: '#121212',
@@ -36,7 +35,7 @@ interface Top10MonthRowProps {
     artist: string;
     thumbnail: string;
     plays: string;
-    position: number;
+    position?: number;
     previousPosition?: number;
   };
   isCurrentTrack?: boolean;
@@ -44,37 +43,19 @@ interface Top10MonthRowProps {
   onPress?: () => void;
 }
 
-export const Top10MonthRow = ({ 
-  item, 
+export const Top10MonthRow = ({
+  item,
   isCurrentTrack = false,
   isPlaying = false,
-  onPress 
+  onPress
 }: Top10MonthRowProps) => {
   const router = useRouter();
-  
-  // Extract track title without position number
-  const trackTitle = item.title.includes('. ') ? item.title.split('. ')[1] : item.title;
-  const position = item.position || parseInt(item.title.split('.')[0]) || 1;
-  
-  // Determine position change indicator
-  const getPositionChange = () => {
-    if (!item.previousPosition) return null;
-    if (item.previousPosition > position) {
-      return { icon: 'arrow-up', color: '#22C55E' };
-    } else if (item.previousPosition < position) {
-      return { icon: 'arrow-down', color: '#EF4444' };
-    }
-    return { icon: 'remove', color: COLORS.goldMuted };
-  };
-
-  const positionChange = getPositionChange();
 
   const handlePress = () => {
     triggerHaptic();
     if (onPress) {
       onPress();
     } else {
-      // Default behavior - navigate to track
       router.navigate(`/track/${item.id}`);
     }
   };
@@ -82,7 +63,6 @@ export const Top10MonthRow = ({
   const handleMenuPress = (e: any) => {
     e.stopPropagation();
     triggerHaptic();
-    // Open options menu
   };
 
   return (
@@ -94,23 +74,6 @@ export const Top10MonthRow = ({
       onPress={handlePress}
       activeOpacity={0.7}
     >
-      <View style={styles.positionContainer}>
-        <Text style={[
-          styles.top10Rank,
-          isCurrentTrack && styles.currentTrackText
-        ]}>
-          {position}
-        </Text>
-        {positionChange && (
-          <Ionicons 
-            name={positionChange.icon} 
-            size={12} 
-            color={positionChange.color} 
-            style={styles.positionIcon}
-          />
-        )}
-      </View>
-      
       <View style={styles.thumbnailWithPlayIndicator}>
         <Image
           source={{ uri: item.thumbnail }}
@@ -118,30 +81,30 @@ export const Top10MonthRow = ({
         />
         {isCurrentTrack && (
           <View style={styles.currentTrackIndicator}>
-            <Ionicons 
-              name={isPlaying ? "pause" : "play"} 
-              size={8} 
-              color={COLORS.goldShiny} 
+            <Ionicons
+              name={isPlaying ? "pause" : "play"}
+              size={8}
+              color={COLORS.goldShiny}
             />
           </View>
         )}
       </View>
-      
+
       <View style={styles.top10Info}>
         <Text style={[
           styles.top10Title,
           isCurrentTrack && styles.currentTrackText
         ]} numberOfLines={1}>
-          {trackTitle}
+          {item.title}
         </Text>
         <Text style={styles.top10Artist} numberOfLines={1}>
           {item.artist}
         </Text>
       </View>
-      
+
       <View style={styles.top10Right}>
         <Text style={styles.top10Plays}>{item.plays}</Text>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.trendingMenuButton}
           onPress={handleMenuPress}
           hitSlop={8}
@@ -162,20 +125,6 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: COLORS.border,
-  },
-  positionContainer: {
-    width: 35,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  top10Rank: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.goldPrimary,
-    textAlign: 'center',
-  },
-  positionIcon: {
-    marginTop: 2,
   },
   thumbnailWithPlayIndicator: {
     position: 'relative',

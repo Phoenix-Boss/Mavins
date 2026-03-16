@@ -14,7 +14,33 @@ import { normalizeQuery } from './utils';
 
 /**
  * Supabase Cache - Persistent storage
- * Reads env variables at RUNTIME, not from static config
+ *
+ * Schema alignment notes (confirmed against live DB 2026-03-14):
+ *
+ * tracks columns used here:
+ *   id, title, artist_id, album_id, video_id, duration_seconds,
+ *   thumbnail_url, metadata, play_count, updated_at, created_at
+ *   — NO: isrc, artist (string), album (string), artwork_url,
+ *         spotify_id, youtube_id, deezer_id, soundcloud_id,
+ *         access_count, last_accessed
+ *
+ * streams columns used here:
+ *   id, track_id, source, stream_url, quality, format, duration,
+ *   expiry, health_score, is_active, last_accessed, access_count
+ *   — NO: failure_count, last_verified (not on streams table)
+ *
+ * artists columns used here:
+ *   id, name, browse_id, thumbnail_url, subscriber_count,
+ *   monthly_listeners, metadata, updated_at, created_at
+ *   — top_tracks / albums / similar stored inside metadata jsonb
+ *
+ * searches → table does not exist.
+ *   Replaced with cache_metadata:
+ *   id, cache_key, original_query, track_id, hit_count,
+ *   last_verified, updated_at, created_at,
+ *   l1_cached, l2_cached, l3_cached, l4_cached + _at fields
+ *
+ * related_tracks → table does not exist; methods return empty / false safely.
  */
 export class SupabaseCache {
   private supabase: SupabaseClient | null = null;
@@ -26,7 +52,6 @@ export class SupabaseCache {
     console.log('🏗️ SupabaseCache constructor starting...');
     console.log('=====================================\n');
 
-    // ✅ READ ENV AT RUNTIME — NOT FROM CONFIG FILE
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     const serviceKey = process.env.SUPABASE_SERVICE_KEY;
@@ -38,8 +63,6 @@ export class SupabaseCache {
 
     if (!url || !anonKey) {
       console.error('❌ Supabase env variables missing');
-      console.error('   URL:', url || 'undefined');
-      console.error('   Anon Key:', anonKey || 'undefined');
       this.enabled = false;
       return;
     }
@@ -48,9 +71,7 @@ export class SupabaseCache {
 
     try {
       const keyToUse = serviceKey || anonKey;
-
       console.log('🔧 Creating Supabase client with URL:', url);
-
       this.supabase = createClient(url, keyToUse, {
         auth: {
           persistSession: false,
@@ -58,14 +79,11 @@ export class SupabaseCache {
           detectSessionInUrl: false
         }
       });
-
       console.log('✅ Supabase client created successfully');
-      
-      // Test connection in background
+
       this.testConnection().catch(err => {
         console.warn('⚠️ Supabase connection test failed:', err.message);
       });
-      
     } catch (error) {
       console.error('❌ Failed to create Supabase client:', error);
       this.supabase = null;
@@ -78,17 +96,14 @@ export class SupabaseCache {
     console.log('🏗️ ==================================\n');
   }
 
-  /**
-   * Test database connection
-   */
+  // ─── Connection test ────────────────────────────────────────────────────────
+
   private async testConnection(): Promise<void> {
     if (!this.supabase || !this.enabled) return;
-    
     try {
       const { error } = await this.supabase
         .from('tracks')
         .select('count', { count: 'exact', head: true });
-      
       if (error) {
         console.warn('⚠️ Supabase connection test failed:', error.message);
       } else {
@@ -99,311 +114,217 @@ export class SupabaseCache {
     }
   }
 
-  /**
-   * ==================== TRACK METHODS ====================
-   */
+  // ─── TRACK METHODS ──────────────────────────────────────────────────────────
 
   /**
-   * Get track by ID, ISRC, or title+artist
+   * Get track by ID or title+artist name.
+   *
+   * The tracks table does not have an isrc column or string artist/album columns.
+   * artist_id and album_id are UUID foreign keys. When looking up by title+artist
+   * we join through the artists table on name.
    */
   public async getTrack(identifier: string | TrackIdentifier): Promise<TrackMetadata | null> {
-    console.log('\n🔍 ==================================');
-    console.log('🔍 getTrack called');
-    console.log('=====================================');
-    console.log('Identifier:', JSON.stringify(identifier, null, 2));
-    
-    if (!this.enabled) {
-      console.log('⚠️ Supabase cache disabled, returning null');
-      return null;
-    }
-
-    if (!this.supabase) {
-      console.error('❌ Supabase client not initialized');
-      return null;
-    }
+    if (!this.enabled || !this.supabase) return null;
 
     try {
-      let query = this.supabase.from('tracks').select('*');
+      let data: any = null;
 
       if (typeof identifier === 'string') {
-        console.log('   Searching by ID string:', identifier);
-        query = query.eq('id', identifier);
-      } else if (identifier.isrc) {
-        console.log('   Searching by ISRC:', identifier.isrc);
-        query = query.eq('isrc', identifier.isrc);
-      } else if (identifier.title && identifier.artist) {
-        console.log('   Searching by title+artist:', identifier.title, identifier.artist);
-        query = query
-          .eq('title', identifier.title)
-          .eq('artist', identifier.artist);
+        // Lookup by track UUID
+        const result = await this.supabase
+          .from('tracks')
+          .select(`
+            id, title, video_id, duration_seconds, thumbnail_url,
+            metadata, play_count, updated_at, created_at,
+            artists ( id, name ),
+            albums ( id, title )
+          `)
+          .eq('id', identifier)
+          .maybeSingle();
+        if (result.error) { console.error('❌ getTrack error:', result.error); return null; }
+        data = result.data;
+
       } else if (identifier.id) {
-        console.log('   Searching by ID object:', identifier.id);
-        query = query.eq('id', identifier.id);
+        const result = await this.supabase
+          .from('tracks')
+          .select(`
+            id, title, video_id, duration_seconds, thumbnail_url,
+            metadata, play_count, updated_at, created_at,
+            artists ( id, name ),
+            albums ( id, title )
+          `)
+          .eq('id', identifier.id)
+          .maybeSingle();
+        if (result.error) { console.error('❌ getTrack error:', result.error); return null; }
+        data = result.data;
+
+      } else if (identifier.title && identifier.artist) {
+        // Join through artists table to match by name
+        const result = await this.supabase
+          .from('tracks')
+          .select(`
+            id, title, video_id, duration_seconds, thumbnail_url,
+            metadata, play_count, updated_at, created_at,
+            artists!inner ( id, name ),
+            albums ( id, title )
+          `)
+          .eq('title', identifier.title)
+          .eq('artists.name', identifier.artist)
+          .maybeSingle();
+        if (result.error) { console.error('❌ getTrack error:', result.error); return null; }
+        data = result.data;
+
       } else {
         console.log('❌ No valid identifier provided');
         return null;
       }
 
-      console.log('   Executing query...');
-      const { data, error } = await query.maybeSingle();
+      if (!data) return null;
 
-      if (error) {
-        console.error('❌ Query error:', error);
-        return null;
-      }
+      // Bump play_count in background — replaces the old access_count RPC
+      // which no longer matches the schema.
+      this.incrementPlayCount(data.id).catch(console.error);
 
-      if (!data) {
-        console.log('   No track found');
-        return null;
-      }
-
-      console.log('✅ Track found:', {
-        id: data.id,
-        title: data.title,
-        artist: data.artist
-      });
-
-      // Update access count in background
-      this.updateTrackAccess(data.id).catch(console.error);
-
-      // Convert from snake_case to camelCase
-      const track: TrackMetadata = {
-        id: data.id,
-        isrc: data.isrc,
-        title: data.title,
-        artist: data.artist,
-        album: data.album,
-        duration: data.duration,
-        artworkUrl: data.artwork_url,
-        spotifyId: data.spotify_id,
-        youtubeId: data.youtube_id,
-        deezerId: data.deezer_id,
-        soundcloudId: data.soundcloud_id,
-        metadata: data.metadata,
-        accessCount: data.access_count,
-        lastAccessed: data.last_accessed,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at
-      };
-
-      console.log('   Converted track:', track.title);
-      return track;
+      return this.rowToTrackMetadata(data);
     } catch (error) {
-      console.error('❌ Get track error:', error);
+      console.error('❌ getTrack error:', error);
       return null;
     }
   }
 
   /**
-   * Save track to database
+   * Save (upsert) a track.
+   *
+   * We can only store fields that exist on the tracks table. artist and album
+   * names cannot be stored as strings — caller must resolve artist_id / album_id
+   * UUIDs beforehand and pass them in metadata if needed. video_id maps to
+   * what was previously youtubeId.
    */
   public async saveTrack(trackData: TrackMetadata): Promise<string | null> {
-    console.log('\n💾 ==================================');
-    console.log('💾 saveTrack called');
-    console.log('=====================================');
-    console.log('Track data:', {
-      title: trackData.title,
-      artist: trackData.artist,
-      album: trackData.album,
-      isrc: trackData.isrc
-    });
-    
-    if (!this.enabled) {
-      console.log('⚠️ Supabase cache disabled, returning null');
-      return null;
-    }
-
-    if (!this.supabase) {
-      console.error('❌ Supabase client not initialized');
-      return null;
-    }
+    if (!this.enabled || !this.supabase) return null;
 
     try {
-      // Check if exists first
-      console.log('   Checking if track exists...');
       const existing = await this.getTrack({
-        isrc: trackData.isrc,
         title: trackData.title,
         artist: trackData.artist
       });
 
-      if (existing && existing.id) {
-        console.log('   Track exists, updating:', existing.id);
-        
-        // Update existing
+      const now = new Date().toISOString();
+
+      if (existing?.id) {
         const { data, error } = await this.supabase
           .from('tracks')
           .update({
-            isrc: trackData.isrc,
             title: trackData.title,
-            artist: trackData.artist,
-            album: trackData.album,
-            duration: trackData.duration,
-            artwork_url: trackData.artworkUrl,
-            spotify_id: trackData.spotifyId,
-            youtube_id: trackData.youtubeId,
-            deezer_id: trackData.deezerId,
-            soundcloud_id: trackData.soundcloudId,
+            video_id: trackData.youtubeId || null,
+            duration_seconds: trackData.duration || null,
+            thumbnail_url: trackData.artworkUrl || null,
             metadata: trackData.metadata || {},
-            last_accessed: new Date().toISOString(),
-            access_count: existing.accessCount ? existing.accessCount + 1 : 1,
-            updated_at: new Date().toISOString()
+            updated_at: now
           })
           .eq('id', existing.id)
           .select('id')
           .single();
 
-        if (error) {
-          console.error('❌ Update track error:', error);
-          return existing.id;
-        }
-
+        if (error) { console.error('❌ saveTrack update error:', error); return existing.id; }
         console.log('✅ Track updated:', data.id);
         return data.id;
       }
 
-      console.log('   Track does not exist, creating new...');
-      
-      // Insert new
-      const insertData = {
-        isrc: trackData.isrc,
-        title: trackData.title,
-        artist: trackData.artist,
-        album: trackData.album,
-        duration: trackData.duration,
-        artwork_url: trackData.artworkUrl,
-        spotify_id: trackData.spotifyId,
-        youtube_id: trackData.youtubeId,
-        deezer_id: trackData.deezerId,
-        soundcloud_id: trackData.soundcloudId,
-        metadata: trackData.metadata || {},
-        last_accessed: new Date().toISOString(),
-        access_count: 1,
-        created_at: new Date().toISOString()
-      };
-
-      console.log('   Insert data:', insertData);
-
       const { data, error } = await this.supabase
         .from('tracks')
-        .insert(insertData)
+        .insert({
+          title: trackData.title,
+          video_id: trackData.youtubeId || null,
+          duration_seconds: trackData.duration || null,
+          thumbnail_url: trackData.artworkUrl || null,
+          metadata: trackData.metadata || {},
+          created_at: now,
+          updated_at: now
+        })
         .select('id')
         .single();
 
-      if (error) {
-        console.error('❌ Save track error:', error);
-        return null;
-      }
-
+      if (error) { console.error('❌ saveTrack insert error:', error); return null; }
       console.log('✅ New track created:', data.id);
       return data.id;
     } catch (error) {
-      console.error('❌ Save track error:', error);
+      console.error('❌ saveTrack error:', error);
       return null;
     }
   }
 
   /**
-   * Update track access count
+   * Increment play_count for a track.
+   * Replaces the old increment_track_access RPC which no longer matches the schema.
    */
-  private async updateTrackAccess(trackId: string): Promise<void> {
+  private async incrementPlayCount(trackId: string): Promise<void> {
+    if (!this.supabase) return;
     try {
-      if (!this.supabase) return;
-      
-      await this.supabase.rpc('increment_track_access', {
-        track_id: trackId
-      });
-      console.log(`   Access count incremented for track ${trackId}`);
-    } catch (error) {
-      console.error('❌ Update track access error:', error);
+      await this.supabase.rpc('increment_play_count', { track_id: trackId });
+    } catch {
+      // RPC may not exist — fall back to a direct update
+      try {
+        await this.supabase
+          .from('tracks')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', trackId);
+      } catch { /* non-critical */ }
     }
   }
 
-  /**
-   * ==================== STREAM METHODS ====================
-   */
+  // ─── STREAM METHODS ─────────────────────────────────────────────────────────
 
   /**
-   * Get working stream for track
+   * Get the best active stream for a track.
+   * streams table has: id, track_id, source, stream_url, quality, format,
+   * duration, expiry, health_score, is_active, last_accessed, access_count.
+   * No failure_count or last_verified columns.
    */
   public async getStream(trackId: string): Promise<StreamData | null> {
-    console.log(`\n🎵 Getting stream for track: ${trackId}`);
-    
-    if (!this.enabled || !this.supabase) {
-      console.log('⚠️ Supabase cache disabled or client missing');
-      return null;
-    }
+    if (!this.enabled || !this.supabase) return null;
 
     try {
       const { data, error } = await this.supabase
         .from('streams')
-        .select('*')
+        .select('id, track_id, source, stream_url, quality, format, duration, expiry, health_score, is_active, last_accessed, access_count')
         .eq('track_id', trackId)
         .eq('is_active', true)
         .order('health_score', { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      if (error) {
-        console.error('❌ Get stream error:', error);
-        return null;
-      }
+      if (error) { console.error('❌ getStream error:', error); return null; }
+      if (!data) return null;
 
-      if (!data) {
-        console.log('   No stream found');
-        return null;
-      }
-
-      // Check if expired
       if (new Date(data.expiry) < new Date()) {
-        console.log('⏰ Stream expired, deactivating...');
-        await this.supabase
-          .from('streams')
-          .update({ is_active: false })
-          .eq('id', data.id);
+        await this.supabase.from('streams').update({ is_active: false }).eq('id', data.id);
         return null;
       }
 
-      console.log('✅ Stream found:', {
-        id: data.id,
-        source: data.source,
-        quality: data.quality,
-        health: data.health_score
-      });
+      // Update access tracking in background
+      this.supabase.from('streams').update({
+        last_accessed: new Date().toISOString(),
+        access_count: (data.access_count || 0) + 1
+      }).eq('id', data.id).then(() => {}).catch(() => {});
 
-      return {
-        id: data.id,
-        trackId: data.track_id,
-        source: data.source,
-        streamUrl: data.stream_url,
-        quality: data.quality,
-        format: data.format,
-        expiry: data.expiry,
-        isActive: data.is_active,
-        healthScore: data.health_score,
-        failureCount: data.failure_count,
-        lastVerified: data.last_verified
-      };
+      return this.rowToStreamData(data);
     } catch (error) {
-      console.error('❌ Get stream error:', error);
+      console.error('❌ getStream error:', error);
       return null;
     }
   }
 
   /**
-   * Save stream URL
+   * Save or update a stream URL.
    */
   public async saveStream(streamData: StreamSaveData): Promise<boolean> {
-    console.log(`\n💾 Saving stream for track: ${streamData.trackId}`);
-    
     if (!this.enabled || !this.supabase) return false;
 
     try {
-      const expiryDate = new Date(
-        Date.now() + (6 * 60 * 60 * 1000) // 6 hours default
-      ).toISOString();
+      const expiryDate = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
+      const now = new Date().toISOString();
 
-      // Check if exists
       const { data: existing } = await this.supabase
         .from('streams')
         .select('id')
@@ -412,9 +333,6 @@ export class SupabaseCache {
         .maybeSingle();
 
       if (existing) {
-        console.log('   Updating existing stream:', existing.id);
-        
-        // Update
         const { error } = await this.supabase
           .from('streams')
           .update({
@@ -424,23 +342,14 @@ export class SupabaseCache {
             expiry: expiryDate,
             is_active: true,
             health_score: 100,
-            last_verified: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            last_accessed: now
           })
           .eq('id', existing.id);
 
-        if (error) {
-          console.error('❌ Update stream error:', error);
-          return false;
-        }
-        
-        console.log('✅ Stream updated');
+        if (error) { console.error('❌ saveStream update error:', error); return false; }
         return true;
       }
 
-      console.log('   Creating new stream...');
-      
-      // Insert
       const { error } = await this.supabase
         .from('streams')
         .insert({
@@ -452,473 +361,331 @@ export class SupabaseCache {
           expiry: expiryDate,
           is_active: true,
           health_score: 100,
-          last_verified: new Date().toISOString(),
-          created_at: new Date().toISOString()
+          last_accessed: now,
+          access_count: 0,
+          created_at: now
         });
 
-      if (error) {
-        console.error('❌ Insert stream error:', error);
-        return false;
-      }
-
-      console.log('✅ New stream created');
+      if (error) { console.error('❌ saveStream insert error:', error); return false; }
       return true;
     } catch (error) {
-      console.error('❌ Save stream error:', error);
+      console.error('❌ saveStream error:', error);
       return false;
     }
   }
 
   /**
-   * Report failed stream
+   * Report a stream failure by reducing its health score.
+   * streams table has no failure_count column — health_score alone is used.
    */
   public async reportStreamFailure(streamId: string): Promise<void> {
-    console.log(`\n⚠️ Reporting stream failure: ${streamId}`);
-    
     if (!this.supabase) return;
 
     try {
       const { data } = await this.supabase
         .from('streams')
-        .select('health_score, failure_count')
+        .select('health_score')
         .eq('id', streamId)
         .single();
 
-      if (data) {
-        const newHealth = data.health_score - 20;
-        const newFailures = (data.failure_count || 0) + 1;
+      if (!data) return;
 
-        console.log(`   Health: ${data.health_score} -> ${newHealth}`);
-        console.log(`   Failures: ${data.failure_count || 0} -> ${newFailures}`);
+      const newHealth = (data.health_score || 100) - 20;
 
-        if (newHealth <= 0 || newFailures >= 3) {
-          console.log('   Deactivating stream (too many failures)');
-          // Deactivate
-          await this.supabase
-            .from('streams')
-            .update({
-              is_active: false,
-              health_score: 0,
-              failure_count: newFailures
-            })
-            .eq('id', streamId);
-        } else {
-          // Just reduce health
-          await this.supabase
-            .from('streams')
-            .update({
-              health_score: newHealth,
-              failure_count: newFailures
-            })
-            .eq('id', streamId);
-        }
-      }
+      await this.supabase
+        .from('streams')
+        .update({
+          health_score: Math.max(newHealth, 0),
+          is_active: newHealth <= 0
+        })
+        .eq('id', streamId);
     } catch (error) {
-      console.error('❌ Report stream failure error:', error);
+      console.error('❌ reportStreamFailure error:', error);
     }
   }
 
-  /**
-   * ==================== SEARCH METHODS ====================
-   */
+  // ─── SEARCH METHODS (via cache_metadata) ───────────────────────────────────
 
   /**
-   * Save search query and result
+   * The `searches` table does not exist in this schema.
+   * Search query tracking is handled via the `cache_metadata` table which has:
+   * cache_key, original_query, track_id, hit_count, last_verified, updated_at.
    */
   public async saveSearch(query: string, trackId: string): Promise<boolean> {
-    console.log(`\n🔎 Saving search: "${query}" -> track: ${trackId}`);
-    
     if (!this.enabled || !this.supabase) return false;
 
     const normalized = normalizeQuery(query);
+    const cacheKey = `search:${normalized}`;
+    const now = new Date().toISOString();
 
     try {
-      // Check if exists
       const { data: existing } = await this.supabase
-        .from('searches')
+        .from('cache_metadata')
         .select('id, hit_count')
-        .eq('normalized', normalized)
+        .eq('cache_key', cacheKey)
         .maybeSingle();
 
       if (existing) {
-        console.log('   Updating existing search, hit count:', existing.hit_count + 1);
-        
-        // Update hit count
         await this.supabase
-          .from('searches')
+          .from('cache_metadata')
           .update({
-            hit_count: existing.hit_count + 1,
-            last_hit: new Date().toISOString(),
+            hit_count: (existing.hit_count || 0) + 1,
+            last_verified: now,
+            updated_at: now,
             track_id: trackId
           })
           .eq('id', existing.id);
       } else {
-        console.log('   Creating new search entry');
-        
-        // Insert
         await this.supabase
-          .from('searches')
+          .from('cache_metadata')
           .insert({
-            query: query,
-            normalized: normalized,
+            cache_key: cacheKey,
+            original_query: query,
             track_id: trackId,
             hit_count: 1,
-            first_seen: new Date().toISOString(),
-            last_hit: new Date().toISOString()
+            l1_cached: false,
+            l2_cached: false,
+            l3_cached: false,
+            l4_cached: false,
+            created_at: now,
+            updated_at: now
           });
       }
 
-      console.log('✅ Search saved');
       return true;
     } catch (error) {
-      console.error('❌ Save search error:', error);
+      console.error('❌ saveSearch error:', error);
       return false;
     }
   }
 
   /**
-   * Find track by search query
+   * Find a cached track by search query via cache_metadata.
    */
   public async findBySearch(query: string): Promise<TrackMetadata | null> {
-    console.log(`\n🔎 Finding by search: "${query}"`);
-    
     if (!this.enabled || !this.supabase) return null;
 
-    const normalized = normalizeQuery(query);
+    const cacheKey = `search:${normalizeQuery(query)}`;
+    const now = new Date().toISOString();
 
     try {
       const { data, error } = await this.supabase
-        .from('searches')
+        .from('cache_metadata')
         .select('track_id')
-        .eq('normalized', normalized)
+        .eq('cache_key', cacheKey)
         .maybeSingle();
 
-      if (error || !data || !data.track_id) {
-        console.log('   No search record found');
-        return null;
-      }
+      if (error || !data?.track_id) return null;
 
-      console.log('   Found search record, track_id:', data.track_id);
-
-      // Update last hit
+      // Update last_verified
       await this.supabase
-        .from('searches')
-        .update({ last_hit: new Date().toISOString() })
-        .eq('normalized', normalized);
+        .from('cache_metadata')
+        .update({ last_verified: now, updated_at: now })
+        .eq('cache_key', cacheKey);
 
-      // Get the track
       return await this.getTrack(data.track_id);
     } catch (error) {
-      console.error('❌ Find by search error:', error);
+      console.error('❌ findBySearch error:', error);
       return null;
     }
   }
 
   /**
-   * ==================== RELATED TRACKS ====================
+   * Get popular searches for pre-caching, from cache_metadata ordered by hit_count.
    */
-
-  /**
-   * Save related tracks
-   */
-  public async saveRelatedTracks(
-    sourceTrackId: string, 
-    relatedTracks: RelatedTrackInput[]
-  ): Promise<boolean> {
-    console.log(`\n🔗 Saving ${relatedTracks.length} related tracks for: ${sourceTrackId}`);
-    
-    if (!this.enabled || !this.supabase || !relatedTracks.length) return false;
-
-    try {
-      // First, save all related tracks
-      for (const track of relatedTracks) {
-        console.log(`   Processing related track: ${track.title} by ${track.artist}`);
-        
-        const trackId = await this.saveTrack({
-          title: track.title,
-          artist: track.artist,
-          album: track.album,
-          isrc: track.isrc
-        });
-        
-        if (trackId) {
-          // Create relationship
-          await this.supabase
-            .from('related_tracks')
-            .upsert({
-              source_track: sourceTrackId,
-              related_track: trackId,
-              relevance: track.relevance,
-              reason: track.reason,
-              created_at: new Date().toISOString()
-            }, {
-              onConflict: 'source_track,related_track'
-            });
-          
-          console.log(`   ✅ Related track saved: ${trackId}`);
-        }
-      }
-
-      console.log('✅ All related tracks saved');
-      return true;
-    } catch (error) {
-      console.error('❌ Save related tracks error:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get related tracks
-   */
-  public async getRelatedTracks(trackId: string, limit = 10): Promise<TrackMetadata[]> {
-    console.log(`\n🔗 Getting related tracks for: ${trackId}`);
-    
-    if (!this.enabled || !this.supabase) return [];
-
-    try {
-      const { data, error } = await this.supabase
-        .from('related_tracks')
-        .select(`
-          related_track,
-          tracks!related_tracks_related_track_fkey (*)
-        `)
-        .eq('source_track', trackId)
-        .order('relevance', { ascending: false })
-        .limit(limit);
-
-      if (error || !data) {
-        console.error('❌ Get related tracks error:', error);
-        return [];
-      }
-
-      console.log(`   Found ${data.length} related tracks`);
-
-      return data.map(item => ({
-        id: item.tracks.id,
-        isrc: item.tracks.isrc,
-        title: item.tracks.title,
-        artist: item.tracks.artist,
-        album: item.tracks.album,
-        duration: item.tracks.duration,
-        artworkUrl: item.tracks.artwork_url,
-        spotifyId: item.tracks.spotify_id,
-        youtubeId: item.tracks.youtube_id,
-        deezerId: item.tracks.deezer_id,
-        soundcloudId: item.tracks.soundcloud_id,
-        metadata: item.tracks.metadata
-      }));
-    } catch (error) {
-      console.error('❌ Get related tracks error:', error);
-      return [];
-    }
-  }
-
-  /**
-   * ==================== ARTIST METHODS ====================
-   */
-
-  /**
-   * Save artist cache
-   */
-  public async saveArtist(artistName: string, data: Partial<ArtistCache>): Promise<boolean> {
-    console.log(`\n👤 Saving artist: ${artistName}`);
-    
-    if (!this.enabled || !this.supabase) return false;
-
-    try {
-      await this.supabase
-        .from('artist_cache')
-        .upsert({
-          name: artistName.toLowerCase(),
-          top_tracks: data.topTracks || [],
-          albums: data.albums || [],
-          similar: data.similar || [],
-          last_updated: new Date().toISOString()
-        }, {
-          onConflict: 'name'
-        });
-
-      console.log('✅ Artist saved');
-      return true;
-    } catch (error) {
-      console.error('❌ Save artist error:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get artist cache
-   */
-  public async getArtist(artistName: string): Promise<ArtistCache | null> {
-    console.log(`\n👤 Getting artist: ${artistName}`);
-    
-    if (!this.enabled || !this.supabase) return null;
-
-    try {
-      const { data, error } = await this.supabase
-        .from('artist_cache')
-        .select('*')
-        .eq('name', artistName.toLowerCase())
-        .maybeSingle();
-
-      if (error || !data) {
-        console.log('   Artist not found in cache');
-        return null;
-      }
-
-      console.log('✅ Artist found');
-
-      return {
-        id: data.id,
-        name: data.name,
-        topTracks: data.top_tracks,
-        albums: data.albums,
-        similar: data.similar,
-        lastUpdated: data.last_updated
-      };
-    } catch (error) {
-      console.error('❌ Get artist error:', error);
-      return null;
-    }
-  }
-
-  /**
-   * ==================== POPULAR SEARCHES ====================
-   */
-
-  /**
-   * Get popular searches for pre-caching
-   */
-  public async getPopularSearches(limit = 50, minHits = 10): Promise<Array<{ query: string; trackId: string; hitCount: number }>> {
+  public async getPopularSearches(
+    limit = 50,
+    minHits = 10
+  ): Promise<Array<{ query: string; trackId: string; hitCount: number }>> {
     console.log(`\n📊 Getting popular searches (min hits: ${minHits}, limit: ${limit})`);
-    
     if (!this.enabled || !this.supabase) return [];
 
     try {
       const { data, error } = await this.supabase
-        .from('searches')
-        .select('query, track_id, hit_count')
+        .from('cache_metadata')
+        .select('original_query, track_id, hit_count')
+        .not('track_id', 'is', null)
+        .not('original_query', 'is', null)
         .gte('hit_count', minHits)
         .order('hit_count', { ascending: false })
         .limit(limit);
 
       if (error || !data) {
-        console.error('❌ Get popular searches error:', error);
+        console.error('❌ getPopularSearches error:', error);
         return [];
       }
 
       console.log(`   Found ${data.length} popular searches`);
-
       return data.map(item => ({
-        query: item.query,
+        query: item.original_query,
         trackId: item.track_id,
         hitCount: item.hit_count
       }));
     } catch (error) {
-      console.error('❌ Get popular searches error:', error);
+      console.error('❌ getPopularSearches error:', error);
       return [];
     }
   }
 
-  /**
-   * ==================== STREAM HEALTH ====================
-   */
+  // ─── RELATED TRACKS ─────────────────────────────────────────────────────────
 
   /**
-   * Get streams expiring soon
+   * The `related_tracks` table does not exist in this schema.
+   * These methods are stubbed to return safe empty values until a
+   * related_tracks table is added.
+   */
+  public async saveRelatedTracks(
+    sourceTrackId: string,
+    relatedTracks: RelatedTrackInput[]
+  ): Promise<boolean> {
+    console.log(`⚠️ saveRelatedTracks: related_tracks table not in schema, skipping`);
+    return false;
+  }
+
+  public async getRelatedTracks(trackId: string, limit = 10): Promise<TrackMetadata[]> {
+    console.log(`⚠️ getRelatedTracks: related_tracks table not in schema, returning []`);
+    return [];
+  }
+
+  // ─── ARTIST METHODS ─────────────────────────────────────────────────────────
+
+  /**
+   * The `artist_cache` table does not exist. The real table is `artists` with:
+   * id, name, browse_id, thumbnail_url, subscriber_count, monthly_listeners,
+   * metadata, updated_at, created_at.
+   *
+   * top_tracks, albums, and similar are stored inside the metadata jsonb column.
+   */
+  public async saveArtist(artistName: string, data: Partial<ArtistCache>): Promise<boolean> {
+    if (!this.enabled || !this.supabase) return false;
+
+    const now = new Date().toISOString();
+
+    try {
+      await this.supabase
+        .from('artists')
+        .upsert({
+          name: artistName.toLowerCase(),
+          metadata: {
+            topTracks: data.topTracks || [],
+            albums: data.albums || [],
+            similar: data.similar || []
+          },
+          updated_at: now
+        }, { onConflict: 'name' });
+
+      console.log('✅ Artist saved');
+      return true;
+    } catch (error) {
+      console.error('❌ saveArtist error:', error);
+      return false;
+    }
+  }
+
+  public async getArtist(artistName: string): Promise<ArtistCache | null> {
+    if (!this.enabled || !this.supabase) return null;
+
+    try {
+      const { data, error } = await this.supabase
+        .from('artists')
+        .select('id, name, thumbnail_url, subscriber_count, metadata, updated_at')
+        .eq('name', artistName.toLowerCase())
+        .maybeSingle();
+
+      if (error || !data) return null;
+
+      return {
+        id: data.id,
+        name: data.name,
+        topTracks: data.metadata?.topTracks || [],
+        albums: data.metadata?.albums || [],
+        similar: data.metadata?.similar || [],
+        lastUpdated: data.updated_at
+      };
+    } catch (error) {
+      console.error('❌ getArtist error:', error);
+      return null;
+    }
+  }
+
+  // ─── STREAM HEALTH ───────────────────────────────────────────────────────────
+
+  /**
+   * Get streams expiring within the next N hours.
    */
   public async getExpiringStreams(hoursThreshold = 6): Promise<StreamData[]> {
     console.log(`\n⏰ Getting streams expiring in ${hoursThreshold} hours`);
-    
     if (!this.enabled || !this.supabase) return [];
 
     try {
       const thresholdDate = new Date(
-        Date.now() + (hoursThreshold * 60 * 60 * 1000)
+        Date.now() + hoursThreshold * 60 * 60 * 1000
       ).toISOString();
 
       const { data, error } = await this.supabase
         .from('streams')
-        .select('*')
+        .select('id, track_id, source, stream_url, quality, format, duration, expiry, health_score, is_active, last_accessed, access_count')
         .eq('is_active', true)
         .lt('expiry', thresholdDate)
         .limit(100);
 
       if (error || !data) {
-        console.error('❌ Get expiring streams error:', error);
+        console.error('❌ getExpiringStreams error:', error);
         return [];
       }
 
       console.log(`   Found ${data.length} expiring streams`);
-
-      return data.map(item => ({
-        id: item.id,
-        trackId: item.track_id,
-        source: item.source,
-        streamUrl: item.stream_url,
-        quality: item.quality,
-        format: item.format,
-        expiry: item.expiry,
-        isActive: item.is_active,
-        healthScore: item.health_score,
-        failureCount: item.failure_count,
-        lastVerified: item.last_verified
-      }));
+      return data.map(item => this.rowToStreamData(item));
     } catch (error) {
-      console.error('❌ Get expiring streams error:', error);
+      console.error('❌ getExpiringStreams error:', error);
       return [];
     }
   }
 
   /**
-   * Get stale tracks (not accessed in N days)
+   * Get IDs of tracks not updated in the last N days.
+   * tracks table has no last_accessed column — updated_at is the correct
+   * staleness signal (written on every insert, update, and play count bump).
    */
   public async getStaleTracks(daysThreshold = 90): Promise<string[]> {
     console.log(`\n🧹 Getting stale tracks (not accessed in ${daysThreshold} days)`);
-    
     if (!this.enabled || !this.supabase) return [];
 
     try {
       const thresholdDate = new Date(
-        Date.now() - (daysThreshold * 24 * 60 * 60 * 1000)
+        Date.now() - daysThreshold * 24 * 60 * 60 * 1000
       ).toISOString();
 
       const { data, error } = await this.supabase
         .from('tracks')
         .select('id')
-        .lt('last_accessed', thresholdDate)
+        .lt('updated_at', thresholdDate)
         .limit(1000);
 
       if (error || !data) {
-        console.error('❌ Get stale tracks error:', error);
+        console.error('❌ getStaleTracks error:', error);
         return [];
       }
 
       console.log(`   Found ${data.length} stale tracks`);
       return data.map(t => t.id);
     } catch (error) {
-      console.error('❌ Get stale tracks error:', error);
+      console.error('❌ getStaleTracks error:', error);
       return [];
     }
   }
 
-  /**
-   * ==================== STATS ====================
-   */
+  // ─── STATS ──────────────────────────────────────────────────────────────────
 
-  /**
-   * Get cache statistics
-   */
   public async getStats(): Promise<SupabaseStats | null> {
     console.log('\n📊 Getting cache statistics');
-    
     if (!this.enabled || !this.supabase) return null;
 
     try {
       const [tracks, streams, searches] = await Promise.all([
         this.supabase.from('tracks').select('*', { count: 'exact', head: true }),
         this.supabase.from('streams').select('*', { count: 'exact', head: true }).eq('is_active', true),
-        this.supabase.from('searches').select('*', { count: 'exact', head: true })
+        this.supabase.from('cache_metadata').select('*', { count: 'exact', head: true })
       ]);
 
       const stats = {
@@ -930,16 +697,52 @@ export class SupabaseCache {
       console.log('📊 Stats:', stats);
       return stats;
     } catch (error) {
-      console.error('❌ Get stats error:', error);
+      console.error('❌ getStats error:', error);
       return null;
     }
   }
 
-  /**
-   * Check if cache is enabled
-   */
   public isEnabled(): boolean {
     return this.enabled;
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  private rowToTrackMetadata(data: any): TrackMetadata {
+    return {
+      id: data.id,
+      isrc: data.metadata?.isrc || null,
+      title: data.title,
+      artist: data.artists?.name || data.metadata?.artist || '',
+      album: data.albums?.title || data.metadata?.album || '',
+      duration: data.duration_seconds,
+      artworkUrl: data.thumbnail_url,
+      spotifyId: data.metadata?.spotifyId || null,
+      youtubeId: data.video_id,
+      deezerId: data.metadata?.deezerId || null,
+      soundcloudId: data.metadata?.soundcloudId || null,
+      metadata: data.metadata,
+      accessCount: data.play_count,
+      lastAccessed: data.updated_at,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
+    };
+  }
+
+  private rowToStreamData(data: any): StreamData {
+    return {
+      id: data.id,
+      trackId: data.track_id,
+      source: data.source,
+      streamUrl: data.stream_url,
+      quality: data.quality,
+      format: data.format,
+      expiry: data.expiry,
+      isActive: data.is_active,
+      healthScore: data.health_score,
+      failureCount: 0,           // column does not exist on streams table
+      lastVerified: data.last_accessed  // closest equivalent
+    };
   }
 }
 

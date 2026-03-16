@@ -1,32 +1,32 @@
 /**
  * PeoplesChoiceSection
  *
- * Displays most popular/viral music tracks.
- *
- * Data flow:
- *   usePopularChoice()
- *     → MavinEngine.search("most popular songs 2025", "all", undefined, 0)
- *       → Kotlin: performSearch(query, "all", null, 0)
- *
- * AlbumCard receives PopularItem fields (already transformed by hook).
+ * Displays most popular/viral music tracks from Supabase
+ * Excludes songs already shown in Trending section to prevent duplicates
  */
 
-import React from "react";
+import React, { useMemo } from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   StyleSheet,
+  TouchableOpacity,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { usePopularChoice, PopularItem } from "../../hooks/usePopularChoice";
 import { AlbumCard } from "../cards/AlbumCard";
 import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
   surface: "#121212",
+  surfaceLight: "#1F1F1F",
   goldPrimary: "#D4AF37",
+  text: "#FFFFFF",
   textSecondary: "#B3B3B3",
+  textTertiary: "#808080",
+  danger: "#EF4444",
 };
 
 const formatViews = (viewCount: number): string => {
@@ -38,8 +38,26 @@ const formatViews = (viewCount: number): string => {
   return String(viewCount);
 };
 
-export const PeoplesChoiceSection = () => {
-  const { data, loading, error } = usePopularChoice();
+interface PeoplesChoiceSectionProps {
+  trendingIds?: string[]; // IDs from Trending section to exclude
+  recentlyPlayedIds?: string[]; // IDs from Recently Played to exclude
+}
+
+export const PeoplesChoiceSection: React.FC<PeoplesChoiceSectionProps> = ({
+  trendingIds = [],
+  recentlyPlayedIds = [],
+}) => {
+  // Combine all IDs to exclude
+  const excludeIds = useMemo(() => {
+    const combined = [...new Set([...trendingIds, ...recentlyPlayedIds])];
+    console.log(`🚫 [PeoplesChoiceSection] Excluding ${combined.length} IDs`);
+    return combined;
+  }, [trendingIds, recentlyPlayedIds]);
+
+  const { data, loading, error, refetch, isEmpty } = usePopularChoice({
+    excludeIds,
+    shuffle: true,
+  });
 
   // ── Loading ───────────────────────────────
   if (loading) {
@@ -54,8 +72,46 @@ export const PeoplesChoiceSection = () => {
     );
   }
 
-  // ── Error / Empty — section hides silently ─
-  if (error || !data.length) return null;
+  // ── Error ─────────────────────────────────
+  if (error) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="People's Choice" showPlayAll />
+        <View style={styles.centeredBox}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={22}
+            color={COLORS.danger}
+          />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Empty ─────────────────────────────────
+  if (isEmpty) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="People's Choice" showPlayAll />
+        <View style={styles.centeredBox}>
+          <Ionicons
+            name="musical-note-outline"
+            size={22}
+            color={COLORS.textTertiary}
+          />
+          <Text style={styles.subtleText}>No popular songs available</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Text style={styles.retryText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   // ── Success ───────────────────────────────
   return (
@@ -66,15 +122,14 @@ export const PeoplesChoiceSection = () => {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: PopularItem) => (
+        {data.map((item: PopularItem, index: number) => (
           <AlbumCard
-            key={item.id}
+            key={`peoples-choice-${item.id}-${index}`}
             item={{
               id: item.id,
               title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
-             
               plays: formatViews(item.views),
             }}
             showPlayButton={false}
@@ -104,5 +159,27 @@ const styles = StyleSheet.create({
   subtleText: {
     color: COLORS.textSecondary,
     marginTop: 2,
+  },
+  errorText: {
+    color: COLORS.danger,
+    fontSize: 12,
+    textAlign: "center",
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: COLORS.goldPrimary + "20",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary,
+    gap: 5,
+    marginTop: 8,
+  },
+  retryText: {
+    color: COLORS.goldPrimary,
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

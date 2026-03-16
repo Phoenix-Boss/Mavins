@@ -1,29 +1,11 @@
 /**
- * Podcast Card Component - Displays a podcast episode or show
+ * PodcastCard Component
+ *
+ * Displays a podcast episode with title, creator name, and duration/episode info.
  */
-import React from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  StyleSheet,
-} from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { triggerHaptic } from "@/helpers/haptics";
-
-// Metallic Gold Color Palette
-const COLORS = {
-  background: '#000000',
-  surfaceLight: '#1F1F1F',
-  goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  text: '#FFFFFF',
-  textSecondary: '#B3B3B3',
-  success: '#22C55E',
-};
+import React from 'react';
+import { View, Text, TouchableOpacity, Image, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 interface PodcastCardProps {
   item: {
@@ -31,188 +13,100 @@ interface PodcastCardProps {
     title: string;
     artist: string;
     thumbnail: string;
-    episodeCount?: number;
-    type: 'podcast';
+    episodeCount: number; // episode number if available, else duration in minutes
+    type: string;
   };
-  isCurrentTrack?: boolean;
-  isPlaying?: boolean;
   onPress?: () => void;
 }
 
-export const PodcastCard = ({ 
-  item, 
-  isCurrentTrack = false,
-  isPlaying = false,
-  onPress 
-}: PodcastCardProps) => {
-  const router = useRouter();
+const COLORS = {
+  surface:       "#121212",
+  surfaceLight:  "#1F1F1F",
+  goldPrimary:   "#D4AF37",
+  text:          "#FFFFFF",
+  textSecondary: "#B3B3B3",
+  textTertiary:  "#808080",
+};
 
-  const handlePress = () => {
-    triggerHaptic();
-    if (onPress) {
-      onPress();
-    } else {
-      // Default behavior - navigate to podcast
-      router.navigate(`/podcast/${item.id}`);
-    }
-  };
+export const PodcastCard: React.FC<PodcastCardProps> = ({ item, onPress }) => {
+  const { title, artist, thumbnail, episodeCount } = item;
 
-  const handlePlayPress = (e: any) => {
-    e.stopPropagation();
-    triggerHaptic();
-    // Play the latest episode
-    router.navigate('/player');
-  };
+  // If episodeCount looks like a duration (>100 min likely), label it as "X min"
+  // Episode numbers are typically < 500; durations in minutes can be much higher
+  const episodeLabel = episodeCount > 0
+    ? episodeCount > 500
+      ? `${episodeCount} min`
+      : `Ep. ${episodeCount}`
+    : null;
 
   return (
-    <TouchableOpacity
-      style={[
-        styles.podcastCard,
-        isCurrentTrack && styles.currentPlayingTrack
-      ]}
-      onPress={handlePress}
-      activeOpacity={0.9}
-    >
-      <Image
-        source={{ uri: item.thumbnail }}
-        style={styles.podcastImage}
-      />
-      
-      <View style={styles.podcastBadge}>
-        <Text style={styles.podcastBadgeText}>PODCAST</Text>
-      </View>
-      
-      {item.episodeCount && (
-        <View style={styles.episodeCountBadge}>
-          <Ionicons name="mic-outline" size={10} color={COLORS.goldShiny} />
-          <Text style={styles.episodeCountText}>{item.episodeCount}</Text>
-        </View>
-      )}
-      
-      {/* Play button top right */}
-      <View style={styles.podcastPlayButtonContainer}>
-        <TouchableOpacity 
-          style={[
-            styles.metallicPlayButtonOutline,
-            isCurrentTrack && styles.activePlayButton
-          ]}
-          onPress={handlePlayPress}
-        >
-          <Ionicons 
-            name={isCurrentTrack && isPlaying ? "pause" : "play"} 
-            size={14} 
-            color={COLORS.goldShiny} 
+    <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
+      <View style={styles.imageContainer}>
+        {thumbnail ? (
+          <Image
+            source={{ uri: thumbnail }}
+            style={styles.thumbnail}
+            resizeMode="cover"
           />
-        </TouchableOpacity>
+        ) : (
+          <View style={[styles.thumbnail, styles.placeholderContainer]}>
+            <Ionicons name="headset" size={40} color={COLORS.textTertiary} />
+          </View>
+        )}
       </View>
-      
-      <View style={styles.podcastInfo}>
-        <Text style={styles.podcastTitle} numberOfLines={1}>
-          {item.title}
+
+      <View style={styles.infoContainer}>
+        <Text style={styles.title} numberOfLines={2}>
+          {title || 'Unknown Episode'}
         </Text>
-        <Text style={styles.podcastArtist} numberOfLines={1}>
-          {item.artist}
+        <Text style={styles.artist} numberOfLines={1}>
+          {artist || 'Unknown Podcast'}
         </Text>
+        {episodeLabel && (
+          <Text style={styles.episodeCount}>{episodeLabel}</Text>
+        )}
       </View>
     </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  podcastCard: {
-    width: 130,
-    height: 170,
-    borderRadius: 10,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  podcastImage: {
+  container: {
     width: '100%',
-    height: '100%',
+  },
+  imageContainer: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
     backgroundColor: COLORS.surfaceLight,
   },
-  podcastBadge: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    backgroundColor: COLORS.success,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 10,
-    zIndex: 2,
+  thumbnail: {
+    width: '100%',
+    height: '100%',
   },
-  podcastBadgeText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: COLORS.background,
-  },
-  episodeCountBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 40,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    zIndex: 2,
-  },
-  episodeCountText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: COLORS.goldShiny,
-  },
-  podcastPlayButtonContainer: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    zIndex: 2,
-  },
-  metallicPlayButtonOutline: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderWidth: 1.5,
-    borderColor: COLORS.goldShiny,
+  placeholderContainer: {
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.6,
-    shadowRadius: 3,
-    elevation: 3,
+    backgroundColor: COLORS.surfaceLight,
   },
-  activePlayButton: {
-    backgroundColor: COLORS.goldPrimary + '30',
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    elevation: 6,
+  infoContainer: {
+    marginTop: 5,
   },
-  podcastInfo: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-  },
-  podcastTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+  title: {
     color: COLORS.text,
-    marginBottom: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 1,
+    lineHeight: 14,
   },
-  podcastArtist: {
-    fontSize: 12,
-    color: COLORS.goldShimmer,
+  artist: {
+    color: COLORS.goldPrimary,
+    fontSize: 10,
+    marginBottom: 1,
   },
-  currentPlayingTrack: {
-    borderWidth: 2,
-    borderColor: COLORS.goldPrimary,
+  episodeCount: {
+    color: COLORS.textTertiary,
+    fontSize: 9,
   },
 });

@@ -1,31 +1,25 @@
 /**
  * BiggestHitsSection
  *
- * Displays music chart items sourced from the YouTube Music kiosk
- * (getTrending → 'Music' kiosk) and YouTube Music search ('viral50').
- *
- * Data flow:
- *   useTopCharts(chartType)
- *     → MavinEngine.getTrending() or MavinEngine.search('songs')
- *       → Kotlin: KioskInfo("Music") or SearchInfo(filter="songs")
- *
- * Only ChartItem fields are used — the hook transforms StreamInfoItem to ChartItem.
+ * Displays top charts data from Supabase in a 2x3 grid (2 rows, 3 columns)
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
-  ScrollView,
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
+  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useTopCharts, ChartItem } from "../../hooks/useTopCharts";
+import { useTopCharts } from "../../hooks/useTopCharts";
 import { AlbumCard } from "../cards/AlbumCard";
 import { SectionHeader } from "../common/SectionHeader";
+import type { ChartItem } from "../../hooks/useTopCharts";
 
+const { width } = Dimensions.get("window");
 const COLORS = {
   background: "#000000",
   surface: "#121212",
@@ -35,76 +29,46 @@ const COLORS = {
   text: "#FFFFFF",
   textSecondary: "#B3B3B3",
   textTertiary: "#808080",
-  border: "#333333",
   danger: "#EF4444",
 };
 
-const CHART_TYPES = [
-  { id: "top50", label: "Top 50", icon: "🏆" },
-  { id: "viral50", label: "Viral 50", icon: "🔥" },
-] as const;
-
-type ChartType = "top50" | "viral50";
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
 function formatViews(viewCount: number): string {
+  if (!viewCount) return "0";
   if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
   if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
   return String(viewCount);
 }
 
-// ─────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────
-
-interface ChartSelectorProps {
-  active: ChartType;
-  onChange: (type: ChartType) => void;
+// Fisher-Yates shuffle algorithm
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
 }
 
-const ChartSelector = ({ active, onChange }: ChartSelectorProps) => (
-  <View style={styles.chartSelector}>
-    {CHART_TYPES.map(({ id, label, icon }) => {
-      const isActive = active === id;
-      return (
-        <TouchableOpacity
-          key={id}
-          style={[styles.chartChip, isActive && styles.chartChipActive]}
-          onPress={() => onChange(id)}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.chartIcon}>{icon}</Text>
-          <Text
-            style={[
-              styles.chartChipText,
-              isActive && styles.chartChipTextActive,
-            ]}
-          >
-            {label}
-          </Text>
-        </TouchableOpacity>
-      );
-    })}
-  </View>
-);
-
-// ─────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────
-
 export const BiggestHitsSection = () => {
-  const [chartType, setChartType] = useState<ChartType>("top50");
-  const { data, loading, error, refetch } = useTopCharts(chartType);
+  const { data, loading, error, refetch } = useTopCharts("top50");
+  const [shuffleKey, setShuffleKey] = useState(0);
+
+  // Shuffle on every render by including shuffleKey in dependencies
+  const displayItems = useMemo(() => {
+    if (!data || data.length === 0) return [];
+    const shuffled = shuffleArray(data);
+    return shuffled.slice(0, 6);
+  }, [data, shuffleKey]);
+
+  // Split into 2 rows with 3 columns each
+  const topRow = displayItems.slice(0, 3);
+  const bottomRow = displayItems.slice(3, 6);
 
   // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Biggest Hits" showPlayAll />
-        <ChartSelector active={chartType} onChange={setChartType} />
         <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
           <Text style={styles.subtleText}>Loading charts…</Text>
@@ -118,7 +82,6 @@ export const BiggestHitsSection = () => {
     return (
       <View style={styles.section}>
         <SectionHeader title="Biggest Hits" showPlayAll />
-        <ChartSelector active={chartType} onChange={setChartType} />
         <View style={styles.centeredBox}>
           <Ionicons
             name="cloud-offline-outline"
@@ -137,11 +100,10 @@ export const BiggestHitsSection = () => {
   }
 
   // ── Empty ─────────────────────────────────
-  if (!data.length) {
+  if (!displayItems.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Biggest Hits" showPlayAll />
-        <ChartSelector active={chartType} onChange={setChartType} />
         <View style={styles.centeredBox}>
           <Ionicons
             name="musical-note-outline"
@@ -157,33 +119,49 @@ export const BiggestHitsSection = () => {
     );
   }
 
-  // ── Success ───────────────────────────────
+  // ── Success: 2 Rows × 3 Columns Grid ───────────────────────────────
   return (
     <View style={styles.section}>
       <SectionHeader title="Biggest Hits" showPlayAll />
-      <ChartSelector active={chartType} onChange={setChartType} />
+      <View style={styles.gridContainer}>
+        {/* Top Row - Items 0, 1, 2 */}
+        <View style={styles.row}>
+          {topRow.map((item: ChartItem, index: number) => (
+            <View key={`top-${item.id}-${index}`} style={styles.gridItem}>
+              <AlbumCard
+                item={{
+                  id: item.videoId,
+                  title: item.title,
+                  artist: item.artist,
+                  thumbnail: item.thumbnail,
+                  plays: item.views > 0 ? formatViews(item.views) : undefined,
+                }}
+                showPlayButton
+                size="small"
+              />
+            </View>
+          ))}
+        </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.horizontalScroll}
-      >
-        {data.map((item: ChartItem, index: number) => (
-          <AlbumCard
-            key={item.id}
-            item={{
-              id: item.videoId, // full stream url for playback
-              title: item.title,
-              artist: item.artist,
-              thumbnail: item.thumbnail,
-              position: item.position,
-              plays: item.views > 0 ? formatViews(item.views) : undefined,
-             
-            }}
-            showPlayButton
-          />
-        ))}
-      </ScrollView>
+        {/* Bottom Row - Items 3, 4, 5 */}
+        <View style={styles.row}>
+          {bottomRow.map((item: ChartItem, index: number) => (
+            <View key={`bottom-${item.id}-${index}`} style={styles.gridItem}>
+              <AlbumCard
+                item={{
+                  id: item.videoId,
+                  title: item.title,
+                  artist: item.artist,
+                  thumbnail: item.thumbnail,
+                  plays: item.views > 0 ? formatViews(item.views) : undefined,
+                }}
+                showPlayButton
+                size="small"
+              />
+            </View>
+          ))}
+        </View>
+      </View>
     </View>
   );
 };
@@ -192,42 +170,19 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
   },
-  chartSelector: {
+  gridContainer: {
+    flexDirection: "column",
+    paddingHorizontal: 0,
+    gap: 10,
+  },
+  row: {
     flexDirection: "row",
-    paddingHorizontal: 16,
-    marginBottom: 12,
-    gap: 8,
+    gap: 0,
+    justifyContent: "space-between",
+    paddingHorizontal: 0,
   },
-  chartChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: COLORS.surfaceLight,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 4,
-  },
-  chartChipActive: {
-    backgroundColor: COLORS.goldPrimary,
-    borderColor: COLORS.goldPrimary,
-  },
-  chartIcon: {
-    fontSize: 12,
-  },
-  chartChipText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  chartChipTextActive: {
-    color: "#000",
-    fontWeight: "700",
-  },
-  horizontalScroll: {
-    paddingHorizontal: 16,
-    gap: 14,
+  gridItem: {
+    width: width / 3,
   },
   centeredBox: {
     padding: 36,

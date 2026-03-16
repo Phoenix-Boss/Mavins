@@ -1,14 +1,11 @@
 /**
  * TrendingNowSection
  *
- * Displays trending music tracks as a vertical list with skeleton loading.
+ * Displays trending music tracks from Supabase
  *
  * Data flow:
  *   useTrending()
- *     → MavinEngine.getYouTubeKiosk("MUSIC", 0)
- *       → Kotlin: extractKioskInfo("Music", null, 0)
- *
- * TrendingSongRow receives TrendingItem fields (already transformed by hook).
+ *     → Supabase trending_tracks or sections with section_type = 'trending'
  */
 
 import React from 'react';
@@ -43,7 +40,7 @@ export const TrendingNowSection = () => {
         <SectionHeader title="Trending Now" showPlayAll />
         <View style={styles.verticalList}>
           {[1, 2, 3, 4, 5, 6].map(i => (
-            <SkeletonLoader key={i} type="trending" />
+            <SkeletonLoader key={`trending-skeleton-${i}`} type="trending" />
           ))}
         </View>
       </View>
@@ -54,13 +51,18 @@ export const TrendingNowSection = () => {
   if (error || !data.length) return null;
 
   // ── Success ───────────────────────────────
+  // Remove duplicates within the same section
+  const unique = data.filter(
+    (item, index, arr) => arr.findIndex(x => x.id === item.id) === index
+  );
+
   return (
     <View style={styles.section}>
       <SectionHeader title="Trending Now" showPlayAll />
       <View style={styles.verticalList}>
-        {data.map((item: TrendingItem, index: number) => (
+        {unique.map((item: TrendingItem, index: number) => (
           <TrendingSongRow
-            key={item.id}
+            key={`trending-now-${item.id}-${index}`}
             item={{
               id: item.id,
               title: item.title,
@@ -85,4 +87,4 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 16,
   },
-});
+}); 

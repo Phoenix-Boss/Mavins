@@ -11,7 +11,7 @@ import { triggerHaptic } from "@/helpers/haptics";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
 import { defaultStyles } from "@/styles";
 import { FlashList } from "@shopify/flash-list";
-import { Image } from "@d11/react-native-fast-image";
+import { Image } from "expo-image";
 import { Entypo, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
@@ -77,9 +77,10 @@ const ItemList = () => {
           style={styles.searchResultTouchableArea}
           onPress={() => handleSongSelect(item)}
         >
-          <FastImage
+          <Image
             source={{ uri: item.thumbnail }}
             style={styles.songThumbnail}
+            contentFit="cover"
           />
           {activeTrack?.id === item.id && (
             <LoaderKit
@@ -139,9 +140,10 @@ const ItemList = () => {
           style={styles.searchResultTouchableArea}
           onPress={() => handleSongSelect(item)}
         >
-          <FastImage
+          <Image
             source={{ uri: item.thumbnail }}
             style={styles.videoThumbnail}
+            contentFit="cover"
           />
           {activeTrack?.id === item.id && (
             <LoaderKit
@@ -212,9 +214,10 @@ const ItemList = () => {
             });
           }}
         >
-          <FastImage
+          <Image
             source={{ uri: item.thumbnail }}
             style={styles.songThumbnail}
+            contentFit="cover"
           />
           <View style={styles.resultText}>
             <Text style={styles.resultTitle} numberOfLines={1}>
@@ -276,9 +279,10 @@ const ItemList = () => {
             });
           }}
         >
-          <FastImage
+          <Image
             source={{ uri: item.thumbnail }}
             style={styles.songThumbnail}
+            contentFit="cover"
           />
           <View style={styles.resultText}>
             <Text style={styles.resultTitle} numberOfLines={1}>
@@ -400,6 +404,7 @@ const ItemList = () => {
             paddingBottom: verticalScale(190) + bottom,
           }}
           showsVerticalScrollIndicator={false}
+          estimatedItemSize={75}
           onScroll={(e) => {
             const currentScrollPosition =
               Math.floor(e.nativeEvent.contentOffset.y) || 0;
@@ -480,6 +485,7 @@ const styles = ScaledSheet.create({
     paddingRight: 30,
   },
   searchResultTouchableArea: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
   },

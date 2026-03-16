@@ -1,14 +1,14 @@
 /**
  * FeaturedSection
  *
- * Displays curated featured music from the YouTube Music kiosk.
+ * ⚠️  TEMPORARILY DISABLED in index.tsx
+ * Currently shares the same Supabase data as MavinsBestSection (editor picks /
+ * featured songs). Re-enable and point useFeatured() at a dedicated data source
+ * once the Featured content is separated in Supabase.
  *
  * Data flow:
  *   useFeatured()
- *     → MavinEngine.getYouTubeKiosk("MUSIC", 0)
- *       → Kotlin: extractKioskInfo("Music", null, 0)
- *
- * AlbumCard receives only fields present on StreamInfoItem.
+ *     → Supabase sections with section_type = 'featured'
  */
 
 import React from "react";
@@ -19,10 +19,9 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from "react-native";
-import { useFeatured } from "../../hooks/useFeatured";
+import { useFeatured, FeaturedItem } from "../../hooks/useFeatured";
 import { AlbumCard } from "../cards/AlbumCard";
 import { SectionHeader } from "../common/SectionHeader";
-import { StreamInfoItem } from "@/modules/mavin-engine";
 
 const COLORS = {
   surface: "#121212",
@@ -67,15 +66,15 @@ export const FeaturedSection = () => {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: StreamInfoItem) => (
+        {data.map((item: FeaturedItem, index: number) => (
           <AlbumCard
-            key={item.url}
+            key={`featured-${item.id}-${index}`}
             item={{
-              id: item.url, // full stream url for playback
-              title: item.name, // StreamInfoItem.name
-              artist: item.uploaderName, // StreamInfoItem.uploaderName
-              thumbnail: item.thumbnails[0]?.url ?? "",
-              plays: formatViews(item.viewCount),
+              id: item.id,
+              title: item.title,
+              artist: item.artist,
+              thumbnail: item.thumbnail,
+              plays: item.views > 0 ? formatViews(item.views) : undefined,
             }}
             showPlayButton={false}
           />

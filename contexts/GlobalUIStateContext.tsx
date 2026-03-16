@@ -8,12 +8,12 @@ import React, {
   useEffect,
   useMemo,
 } from "react";
-import {
-  usePlaybackState,
-  State as TPState, // Works for v3
-  PlaybackState as TPPlaybackState, // Works for v4
-} from "react-native-track-player";
+import { usePlaybackState, State } from "react-native-track-player";
 import { triggerHaptic } from "@/helpers/haptics";
+
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
 
 interface GlobalUIStateContextType {
   tabsVisible: boolean;
@@ -31,46 +31,51 @@ interface GlobalUIStateContextType {
 const GlobalUIStateContext =
   createContext<GlobalUIStateContextType | undefined>(undefined);
 
+// ─────────────────────────────────────────────
+// Provider
+//
+// IMPORTANT: This component calls usePlaybackState() at the top level.
+// It must only be rendered after TrackPlayer.setupPlayer() has resolved.
+// In _layout.tsx this is guaranteed by the `playerReady` gate on AppShell.
+// ─────────────────────────────────────────────
+
 export const GlobalUIStateProvider: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
-  const [tabsVisible, setTabsVisibleState] = useState(true);
-  const [tabsLocked, setTabsLockedState] = useState(false);
-  const [handleVisible, setHandleVisibleState] = useState(false);
+  const [tabsVisible,   setTabsVisibleState]   = useState(true);
+  const [tabsLocked,    setTabsLockedState]     = useState(false);
+  const [handleVisible, setHandleVisibleState]  = useState(false);
   const [isMusicPlaying, setIsMusicPlayingState] = useState(false);
 
+  /**
+   * usePlaybackState() is safe here because this component only mounts after
+   * setupPlayer() has resolved (enforced by the playerReady gate in _layout).
+   *
+   * The hook returns:
+   *   v4 — { state: State.Playing, ... }   (object)
+   *   v3 — State.Playing                   (enum directly)
+   *
+   * We normalise both shapes below and fall back to State.None if the value
+   * is not yet available on the very first render tick.
+   */
   const playbackState = usePlaybackState();
 
-  /**
-   * Normalize playback state for v3 and v4 compatibility
-   */
-  const currentState = useMemo(() => {
-    // v4 returns object with `.state`
+  const currentState = useMemo<State>(() => {
+    if (!playbackState) return State.None;
+
     if (typeof playbackState === "object" && "state" in playbackState) {
-      return playbackState.state;
+      return (playbackState as { state: State }).state ?? State.None;
     }
 
-    // v3 returns enum directly
-    return playbackState;
+    return playbackState as unknown as State;
   }, [playbackState]);
 
-  /**
-   * Determine if music is playing
-   */
-  const isPlaying = useMemo(() => {
-    // Support both v3 and v4 enums
-    const Playing =
-      TPPlaybackState?.Playing ?? TPState?.Playing;
+  const isPlaying = useMemo(
+    () => currentState === State.Playing || currentState === State.Buffering,
+    [currentState]
+  );
 
-    const Buffering =
-      TPPlaybackState?.Buffering ?? TPState?.Buffering;
-
-    return currentState === Playing || currentState === Buffering;
-  }, [currentState]);
-
-  /**
-   * Sync UI when playback changes
-   */
+  // ── Sync tab/handle visibility with playback ──────────────────────────────
   useEffect(() => {
     setIsMusicPlayingState(isPlaying);
     setHandleVisibleState(isPlaying);
@@ -84,37 +89,35 @@ export const GlobalUIStateProvider: React.FC<{
     }
   }, [isPlaying, tabsLocked]);
 
+  // ── Setters ───────────────────────────────────────────────────────────────
+
   /**
-   * User manually toggles tabs
+   * Set tab visibility. Pass `isUserAction=true` to lock the state so the
+   * playback-driven auto-sync won't override a deliberate user choice.
    */
   const setTabsVisible = useCallback(
-    (visible: boolean, isUserAction: boolean = false) => {
+    (visible: boolean, isUserAction = false) => {
       setTabsVisibleState(visible);
-
-      if (isUserAction) {
-        setTabsLockedState(visible);
-      }
+      if (isUserAction) setTabsLockedState(visible);
     },
     []
   );
 
-  const setTabsLocked = useCallback((locked: boolean) => {
-    setTabsLockedState(locked);
-  }, []);
+  const setTabsLocked = useCallback(
+    (locked: boolean) => setTabsLockedState(locked),
+    []
+  );
 
+  /**
+   * Called when the user taps the drag handle on the FloatingPlayer.
+   * Toggles tab bar visibility and locks it to prevent auto-override.
+   */
   const handleUserTappedHandle = useCallback(() => {
     if (!isMusicPlaying) return;
 
     const newVisibility = !tabsVisible;
-
-    if (newVisibility) {
-      setTabsLockedState(true);
-      setTabsVisibleState(true);
-    } else {
-      setTabsLockedState(false);
-      setTabsVisibleState(false);
-    }
-
+    setTabsLockedState(newVisibility);   // lock when showing, unlock when hiding
+    setTabsVisibleState(newVisibility);
     triggerHaptic();
   }, [isMusicPlaying, tabsVisible]);
 
@@ -123,13 +126,15 @@ export const GlobalUIStateProvider: React.FC<{
     setTabsLockedState(false);
   }, []);
 
-  const setIsMusicPlaying = useCallback((playing: boolean) => {
-    setIsMusicPlayingState(playing);
-  }, []);
+  const setIsMusicPlaying = useCallback(
+    (playing: boolean) => setIsMusicPlayingState(playing),
+    []
+  );
 
-  const setHandleVisible = useCallback((visible: boolean) => {
-    setHandleVisibleState(visible);
-  }, []);
+  const setHandleVisible = useCallback(
+    (visible: boolean) => setHandleVisibleState(visible),
+    []
+  );
 
   return (
     <GlobalUIStateContext.Provider
@@ -151,11 +156,15 @@ export const GlobalUIStateProvider: React.FC<{
   );
 };
 
-export const useGlobalUIState = () => {
+// ─────────────────────────────────────────────
+// Hook
+// ─────────────────────────────────────────────
+
+export const useGlobalUIState = (): GlobalUIStateContextType => {
   const context = useContext(GlobalUIStateContext);
   if (!context) {
     throw new Error(
-      "useGlobalUIState must be used within GlobalUIStateProvider"
+      "useGlobalUIState must be used within a GlobalUIStateProvider"
     );
   }
   return context;

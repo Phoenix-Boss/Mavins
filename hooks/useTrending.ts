@@ -1,186 +1,215 @@
 /**
- * useTrending Hook - Supabase DB Edition
+ * useTrending Hook - Supabase DB Edition (Fixed)
  *
- * Data flow:
- * sections (section_type = 'trending')
- *   → section_items (track_id)
- *     → songs (title, artist, artwork_url, video_id, play_count, duration)
- *
- * Cache layers:
- * 1. In-memory cache (libs/cache) — 6 hours TTL
- * 2. Supabase DB — source of truth
+ * Fetches trending tracks with proper duration and play counts
+ * Removes duplicates and returns only 3 shuffled items
  */
-import { useState, useEffect, useCallback } from 'react';
+
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
 export interface TrendingItem {
   id: string;
-  videoId: string;
   title: string;
   artist: string;
   thumbnail: string;
   duration: number;
   views: number;
+  videoId?: string;
 }
 
 interface UseTrendingResult {
-  data: TrendingItem[];
+  data: TrendingItem[];       // 3 shuffled items shown in section
+  allData: TrendingItem[];    // full unsliced dataset — use for dedup in other sections
   loading: boolean;
   error: string | null;
   refetch: () => void;
   isEmpty: boolean;
-  source: string | null; // 'supabase' | 'cache' | null
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-const MAX_ITEMS = 10;
-const CACHE_KEY = 'trending:now';
+const CACHE_KEY = 'trending:now:v3';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const DISPLAY_COUNT = 3;
 
-// ─────────────────────────────────────────────
-// Fetch from Supabase
-// ─────────────────────────────────────────────
-async function fetchFromSupabase(): Promise<{ items: TrendingItem[]; source: string }> {
-  // Step 1: Get the trending section id
-  const { data: section, error: sectionError } = await supabase
-    .from('sections')
-    .select('id')
-    .eq('section_type', 'trending')
-    .eq('is_visible', true)
-    .single();
+// Fisher-Yates shuffle algorithm
+const shuffleArray = <T,>(array: T[]): T[] => {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
 
-  if (sectionError || !section) {
-    throw new Error(`Trending section not found: ${sectionError?.message}`);
+// Normalize string for comparison
+const normalizeKey = (str: string): string => {
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s-]/g, '');
+};
+
+// Remove duplicates - priority: videoId > title+artist
+const removeDuplicates = (items: TrendingItem[]): TrendingItem[] => {
+  const seenVideoIds = new Set<string>();
+  const seenSongs = new Set<string>();
+
+  return items.filter(item => {
+    if (item.videoId?.trim()) {
+      const vid = item.videoId.trim().toLowerCase();
+      if (seenVideoIds.has(vid)) return false;
+      seenVideoIds.add(vid);
+      return true;
+    }
+
+    const key = `${normalizeKey(item.title)}-${normalizeKey(item.artist)}`;
+    if (seenSongs.has(key)) return false;
+    seenSongs.add(key);
+    return true;
+  });
+};
+
+async function fetchTrendingFromDB(): Promise<TrendingItem[]> {
+  console.log('🔍 [useTrending] Fetching from database...');
+
+  const { data: trendingTracks, error: trendingError } = await supabase
+    .from('trending_tracks')
+    .select('id, title, artist_name, streams');
+
+  if (trendingError) {
+    console.error('Error fetching trending tracks:', trendingError);
+    throw new Error(`Failed to fetch trending: ${trendingError.message}`);
   }
 
-  // Step 2: Get section_items for that section, ordered by display_order
-  const { data: sectionItems, error: itemsError } = await supabase
-    .from('section_items')
-    .select('track_id, display_order')
-    .eq('section_id', section.id)
-    .not('track_id', 'is', null)
-    .order('display_order', { ascending: true })
-    .limit(MAX_ITEMS);
-
-  if (itemsError) {
-    throw new Error(`Failed to fetch section items: ${itemsError.message}`);
+  if (!trendingTracks || trendingTracks.length === 0) {
+    console.log('No trending tracks found');
+    return [];
   }
 
-  if (!sectionItems || sectionItems.length === 0) {
-    throw new Error('Trending section has no items');
-  }
+  console.log(`Found ${trendingTracks.length} trending tracks`);
 
-  const trackIds = sectionItems.map(si => si.track_id);
-
-  // Step 3: Fetch the songs for those track IDs
   const { data: songs, error: songsError } = await supabase
     .from('songs')
-    .select(`
-      id,
-      title,
-      artist,
-      artwork_url,
-      artwork_thumbnail,
-      video_id,
-      play_count,
-      duration,
-      popularity
-    `)
-    .in('id', trackIds);
+    .select('id, title, artist, artwork_thumbnail, artwork_url, duration, play_count, video_id');
 
   if (songsError) {
+    console.error('Error fetching songs:', songsError);
     throw new Error(`Failed to fetch songs: ${songsError.message}`);
   }
 
-  if (!songs || songs.length === 0) {
-    throw new Error('No songs found for trending section');
+  const songMap = new Map<string, typeof songs[0]>();
+
+  songs?.forEach(song => {
+    const key = `${normalizeKey(song.title)}-${normalizeKey(song.artist)}`;
+    const existing = songMap.get(key);
+    if (!existing || (song.play_count ?? 0) > (existing.play_count ?? 0)) {
+      songMap.set(key, song);
+    }
+  });
+
+  const items: TrendingItem[] = [];
+
+  for (const track of trendingTracks) {
+    const trackTitle = track.title ?? '';
+    const trackArtist = track.artist_name ?? '';
+
+    let song = songMap.get(`${normalizeKey(trackTitle)}-${normalizeKey(trackArtist)}`);
+
+    if (!song) {
+      for (const [key, s] of songMap.entries()) {
+        if (key.includes(normalizeKey(trackTitle)) || normalizeKey(trackTitle).includes(key.split('-')[0])) {
+          song = s;
+          break;
+        }
+      }
+    }
+
+    const trendingStreams = track.streams ?? 0;
+    const songPlays = song?.play_count ?? 0;
+
+    items.push({
+      id: track.id,
+      title: trackTitle || 'Unknown Title',
+      artist: trackArtist || 'Unknown Artist',
+      thumbnail: song?.artwork_thumbnail || song?.artwork_url || '',
+      duration: song?.duration ?? 0,
+      views: Math.max(trendingStreams, songPlays),
+      videoId: song?.video_id || undefined,
+    });
   }
 
-  // Step 4: Re-order songs to match section display_order
-  const songMap = new Map(songs.map(s => [s.id, s]));
+  const uniqueItems = removeDuplicates(items);
+  console.log(`✅ Processed ${uniqueItems.length} unique items (removed ${items.length - uniqueItems.length} duplicates)`);
 
-  const items: TrendingItem[] = sectionItems
-    .map(si => {
-      const song = songMap.get(si.track_id);
-      if (!song) return null;
-      return {
-        id: song.id,
-        videoId: song.video_id ?? '',
-        title: song.title ?? 'Unknown Title',
-        artist: song.artist ?? 'Unknown Artist',
-        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
-        duration: song.duration ?? 0,
-        views: song.play_count ?? 0,
-      };
-    })
-    .filter((item): item is TrendingItem => item !== null);
-
-  if (items.length === 0) {
-    throw new Error('Could not map any trending songs');
-  }
-
-  console.log(`✅ [useTrending] Loaded ${items.length} items from Supabase`);
-  return { items, source: 'supabase' };
+  return uniqueItems;
 }
 
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
 export const useTrending = (): UseTrendingResult => {
-  const [data, setData] = useState<TrendingItem[]>([]);
+  const [rawData, setRawData] = useState<TrendingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>(null);
+  const [shuffleKey, setShuffleKey] = useState(0);
 
-  const fetchTrendingData = useCallback(async () => {
+  // 3 shuffled items shown in the section
+  const data = useMemo(() => {
+    if (!rawData || rawData.length === 0) return [];
+    const shuffled = shuffleArray(rawData);
+    return shuffled.slice(0, DISPLAY_COUNT);
+  }, [rawData, shuffleKey]);
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      // Layer 1: Check local cache first
       const cached = await cache.get(CACHE_KEY);
-      if (cached?.items?.length > 0) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         console.log('📦 [useTrending] Using cached data');
-        setData(cached.items);
-        setSource('cache');
+        setRawData(cached);
         setLoading(false);
         return;
       }
 
-      // Layer 2: Fetch from Supabase
-      const result = await fetchFromSupabase();
+      const items = await fetchTrendingFromDB();
 
-      // Store in local cache
-      await cache.set(CACHE_KEY, { items: result.items, source: result.source }, CACHE_TTL_MS);
-
-      setData(result.items);
-      setSource(result.source);
+      if (items.length > 0) {
+        console.log(`✅ [useTrending] Fetched ${items.length} unique items`);
+        await cache.set(CACHE_KEY, items, CACHE_TTL_MS);
+        setRawData(items);
+      } else {
+        console.log('⚠️ [useTrending] No items found');
+        setRawData([]);
+      }
     } catch (err: any) {
       console.error('❌ [useTrending] Failed:', err);
-      setError(err.message || 'Could not load trending music');
-      setData([]);
-      setSource(null);
+      setError(err.message || 'Failed to load trending music');
+      setRawData([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchTrendingData();
-  }, [fetchTrendingData]);
+    fetchData();
+  }, [fetchData]);
+
+  const refetch = useCallback(() => {
+    if (rawData.length > 0) {
+      console.log('🎲 [useTrending] Reshuffling...');
+      setShuffleKey(prev => prev + 1);
+    } else {
+      fetchData();
+    }
+  }, [rawData.length, fetchData]);
 
   return {
     data,
+    allData: rawData, // full dataset for dedup — never sliced or shuffled
     loading,
     error,
-    refetch: fetchTrendingData,
+    refetch,
     isEmpty: data.length === 0,
-    source,
   };
 };

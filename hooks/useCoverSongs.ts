@@ -1,27 +1,32 @@
 /**
  * useCoverSongs Hook — Supabase DB Edition
- * 
- * NOTE: The "Covers" section has been renamed to "Throwbacks" in the DB.
- * This hook now fetches from section_type = 'throwbacks'.
  *
- * Data flow:
- * sections (section_type = 'throwbacks')
- *   → section_items (track_id)
- *     → songs (title, artist, artwork_url, video_id, play_count, duration)
+ * Reads throwback tracks via:
+ *   sections (section_type = 'throwbacks')
+ *     → section_items (track_id FK → tracks)
+ *       → tracks (title, thumbnail_url, video_id)
+ *
+ * Thumbnail resolution:
+ *   1. tracks.thumbnail_url          ← already set to i.ytimg.com/hqdefault
+ *   2. i.ytimg.com from video_id     ← constructed if thumbnail_url is missing
+ *   3. ''                            ← empty, component handles gracefully
+ *
+ * Cache: 12 h TTL, versioned key, auto-busts stale non-ytimg URLs.
  */
+
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 export interface CoverItem {
   id: string;
   videoId: string;
   title: string;
   artist: string;
   thumbnail: string;
+  thumbnailFallback: string;
   duration: number;
   views: number;
 }
@@ -33,94 +38,163 @@ interface UseCoverSongsResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-const MAX_ITEMS = 8;
-const CACHE_KEY = 'covers:throwbacks';
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────
-// Fetcher
-// ─────────────────────────────────────────────
+const MAX_ITEMS     = 8;
+const CACHE_VERSION = 6;
+const CACHE_KEY     = `covers:throwbacks:v${CACHE_VERSION}`; // v4 — busts stale v3 entries
+const CACHE_TTL_MS  = 12 * 60 * 60 * 1000;
+
+const VALID_THUMB_DOMAINS = ['i.ytimg.com', 'img.youtube.com'];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function ytThumb(videoId: string, quality: 'hqdefault' | 'mqdefault' = 'hqdefault'): string {
+  return `https://i.ytimg.com/vi/${videoId}/${quality}.jpg`;
+}
+
+function resolveThumbnail(thumbnailUrl: string | null, videoId: string | null): string {
+  if (thumbnailUrl) return thumbnailUrl;
+  if (videoId)      return ytThumb(videoId, 'hqdefault');
+  return '';
+}
+
+function resolveFallback(videoId: string | null): string {
+  if (videoId) return ytThumb(videoId, 'mqdefault');
+  return '';
+}
+
+function isCacheValid(cached: CoverItem[]): boolean {
+  return cached.every(item => {
+    if (!item.thumbnail) return false;
+    try {
+      const host = new URL(item.thumbnail).hostname;
+      return VALID_THUMB_DOMAINS.some(d => host === d || host.endsWith(`.${d}`));
+    } catch {
+      return false;
+    }
+  });
+}
+
+// ─── Core fetch ───────────────────────────────────────────────────────────────
+
 async function fetchCovers(): Promise<CoverItem[]> {
+  // 1. Find the throwbacks section
   const { data: section, error: sectionError } = await supabase
     .from('sections')
     .select('id')
     .eq('section_type', 'throwbacks')
     .eq('is_visible', true)
-    .single();
+    .maybeSingle();
 
-  if (sectionError || !section) {
-    throw new Error(`Throwbacks section not found: ${sectionError?.message}`);
+  if (sectionError) {
+    console.error('[useCoverSongs] Section fetch error:', sectionError);
+    throw new Error(`Failed to find throwbacks section: ${sectionError.message}`);
   }
 
-  const { data: sectionItems, error: itemsError } = await supabase
+  if (!section) {
+    throw new Error('No throwbacks section found');
+  }
+
+  // 2. Get section_items with joined track data in one query
+  const { data: items, error: itemsError } = await supabase
     .from('section_items')
-    .select('track_id, display_order')
+    .select(`
+      display_order,
+      position,
+      track_id,
+      tracks (
+        id,
+        title,
+        video_id,
+        duration_seconds,
+        play_count,
+        thumbnail_url,
+        artist_id,
+        artists (
+          id,
+          name
+        )
+      )
+    `)
     .eq('section_id', section.id)
     .not('track_id', 'is', null)
-    .order('display_order', { ascending: true })
+    .order('display_order', { ascending: true, nullsFirst: false })
+    .order('position',      { ascending: true, nullsFirst: false })
     .limit(MAX_ITEMS);
 
-  if (itemsError) throw new Error(`Failed to fetch section items: ${itemsError.message}`);
-  if (!sectionItems?.length) throw new Error('Throwbacks section has no items');
+  if (itemsError) {
+    console.error('[useCoverSongs] Items fetch error:', itemsError);
+    throw new Error(`Failed to fetch section items: ${itemsError.message}`);
+  }
 
-  const trackIds = sectionItems.map(si => si.track_id);
+  if (!items?.length) {
+    throw new Error('Throwbacks section has no items');
+  }
 
-  const { data: songs, error: songsError } = await supabase
-    .from('songs')
-    .select('id, title, artist, artwork_url, artwork_thumbnail, video_id, play_count, duration')
-    .in('id', trackIds);
+  // 3. Map to CoverItem
+  const mapped = items
+    .map((item: any) => {
+      const track = item.tracks;
+      if (!track) return null;
 
-  if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
-  if (!songs?.length) throw new Error('No songs found for throwbacks section');
+      const artistName = track.artists?.name ?? 'Unknown Artist';
 
-  const songMap = new Map(songs.map(s => [s.id, s]));
-
-  const items: CoverItem[] = sectionItems
-    .map(si => {
-      const song = songMap.get(si.track_id);
-      if (!song) return null;
       return {
-        id: song.id,
-        videoId: song.video_id ?? '',
-        title: song.title ?? 'Unknown Title',
-        artist: song.artist ?? 'Unknown Artist',
-        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
-        duration: song.duration ?? 0,
-        views: song.play_count ?? 0,
-      };
+        id:                track.id,
+        videoId:           track.video_id ?? '',
+        title:             track.title    ?? 'Unknown Title',
+        artist:            artistName,
+        thumbnail:         resolveThumbnail(track.thumbnail_url, track.video_id),
+        thumbnailFallback: resolveFallback(track.video_id),
+        duration:          track.duration_seconds ?? 0,
+        views:             track.play_count       ?? 0,
+      } as CoverItem;
     })
     .filter((item): item is CoverItem => item !== null);
 
-  if (!items.length) throw new Error('Could not map any throwback songs');
-  return items;
+  if (!mapped.length) throw new Error('Could not map any tracks from throwbacks section');
+
+  return mapped;
 }
 
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
-export const useCoverSongs = (): UseCoverSongsResult => {
-  const [data, setData]       = useState<CoverItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
-  const fetchCoverSongs = useCallback(async () => {
+export const useCoverSongs = (): UseCoverSongsResult => {
+  const [data,    setData]    = useState<CoverItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
+      // 1. Try cache
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
-        console.log('📦 [useCoverSongs] Using cached data');
-        setData(cached);
-        setLoading(false);
-        return;
+        if (isCacheValid(cached)) {
+          console.log('📦 [useCoverSongs] Using valid cached data');
+          setData(cached);
+          setLoading(false);
+          return;
+        }
+        console.warn('⚠️ [useCoverSongs] Stale cached thumbnails — busting cache');
+        await cache.delete(CACHE_KEY);
       }
+
+      // 2. Fetch fresh
       console.log('🔍 [useCoverSongs] Fetching from Supabase...');
       const covers = await fetchCovers();
       console.log(`✅ [useCoverSongs] Received ${covers.length} items`);
-      await cache.set(CACHE_KEY, covers, CACHE_TTL_MS);
+
+      // 3. Only cache if thumbnails are valid
+      if (isCacheValid(covers)) {
+        await cache.set(CACHE_KEY, covers, CACHE_TTL_MS);
+      } else {
+        console.warn('⚠️ [useCoverSongs] Fetched thumbnails invalid — skipping cache');
+      }
+
       setData(covers);
     } catch (err: any) {
       console.error('❌ [useCoverSongs] Failed:', err);
@@ -131,7 +205,7 @@ export const useCoverSongs = (): UseCoverSongsResult => {
     }
   }, []);
 
-  useEffect(() => { fetchCoverSongs(); }, [fetchCoverSongs]);
+  useEffect(() => { load(); }, [load]);
 
-  return { data, loading, error, refetch: fetchCoverSongs };
+  return { data, loading, error, refetch: load };
 };

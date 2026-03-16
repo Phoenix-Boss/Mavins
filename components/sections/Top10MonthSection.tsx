@@ -1,19 +1,21 @@
 /**
  * Top10MonthSection
  *
- * Displays monthly chart rankings as a vertical list.
+ * Displays monthly chart rankings from Supabase — shuffled, no position numbers.
+ * Accepts `excludedIds` to prevent songs already shown in other sections
+ * from appearing here.
+ *
+ * Usage:
+ *   <Top10MonthSection excludedIds={someOtherSectionVideoIds} />
  *
  * Data flow:
  *   useMonthlyTop()
- *     → MavinEngine.search("top songs this month 2025", "all", undefined, 0)
- *       → Kotlin: performSearch(query, "all", null, 0)
- *
- * Top10MonthRow receives MonthlyItem fields (already transformed by hook).
+ *     → Supabase chart_rankings joined with songs
  */
 
-import React from "react";
+import React, { useMemo } from "react";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
-import { useMonthlyTop, MonthlyItem } from "../../hooks/useMonthlyTop";  // ✅ Fixed: MonthlyItem not ChartItem
+import { useMonthlyTop, MonthlyItem } from "../../hooks/useMonthlyTop";
 import { Top10MonthRow } from "../cards/Top10MonthRow";
 import { SectionHeader } from "../common/SectionHeader";
 
@@ -32,8 +34,29 @@ const formatViews = (viewCount: number): string => {
   return String(viewCount);
 };
 
-export const Top10MonthSection = () => {
+interface Top10MonthSectionProps {
+  /**
+   * IDs (song id or videoId) already rendered in another section.
+   * Any item whose `id` or `videoId` matches will be hidden here.
+   */
+  excludedIds?: string[];
+}
+
+export const Top10MonthSection = ({ excludedIds = [] }: Top10MonthSectionProps) => {
   const { data, loading, error } = useMonthlyTop();
+
+  // Filter out songs already shown elsewhere, then deduplicate by id
+  const filteredData = useMemo(() => {
+    const excludedSet = new Set(excludedIds);
+    const seen = new Set<string>();
+
+    return data.filter((item: MonthlyItem) => {
+      if (excludedSet.has(item.id) || excludedSet.has(item.videoId)) return false;
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+  }, [data, excludedIds]);
 
   // ── Loading ───────────────────────────────
   if (loading) {
@@ -49,24 +72,22 @@ export const Top10MonthSection = () => {
   }
 
   // ── Error / Empty — section hides silently ─
-  if (error || !data.length) return null;
+  if (error || !filteredData.length) return null;
 
   // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
       <SectionHeader title="Top 10 for the Month" showPlayAll />
       <View style={styles.verticalList}>
-        {data.map((item: MonthlyItem) => (  // ✅ Fixed: MonthlyItem not ChartItem
+        {filteredData.map((item: MonthlyItem, index: number) => (
           <Top10MonthRow
-            key={item.id}  // ✅ Fixed: item.id not item.url
+            key={`top10-month-${item.id}-${index}`}
             item={{
               id: item.id,
-              title: `${item.position}. ${item.title}`,
+              title: item.title,
               artist: item.artist,
               thumbnail: item.thumbnail,
               plays: formatViews(item.views),
-              position: item.position,
-          
             }}
           />
         ))}

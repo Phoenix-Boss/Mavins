@@ -1,19 +1,7 @@
 /**
  * RadioFMSection
  *
- * Displays live music streams sourced from YouTube search.
- *
- * Data flow:
- *   useLiveStations()
- *     → MavinEngine.search("live music stream", "all", undefined, 0)
- *       → Kotlin: performSearch(query, "all", null, 0)
- *       → filters results to item.isLive === true
- *
- * NOTE: getKioskInfo("Live") is NOT used — YouTube does not register
- * a "Live" kiosk in NewPipeExtractor and throws ExtractionException.
- * Search with isLive filtering is the correct approach.
- *
- * RadioFMCard receives LiveStationItem fields (StreamInfoItem from hook).
+ * Displays live radio stations as circular cards in a flex-wrap grid.
  */
 
 import React from "react";
@@ -23,55 +11,86 @@ import {
   ScrollView,
   ActivityIndicator,
   StyleSheet,
+  TouchableOpacity,
 } from "react-native";
-import { useLiveStations, LiveStationItem, formatViewers } from "../../hooks/useLiveStations";
+import { Ionicons } from "@expo/vector-icons";
+import { useLiveStations, LiveStationItem } from "../../hooks/useLiveStations";
 import { RadioFMCard } from "../cards/RadioFMCard";
 import { SectionHeader } from "../common/SectionHeader";
 
 const COLORS = {
-  surface: "#121212",
-  goldPrimary: "#D4AF37",
+  surface:       "#121212",
+  goldPrimary:   "#D4AF37",
   textSecondary: "#B3B3B3",
+  textTertiary:  "#808080",
+  danger:        "#EF4444",
 };
 
 export const RadioFMSection = () => {
-  const { data, loading, error } = useLiveStations();
+  const { data, loading, error, refetch } = useLiveStations();
 
   // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Radio FM" showPlayAll />
+        <SectionHeader title="Radio FM" showPlayAll={false} />
         <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading live stations…</Text>
+          <Text style={styles.subtleText}>Loading stations…</Text>
         </View>
       </View>
     );
   }
 
-  // ── Error / Empty — section hides silently ─
-  if (error || !data.length) return null;
+  // ── Error ─────────────────────────────────
+  if (error) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="Radio FM" showPlayAll={false} />
+        <View style={styles.centeredBox}>
+          <Ionicons name="alert-circle-outline" size={22} color={COLORS.danger} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Empty ─────────────────────────────────
+  if (!data.length) {
+    return (
+      <View style={styles.section}>
+        <SectionHeader title="Radio FM" showPlayAll={false} />
+        <View style={styles.centeredBox}>
+          <Ionicons name="radio-outline" size={22} color={COLORS.textTertiary} />
+          <Text style={styles.subtleText}>No stations available</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+            <Text style={styles.retryText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   // ── Success ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Radio FM" showPlayAll />
+      <SectionHeader title="Radio FM" showPlayAll={false} />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: LiveStationItem) => (
+        {data.map((item: LiveStationItem, index: number) => (
           <RadioFMCard
-            key={item.url}
+            key={`radio-fm-${item.id}-${index}`}
             item={{
-              id: item.url,
+              id: item.id,
               title: item.name,
-              artist: item.uploaderName,
-              thumbnail: item.thumbnails[0]?.url ?? "",
-              viewers: formatViewers(item.viewCount),
-              live: true,
+              thumbnail: item.thumbnail,
             }}
           />
         ))}
@@ -86,7 +105,8 @@ const styles = StyleSheet.create({
   },
   horizontalScroll: {
     paddingHorizontal: 16,
-    gap: 14,
+    gap: 16,
+    alignItems: "flex-start",
   },
   centeredBox: {
     padding: 40,
@@ -99,5 +119,27 @@ const styles = StyleSheet.create({
   subtleText: {
     color: COLORS.textSecondary,
     marginTop: 2,
+  },
+  errorText: {
+    color: COLORS.danger,
+    fontSize: 12,
+    textAlign: "center",
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: COLORS.goldPrimary + "20",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.goldPrimary,
+    gap: 5,
+    marginTop: 8,
+  },
+  retryText: {
+    color: COLORS.goldPrimary,
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

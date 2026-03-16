@@ -1,18 +1,10 @@
 /**
  * CreateMixSection
  *
- * Displays genre-filtered music tracks as mix recommendations.
- *
- * Data flow:
- *   useGenreStations(selectedGenre)
- *     → MavinEngine.search("{genre} music", "all", undefined, 0)
- *       → Kotlin: performSearch(query, "all", null, 0)
- *
- * MixCard receives only fields present on StreamInfoItem —
- * no fabricated properties.
+ * Displays playlist mixes from Supabase
  */
 
-import React, { useState, useCallback } from "react";
+import React from "react";
 import {
   View,
   Text,
@@ -20,13 +12,13 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useGenreStations } from "../../hooks/useGenreStations";
+import { useMixes, MixItem } from "../../hooks/useMixes";
 import { MixCard } from "../cards/MixCard";
 import { SectionHeader } from "../common/SectionHeader";
 import { CreateMixButton } from "../common/CreateMixButton";
-import { StreamInfoItem } from "@/modules/mavin-engine";
 
 const COLORS = {
   surface: "#121212",
@@ -39,75 +31,40 @@ const COLORS = {
   danger: "#EF4444",
 };
 
-const GENRE_OPTIONS = [
-  { id: "afrobeats", name: "Afrobeats", icon: "🎵" },
-  { id: "hip-hop", name: "Hip-Hop", icon: "🎤" },
-  { id: "rnb", name: "R&B", icon: "🎹" },
-  { id: "pop", name: "Pop", icon: "🎸" },
-  { id: "electronic", name: "Electronic", icon: "🎧" },
-  { id: "reggae", name: "Reggae", icon: "🥁" },
-] as const;
-
-type GenreId = (typeof GENRE_OPTIONS)[number]["id"];
-
-// ─────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────
-
-interface GenreSelectorProps {
-  active: GenreId;
-  onChange: (id: GenreId) => void;
-}
-
-const GenreSelector = ({ active, onChange }: GenreSelectorProps) => (
-  <ScrollView
-    horizontal
-    showsHorizontalScrollIndicator={false}
-    style={styles.genreScroll}
-    contentContainerStyle={styles.genreScrollContent}
-  >
-    {GENRE_OPTIONS.map(({ id, name, icon }) => {
-      const isActive = active === id;
-      return (
-        <TouchableOpacity
-          key={id}
-          style={[styles.genreChip, isActive && styles.genreChipActive]}
-          onPress={() => onChange(id)}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.genreIcon}>{icon}</Text>
-          <Text style={[styles.genreText, isActive && styles.genreTextActive]}>
-            {name}
-          </Text>
-        </TouchableOpacity>
-      );
-    })}
-  </ScrollView>
-);
-
-// ─────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────
+// Default fallback image for playlists without cover art
+const DEFAULT_COVER_ART = "https://via.placeholder.com/300x300/1F1F1F/D4AF37?text=Mix";
 
 export const CreateMixSection = () => {
-  const [selectedGenre, setSelectedGenre] = useState<GenreId>("afrobeats");
-  const { data, loading, error, refetch } = useGenreStations(selectedGenre);
+  const { data, loading, error, refetch, isEmpty } = useMixes();
 
-  const handleGenreChange = useCallback((id: GenreId) => {
-    setSelectedGenre(id);
-  }, []);
+  // Helper to validate and sanitize thumbnail URLs
+  const getValidThumbnail = (thumbnail: string | undefined): string => {
+    if (!thumbnail || thumbnail.trim() === "") {
+      return DEFAULT_COVER_ART;
+    }
+    
+    // Ensure URL starts with http/https
+    if (!thumbnail.startsWith("http")) {
+      return DEFAULT_COVER_ART;
+    }
+    
+    // Ensure URL doesn't contain spaces or invalid characters
+    const sanitized = thumbnail.trim();
+    
+    // Return the URL with a cache-busting param to force reload
+    return sanitized;
+  };
 
   // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Create Mix" />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
         <View style={styles.createRow}>
           <CreateMixButton />
           <View style={styles.centeredBox}>
             <ActivityIndicator size="small" color={COLORS.goldPrimary} />
-            <Text style={styles.subtleText}>Loading {selectedGenre}…</Text>
+            <Text style={styles.subtleText}>Loading mixes…</Text>
           </View>
         </View>
       </View>
@@ -119,7 +76,6 @@ export const CreateMixSection = () => {
     return (
       <View style={styles.section}>
         <SectionHeader title="Create Mix" />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
         <View style={styles.createRow}>
           <CreateMixButton />
           <View style={styles.centeredBox}>
@@ -140,11 +96,10 @@ export const CreateMixSection = () => {
   }
 
   // ── Empty ─────────────────────────────────
-  if (!data.length) {
+  if (isEmpty) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Create Mix" />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
         <View style={styles.createRow}>
           <CreateMixButton />
           <View style={styles.centeredBox}>
@@ -153,8 +108,10 @@ export const CreateMixSection = () => {
               size={22}
               color={COLORS.textTertiary}
             />
-            <Text style={styles.subtleText}>No tracks for {selectedGenre}</Text>
-            <Text style={styles.subtleText}>Try another genre</Text>
+            <Text style={styles.subtleText}>No mixes available</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={refetch}>
+              <Text style={styles.retryText}>Refresh</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -165,7 +122,6 @@ export const CreateMixSection = () => {
   return (
     <View style={styles.section}>
       <SectionHeader title="Create Mix" />
-      <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
       <View style={styles.createRow}>
         <CreateMixButton />
         <ScrollView
@@ -173,18 +129,25 @@ export const CreateMixSection = () => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.horizontalScroll}
         >
-          {data.map((item: StreamInfoItem) => (
-            <MixCard
-              key={item.url}
-              item={{
-                id: item.url, // full stream url for playback
-                title: item.name, // StreamInfoItem.name
-                artist: item.uploaderName, // StreamInfoItem.uploaderName
-                thumbnail: item.thumbnails[0]?.url ?? "",
-             
-              }}
-            />
-          ))}
+          {data.map((item: MixItem, index: number) => {
+            const validThumbnail = getValidThumbnail(item.thumbnail);
+            
+            return (
+              <View key={`create-mix-${item.id}-${index}`} style={styles.cardWrapper}>
+                <MixCard
+                  item={{
+                    id: item.id,
+                    title: item.title,
+                    artist: item.artist,
+                    thumbnail: validThumbnail,
+                    trackCount: item.trackCount,
+                  }}
+                />
+                {/* Debug overlay - remove in production */}
+                {/* <Text style={styles.debugText}>{validThumbnail.slice(0, 30)}...</Text> */}
+              </View>
+            );
+          })}
         </ScrollView>
       </View>
     </View>
@@ -195,40 +158,6 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
   },
-  genreScroll: {
-    marginBottom: 12,
-  },
-  genreScrollContent: {
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  genreChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: COLORS.surfaceLight,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 6,
-  },
-  genreChipActive: {
-    backgroundColor: COLORS.goldPrimary,
-    borderColor: COLORS.goldPrimary,
-  },
-  genreIcon: {
-    fontSize: 14,
-  },
-  genreText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  genreTextActive: {
-    color: "#000",
-    fontWeight: "700",
-  },
   createRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -236,6 +165,9 @@ const styles = StyleSheet.create({
   horizontalScroll: {
     paddingRight: 16,
     gap: 14,
+  },
+  cardWrapper: {
+    // Ensure consistent sizing
   },
   centeredBox: {
     flex: 1,
@@ -270,5 +202,13 @@ const styles = StyleSheet.create({
     color: COLORS.goldPrimary,
     fontSize: 12,
     fontWeight: "600",
+  },
+  debugText: {
+    color: COLORS.goldPrimary,
+    fontSize: 8,
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    backgroundColor: "rgba(0,0,0,0.7)",
   },
 });

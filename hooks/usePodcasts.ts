@@ -1,38 +1,25 @@
 /**
- * usePodcasts Hook
+ * usePodcasts Hook — Supabase DB Edition
  *
- * Fetches podcast content via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
+ * Data flow:
+ * podcast_episodes (title, thumbnail_url, duration_seconds, play_count, metadata)
+ *   metadata jsonb contains: creator, video_id, published, creator_id
+ *   ordered by play_count DESC, created_at DESC
  *
- * Podcasts on YouTube are playlists — we search with filter "all"
- * so PlaylistInfoItems are included, then keep only playlist-type
- * results. No getPodcasts() exists in Kotlin.
- *
- * filter="all" is correct here: it is the only filter valid on
- * standard YouTube (serviceId=0) that returns mixed result types
- * including PlaylistInfoItems.
+ * NOTE: The `podcasts` table only has placeholder data (Podcast Show 1/2/3,
+ * null cover art, null publisher). All real content lives in `podcast_episodes`.
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import {
-  search,
-  PlaylistInfoItem,
-  InfoItem,
-  SearchPage,
-} from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
 
-// ─────────────────────────────────────────────
-// Public shape
-// ─────────────────────────────────────────────
-
 export interface PodcastItem {
-  id: string;           // stable React key (playlist url)
-  videoId: string;      // playlist url → pass to getPlaylistInfo() for episodes
+  id: string;
+  videoId: string;
   title: string;
-  artist: string;       // uploaderName — the podcast creator
-  thumbnail: string;
-  episodeCount: number; // streamCount from PlaylistInfoItem
+  artist: string;      // mapped from metadata.creator
+  thumbnail: string;   // mapped from thumbnail_url
+  episodeCount: number;
   type: 'podcast';
 }
 
@@ -43,91 +30,53 @@ interface UsePodcastsResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
-const MAX_ITEMS = 8;
-const CACHE_KEY = 'podcasts:featured';
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-const SEARCH_QUERIES = [
-  'music podcast 2025',
-  'top music podcasts',
-  'hip hop podcast playlist',
-];
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-function pickBestThumbnail(thumbnails: PlaylistInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toPodcastItem(item: PlaylistInfoItem): PodcastItem {
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Podcast',
-    artist: item.uploaderName?.trim() || 'Unknown Creator',
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    episodeCount: Number(item.streamCount) || 0,
-    type: 'podcast',
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetcher — tries each query until items found
-// ─────────────────────────────────────────────
+const MAX_ITEMS = 9;
+const CACHE_KEY = 'podcasts:episodes:v2'; // bumped from 'podcasts:featured' — now queries podcast_episodes table
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 async function fetchPodcasts(): Promise<PodcastItem[]> {
-  for (const query of SEARCH_QUERIES) {
-    try {
-      // Calls Kotlin: performSearch(query, "all", null, 0)
-      // "all" returns mixed results including PlaylistInfoItems (podcasts)
-      const result = await search(
-        query,
-        'all',
-        undefined,
-        YOUTUBE_SERVICE_ID,
-      ) as SearchPage;
+  const { data, error } = await supabase
+    .from('podcast_episodes')
+    .select('id, podcast_id, title, thumbnail_url, duration_seconds, play_count, episode_number, metadata')
+    .order('play_count', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(MAX_ITEMS);
 
-      if (!result.success) continue;
+  if (error) throw new Error(`Failed to fetch podcast episodes: ${error.message}`);
+  if (!data?.length) throw new Error('No podcast episodes available');
 
-      const items = (result.results as InfoItem[])
-        .filter((item): item is PlaylistInfoItem => item.type === 'playlist')
-        .map(toPodcastItem)
-        .slice(0, MAX_ITEMS);
+  return data.map(item => {
+    const meta     = (item.metadata ?? {}) as Record<string, any>;
+    const videoId  = meta.video_id ?? '';
+    const creator  = meta.creator  ?? 'Unknown Podcast';
 
-      if (items.length > 0) return items;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error('No podcasts available');
+    // Show episode number if available, otherwise derive a count from duration
+    // so the card never just says "0 episodes"
+    const epNum    = item.episode_number;
+    const durSecs  = item.duration_seconds ?? 0;
+    const durMins  = Math.round(durSecs / 60);
+    const episodeCount = epNum != null ? epNum : (durMins > 0 ? durMins : 0);
+
+    return {
+      id: item.id,
+      videoId,
+      title: item.title ?? 'Unknown Episode',
+      artist: creator,
+      thumbnail: item.thumbnail_url ?? '',
+      episodeCount,
+      type: 'podcast' as const,
+    };
+  });
 }
-
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
 
 export const usePodcasts = (): UsePodcastsResult => {
   const [data, setData]       = useState<PodcastItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const fetchPodcastsData = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
       const cached = await cache.get(CACHE_KEY);
       if (cached && Array.isArray(cached) && cached.length > 0) {
@@ -136,14 +85,11 @@ export const usePodcasts = (): UsePodcastsResult => {
         setLoading(false);
         return;
       }
-
-      console.log('🔍 [usePodcasts] Fetching from native module...');
+      console.log('🔍 [usePodcasts] Fetching from Supabase...');
       const podcasts = await fetchPodcasts();
-
       console.log(`✅ [usePodcasts] Received ${podcasts.length} items`);
       await cache.set(CACHE_KEY, podcasts, CACHE_TTL_MS);
       setData(podcasts);
-
     } catch (err: any) {
       console.error('❌ [usePodcasts] Failed:', err);
       setError(err.message || 'Failed to load podcasts');
@@ -153,9 +99,7 @@ export const usePodcasts = (): UsePodcastsResult => {
     }
   }, []);
 
-  useEffect(() => {
-    fetchPodcastsData();
-  }, [fetchPodcastsData]);
+  useEffect(() => { load(); }, [load]);
 
-  return { data, loading, error, refetch: fetchPodcastsData };
+  return { data, loading, error, refetch: load };
 };

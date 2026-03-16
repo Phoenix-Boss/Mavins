@@ -1,17 +1,11 @@
 /**
  * MusicChannelsSection
  *
- * Displays genre-filtered music tracks as channel-style cards.
- *
- * Data flow:
- *   useGenreStations(selectedGenre)
- *     → MavinEngine.search("{genre} music", "all", undefined, 0)
- *       → Kotlin: performSearch(query, "all", null, 0)
- *
- * MusicChannelCard receives GenreItem fields (StreamInfoItem from hook).
+ * Displays artists as circular "Music Channels" - horizontal scroll
+ * Shows: circular thumbnail + artist name only
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useCallback } from "react";
 import {
   View,
   Text,
@@ -19,93 +13,46 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
+  Image,
+  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useGenreStations, GenreItem } from "../../hooks/useGenreStations";
-import { MusicChannelCard } from "../cards/MusicChannelCard";
+import { useMusicChannels, MusicChannelItem } from "../../hooks/useMusicChannels";
 import { SectionHeader } from "../common/SectionHeader";
+import { useRouter } from "expo-router";
 
+const { width } = Dimensions.get("window");
+const ITEM_SIZE = 80; // Circle size
 const COLORS = {
+  background: "#000000",
   surface: "#121212",
-  surfaceLight: "#1F1F1F",
   goldPrimary: "#D4AF37",
+  text: "#FFFFFF",
   textSecondary: "#B3B3B3",
   textTertiary: "#808080",
-  border: "#333333",
   danger: "#EF4444",
 };
 
-const CHANNEL_GENRES = [
-  { id: "afrobeats", name: "Afrobeats", icon: "🎵" },
-  { id: "hip-hop", name: "Hip-Hop", icon: "🎤" },
-  { id: "rnb", name: "R&B", icon: "🎹" },
-  { id: "pop", name: "Pop", icon: "🎸" },
-  { id: "electronic", name: "Electronic", icon: "🎧" },
-  { id: "reggae", name: "Reggae", icon: "🥁" },
-] as const;
-
-type GenreId = (typeof CHANNEL_GENRES)[number]["id"];
-
-// ─────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────
-
-interface GenreSelectorProps {
-  active: GenreId;
-  onChange: (id: GenreId) => void;
-}
-
-const GenreSelector = ({ active, onChange }: GenreSelectorProps) => (
-  <ScrollView
-    horizontal
-    showsHorizontalScrollIndicator={false}
-    style={styles.genreScroll}
-    contentContainerStyle={styles.genreScrollContent}
-  >
-    {CHANNEL_GENRES.map(({ id, name, icon }) => {
-      const isActive = active === id;
-      return (
-        <TouchableOpacity
-          key={id}
-          style={[styles.genreChip, isActive && styles.genreChipActive]}
-          onPress={() => onChange(id)}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.genreIcon}>{icon}</Text>
-          <Text style={[styles.genreText, isActive && styles.genreTextActive]}>
-            {name}
-          </Text>
-        </TouchableOpacity>
-      );
-    })}
-  </ScrollView>
-);
-
-// ─────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────
-
 export const MusicChannelsSection = () => {
-  const [selectedGenre, setSelectedGenre] = useState<GenreId>("afrobeats");
-  const { data, loading, error, refetch } = useGenreStations(selectedGenre);
-
-  const handleGenreChange = useCallback((id: GenreId) => {
-    setSelectedGenre(id);
-  }, []);
+  const { data, loading, error, refetch } = useMusicChannels();
+  const router = useRouter();
 
   const handleRetry = useCallback(() => {
     refetch();
   }, [refetch]);
 
+  const handleArtistPress = useCallback((artistId: string) => {
+    router.push(`/artist/${artistId}`);
+  }, [router]);
+
   // ── Loading ───────────────────────────────
   if (loading) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Music Channels" showPlayAll />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
+        <SectionHeader title="Music Channels" showPlayAll={false} />
         <View style={styles.centeredBox}>
           <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading music channels…</Text>
+          <Text style={styles.subtleText}>Loading...</Text>
         </View>
       </View>
     );
@@ -115,17 +62,10 @@ export const MusicChannelsSection = () => {
   if (error) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Music Channels" showPlayAll />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
+        <SectionHeader title="Music Channels" showPlayAll={false} />
         <View style={styles.centeredBox}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={24}
-            color={COLORS.danger}
-          />
-          <Text style={styles.errorText}>{error}</Text>
+          <Ionicons name="alert-circle-outline" size={28} color={COLORS.danger} />
           <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-            <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
             <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
         </View>
@@ -137,45 +77,49 @@ export const MusicChannelsSection = () => {
   if (!data.length) {
     return (
       <View style={styles.section}>
-        <SectionHeader title="Music Channels" showPlayAll />
-        <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
+        <SectionHeader title="Music Channels" showPlayAll={false} />
         <View style={styles.centeredBox}>
-          <Ionicons
-            name="musical-note-outline"
-            size={24}
-            color={COLORS.textTertiary}
-          />
-          <Text style={styles.subtleText}>
-            No channels found for {selectedGenre}
-          </Text>
-          <Text style={styles.subtleText}>Try another genre</Text>
+          <Text style={styles.subtleText}>No channels</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
+            <Text style={styles.retryText}>Refresh</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // ── Success ───────────────────────────────
+  // ── Success: Horizontal Scroll with Circles ───────────────────────────────
   return (
     <View style={styles.section}>
-      <SectionHeader title="Music Channels" showPlayAll />
-      <GenreSelector active={selectedGenre} onChange={handleGenreChange} />
+      <SectionHeader title="Music Channels" showPlayAll={false} />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: GenreItem) => (
-          <MusicChannelCard
-            key={item.url}
-            item={{
-              id: item.url,
-              name: item.name,
-              uploaderName: item.uploaderName,
-              thumbnails: item.thumbnails,
-              duration: item.duration,
-              viewCount: item.viewCount,
-            }}
-          />
+        {data.map((item: MusicChannelItem, index: number) => (
+          <TouchableOpacity
+            key={`channel-${item.id}-${index}`}
+            style={styles.channelItem}
+            onPress={() => handleArtistPress(item.artistId)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.circleContainer}>
+              <Image
+                source={{ uri: item.thumbnail }}
+                style={styles.circleImage}
+                resizeMode="cover"
+              />
+              {item.isVerified && (
+                <View style={styles.verifiedBadge}>
+                  <Ionicons name="checkmark-circle" size={14} color={COLORS.goldPrimary} />
+                </View>
+              )}
+            </View>
+            <Text style={styles.artistName} numberOfLines={1} ellipsizeMode="tail">
+              {item.title}
+            </Text>
+          </TouchableOpacity>
         ))}
       </ScrollView>
     </View>
@@ -186,46 +130,45 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
   },
-  genreScroll: {
-    marginBottom: 12,
-  },
-  genreScrollContent: {
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  genreChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: COLORS.surfaceLight,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 6,
-  },
-  genreChipActive: {
-    backgroundColor: COLORS.goldPrimary,
-    borderColor: COLORS.goldPrimary,
-  },
-  genreIcon: {
-    fontSize: 14,
-  },
-  genreText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  genreTextActive: {
-    color: "#000",
-    fontWeight: "700",
-  },
   horizontalScroll: {
     paddingHorizontal: 16,
-    gap: 14,
+    gap: 16,
+    paddingVertical: 8,
+  },
+  channelItem: {
+    alignItems: "center",
+    width: ITEM_SIZE,
+  },
+  circleContainer: {
+    width: ITEM_SIZE,
+    height: ITEM_SIZE,
+    borderRadius: ITEM_SIZE / 2,
+    overflow: "hidden",
+    backgroundColor: COLORS.surface,
+    position: "relative",
+  },
+  circleImage: {
+    width: ITEM_SIZE,
+    height: ITEM_SIZE,
+  },
+  verifiedBadge: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    backgroundColor: COLORS.background,
+    borderRadius: 10,
+    padding: 2,
+  },
+  artistName: {
+    color: COLORS.text,
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 8,
+    textAlign: "center",
+    width: ITEM_SIZE,
   },
   centeredBox: {
-    padding: 36,
+    padding: 24,
     alignItems: "center",
     backgroundColor: COLORS.surface,
     borderRadius: 12,
@@ -235,23 +178,14 @@ const styles = StyleSheet.create({
   subtleText: {
     color: COLORS.textTertiary,
     fontSize: 12,
-    textAlign: "center",
-  },
-  errorText: {
-    color: COLORS.danger,
-    fontSize: 12,
-    textAlign: "center",
   },
   retryButton: {
-    flexDirection: "row",
-    alignItems: "center",
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingVertical: 6,
     backgroundColor: COLORS.goldPrimary + "20",
-    borderRadius: 20,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: COLORS.goldPrimary,
-    gap: 5,
   },
   retryText: {
     color: COLORS.goldPrimary,

@@ -1,14 +1,10 @@
 /**
- * useTopCharts Hook - Enhanced with Charts API for top50
- * 
- * chart type routing:
- *   'top50'   → getTrendingWithFallback()  → YouTube Charts API
- *   'viral50' → search("top music videos") → Search fallback
+ * useTopCharts Hook — Supabase DB Edition (with duplicate removal)
  */
-
 import { useState, useEffect, useCallback } from 'react';
-import { getTrendingWithFallback, search, StreamInfoItem, SearchPage } from '@/modules/mavin-engine';
+import { supabase } from '@/libs/supabase';
 import { cache } from '@/libs/cache';
+import type { Song, ChartRanking } from '@/libs/supabase/types';
 
 export interface ChartItem {
   id: string;
@@ -28,112 +24,131 @@ interface UseTopChartsResult {
   refetch: () => void;
 }
 
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-
-const YOUTUBE_SERVICE_ID = 0;
 const MAX_ITEMS = 20;
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
+// Normalize string for comparison
+const normalizeKey = (str: string): string => {
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s-]/g, '');
+};
 
-function pickBestThumbnail(thumbnails: StreamInfoItem['thumbnails']): string {
-  if (!thumbnails?.length) return '';
-  const priority = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'] as const;
-  for (const level of priority) {
-    const match = thumbnails.find(t => t.resolutionLevel === level);
-    if (match?.url) return match.url;
-  }
-  return thumbnails[0]?.url ?? '';
-}
-
-function toChartItem(item: StreamInfoItem, index: number): ChartItem | null {
-  if (item.isLive) return null;
-  if (item.isShortFormContent) return null;
-  if (!item.url) return null;
-
-  return {
-    id: item.url,
-    videoId: item.url,
-    title: item.name?.trim() || 'Unknown Title',
-    artist: item.uploaderName?.trim() || 'Unknown Artist',
-    duration: Number(item.duration) || 0,
-    thumbnail: pickBestThumbnail(item.thumbnails),
-    views: Number(item.viewCount) || 0,
-    position: index + 1,
-  };
-}
-
-// ─────────────────────────────────────────────
-// Fetchers
-// ─────────────────────────────────────────────
-
-/**
- * Fetch top 50 using Charts API (most reliable)
- */
-async function fetchTop50(): Promise<ChartItem[]> {
-  const result = await getTrendingWithFallback('music', YOUTUBE_SERVICE_ID);
+// Remove duplicates - priority: videoId > song_id > title+artist
+const removeDuplicates = (items: ChartItem[]): ChartItem[] => {
+  const seenVideoIds = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenSongs = new Set<string>();
   
-  if (!result.success || !result.items?.length) {
-    throw new Error(result.message || 'Top 50 unavailable');
-  }
+  return items.filter(item => {
+    // Priority 1: videoId
+    if (item.videoId?.trim()) {
+      const vid = item.videoId.trim().toLowerCase();
+      if (seenVideoIds.has(vid)) return false;
+      seenVideoIds.add(vid);
+      return true;
+    }
+    
+    // Priority 2: song id
+    if (seenIds.has(item.id)) return false;
+    seenIds.add(item.id);
+    
+    // Priority 3: title + artist (fallback)
+    const key = `${normalizeKey(item.title)}-${normalizeKey(item.artist)}`;
+    if (seenSongs.has(key)) return false;
+    seenSongs.add(key);
+    
+    return true;
+  });
+};
 
-  const items = (result.items as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .slice(0, MAX_ITEMS)
-    .map((item, idx) => toChartItem(item, idx))
+async function fetchCharts(chartType: string = 'top50'): Promise<ChartItem[]> {
+  // Get latest date
+  const { data: latestDateData, error: dateError } = await supabase
+    .from('chart_rankings')
+    .select('date')
+    .order('date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (dateError) throw new Error(`Failed to get latest chart date: ${dateError.message}`);
+  
+  const latestDate = latestDateData?.date;
+  if (!latestDate) throw new Error('No chart date found');
+
+  // Get rankings for latest date
+  const { data: rankings, error: rankingsError } = await supabase
+    .from('chart_rankings')
+    .select('position, song_id, streams_today')
+    .eq('date', latestDate)
+    .order('position', { ascending: true });
+
+  if (rankingsError) throw new Error(`Failed to fetch chart rankings: ${rankingsError.message}`);
+  if (!rankings?.length) throw new Error(`No rankings found for chart`);
+
+  // 🎯 CRITICAL: Remove duplicate song_ids, keep the one with best position (lowest number)
+  const songIdMap = new Map<string, ChartRanking>();
+  
+  rankings.forEach((ranking: ChartRanking) => {
+    const existing = songIdMap.get(ranking.song_id);
+    // Keep the one with better (lower) position, or higher streams if same position
+    if (!existing || 
+        ranking.position < existing.position || 
+        (ranking.position === existing.position && (ranking.streams_today ?? 0) > (existing.streams_today ?? 0))) {
+      songIdMap.set(ranking.song_id, ranking);
+    }
+  });
+
+  const uniqueRankings = Array.from(songIdMap.values())
+    .sort((a, b) => a.position - b.position)
+    .slice(0, MAX_ITEMS * 2);
+
+  console.log(`📊 Rankings: ${rankings.length} → Unique: ${uniqueRankings.length} (removed ${rankings.length - uniqueRankings.length} duplicates)`);
+
+  if (!uniqueRankings.length) throw new Error('No unique rankings found');
+
+  const songIds = uniqueRankings.map(r => r.song_id);
+
+  // Fetch songs
+  const { data: songs, error: songsError } = await supabase
+    .from('songs')
+    .select('id, title, artist, artwork_thumbnail, artwork_url, video_id, duration, play_count')
+    .in('id', songIds);
+
+  if (songsError) throw new Error(`Failed to fetch songs: ${songsError.message}`);
+
+  const songMap = new Map(songs?.map((s: Song) => [s.id, s]));
+
+  // Build items
+  const items = uniqueRankings
+    .map((ranking) => {
+      const song = songMap.get(ranking.song_id);
+      if (!song) {
+        console.warn(`⚠️ Missing song: ${ranking.song_id}`);
+        return null;
+      }
+      return {
+        id: song.id,
+        videoId: song.video_id ?? '',
+        title: song.title ?? 'Unknown Title',
+        artist: song.artist ?? 'Unknown Artist',
+        duration: song.duration ?? 0,
+        thumbnail: song.artwork_thumbnail ?? song.artwork_url ?? '',
+        views: ranking.streams_today ?? song.play_count ?? 0,
+        position: ranking.position,
+      };
+    })
     .filter((item): item is ChartItem => item !== null);
 
-  if (!items.length) {
-    throw new Error('No top chart tracks available');
-  }
+  // Final deduplication safety net
+  const uniqueItems = removeDuplicates(items).slice(0, MAX_ITEMS);
+  
+  console.log(`✅ Final items: ${uniqueItems.length}`);
 
-  return items;
+  return uniqueItems;
 }
-
-/**
- * Fetch viral 50 using search (trending/viral content)
- */
-async function fetchViral50(): Promise<ChartItem[]> {
-  const result = await search(
-    'viral music videos trending',
-    'all',
-    undefined,
-    YOUTUBE_SERVICE_ID,
-  ) as SearchPage;
-
-  if (!result.success) {
-    throw new Error(result.errors?.[0] || 'Viral search unavailable');
-  }
-
-  const items = (result.results as StreamInfoItem[])
-    .filter(item => item.type === 'stream')
-    .filter(item => !item.isLive && !item.isShortFormContent)
-    .slice(0, MAX_ITEMS)
-    .map((item, idx) => toChartItem(item, idx))
-    .filter((item): item is ChartItem => item !== null);
-
-  if (!items.length) {
-    throw new Error('No viral chart tracks available');
-  }
-
-  return items;
-}
-
-async function fetchCharts(chartType: string): Promise<ChartItem[]> {
-  switch (chartType) {
-    case 'top50':   return fetchTop50();
-    case 'viral50': return fetchViral50();
-    default:        return fetchTop50();
-  }
-}
-
-// ─────────────────────────────────────────────
-// Hook
-// ─────────────────────────────────────────────
 
 export const useTopCharts = (chartType: string = 'top50'): UseTopChartsResult => {
   const [data, setData] = useState<ChartItem[]>([]);
@@ -143,13 +158,12 @@ export const useTopCharts = (chartType: string = 'top50'): UseTopChartsResult =>
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-
+    const cacheKey = `charts:${chartType}:v2`; // Bumped version to invalidate old cache
+    
     try {
-      const cacheKey = `charts:${chartType}`;
-
       const cached = await cache.get(cacheKey);
-      if (cached && Array.isArray(cached) && cached.length > 0) {
-        console.log(`📦 [useTopCharts] cache hit — ${chartType}`);
+      if (cached?.length) {
+        console.log(`📦 [useTopCharts] cache hit — ${chartType} (${cached.length} items)`);
         setData(cached);
         setLoading(false);
         return;
@@ -157,24 +171,19 @@ export const useTopCharts = (chartType: string = 'top50'): UseTopChartsResult =>
 
       console.log(`🔍 [useTopCharts] fetching ${chartType}…`);
       const items = await fetchCharts(chartType);
-
       console.log(`✅ [useTopCharts] ${items.length} items — ${chartType}`);
       await cache.set(cacheKey, items, CACHE_TTL_MS);
       setData(items);
-
     } catch (e: any) {
-      const msg = e?.message || `Failed to load ${chartType} charts`;
-      console.error(`❌ [useTopCharts] ${chartType}:`, msg);
-      setError(msg);
+      console.error(`❌ [useTopCharts] ${chartType}:`, e.message);
+      setError(e.message || `Failed to load ${chartType} charts`);
       setData([]);
     } finally {
       setLoading(false);
     }
   }, [chartType]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   return { data, loading, error, refetch: load };
 };

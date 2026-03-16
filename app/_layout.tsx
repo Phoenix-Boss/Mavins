@@ -5,6 +5,7 @@ import { useFonts } from "expo-font";
 import { Stack, useSegments, useRootNavigationState } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
+import { StyleSheet } from "react-native";
 import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
@@ -17,52 +18,67 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { store, initializeLibrary } from "@/store/library";
 import { playbackService } from "@/constants/playbackService";
 import { MusicPlayerProvider } from "@/components/MusicPlayerContext";
-import { LyricsProvider } from "@/hooks/useLyricsContext";
+// LyricsProvider  = safe shell (no RNTP hooks) — always mounts
+// LyricsFetcher   = calls useActiveTrack() — only mounts after playerReady
+import { LyricsProvider, LyricsFetcher } from "@/hooks/useLyricsContext";
 import { GlobalUIStateProvider } from "@/contexts/GlobalUIStateContext";
 import FloatingPlayer from "@/components/FloatingPlayer";
 import { UpdateModal } from "@/components/UpdateModal";
 import { MessageModal } from "@/components/MessageModal";
 
 // ── Mavin libs ────────────────────────────────────────────────────────────────
-import { queryClient } from "@/libs/supabase";   // ✅ singleton, not inline
-import { initCache } from "@/libs/cache";         // ✅ initialise cache on boot
+import { queryClient } from "@/libs/supabase";
+import { initCache } from "@/libs/cache";
 
-// ─────────────────────────────────────────────
-// App bootstrap (runs once outside component tree)
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Module-level bootstrap — runs once before any component mounts.
+// registerPlaybackService MUST be called before setupPlayer().
+// ─────────────────────────────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
 TrackPlayer.registerPlaybackService(() => playbackService);
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
-initCache({ startBackgroundJobs: true }); // ✅ boot cache system + background jobs
+initCache({ startBackgroundJobs: true });
 
-// ─────────────────────────────────────────────
-// Loading screen
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadingScreen
+// ─────────────────────────────────────────────────────────────────────────────
 function LoadingScreen() {
   return (
-    <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
+    <View style={styles.loadingScreen}>
       <ActivityIndicator size="large" color="#D4AF37" />
     </View>
   );
 }
 
-// ─────────────────────────────────────────────
-// Root layout
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// RootLayout
+// ─────────────────────────────────────────────────────────────────────────────
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
     Meriva: require("../assets/fonts/Meriva.ttf"),
   });
 
+  const [playerReady, setPlayerReady] = useState(false);
   const [libraryReady, setLibraryReady] = useState(false);
+
   const navigationState = useRootNavigationState();
   const segments = useSegments();
   const isPlayerScreen = segments.includes("(player)");
+  const navReady = !!navigationState?.key;
 
-  // Initialise app library (no navigation side effects here)
+  // ── Bootstrap ────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function prepare() {
+      // Step 1: TrackPlayer — probe first to survive fast-refresh in dev
+      try {
+        await TrackPlayer.getActiveTrack();
+      } catch {
+        await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
+      }
+      setPlayerReady(true); // ← LyricsFetcher mounts only after this
+
+      // Step 2: App library (runs after player is ready, non-blocking for UI)
       try {
         await initializeLibrary();
       } catch (error) {
@@ -71,35 +87,57 @@ export default function RootLayout() {
         setLibraryReady(true);
       }
     }
+
     prepare();
   }, []);
 
-  // Hide splash only after fonts, library, and navigation are all ready
+  // ── Hide splash once everything is ready ─────────────────────────────────────
   useEffect(() => {
-    if (fontsLoaded && libraryReady && navigationState?.key) {
+    if (fontsLoaded && libraryReady && navReady) {
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, libraryReady, navigationState]);
+  }, [fontsLoaded, libraryReady, navReady]);
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Provider tree rules:
+  //
+  //  ┌─ QueryClientProvider          (no RNTP) — always safe
+  //  ├─ Provider (Redux)             (no RNTP) — always safe
+  //  ├─ MusicPlayerProvider          (no RNTP) — always safe
+  //  ├─ LyricsProvider               (no RNTP) — always safe; just holds state
+  //  │   └─ GlobalUIStateProvider    (no RNTP) — always safe
+  //  │       └─ Stack + screens      ← context is available to ALL screens
+  //  │       └─ LyricsFetcher        ← mounts ONLY after playerReady;
+  //  │                                  calls useActiveTrack() safely here
+  //  │       └─ FloatingPlayer       ← uses RNTP hooks, gated by playerReady
+  //  └─ UpdateModal / MessageModal   (no RNTP) — always safe
+  //
+  // Key principle: RNTP hooks must NEVER be called before setupPlayer() resolves.
+  // We achieve this by mounting the components that contain those hooks
+  // conditionally, not by trying to guard the hooks themselves.
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
-    // ── Server state (TanStack Query) ───────────────────────────────────────
     <QueryClientProvider client={queryClient}>
-      {/* ── Local/UI state (Redux) ──────────────────────────────────────── */}
       <Provider store={store}>
         <MusicPlayerProvider>
-          <LyricsProvider>
-            <GlobalUIStateProvider>
-              <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-                <GestureHandlerRootView style={{ flex: 1 }}>
-                  <ThemeProvider value={DarkTheme}>
-                    <StatusBar
-                      barStyle="light-content"
-                      backgroundColor="transparent"
-                      translucent
-                    />
+          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <ThemeProvider value={DarkTheme}>
+                <StatusBar
+                  barStyle="light-content"
+                  backgroundColor="transparent"
+                  translucent
+                />
 
+                {/*
+                  LyricsProvider wraps the ENTIRE tree so that useLyricsContext()
+                  is available in every screen, including (player) and (modals).
+                  It contains NO RNTP hooks — safe to mount immediately.
+                */}
+                <LyricsProvider>
+                  <GlobalUIStateProvider>
                     <View style={{ flex: 1, backgroundColor: "#000" }}>
-                      {/* Navigator must mount immediately — never gate it */}
+
                       <Stack
                         screenOptions={{
                           headerShown: false,
@@ -127,33 +165,61 @@ export default function RootLayout() {
                         <Stack.Screen name="+not-found" />
                       </Stack>
 
-                      {!isPlayerScreen && (
-                        <View
-                          style={{
-                            position: "absolute",
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            zIndex: 1000,
-                          }}
-                        >
-                          <FloatingPlayer />
-                        </View>
-                      )}
-
-                      {/* Loading overlay — shown until fonts + library ready */}
+                      {/* Full-screen overlay until fonts + library are ready */}
                       {(!fontsLoaded || !libraryReady) && <LoadingScreen />}
                     </View>
 
+                    {/*
+                      LyricsFetcher — renders null but calls useActiveTrack().
+                      MUST stay outside <View> (it's not visual) but inside
+                      LyricsProvider so it can write to the context.
+                      Mounts ONLY after setupPlayer() has resolved.
+                    */}
+                    {playerReady && <LyricsFetcher />}
+
+                    {/*
+                      FloatingPlayer uses RNTP hooks (useActiveTrack etc).
+                      Gated behind both playerReady AND navReady, and hidden
+                      when the full player screen is open.
+                    */}
+                    {playerReady && navReady && !isPlayerScreen && (
+                      <View style={styles.floatingPlayerWrapper}>
+                        <FloatingPlayer />
+                      </View>
+                    )}
+
+                    {/* Modals with no RNTP hooks — always safe */}
                     <UpdateModal />
                     <MessageModal />
-                  </ThemeProvider>
-                </GestureHandlerRootView>
-              </SafeAreaProvider>
-            </GlobalUIStateProvider>
-          </LyricsProvider>
+
+                  </GlobalUIStateProvider>
+                </LyricsProvider>
+
+              </ThemeProvider>
+            </GestureHandlerRootView>
+          </SafeAreaProvider>
         </MusicPlayerProvider>
       </Provider>
     </QueryClientProvider>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  loadingScreen: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 9999,
+  },
+  floatingPlayerWrapper: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+  },
+});

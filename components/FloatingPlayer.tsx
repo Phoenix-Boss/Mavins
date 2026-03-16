@@ -1,4 +1,20 @@
-import React, { useRef } from "react";
+/**
+ * FloatingPlayer
+ *
+ * Reads directly from react-native-track-player via useActiveTrack()
+ * and MusicPlayerContext.togglePlayPause() — no props required.
+ *
+ * Visibility: hidden when no track is loaded (activeTrack is undefined).
+ * Tap anywhere on the card → opens /(player) full screen.
+ * Skip button → TrackPlayer.skipToNext().
+ * Play/Pause button → MusicPlayerContext.togglePlayPause().
+ *
+ * SAFETY: This component only mounts after TrackPlayer.setupPlayer() has
+ * resolved (enforced by the playerReady + navReady gate in _layout.tsx),
+ * so all RNTP hooks are guaranteed to find an initialised player.
+ */
+
+import React from "react";
 import {
   View,
   Text,
@@ -7,118 +23,143 @@ import {
   StyleSheet,
   Dimensions,
   Platform,
-  GestureResponderEvent,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useNavigation } from "@react-navigation/native";
 import { triggerHaptic } from "@/helpers/haptics";
-import Animated, {
-  useAnimatedStyle,
-  withTiming,
-} from "react-native-reanimated";
-import { Colors } from "@/constants/Colors";
+import Animated, { useAnimatedStyle, withTiming } from "react-native-reanimated";
+import { useActiveTrack, usePlaybackState, State } from "react-native-track-player";
+import TrackPlayer from "react-native-track-player";
+import { useMusicPlayer } from "@/components/MusicPlayerContext";
 
 const { width } = Dimensions.get("window");
 
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface FloatingPlayerProps {
   tabHeight?: number;
-  track?: {
-    title: string;
-    artist: string;
-    artwork?: string | number;
-  };
 }
 
-const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
-  tabHeight = 56,
-  track,
-}) => {
-  const router = useRouter();
-  const [isPlaying, setIsPlaying] = React.useState(false);
+// ─── Component ────────────────────────────────────────────────────────────────
 
-  const togglePlay = () => {
-    triggerHaptic();
-    setIsPlaying(!isPlaying);
-  };
+const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
+  const router        = useRouter();
+  const navigation    = useNavigation();
+  const activeTrack   = useActiveTrack();
+  const playbackState = usePlaybackState();
+  const { togglePlayPause, isLoading } = useMusicPlayer();
 
-  const playNextSong = () => {
-    triggerHaptic();
-  };
+  /**
+   * Normalise the playback state across RNTP v3 (enum) and v4 (object).
+   * Falls back to State.None if the value is not yet available — this is
+   * purely defensive; the component should never mount before setupPlayer().
+   */
+  const currentState: State = (() => {
+    if (!playbackState) return State.None;
+    if (typeof playbackState === "object" && "state" in playbackState) {
+      return (playbackState as { state: State }).state ?? State.None;
+    }
+    return playbackState as unknown as State;
+  })();
 
-  const openPlayerScreen = () => {
-    triggerHaptic();
-    if (!track) return;
-    router.push("/(player)");
-  };
+  const isPlaying =
+    currentState === State.Playing ||
+    currentState === State.Buffering;
 
   const floatingPlayerBottom = tabHeight + 4;
 
-  const animatedStyle = useAnimatedStyle(() => {
-    return {
-      bottom: withTiming(floatingPlayerBottom, { duration: 300 }),
-    };
-  }, [floatingPlayerBottom]);
+  const animatedStyle = useAnimatedStyle(
+    () => ({ bottom: withTiming(floatingPlayerBottom, { duration: 300 }) }),
+    [floatingPlayerBottom]
+  );
 
-  if (!track) {
-    return null;
-  }
+  // ── Hide when nothing is loaded ──────────────────────────────────────────
+  if (!activeTrack) return null;
 
-  const getArtworkSource = () => {
-    if (!track.artwork) return null;
-    if (typeof track.artwork === "number") return track.artwork;
-    return { uri: track.artwork };
+  // ── Handlers ────────────────────────────────────────────────────────────
+
+  const openPlayerScreen = () => {
+    triggerHaptic();
+    /**
+     * Use push so the user can go back from the player screen.
+     * If the navigator has no history yet (should not happen given the
+     * navReady gate, but defensive), replace to avoid a GO_BACK crash.
+     */
+    if (navigation.canGoBack()) {
+      router.push("/(player)");
+    } else {
+      router.replace("/(player)");
+    }
   };
 
-  const artworkSource = getArtworkSource();
+  const handleTogglePlay = async (e: any) => {
+    e.stopPropagation();
+    triggerHaptic();
+    await togglePlayPause();
+  };
+
+  const handleSkipNext = async (e: any) => {
+    e.stopPropagation();
+    triggerHaptic();
+    try {
+      await TrackPlayer.skipToNext();
+    } catch {
+      // End of queue — silently ignore
+    }
+  };
+
+  const artworkSource =
+    activeTrack.artwork
+      ? typeof activeTrack.artwork === "number"
+        ? activeTrack.artwork
+        : { uri: activeTrack.artwork as string }
+      : null;
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <Animated.View
-      style={[
-        styles.floatingWrapper,
-        { left: 8, right: 8 },
-        animatedStyle,
-      ]}
+      style={[styles.floatingWrapper, { left: 8, right: 8 }, animatedStyle]}
     >
       <View style={styles.glassBaseLayer} />
+
       <View style={styles.floatingCard}>
         <TouchableOpacity
           style={styles.contentContainer}
           onPress={openPlayerScreen}
           activeOpacity={0.9}
         >
+          {/* Artwork */}
           <View style={styles.albumArtContainer}>
             {artworkSource ? (
-              <Image
-                source={artworkSource}
-                style={styles.albumArt}
-              />
+              <Image source={artworkSource} style={styles.albumArt} />
             ) : (
               <View style={styles.albumArtPlaceholder}>
                 <Ionicons
                   name="musical-notes"
                   size={20}
-                  color="rgba(255, 255, 255, 0.7)"
+                  color="rgba(255,255,255,0.7)"
                 />
               </View>
             )}
           </View>
 
+          {/* Track info */}
           <View style={styles.trackInfo}>
             <Text style={styles.trackTitle} numberOfLines={1}>
-              {track.title || "Unknown Title"}
+              {activeTrack.title || "Unknown Title"}
             </Text>
             <Text style={styles.trackArtist} numberOfLines={1}>
-              {track.artist || "Unknown Artist"}
+              {activeTrack.artist || "Unknown Artist"}
             </Text>
           </View>
 
+          {/* Controls */}
           <View style={styles.controls}>
             <TouchableOpacity
               style={styles.controlButton}
-              onPress={(e) => {
-                e.stopPropagation();
-                playNextSong();
-              }}
+              onPress={handleSkipNext}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="play-skip-forward" size={20} color="#FFFFFF" />
@@ -126,14 +167,14 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
 
             <TouchableOpacity
               style={[styles.controlButton, styles.playButton]}
-              onPress={(e) => {
-                e.stopPropagation();
-                togglePlay();
-              }}
+              onPress={handleTogglePlay}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              disabled={isLoading}
             >
               <Ionicons
-                name={isPlaying ? "pause" : "play"}
+                name={
+                  isLoading ? "hourglass-outline" : isPlaying ? "pause" : "play"
+                }
                 size={22}
                 color="#FFFFFF"
               />
@@ -144,6 +185,8 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
     </Animated.View>
   );
 };
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   floatingWrapper: {
@@ -156,12 +199,9 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
+    borderColor: "rgba(255,255,255,0.1)",
     shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 10,
@@ -169,9 +209,9 @@ const styles = StyleSheet.create({
   glassBaseLayer: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: Platform.select({
-      ios: "rgba(20, 20, 25, 0.85)",
-      android: "rgba(18, 18, 23, 0.95)",
-      default: "rgba(18, 18, 23, 0.9)",
+      ios:     "rgba(20,20,25,0.85)",
+      android: "rgba(18,18,23,0.95)",
+      default: "rgba(18,18,23,0.9)",
     }),
     borderRadius: 16,
   },
@@ -190,19 +230,19 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    backgroundColor: "rgba(0,0,0,0.4)",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.15)",
+    borderColor: "rgba(255,255,255,0.15)",
   },
   albumArtPlaceholder: {
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    backgroundColor: "rgba(0,0,0,0.4)",
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.15)",
+    borderColor: "rgba(255,255,255,0.15)",
   },
   trackInfo: {
     flex: 1,
@@ -218,7 +258,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   trackArtist: {
-    color: "rgba(255, 255, 255, 0.7)",
+    color: "rgba(255,255,255,0.7)",
     fontSize: 12,
     letterSpacing: 0.2,
   },
@@ -232,15 +272,15 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    backgroundColor: "rgba(255,255,255,0.1)",
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.15)",
+    borderColor: "rgba(255,255,255,0.15)",
   },
   playButton: {
-    backgroundColor: "rgba(139, 115, 85, 0.8)",
-    borderColor: "rgba(255, 255, 255, 0.3)",
+    backgroundColor: "rgba(139,115,85,0.8)",
+    borderColor: "rgba(255,255,255,0.3)",
   },
 });
 

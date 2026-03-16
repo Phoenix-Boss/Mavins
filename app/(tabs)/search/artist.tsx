@@ -1,25 +1,32 @@
 /**
- * This file defines the `ArtistPageScreen` component, which displays detailed
- * information about a specific music artist. It fetches artist data from YouTube Music,
- * including their top songs, albums, singles, and videos. Users can play individual
- * songs or navigate to album/video detail pages from this screen.
+ * ArtistPageScreen
+ *
+ * Displays a detailed artist page including top songs, albums, singles/EPs,
+ * and videos. Data is fetched via MavinEngine (NewPipe Extractor v0.26.0)
+ * using getChannelInfo + getChannelTabItems.
+ *
+ * Route params:
+ *   id       — YouTube channel/artist ID  (e.g. "UCxxxxxx")
+ *   subtitle — Optional pre-fetched subscriber string shown under the name
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { Colors } from "@/constants/Colors";
 import { triggerHaptic } from "@/helpers/haptics";
-import {
-  innertube,
-  processArtistPageData,
-  processItems,
-} from "@/services/youtube";
+import MavinEngine, {
+  ChannelInfo,
+  ChannelTab,
+  InfoItem,
+  StreamInfoItem,
+  PlaylistInfoItem,
+} from "@/modules/mavin-engine";
 import { FlashList } from "@shopify/flash-list";
-import { Image } from "@d11/react-native-fast-image";
+import { Image } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   ImageBackground,
@@ -36,341 +43,545 @@ import {
   ScaledSheet,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { YTMusic } from "youtubei.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Normalised song shape used throughout this screen */
+interface Song {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  url: string;
+}
+
+/** Normalised album / single / video card shape */
+interface ArtistPageItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  thumbnail: string;
+  url: string;
+  type: "album" | "video";
+}
+
+/** Full data model for this screen */
+interface ArtistPageData {
+  title: string;
+  thumbnail: string;
+  subscriberCount: string;
+  songs: Song[];
+  albums: ArtistPageItem[];
+  singlesAndEPs: ArtistPageItem[];
+  videos: ArtistPageItem[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Build a channel URL from an artist ID that works with NewPipe */
+const channelUrlFromId = (id: string): string =>
+  id.startsWith("UC")
+    ? `https://www.youtube.com/channel/${id}`
+    : `https://music.youtube.com/channel/${id}`;
+
+/** Format a raw subscriber count into a readable string */
+const formatSubscribers = (count: number): string => {
+  if (count <= 0) return "";
+  if (count >= 1_000_000)
+    return `${(count / 1_000_000).toFixed(1)}M subscribers`;
+  if (count >= 1_000)
+    return `${(count / 1_000).toFixed(0)}K subscribers`;
+  return `${count} subscribers`;
+};
+
+/** Convert a StreamInfoItem to the local Song shape */
+const streamItemToSong = (item: StreamInfoItem): Song => ({
+  id: item.url.split("v=")[1]?.split("&")[0] ?? item.url,
+  title: item.name,
+  artist: item.uploaderName,
+  thumbnail:
+    item.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
+    item.thumbnails[0]?.url ??
+    "",
+  url: item.url,
+});
+
+/** Convert any InfoItem to an ArtistPageItem, returns null for channel items */
+const infoItemToPageItem = (
+  item: InfoItem,
+  type: "album" | "video"
+): ArtistPageItem | null => {
+  if (item.type === "stream") {
+    const s = item as StreamInfoItem;
+    return {
+      id: s.url.split("v=")[1]?.split("&")[0] ?? s.url,
+      title: s.name,
+      subtitle: s.uploaderName,
+      thumbnail:
+        s.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
+        s.thumbnails[0]?.url ??
+        "",
+      url: s.url,
+      type,
+    };
+  }
+  if (item.type === "playlist") {
+    const p = item as PlaylistInfoItem;
+    return {
+      id: p.url,
+      title: p.name,
+      subtitle: p.uploaderName,
+      thumbnail: p.thumbnails[0]?.url ?? "",
+      url: p.url,
+      type,
+    };
+  }
+  return null;
+};
+
+/**
+ * Find the first tab whose contentFilters match any of the given keywords.
+ * NewPipe channel tab filter names are lowercase (e.g. "videos", "albums").
+ */
+const findTab = (
+  tabs: ChannelTab[],
+  ...keywords: string[]
+): ChannelTab | undefined =>
+  tabs.find((tab) =>
+    keywords.some((kw) =>
+      tab.contentFilters.some((f) =>
+        f.toLowerCase().includes(kw.toLowerCase())
+      )
+    )
+  );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
 
 const HEADER_HEIGHT = 300;
 
-/**
- * `ArtistPageScreen` component.
- * Displays a detailed page for a specific artist.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function ArtistPageScreen() {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const [artist, setArtist] = useState<YTMusic.Artist>();
-  const [artistData, setArtistData] = useState<ArtistPageData>();
+  const params = useLocalSearchParams<{ id: string; subtitle?: string }>();
+  const artistId = params.id;
+
+  const [artistData, setArtistData] = useState<ArtistPageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Retain the songs tab reference so Show More can re-use it
+  const songsTabRef = useRef<ChannelTab | null>(null);
+  const channelUrlRef = useRef<string>("");
+
   const { playAudio } = useMusicPlayer();
-  const artistId = params.id as string;
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    /**
-     * Fetches the artist's data from the YouTube Music API.
-     */
-    const fetchArtistData = async () => {
-      if (!artistId) {
-        setLoading(false);
-        return;
-      }
+    if (!artistId) {
+      setError("No artist ID provided.");
+      setLoading(false);
+      return;
+    }
 
+    const url = channelUrlFromId(artistId);
+    channelUrlRef.current = url;
+
+    const fetchArtist = async () => {
       setLoading(true);
+      setError(null);
+
       try {
-        console.log(`Fetching data for artist: ${artistId}`);
-        const yt = await innertube;
-        const artist = await yt.music.getArtist(artistId);
-        setArtist(artist);
-        const artistPage = processArtistPageData(artist);
-        setArtistData(artistPage);
-      } catch (error) {
-        console.error("Error fetching artist data:", error);
+        // Step 1: channel metadata + tab definitions — single network call
+        const info: ChannelInfo = await MavinEngine.getChannelInfo(url, 0);
+
+        const thumbnail =
+          info.avatars.find((a) => a.resolutionLevel === "HIGH")?.url ??
+          info.avatars[0]?.url ??
+          "";
+
+        const data: ArtistPageData = {
+          title:           info.name,
+          thumbnail,
+          subscriberCount: formatSubscribers(info.subscriberCount),
+          songs:           [],
+          albums:          [],
+          singlesAndEPs:   [],
+          videos:          [],
+        };
+
+        // Step 2: resolve tabs
+        const songsTab   = findTab(info.tabs, "videos", "songs");
+        const albumsTab  = findTab(info.tabs, "albums", "releases");
+        const singlesTab = findTab(info.tabs, "singles", "eps");
+        const videosTab  = findTab(info.tabs, "shorts", "live", "streams");
+
+        if (songsTab) songsTabRef.current = songsTab;
+
+        // Step 3: fetch all tabs in parallel, fail gracefully per-tab
+        const requests: Array<Promise<void>> = [];
+
+        if (songsTab) {
+          requests.push(
+            MavinEngine.getChannelTabItems(
+              url,
+              songsTab.contentFilters[0],
+              undefined,
+              0
+            ).then((page) => {
+              data.songs = page.items
+                .filter((i): i is StreamInfoItem => i.type === "stream")
+                .slice(0, 5)
+                .map(streamItemToSong);
+            }).catch((e) =>
+              console.warn("[ArtistPage] songs tab failed:", e)
+            )
+          );
+        }
+
+        if (albumsTab) {
+          requests.push(
+            MavinEngine.getChannelTabItems(
+              url,
+              albumsTab.contentFilters[0],
+              undefined,
+              0
+            ).then((page) => {
+              data.albums = page.items
+                .map((i) => infoItemToPageItem(i, "album"))
+                .filter((i): i is ArtistPageItem => i !== null)
+                .slice(0, 10);
+            }).catch((e) =>
+              console.warn("[ArtistPage] albums tab failed:", e)
+            )
+          );
+        }
+
+        if (singlesTab) {
+          requests.push(
+            MavinEngine.getChannelTabItems(
+              url,
+              singlesTab.contentFilters[0],
+              undefined,
+              0
+            ).then((page) => {
+              data.singlesAndEPs = page.items
+                .map((i) => infoItemToPageItem(i, "album"))
+                .filter((i): i is ArtistPageItem => i !== null)
+                .slice(0, 10);
+            }).catch((e) =>
+              console.warn("[ArtistPage] singles tab failed:", e)
+            )
+          );
+        }
+
+        if (videosTab) {
+          requests.push(
+            MavinEngine.getChannelTabItems(
+              url,
+              videosTab.contentFilters[0],
+              undefined,
+              0
+            ).then((page) => {
+              data.videos = page.items
+                .filter((i): i is StreamInfoItem => i.type === "stream")
+                .slice(0, 10)
+                .map((i) => infoItemToPageItem(i, "video"))
+                .filter((i): i is ArtistPageItem => i !== null);
+            }).catch((e) =>
+              console.warn("[ArtistPage] videos tab failed:", e)
+            )
+          );
+        }
+
+        await Promise.allSettled(requests);
+        setArtistData(data);
+      } catch (e) {
+        console.error("[ArtistPageScreen] fetch failed:", e);
+        setError("Could not load artist data. Please try again.");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchArtistData();
+    fetchArtist();
   }, [artistId]);
 
-  /**
-   * Handles the selection of a song, initiating playback.
-   * @param song - The selected song.
-   */
-  const handleSongSelect = (song: Song) => {
-    triggerHaptic();
-    playAudio(song);
-  };
+  // ── Handlers ───────────────────────────────────────────────────────────────
 
-  /**
-   * Renders a song item for the artist's page.
-   * @param item - The song item to render.
-   * @returns A View component representing the song item.
-   */
-  const renderSong = ({ item }: { item: Song }) => (
-    <View style={styles.song}>
-      <TouchableOpacity
-        style={styles.songTouchableArea}
-        onPress={() => handleSongSelect(item)}
-      >
-        <FastImage
-          source={{ uri: item.thumbnail }}
-          style={styles.songThumbnail}
-        />
-        <View style={styles.songText}>
-          <Text style={styles.songTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.songArtist} numberOfLines={1}>
-            {item.artist}
-          </Text>
-        </View>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={() => {
-          triggerHaptic();
-          // Convert the song object to a JSON string
-          const songData = JSON.stringify({
-            id: item.id,
-            title: item.title,
-            artist: item.artist,
-            thumbnail: item.thumbnail,
-          });
-
-          router.push({
-            pathname: "/(modals)/menu",
-            params: { songData: songData, type: "song" },
-          });
-        }}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Entypo
-          name="dots-three-vertical"
-          size={moderateScale(15)}
-          color="white"
-        />
-      </TouchableOpacity>
-    </View>
+  const handleSongSelect = useCallback(
+    (song: Song) => {
+      triggerHaptic();
+      playAudio(song);
+    },
+    [playAudio]
   );
 
-  /**
-   * Renders a large item (album or video) for an artist's page.
-   * @param item - The artist page item to render.
-   * @param type - The type of item ("album" or "video").
-   * @returns A TouchableOpacity component representing the large item.
-   */
-  const renderLargeItem = (item: ArtistPageItem, type: "album" | "video") => (
-    <TouchableOpacity
-      key={item.id}
-      style={[
-        styles.largeItemContainer,
-        type === "video" && { width: scale(160), height: scale(135) },
-      ]}
-      onPress={() => {
-        triggerHaptic();
-        if (type === "video")
-          handleSongSelect({
-            id: item.id,
-            title: item.title,
-            artist: item.subtitle.slice(0, item.subtitle.indexOf(" • ")),
-            thumbnail: item.thumbnail,
-          });
-        else
-          router.push({
-            pathname: "/(tabs)/search/album",
-            params: {
-              id: item.id,
-              title: item.title,
-              subtitle: item.subtitle,
+  const handleShowMoreSongs = useCallback(async () => {
+    const tab = songsTabRef.current;
+    const url = channelUrlRef.current;
+    if (!tab || !url) return;
+
+    triggerHaptic();
+    setLoading(true);
+
+    try {
+      const page = await MavinEngine.getChannelTabItems(
+        url,
+        tab.contentFilters[0],
+        undefined,
+        0
+      );
+      const songs = page.items
+        .filter((i): i is StreamInfoItem => i.type === "stream")
+        .map(streamItemToSong);
+
+      router.push({
+        pathname: "/(tabs)/search/itemList",
+        params: {
+          data:  JSON.stringify(songs),
+          type:  "song",
+          title: "Top Songs",
+        },
+      });
+    } catch (e) {
+      console.error("[ArtistPageScreen] show more songs failed:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
+
+  const renderSong = useCallback(
+    ({ item }: { item: Song }) => (
+      <View style={styles.song}>
+        {/* flex:1 pushes three-dot menu to the far right */}
+        <TouchableOpacity
+          style={styles.songTouchableArea}
+          onPress={() => handleSongSelect(item)}
+        >
+          <Image
+            source={{ uri: item.thumbnail }}
+            style={styles.songThumbnail}
+            contentFit="cover"
+          />
+          <View style={styles.songTextContainer}>
+            <Text style={styles.songTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.songArtist} numberOfLines={1}>
+              {item.artist}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => {
+            triggerHaptic();
+            router.push({
+              pathname: "/(modals)/menu",
+              params: {
+                songData: JSON.stringify({
+                  id:        item.id,
+                  title:     item.title,
+                  artist:    item.artist,
+                  thumbnail: item.thumbnail,
+                }),
+                type: "song",
+              },
+            });
+          }}
+          hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+        >
+          <Entypo
+            name="dots-three-vertical"
+            size={moderateScale(15)}
+            color="white"
+          />
+        </TouchableOpacity>
+      </View>
+    ),
+    [handleSongSelect, router]
+  );
+
+  const renderLargeItem = useCallback(
+    (item: ArtistPageItem) => (
+      <TouchableOpacity
+        key={item.id}
+        style={[
+          styles.largeItemContainer,
+          item.type === "video" && styles.largeVideoContainer,
+        ]}
+        onPress={() => {
+          triggerHaptic();
+          if (item.type === "video") {
+            handleSongSelect({
+              id:        item.id,
+              title:     item.title,
+              artist:    item.subtitle.split(" • ")[0] ?? item.subtitle,
               thumbnail: item.thumbnail,
-              artist: artistData?.title,
-            },
-          });
-      }}
-      onLongPress={() => {
-        if (type === "video") {
-          const songData = JSON.stringify({
-            id: item.id,
-            title: item.title,
-            artist: item.subtitle.slice(0, item.subtitle.indexOf(" • ")),
-            thumbnail: item.thumbnail,
-          });
-
-          // Trigger haptic feedback for long press.
+              url:       item.url,
+            });
+          } else {
+            router.push({
+              pathname: "/(tabs)/search/album",
+              params: {
+                id:        item.id,
+                title:     item.title,
+                subtitle:  item.subtitle,
+                thumbnail: item.thumbnail,
+                artist:    artistData?.title ?? "",
+              },
+            });
+          }
+        }}
+        onLongPress={() => {
+          if (item.type !== "video") return;
           triggerHaptic(Haptics.AndroidHaptics.Long_Press);
-
           router.push({
             pathname: "/(modals)/menu",
-            params: { songData: songData, type: "song" },
+            params: {
+              songData: JSON.stringify({
+                id:        item.id,
+                title:     item.title,
+                artist:    item.subtitle.split(" • ")[0] ?? item.subtitle,
+                thumbnail: item.thumbnail,
+              }),
+              type: "song",
+            },
           });
-        }
-      }}
-    >
-      <View style={styles.largeItemImageContainer}>
-        <FastImage
+        }}
+      >
+        <Image
           source={{ uri: item.thumbnail }}
           style={[
             styles.largeItemThumbnail,
-            type === "video" && { width: scale(160), height: scale(90) },
+            item.type === "video" && styles.largeVideoThumbnail,
           ]}
+          contentFit="cover"
         />
-      </View>
-      <Text style={styles.largeItemTitle} numberOfLines={1}>
-        {item.title}
-      </Text>
-      <Text style={styles.largeItemSubtitle} numberOfLines={1}>
-        {item.subtitle}
-      </Text>
-    </TouchableOpacity>
+        <Text style={styles.largeItemTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.largeItemSubtitle} numberOfLines={1}>
+          {item.subtitle}
+        </Text>
+      </TouchableOpacity>
+    ),
+    [artistData?.title, handleSongSelect, router]
   );
 
-  if (loading) {
-    return (
-      <View style={styles.centeredContainer}>
-        <ActivityIndicator size="large" color="#FFFFFF" />
-      </View>
-    );
-  }
+  // ── List data assembly ─────────────────────────────────────────────────────
 
-  const listData: any[] = [];
-  if (artistData?.songs && artistData.songs.length > 0) {
+  type ListRow =
+    | { type: "songs_header" | "songs_footer" | "albums_header" | "singles_header" | "videos_header"; id: string }
+    | { type: "song"; id: string; data: Song }
+    | { type: "albums_carousel" | "singles_carousel" | "videos_carousel"; id: string; data: ArtistPageItem[] };
+
+  const listData: ListRow[] = [];
+
+  if (artistData?.songs.length) {
     listData.push({ type: "songs_header", id: "songs_header" });
-    listData.push(
-      ...artistData.songs.map((song) => ({
-        type: "song",
-        data: song,
-        id: song.id,
-      })),
+    artistData.songs.forEach((s) =>
+      listData.push({ type: "song", id: s.id, data: s })
     );
     listData.push({ type: "songs_footer", id: "songs_footer" });
   }
-  if (artistData?.albums && artistData.albums.length > 0) {
+  if (artistData?.albums.length) {
     listData.push({ type: "albums_header", id: "albums_header" });
-    listData.push({
-      type: "albums_carousel",
-      data: artistData.albums,
-      id: "albums_carousel",
-    });
+    listData.push({ type: "albums_carousel", id: "albums_carousel", data: artistData.albums });
   }
-  if (artistData?.singlesAndEPs && artistData.singlesAndEPs.length > 0) {
+  if (artistData?.singlesAndEPs.length) {
     listData.push({ type: "singles_header", id: "singles_header" });
-    listData.push({
-      type: "singles_carousel",
-      data: artistData.singlesAndEPs,
-      id: "singles_carousel",
-    });
+    listData.push({ type: "singles_carousel", id: "singles_carousel", data: artistData.singlesAndEPs });
   }
-  if (artistData?.videos && artistData.videos.length > 0) {
+  if (artistData?.videos.length) {
     listData.push({ type: "videos_header", id: "videos_header" });
-    listData.push({
-      type: "videos_carousel",
-      data: artistData.videos,
-      id: "videos_carousel",
-    });
+    listData.push({ type: "videos_carousel", id: "videos_carousel", data: artistData.videos });
   }
 
-  /**
-   * Renders an item in the FlashList based on its type.
-   * @param item - The item to render.
-   * @returns The rendered component for the item.
-   */
-  const renderItem = ({ item }: { item: any }) => {
+  const renderItem = ({ item }: { item: ListRow }) => {
     switch (item.type) {
       case "songs_header":
-        return <Text style={styles.resultTypeText}>Top Songs</Text>;
+        return <Text style={styles.sectionHeader}>Top Songs</Text>;
+
       case "song":
-        return renderSong({ item: item.data });
+        return renderSong({ item: (item as { type: "song"; id: string; data: Song }).data });
+
       case "songs_footer":
         return (
           <TouchableOpacity
-            style={styles.button}
-            onPress={async () => {
-              triggerHaptic();
-              if (!artist) {
-                return;
-              }
-              setLoading(true);
-
-              const allSongsResult = await artist.getAllSongs();
-
-              if (!allSongsResult)
-                console.log("No songs found for this artist.");
-
-              setLoading(false);
-
-              if (allSongsResult && allSongsResult.contents) {
-                const processedSongs = await processItems(
-                  allSongsResult.contents,
-                  "song",
-                );
-
-                router.push({
-                  pathname: "/(tabs)/search/itemList",
-                  params: {
-                    data: JSON.stringify(processedSongs),
-                    type: "song",
-                    title: "Top Songs",
-                  },
-                });
-              }
-            }}
+            style={styles.showMoreButton}
+            onPress={handleShowMoreSongs}
           >
-            <Text style={styles.buttonText}>Show More</Text>
+            <Text style={styles.showMoreText}>Show More</Text>
           </TouchableOpacity>
         );
+
       case "albums_header":
-        return <Text style={styles.resultTypeText}>Albums</Text>;
+        return <Text style={styles.sectionHeader}>Albums</Text>;
+
       case "albums_carousel":
+      case "singles_carousel": {
+        const d = (item as { data: ArtistPageItem[] }).data;
         return (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingLeft: 13 }}
+            contentContainerStyle={styles.carouselContent}
           >
-            <View style={styles.largeItemRow}>
-              {(item.data || []).map((albumItem: any) =>
-                renderLargeItem(albumItem, "album"),
-              )}
+            <View style={styles.carouselRow}>
+              {d.map((i) => renderLargeItem(i))}
             </View>
           </ScrollView>
         );
+      }
+
       case "singles_header":
-        return <Text style={styles.resultTypeText}>Singles & EPs</Text>;
-      case "singles_carousel":
-        return (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingLeft: 13 }}
-          >
-            <View style={styles.largeItemRow}>
-              {(item.data || []).map((singleItem: any) =>
-                renderLargeItem(singleItem, "album"),
-              )}
-            </View>
-          </ScrollView>
-        );
+        return <Text style={styles.sectionHeader}>Singles & EPs</Text>;
+
       case "videos_header":
-        return <Text style={styles.resultTypeText}>Videos</Text>;
-      case "videos_carousel":
+        return <Text style={styles.sectionHeader}>Videos</Text>;
+
+      case "videos_carousel": {
+        const d = (item as { data: ArtistPageItem[] }).data;
         return (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingLeft: 13 }}
+            contentContainerStyle={styles.carouselContent}
           >
-            <View style={styles.largeItemRow}>
-              {(item.data || []).map((videoItem: any) =>
-                renderLargeItem(videoItem, "video"),
-              )}
+            <View style={styles.carouselRow}>
+              {d.map((i) => renderLargeItem(i))}
             </View>
           </ScrollView>
         );
+      }
+
       default:
         return null;
     }
   };
 
-  /**
-   * Renders the header component for the artist page.
-   * @returns The rendered header component.
-   */
+  // ── Header ─────────────────────────────────────────────────────────────────
+
   const ListHeader = () => (
     <View
       style={[styles.headerContainer, { height: moderateScale(HEADER_HEIGHT) }]}
     >
       <ImageBackground
-        source={{ uri: artistData?.thumbnail }}
+        source={artistData?.thumbnail ? { uri: artistData.thumbnail } : undefined}
         style={styles.headerImage}
         resizeMode="cover"
       >
@@ -380,8 +591,7 @@ export default function ArtistPageScreen() {
         />
       </ImageBackground>
 
-      {/* --- TOP NAVIGATION ICONS --- */}
-      <View style={[styles.topNav, { top: top }]}>
+      <View style={[styles.topNav, { top }]}>
         <TouchableOpacity
           onPress={() => {
             triggerHaptic();
@@ -392,37 +602,90 @@ export default function ArtistPageScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* --- ARTIST TITLE AND INFO --- */}
       <View style={styles.artistInfoContainer}>
-        <Text style={styles.artistName}>{artistData?.title}</Text>
+        <Text style={styles.artistName}>{artistData?.title ?? ""}</Text>
         <Text style={styles.artistSubtext}>
-          {(params.subtitle as string).replace("Artist • ", "")}
+          {artistData?.subscriberCount ||
+            (params.subtitle ?? "").replace("Artist • ", "")}
         </Text>
       </View>
     </View>
   );
 
+  // ── Loading / error states ─────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <View style={styles.centeredContainer}>
+        <ActivityIndicator size="large" color="#FFFFFF" />
+      </View>
+    );
+  }
+
+  if (error || !artistData) {
+    return (
+      <View style={styles.centeredContainer}>
+        <Ionicons
+          name="alert-circle-outline"
+          size={moderateScale(40)}
+          color="#888"
+        />
+        <Text style={styles.errorText}>
+          {error ?? "Artist not found."}
+        </Text>
+        <TouchableOpacity
+          style={styles.showMoreButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.showMoreText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // ── Main render ────────────────────────────────────────────────────────────
+
   return (
     <FlashList
       style={StyleSheet.flatten(styles.container)}
-      contentContainerStyle={{
-        paddingBottom: verticalScale(138) + bottom,
-      }}
+      contentContainerStyle={{ paddingBottom: verticalScale(138) + bottom }}
       showsVerticalScrollIndicator={false}
       data={listData}
       renderItem={renderItem}
       keyExtractor={(item) => item.id}
       ListHeaderComponent={ListHeader}
+      estimatedItemSize={60}
     />
   );
 }
 
-// Styles for the ArtistPageScreen component.
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+
 const styles = ScaledSheet.create({
+  // ── Layout ──
   container: {
     flex: 1,
     backgroundColor: "#000",
   },
+  centeredContainer: {
+    flex: 1,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  // ── Error ──
+  errorText: {
+    color: "#888",
+    fontSize: "14@ms",
+    textAlign: "center",
+    paddingHorizontal: 20,
+  },
+
+  // ── Header ──
   headerContainer: {
     top: 0,
     left: 0,
@@ -432,12 +695,6 @@ const styles = ScaledSheet.create({
   headerImage: {
     width: "100%",
     height: "100%",
-  },
-  centeredContainer: {
-    flex: 1,
-    backgroundColor: "#000",
-    justifyContent: "center",
-    alignItems: "center",
   },
   topNav: {
     position: "absolute",
@@ -454,6 +711,7 @@ const styles = ScaledSheet.create({
     bottom: 0,
     left: 15,
     right: 15,
+    paddingBottom: 12,
   },
   artistName: {
     color: "white",
@@ -465,7 +723,9 @@ const styles = ScaledSheet.create({
     fontSize: "14@ms",
     fontWeight: "500",
   },
-  resultTypeText: {
+
+  // ── Sections ──
+  sectionHeader: {
     color: Colors.text,
     fontSize: "20@ms",
     fontWeight: "bold",
@@ -473,14 +733,17 @@ const styles = ScaledSheet.create({
     marginBottom: 10,
     marginLeft: 20,
   },
+
+  // ── Song row ──
   song: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: "8@ms",
     paddingLeft: 10,
-    paddingRight: 30,
+    paddingRight: 20,
   },
   songTouchableArea: {
+    flex: 1,                // pushes three-dot button to the far right
     flexDirection: "row",
     alignItems: "center",
   },
@@ -490,7 +753,7 @@ const styles = ScaledSheet.create({
     marginHorizontal: 10,
     borderRadius: 5,
   },
-  songText: {
+  songTextContainer: {
     flex: 1,
   },
   songTitle: {
@@ -501,18 +764,54 @@ const styles = ScaledSheet.create({
     color: Colors.textMuted,
     fontSize: "12@ms",
   },
+
+  // ── Show More ──
+  showMoreButton: {
+    backgroundColor: "transparent",
+    borderColor: "#949392",
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 32,
+    alignSelf: "flex-start",
+    marginHorizontal: 12,
+    marginBottom: 4,
+  },
+  showMoreText: {
+    color: "white",
+    fontSize: "12@ms",
+    fontWeight: "bold",
+    textAlign: "center",
+  },
+
+  // ── Carousel ──
+  carouselContent: {
+    paddingLeft: 13,
+  },
+  carouselRow: {
+    flexDirection: "row",
+    marginBottom: "10@vs",
+  },
+
+  // ── Large item card ──
   largeItemContainer: {
     marginRight: "10@ms",
     width: "100@ms",
     height: "145@ms",
   },
-  largeItemImageContainer: {
-    position: "relative",
+  largeVideoContainer: {
+    width: scale(160),
+    height: scale(135),
   },
   largeItemThumbnail: {
     borderRadius: 12,
     width: "100@ms",
     height: "100@ms",
+  },
+  largeVideoThumbnail: {
+    width: scale(160),
+    height: scale(90),
+    borderRadius: 8,
   },
   largeItemTitle: {
     color: Colors.text,
@@ -523,26 +822,5 @@ const styles = ScaledSheet.create({
   largeItemSubtitle: {
     fontSize: "12@ms",
     color: "#888",
-  },
-  largeItemRow: {
-    flexDirection: "row",
-    marginBottom: "10@vs",
-  },
-  button: {
-    backgroundColor: "transparent",
-    borderColor: "#949392",
-    borderWidth: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 32,
-    flex: 1,
-    marginHorizontal: 12,
-    alignSelf: "flex-start",
-  },
-  buttonText: {
-    color: "white",
-    fontSize: "12@ms",
-    fontWeight: "bold",
-    textAlign: "center",
   },
 });
