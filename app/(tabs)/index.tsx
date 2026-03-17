@@ -5,7 +5,6 @@
  *
  * 1. Search bar → pushes to /(tabs)/search (the full search screen)
  * 2. Notification icon → /(modals)/notifications
- * 3. Settings icon → /(modals)/settings
  * 4. Pull-to-refresh → invalidates TanStack Query cache AND clears
  *    device cache for all home section list keys so hooks re-fetch
  * 5. Categories row commented out cleanly (re-enable by uncommenting)
@@ -231,11 +230,6 @@ export default function HomeScreen() {
     router.push("/(modals)/notifications");
   };
 
-  const handleSettingsPress = () => {
-    triggerHaptic();
-    router.push("/(modals)/settings");
-  };
-
   // ── Header ───────────────────────────────────────────────────────────────────
   const CombinedHeader = () => (
     <View style={{ backgroundColor: COLORS.background }}>
@@ -273,18 +267,6 @@ export default function HomeScreen() {
             />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={handleSettingsPress}
-            style={styles.iconButton}
-            hitSlop={12}
-            accessibilityLabel="Settings"
-          >
-            <Ionicons
-              name="settings-outline"
-              size={24}
-              color={COLORS.goldShimmer}
-            />
-          </TouchableOpacity>
         </View>
       </View>
 

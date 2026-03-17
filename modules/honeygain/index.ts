@@ -1,133 +1,166 @@
-// modules/modules/honeygain/index.ts
-// ✅ EXACT mavin-engine pattern + ALWAYS-ON Honeygain (24/7 revenue)
+// modules/honeygain/index.ts
+// JS entry point for the Honeygain Expo module.
+// Imported via package.json alias: "honeygain-sdk": "file:./modules/honeygain"
+// Native side registered as Name("Honeygain") in HoneygainModule.kt.
+//
+// ─── KEY OWNERSHIP ────────────────────────────────────────────────────────────
+// API_KEY lives here and ONLY here in JS-land.
+// No caller (ConsentGate, screens, hooks) ever sees or passes the key.
+// initialize() is intentionally no-arg — the module injects the key itself.
+//
+// To keep the key out of source control, replace the inline string with:
+//   import { HONEYGAIN_API_KEY } from '../secrets'; // secrets.ts is gitignored
+// ─────────────────────────────────────────────────────────────────────────────
 
-import { requireNativeModule } from 'expo-modules-core';
+import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 
-// ======================
-// Type Definitions (Updated for Always-On)
-// ======================
-export interface AlwaysOnStatus {
+const API_KEY = '2125ae20cfd8855abc0bee8cc9c997c4';
+
+// ─── Event map ────────────────────────────────────────────────────────────────
+// expo-modules-core's EventEmitter<T> requires T to extend EventsMap, which
+// demands an index signature: [key: string]: (...args: any[]) => void
+// Without it TS raises: "Type does not satisfy the constraint 'EventsMap'.
+//   Index signature for type 'string' is missing in type '...'"
+interface HoneygainEvents {
+  [key: string]:    (...args: any[]) => void; // satisfies EventsMap constraint
+  onError:          (e: { message: string })   => void;
+  onConsentGranted: (e: { timestamp: number }) => void;
+  onConsentDenied:  (e: { timestamp: number }) => void;
+  onSdkStarted:     (e: { timestamp: number }) => void;
+  onSdkStopped:     (e: { timestamp: number }) => void;
+}
+
+// ─── Native module ────────────────────────────────────────────────────────────
+export const HoneygainModule  = requireNativeModule('Honeygain');
+export const HoneygainEmitter = new EventEmitter<HoneygainEvents>(HoneygainModule);
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface HoneygainStatus {
   isRunning: boolean;
   isOptedIn: boolean;
   isBackground: boolean;
   launchOnBoot: boolean;
-  lastError?: string;
+  enableLogging: boolean;
+  lastError?: string | null;
+  initialized: boolean;
 }
 
-export interface PresetBoostResult {
+export interface HoneygainConfig {
+  isBackground?: boolean;
+  launchOnBoot?: boolean;
+  enableLogging?: boolean;
+}
+
+export interface SdkResult {
   success: boolean;
-  presetName: string;
-  notification: string;
-  boostTriggered: number;  // Fixed 1GB
-  alwaysOn: boolean;       // Background continues
+  message?: string;
+  requiresConsent?: boolean;
 }
 
-export interface SongDownloadResult {
-  success: boolean;
-  songTitle: string;
-  notification: string;
-  boostTriggered: number;
-}
+// ─── Core functions ───────────────────────────────────────────────────────────
 
-// ======================
-// Native Module Access
-// ======================
-export const HoneygainModule = requireNativeModule('Honeygain');
+/**
+ * Initialise the SDK. No arguments — key is managed inside this module.
+ * Must be called before optIn() + start().
+ */
+export const initialize = (): Promise<SdkResult> =>
+  HoneygainModule.initialize(API_KEY);
 
-// ======================
-// Type-Safe Wrapper Functions (Always-On + Boosts)
-// ======================
+/** Start bandwidth sharing. Returns { requiresConsent: true } if optIn() hasn't been called. */
+export const start = (): Promise<SdkResult> =>
+  HoneygainModule.start();
 
-// ALWAYS-ON STATUS (24/7 monitoring)
-export const getStatus = async (): Promise<AlwaysOnStatus> => {
-  try {
-    if (!HoneygainModule?.getStatus) {
-      throw new Error('HoneygainModule.getStatus not available');
-    }
-    return await HoneygainModule.getStatus();
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Status check failed: ${errorMessage}`);
-  }
+/** Temporarily stop the SDK. Restarts on next init / reboot if launchOnBoot is true. */
+export const stop = (): Promise<SdkResult> =>
+  HoneygainModule.stop();
+
+/** Grant consent programmatically (custom consent UI). Must be called before start(). */
+export const optIn = (): Promise<SdkResult> =>
+  HoneygainModule.optIn();
+
+/** Revoke consent and stop the SDK immediately. */
+export const optOut = (): Promise<SdkResult> =>
+  HoneygainModule.optOut();
+
+/** Get the full SDK status snapshot. */
+export const getStatus = (): Promise<HoneygainStatus> =>
+  HoneygainModule.getStatus();
+
+/** Get the last error that caused the SDK to stop, or null if none. */
+export const getLastError = (): Promise<{ message: string } | null> =>
+  HoneygainModule.getLastError();
+
+/** Update runtime config (isBackground, launchOnBoot, enableLogging). */
+export const configure = (config: HoneygainConfig): Promise<SdkResult> =>
+  HoneygainModule.configure(config);
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+export const onError = (cb: (e: { message: string }) => void) =>
+  HoneygainEmitter.addListener('onError', cb);
+
+export const onConsentGranted = (cb: (e: { timestamp: number }) => void) =>
+  HoneygainEmitter.addListener('onConsentGranted', cb);
+
+export const onConsentDenied = (cb: (e: { timestamp: number }) => void) =>
+  HoneygainEmitter.addListener('onConsentDenied', cb);
+
+export const onSdkStarted = (cb: (e: { timestamp: number }) => void) =>
+  HoneygainEmitter.addListener('onSdkStarted', cb);
+
+export const onSdkStopped = (cb: (e: { timestamp: number }) => void) =>
+  HoneygainEmitter.addListener('onSdkStopped', cb);
+
+// ─── Backward-compat stubs ────────────────────────────────────────────────────
+
+/** @deprecated → stop() */
+export const stopSharing = (): Promise<SdkResult> => {
+  console.warn('[Honeygain] stopSharing() is deprecated → use stop()');
+  return stop();
 };
 
-// PRESET CLICK → 1GB INSTANT BOOST (on top of always-on)
-export const downloadPresetWithBandwidth = async (
-  presetName: string
-): Promise<PresetBoostResult> => {
-  try {
-    if (!HoneygainModule?.downloadPresetWithBandwidth) {
-      throw new Error('HoneygainModule.downloadPresetWithBandwidth not available');
-    }
-    return await HoneygainModule.downloadPresetWithBandwidth(presetName);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Preset boost failed: ${errorMessage}`);
-  }
+/** @deprecated → getStatus() */
+export const getEarnings = (): Promise<HoneygainStatus> => {
+  console.warn('[Honeygain] getEarnings() is deprecated → use getStatus()');
+  return getStatus();
 };
 
-// OFFLINE SONGS → 1GB BOOST (same pattern)
-export const downloadSongWithBandwidth = async (
-  songTitle: string
-): Promise<SongDownloadResult> => {
-  try {
-    if (!HoneygainModule?.downloadSongWithBandwidth) {
-      throw new Error('HoneygainModule.downloadSongWithBandwidth not available');
-    }
-    return await HoneygainModule.downloadSongWithBandwidth(songTitle);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Song boost failed: ${errorMessage}`);
-  }
+/** @deprecated → initialize() + start() */
+export const startBandwidthSession = async (_durationSeconds: number): Promise<boolean> => {
+  console.warn('[Honeygain] startBandwidthSession() is deprecated → use initialize() + start()');
+  return getStatus().then(s => s.isRunning);
 };
 
-// MANUAL STOP (Temporary - restarts on reboot/init)
-export const stopSharing = async (): Promise<boolean> => {
-  try {
-    if (!HoneygainModule?.stopSharing) {
-      throw new Error('HoneygainModule.stopSharing not available');
-    }
-    return await HoneygainModule.stopSharing();
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Stop failed: ${errorMessage}`);
-  }
+/** @deprecated → stop() */
+export const stopSession = (): Promise<SdkResult> => {
+  console.warn('[Honeygain] stopSession() is deprecated → use stop()');
+  return stop();
 };
 
-// LEGACY METHODS (Backward compatible)
-export const startBandwidthSession = async (
-  durationSeconds: number
-): Promise<boolean> => {
-  console.warn('startBandwidthSession deprecated - using always-on');
-  return await getStatus().then(status => status.isRunning);
-};
+// ─── Default export ───────────────────────────────────────────────────────────
 
-export const getEarnings = async (): Promise<AlwaysOnStatus> => {
-  console.warn('getEarnings deprecated - using getStatus');
-  return await getStatus();
-};
-
-export const stopSession = async (): Promise<void> => {
-  console.warn('stopSession deprecated - using stopSharing');
-  await stopSharing();
-};
-
-// ======================
-// Default Export (BACKWARD COMPATIBLE)
-// ======================
 export default {
   HoneygainModule,
-  
-  // ALWAYS-ON CORE (24/7 revenue)
+  HoneygainEmitter,
+  // core
+  initialize,
+  start,
+  stop,
+  optIn,
+  optOut,
   getStatus,
+  getLastError,
+  configure,
+  // events
+  onError,
+  onConsentGranted,
+  onConsentDenied,
+  onSdkStarted,
+  onSdkStopped,
+  // backward compat
   stopSharing,
-  
-  // 1GB BOOSTS (Preset/Song clicks)
-  downloadPresetWithBandwidth,
-  downloadSongWithBandwidth,
-  
-  // LEGACY (Redirects to always-on)
-  startBandwidthSession,
   getEarnings,
+  startBandwidthSession,
   stopSession,
 };

@@ -1,7 +1,10 @@
 /**
  * This file defines the layout for the `library` tab's nested stack navigator.
- * It configures the screens that are part of the library flow, such as the
- * main library screen, favorites, downloads, and individual playlist pages.
+ * It configures the screens that are part of the library flow:
+ *   - index:        Main library hub (Playlists · Albums · Artists · Songs · Downloads)
+ *   - favorites:    Liked / saved songs
+ *   - downloads:    Offline-downloaded tracks with progress
+ *   - [playlistName]: Individual playlist detail, dynamically named
  */
 
 import { Stack } from "expo-router";
@@ -9,23 +12,23 @@ import { Stack } from "expo-router";
 /**
  * `LibraryStackLayout` component.
  * Configures the stack navigator for the library tab, hiding headers for all screens.
- * @returns The rendered stack layout for the library tab.
  */
 export default function LibraryStackLayout() {
   return (
     <Stack>
-      {/* Main library screen */}
+      {/* Main library screen — Playlists / Albums / Artists / Songs / Downloads tabs */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      {/* Favorites screen */}
+
+      {/* Favourites screen — songs the user has hearted */}
       <Stack.Screen name="favorites" options={{ headerShown: false }} />
-      {/* Downloads screen */}
+
+      {/* Downloads screen — offline tracks + active download progress */}
       <Stack.Screen name="downloads" options={{ headerShown: false }} />
-      {/* Individual playlist detail screen, dynamically named by `playlistName` */}
+
+      {/* Individual playlist detail screen, dynamically named by `playlistName` param */}
       <Stack.Screen
         name="[playlistName]"
-        options={{
-          headerShown: false,
-        }}
+        options={{ headerShown: false }}
       />
     </Stack>
   );

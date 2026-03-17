@@ -1,7 +1,13 @@
 /**
- * This file defines the `PlaylistView` component, which displays the contents
- * of a specific playlist. It shows the playlist's name, its songs, and allows users to
- * play individual songs or the entire playlist. It also provides options to manage songs within the playlist.
+ * PlaylistView
+ *
+ * Displays the contents of a specific playlist.
+ * - Song list with active playback indicator
+ * - Sort: Default · A–Z · Artist
+ * - Shuffle all
+ * - Play entire playlist via FAB
+ * - Individual song options menu
+ * - Gradient header from first track's artwork colours
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -12,12 +18,13 @@ import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
 import { usePlaylists } from "@/store/library";
 import { FlashList } from "@shopify/flash-list";
-import { Image } from "@d11/react-native-fast-image";
+import { Image as ExpoImage } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import color from "color";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
 import LoaderKit from "react-native-loader-kit";
 import { Divider, FAB } from "react-native-paper";
@@ -30,143 +37,184 @@ import {
 } from "react-native-size-matters/extend";
 import { useActiveTrack } from "react-native-track-player";
 
-/**
- * `PlaylistView` component.
- * Displays the songs within a specific playlist.
- */
+// ─── Sort options ───────────────────────────────────────────────────────────
+
+const SORT_OPTIONS = ["Default", "A–Z", "Artist"] as const;
+type SortOption = (typeof SORT_OPTIONS)[number];
+
+// ─── PlaylistView ────────────────────────────────────────────────────────────
+
 const PlaylistView = () => {
-  const [isScrolling, setIsScrolling] = useState<boolean>(false);
-  const [showHeaderTitle, setShowHeaderTitle] = useState<boolean>(false);
+  const [isScrolling, setIsScrolling] = useState(false);
+  const [showHeaderTitle, setShowHeaderTitle] = useState(false);
   const [titleLayout, setTitleLayout] = useState({ y: 0, height: 0 });
+  const [activeSort, setActiveSort] = useState<SortOption>("Default");
+
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const lastActiveTrack = useLastActiveTrack();
   const activeTrack = useActiveTrack();
   const { playAudio, playPlaylist } = useMusicPlayer();
-  // Get the playlist name from local search parameters.
+
+  // Get the playlist name from navigation params
   const { playlistName } = useLocalSearchParams<{ playlistName: string }>();
 
-  // Fetch playlists from the Redux store.
+  // Fetch playlists from Redux store
   const { playlists } = usePlaylists();
+  const rawPlaylist: Song[] = (playlists[playlistName] as Song[]) ?? [];
 
-  // Get the specific playlist data.
-  const playlist = playlists[playlistName];
+  // Sort the playlist
+  const playlist = useMemo<Song[]>(() => {
+    if (activeSort === "A–Z") return [...rawPlaylist].sort((a, b) => a.title.localeCompare(b.title));
+    if (activeSort === "Artist") return [...rawPlaylist].sort((a, b) => a.artist.localeCompare(b.artist));
+    return rawPlaylist; // Default
+  }, [rawPlaylist, activeSort]);
 
-  // Get playlist thumbnail colors.
+  // Derive artwork colours from the first song's thumbnail
   const { imageColors } = useImageColors(
     playlist[0]?.thumbnail ?? unknownTrackImageUri,
   );
 
-  // Determine if the floating player should be visible.
   const isFloatingPlayerNotVisible = !(activeTrack ?? lastActiveTrack);
 
-  /**
-   * Handles playing a selected song from the playlist.
-   * @param song - The `Song` object to play.
-   */
+  // ─── Actions ──────────────────────────────────────────────────────────────
+
   const handleSongSelect = (song: Song) => {
     triggerHaptic();
     playAudio(song, playlist);
   };
 
+  const handleShuffleAll = async () => {
+    triggerHaptic();
+    if (playlist.length === 0) return;
+    const shuffled = [...playlist].sort(() => Math.random() - 0.5);
+    await playPlaylist(shuffled);
+    await router.navigate("/player");
+  };
+
+  const handlePlayAll = async () => {
+    triggerHaptic();
+    if (playlist.length === 0) return;
+    await playPlaylist(playlist);
+    await router.navigate("/player");
+  };
+
+  // ─── Sub-components ───────────────────────────────────────────────────────
+
   const ListHeader = () => (
     <>
-      {/* Playlist artwork (first song's thumbnail) */}
+      {/* Artwork */}
       <View style={styles.artworkImageContainer}>
-        <FastImage
-          source={{
-            uri: playlist[0]?.thumbnail ?? unknownTrackImageUri,
-            priority: FastImage.priority.high,
-          }}
+        <ExpoImage
+          source={{ uri: playlist[0]?.thumbnail ?? unknownTrackImageUri }}
           style={styles.artworkImage}
+          contentFit="cover"
+          priority="high"
         />
       </View>
 
+      {/* Title */}
       <Text
-        onLayout={(event) => {
-          const layout = event.nativeEvent.layout;
-          setTitleLayout({ y: layout.y, height: layout.height });
+        onLayout={(e) => {
+          const l = e.nativeEvent.layout;
+          setTitleLayout({ y: l.y, height: l.height });
         }}
         style={styles.titleText}
       >
         {playlistName}
       </Text>
 
-      {/* Display total number of tracks in the playlist */}
-      {playlist.length !== 0 && (
-        <Text
-          style={{
-            color: Colors.text,
-            textAlign: "center",
-            fontSize: moderateScale(15),
-            marginBottom: 5,
-          }}
-        >
-          {playlist.length} {`Track${playlist.length > 1 ? "s" : ""}`}
+      {/* Track count */}
+      {playlist.length > 0 && (
+        <Text style={styles.trackCountText}>
+          {playlist.length} {playlist.length === 1 ? "Track" : "Tracks"}
         </Text>
+      )}
+
+      {/* Controls row: Sort pills + Shuffle */}
+      {rawPlaylist.length > 0 && (
+        <View style={styles.controlsRow}>
+          <View style={styles.sortRow}>
+            {SORT_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.sortPill, activeSort === opt && styles.sortPillActive]}
+                onPress={() => { triggerHaptic(); setActiveSort(opt); }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.sortText, activeSort === opt && styles.sortTextActive]}>{opt}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {playlist.length > 1 && (
+            <TouchableOpacity style={styles.shuffleBtn} onPress={handleShuffleAll} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="shuffle-variant" size={moderateScale(18)} color="#D4AF37" />
+            </TouchableOpacity>
+          )}
+        </View>
       )}
     </>
   );
 
-  const renderSongItem = ({ item }: { item: Song }) => (
-    <View style={styles.songItem}>
-      <TouchableOpacity
-        style={styles.songItemTouchableArea}
-        onPress={() => handleSongSelect(item)}
-      >
-        <FastImage
-          source={{ uri: item.thumbnail }}
-          style={styles.resultThumbnail}
-        />
-        {/* Playing indicator for the active track */}
-        {activeTrack?.id === item.id && (
-          <LoaderKit
-            style={styles.trackPlayingIconIndicator}
-            name="LineScalePulseOutRapid"
-            color="white"
+  const renderSongItem = ({ item, index }: { item: Song; index: number }) => {
+    const isPlaying = activeTrack?.id === item.id;
+    return (
+      <View style={styles.songItem}>
+        <TouchableOpacity
+          style={styles.songItemTouchableArea}
+          onPress={() => handleSongSelect(item)}
+          activeOpacity={0.7}
+        >
+          <ExpoImage
+            source={{ uri: item.thumbnail }}
+            style={styles.resultThumbnail}
+            contentFit="cover"
+            priority="normal"
           />
-        )}
-        <View style={styles.resultText}>
-          <Text style={styles.resultTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.resultArtist} numberOfLines={1}>
-            {item.artist}
-          </Text>
-        </View>
-      </TouchableOpacity>
-      {/* Options menu button for the song */}
-      <TouchableOpacity
-        onPress={() => {
-          triggerHaptic();
-          // Prepare song data for the menu modal.
-          const songData = JSON.stringify({
-            id: item.id,
-            title: item.title,
-            artist: item.artist,
-            thumbnail: item.thumbnail,
-          });
+          {isPlaying && (
+            <LoaderKit
+              style={styles.trackPlayingIconIndicator}
+              name="LineScalePulseOutRapid"
+              color="white"
+            />
+          )}
+          <View style={styles.resultText}>
+            <Text style={[styles.resultTitle, isPlaying && styles.resultTitleActive]} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.resultArtist} numberOfLines={1}>
+              {item.artist}
+            </Text>
+          </View>
+        </TouchableOpacity>
 
-          // Navigate to the menu modal.
-          router.push({
-            pathname: "/(modals)/menu",
-            params: {
-              songData: songData,
-              type: "playlistSong",
-              playlistName: playlistName,
-            },
-          });
-        }}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Entypo
-          name="dots-three-vertical"
-          size={moderateScale(15)}
-          color="white"
-        />
-      </TouchableOpacity>
-    </View>
-  );
+        {/* Options menu */}
+        <TouchableOpacity
+          onPress={() => {
+            triggerHaptic();
+            router.push({
+              pathname: "/(modals)/menu",
+              params: {
+                songData: JSON.stringify({
+                  id: item.id,
+                  title: item.title,
+                  artist: item.artist,
+                  thumbnail: item.thumbnail,
+                }),
+                type: "playlistSong",
+                playlistName: playlistName,
+              },
+            });
+          }}
+          hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+        >
+          <Entypo name="dots-three-vertical" size={moderateScale(15)} color="white" />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <LinearGradient
@@ -178,53 +226,37 @@ const PlaylistView = () => {
       }
     >
       <View style={styles.container}>
-        {/* Header with back button and playlist name */}
-        <View
-          style={[
-            styles.header,
-            isScrolling ? styles.headerScrolled : {},
-            { paddingTop: top },
-          ]}
-        >
+
+        {/* Header */}
+        <View style={[styles.header, isScrolling && styles.headerScrolled, { paddingTop: top }]}>
           <Ionicons
             name="arrow-back"
             size={moderateScale(28)}
             color={Colors.text}
-            style={{
-              paddingLeft: 15,
-              paddingRight: 10,
-              marginTop: 2,
-            }}
-            onPress={() => {
-              triggerHaptic();
-              router.back();
-            }}
+            style={{ paddingLeft: 15, paddingRight: 10, marginTop: 2 }}
+            onPress={() => { triggerHaptic(); router.back(); }}
           />
-
-          <Text
-            numberOfLines={1}
-            style={[styles.headerText, !showHeaderTitle && { opacity: 0 }]}
-          >
+          <Text numberOfLines={1} style={[styles.headerText, !showHeaderTitle && { opacity: 0 }]}>
             {playlistName}
           </Text>
+          {/* Header play button — visible when title visible */}
+          {showHeaderTitle && playlist.length > 0 && (
+            <TouchableOpacity style={styles.headerPlayBtn} onPress={handlePlayAll} hitSlop={10}>
+              <MaterialCommunityIcons name="play" size={moderateScale(18)} color="#000" />
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Divider that appears when scrolling */}
         {isScrolling && (
-          <Divider
-            style={{
-              backgroundColor: "rgba(255,255,255,0.3)",
-              height: 0.3,
-              marginHorizontal: -15,
-            }}
-          />
+          <Divider style={{ backgroundColor: "rgba(255,255,255,0.3)", height: 0.3, marginHorizontal: -15 }} />
         )}
 
         <FlashList
           data={playlist}
           renderItem={renderSongItem}
-          keyExtractor={(item: any) => item.id}
-          extraData={activeTrack}
+          keyExtractor={(item: Song) => item.id}
+          estimatedItemSize={75}
+          extraData={[activeTrack, activeSort]}
           ListHeaderComponent={ListHeader}
           contentContainerStyle={{
             paddingHorizontal: 15,
@@ -232,17 +264,25 @@ const PlaylistView = () => {
           }}
           showsVerticalScrollIndicator={false}
           onScroll={(e) => {
-            const currentScrollPosition =
-              Math.floor(e.nativeEvent.contentOffset.y) || 0;
-            setIsScrolling(currentScrollPosition > 0);
-            setShowHeaderTitle(
-              currentScrollPosition > titleLayout.y + titleLayout.height,
-            );
+            const y = Math.floor(e.nativeEvent.contentOffset.y) || 0;
+            setIsScrolling(y > 0);
+            setShowHeaderTitle(y > titleLayout.y + titleLayout.height);
           }}
           scrollEventThrottle={16}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <MaterialCommunityIcons
+                name="playlist-music-outline"
+                size={moderateScale(52)}
+                color="rgba(212,175,55,0.35)"
+              />
+              <Text style={styles.emptyTitle}>This playlist is empty</Text>
+              <Text style={styles.emptySub}>Add songs from the streaming feed or your local library.</Text>
+            </View>
+          }
         />
 
-        {/* Floating Action Button to play the entire playlist */}
+        {/* Play All FAB */}
         {playlist.length > 0 && (
           <FAB
             style={{
@@ -257,12 +297,7 @@ const PlaylistView = () => {
             theme={{ roundness: 7 }}
             icon="play"
             color="black"
-            onPress={async () => {
-              triggerHaptic();
-              if (playlist.length === 0) return;
-              await playPlaylist(playlist);
-              await router.navigate("/player");
-            }}
+            onPress={handlePlayAll}
           />
         )}
       </View>
@@ -272,11 +307,10 @@ const PlaylistView = () => {
 
 export default PlaylistView;
 
-// Styles for the PlaylistView component.
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
 const styles = ScaledSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: "row",
     justifyContent: "flex-start",
@@ -287,12 +321,18 @@ const styles = ScaledSheet.create({
     fontSize: "20@ms",
     fontWeight: "bold",
     color: Colors.text,
-    textAlign: "left",
-    width: "82%",
+    flex: 1,
   },
-  headerScrolled: {
-    backgroundColor: "rgba(0,0,0,0.3)",
+  headerPlayBtn: {
+    width: "34@ms",
+    height: "34@ms",
+    borderRadius: "17@ms",
+    backgroundColor: "#D4AF37",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 15,
   },
+  headerScrolled: { backgroundColor: "rgba(0,0,0,0.3)" },
   artworkImageContainer: {
     elevation: 20,
     shadowColor: "#000",
@@ -317,23 +357,65 @@ const styles = ScaledSheet.create({
     color: Colors.text,
     marginHorizontal: 15,
     textAlign: "center",
-    marginBottom: 5,
+    marginBottom: 4,
+  },
+  trackCountText: {
+    color: Colors.text,
+    textAlign: "center",
+    fontSize: "15@ms",
+    marginBottom: 12,
+    opacity: 0.7,
+  },
+  controlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  sortRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: "8@s",
+    flex: 1,
+  },
+  sortPill: {
+    paddingHorizontal: "12@s",
+    paddingVertical: "6@vs",
+    borderRadius: "20@ms",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  sortPillActive: {
+    backgroundColor: "rgba(212,175,55,0.15)",
+    borderColor: "rgba(212,175,55,0.3)",
+  },
+  sortText: { fontSize: "12@ms", color: "rgba(255,255,255,0.6)", fontWeight: "500" },
+  sortTextActive: { color: "#D4AF37" },
+  shuffleBtn: {
+    width: "36@ms",
+    height: "36@ms",
+    borderRadius: "10@ms",
+    backgroundColor: "rgba(212,175,55,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
   },
   songItem: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 10,
+    paddingVertical: "10@vs",
   },
   songItemTouchableArea: {
     flexDirection: "row",
     alignItems: "center",
-    width: scale(360) - 60,
+    flex: 1,
   },
   resultThumbnail: {
     width: "55@ms",
     height: "55@ms",
     marginRight: 10,
     borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
   trackPlayingIconIndicator: {
     position: "absolute",
@@ -342,15 +424,29 @@ const styles = ScaledSheet.create({
     width: "20@ms",
     height: "20@ms",
   },
-  resultText: {
+  resultText: { flex: 1, marginRight: 10 },
+  resultTitle: { color: Colors.text, fontSize: "16@ms" },
+  resultTitleActive: { color: "#D4AF37" },
+  resultArtist: { color: Colors.textMuted, fontSize: "14@ms" },
+  emptyContainer: {
     flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: "24@s",
+    paddingTop: "60@vs",
   },
-  resultTitle: {
+  emptyTitle: {
     color: Colors.text,
-    fontSize: "16@ms",
+    fontSize: "18@ms",
+    fontWeight: "700",
+    marginTop: "20@vs",
+    textAlign: "center",
   },
-  resultArtist: {
+  emptySub: {
     color: Colors.textMuted,
     fontSize: "14@ms",
+    textAlign: "center",
+    marginTop: "8@vs",
+    lineHeight: "21@ms",
   },
 });

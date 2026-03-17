@@ -11,15 +11,12 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
 import TrackPlayer from "react-native-track-player";
 import { StatusBar, View, ActivityIndicator } from "react-native";
-import { Provider } from "react-redux";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 // ── Internal ──────────────────────────────────────────────────────────────────
-import { store, initializeLibrary } from "@/store/library";
+import { initializeLibrary } from "@/store/library";
 import { playbackService } from "@/constants/playbackService";
 import { MusicPlayerProvider } from "@/components/MusicPlayerContext";
-// LyricsProvider  = safe shell (no RNTP hooks) — always mounts
-// LyricsFetcher   = calls useActiveTrack() — only mounts after playerReady
 import { LyricsProvider, LyricsFetcher } from "@/hooks/useLyricsContext";
 import { GlobalUIStateProvider } from "@/contexts/GlobalUIStateContext";
 import FloatingPlayer from "@/components/FloatingPlayer";
@@ -30,9 +27,13 @@ import { MessageModal } from "@/components/MessageModal";
 import { queryClient } from "@/libs/supabase";
 import { initCache } from "@/libs/cache";
 
+// ── Honeygain ─────────────────────────────────────────────────────────────────
+// Outermost wrapper — fires permission dialogs + consent modal on first launch.
+// Children render immediately behind the modal; nothing is blocked.
+import HoneygainConsentGate from "@/components/HoneygainConsentGate";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level bootstrap — runs once before any component mounts.
-// registerPlaybackService MUST be called before setupPlayer().
 // ─────────────────────────────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
 TrackPlayer.registerPlaybackService(() => playbackService);
@@ -67,18 +68,16 @@ export default function RootLayout() {
   const isPlayerScreen = segments.includes("(player)");
   const navReady = !!navigationState?.key;
 
-  // ── Bootstrap ────────────────────────────────────────────────────────────────
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
     async function prepare() {
-      // Step 1: TrackPlayer — probe first to survive fast-refresh in dev
       try {
         await TrackPlayer.getActiveTrack();
       } catch {
         await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
       }
-      setPlayerReady(true); // ← LyricsFetcher mounts only after this
+      setPlayerReady(true);
 
-      // Step 2: App library (runs after player is ready, non-blocking for UI)
       try {
         await initializeLibrary();
       } catch (error) {
@@ -91,34 +90,30 @@ export default function RootLayout() {
     prepare();
   }, []);
 
-  // ── Hide splash once everything is ready ─────────────────────────────────────
+  // ── Hide splash ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (fontsLoaded && libraryReady && navReady) {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, libraryReady, navReady]);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Provider tree rules:
+  // ─────────────────────────────────────────────────────────────────────────
+  // Provider tree:
   //
-  //  ┌─ QueryClientProvider          (no RNTP) — always safe
-  //  ├─ Provider (Redux)             (no RNTP) — always safe
-  //  ├─ MusicPlayerProvider          (no RNTP) — always safe
-  //  ├─ LyricsProvider               (no RNTP) — always safe; just holds state
-  //  │   └─ GlobalUIStateProvider    (no RNTP) — always safe
-  //  │       └─ Stack + screens      ← context is available to ALL screens
-  //  │       └─ LyricsFetcher        ← mounts ONLY after playerReady;
-  //  │                                  calls useActiveTrack() safely here
-  //  │       └─ FloatingPlayer       ← uses RNTP hooks, gated by playerReady
-  //  └─ UpdateModal / MessageModal   (no RNTP) — always safe
-  //
-  // Key principle: RNTP hooks must NEVER be called before setupPlayer() resolves.
-  // We achieve this by mounting the components that contain those hooks
-  // conditionally, not by trying to guard the hooks themselves.
-  // ─────────────────────────────────────────────────────────────────────────────
+  //  HoneygainConsentGate    — permissions + consent modal (outermost)
+  //  └─ QueryClientProvider
+  //  └─ MusicPlayerProvider
+  //  └─ SafeAreaProvider
+  //  └─ GestureHandlerRootView
+  //  └─ ThemeProvider
+  //  └─ LyricsProvider
+  //  └─ GlobalUIStateProvider
+  //  └─ Stack + screens
+  //  └─ LyricsFetcher / FloatingPlayer / Modals
+  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <QueryClientProvider client={queryClient}>
-      <Provider store={store}>
+    <HoneygainConsentGate>
+      <QueryClientProvider client={queryClient}>
         <MusicPlayerProvider>
           <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <GestureHandlerRootView style={{ flex: 1 }}>
@@ -129,11 +124,6 @@ export default function RootLayout() {
                   translucent
                 />
 
-                {/*
-                  LyricsProvider wraps the ENTIRE tree so that useLyricsContext()
-                  is available in every screen, including (player) and (modals).
-                  It contains NO RNTP hooks — safe to mount immediately.
-                */}
                 <LyricsProvider>
                   <GlobalUIStateProvider>
                     <View style={{ flex: 1, backgroundColor: "#000" }}>
@@ -165,30 +155,18 @@ export default function RootLayout() {
                         <Stack.Screen name="+not-found" />
                       </Stack>
 
-                      {/* Full-screen overlay until fonts + library are ready */}
                       {(!fontsLoaded || !libraryReady) && <LoadingScreen />}
+
                     </View>
 
-                    {/*
-                      LyricsFetcher — renders null but calls useActiveTrack().
-                      MUST stay outside <View> (it's not visual) but inside
-                      LyricsProvider so it can write to the context.
-                      Mounts ONLY after setupPlayer() has resolved.
-                    */}
                     {playerReady && <LyricsFetcher />}
 
-                    {/*
-                      FloatingPlayer uses RNTP hooks (useActiveTrack etc).
-                      Gated behind both playerReady AND navReady, and hidden
-                      when the full player screen is open.
-                    */}
                     {playerReady && navReady && !isPlayerScreen && (
                       <View style={styles.floatingPlayerWrapper}>
                         <FloatingPlayer />
                       </View>
                     )}
 
-                    {/* Modals with no RNTP hooks — always safe */}
                     <UpdateModal />
                     <MessageModal />
 
@@ -199,8 +177,8 @@ export default function RootLayout() {
             </GestureHandlerRootView>
           </SafeAreaProvider>
         </MusicPlayerProvider>
-      </Provider>
-    </QueryClientProvider>
+      </QueryClientProvider>
+    </HoneygainConsentGate>
   );
 }
 

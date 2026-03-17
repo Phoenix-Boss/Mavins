@@ -1,86 +1,76 @@
 /**
- * This file contains a custom React hook for managing the favorite status of a track.
- * It interacts with the Redux store to persist favorite tracks and updates the track metadata
- * in the `react-native-track-player` to reflect the favorite status in the notification controls.
+ * useTrackPlayerFavorite
+ *
+ * Manages the favourite status of the currently active track.
+ *
+ * Key fixes vs the original:
+ *
+ * 1. No more useEffect + setState to derive isFavorite.
+ *    The original pattern was:
+ *      - useFavorites() returns a new array every render (no useShallow)
+ *      - useEffect sees favoriteTracks as changed → calls setIsFavorite
+ *      - setIsFavorite → re-render → useFavorites re-runs → new array → loop
+ *
+ *    Fix: useIsSongFavorite(id) selects a single boolean from the store.
+ *    Booleans are primitives — Zustand's === check is always correct.
+ *    No array allocation, no useEffect, no derived state.
+ *
+ * 2. toggleFavoriteTrack now comes from useFavorites() which exposes
+ *    the store's toggleFavoriteSong action under that name.
  */
 
-import { useFavorites } from "@/store/library";
-import { useCallback, useEffect, useState } from "react";
+import { useIsSongFavorite, useFavorites } from "@/store/library";
+import { useCallback } from "react";
 import TrackPlayer, { useActiveTrack } from "react-native-track-player";
 
-/**
- * A custom hook that manages the favorite status of the active track.
- * It provides a function to toggle the favorite status and checks if the current track is a favorite.
- * @returns An object containing:
- * - `isFavorite`: A boolean indicating if the active track is a favorite.
- * - `toggleFavoriteFunc`: A function to toggle the favorite status of a track.
- * - `checkIfFavorite`: A function to check if a track with a given ID is a favorite.
- */
 export const useTrackPlayerFavorite = () => {
   const activeTrack = useActiveTrack();
-  const { favoriteTracks, toggleFavoriteTrack } = useFavorites();
-  const [isFavorite, setIsFavorite] = useState(false);
 
-  // Update the favorite status whenever the active track or the list of favorite tracks changes.
-  useEffect(() => {
-    if (activeTrack) {
-      setIsFavorite(
-        favoriteTracks.some((track) => track.id === activeTrack.id),
-      );
-    }
-  }, [activeTrack, favoriteTracks]);
+  // ── isFavorite — direct boolean selector, never causes a loop ──────────────
+  // Falls back to false when no track is active (activeTrack?.id is undefined).
+  // useIsSongFavorite internally does: s.favoriteSongIds.includes(id)
+  // which returns a primitive boolean — safe without useShallow.
+  const isFavorite = useIsSongFavorite(activeTrack?.id ?? '');
 
-  /**
-   * Checks if a track with a given ID is in the list of favorite tracks.
-   * @param id The ID of the track to check.
-   * @returns A promise that resolves to a boolean indicating if the track is a favorite.
-   */
-  const checkIfFavorite = useCallback(
-    async (id: string) => {
-      return favoriteTracks.some((track) => track.id === id);
-    },
-    [favoriteTracks],
-  );
+  // ── toggleFavoriteTrack — stable action reference from the store ───────────
+  const { toggleFavoriteTrack } = useFavorites();
 
-  /**
-   * Toggles the favorite status of a track.
-   * If no track is provided, it defaults to the currently active track.
-   * @param track The track to toggle the favorite status for.
-   */
+  // ── checkIfFavorite — reads current store state outside React ─────────────
+  // Uses getState() so it doesn't subscribe to re-renders.
+  const checkIfFavorite = useCallback(async (id: string): Promise<boolean> => {
+    const { useLibraryStore } = await import('@/store/library');
+    return useLibraryStore.getState().favoriteSongIds.includes(id);
+  }, []);
+
+  // ── toggleFavoriteFunc ─────────────────────────────────────────────────────
   const toggleFavoriteFunc = useCallback(
     async (
       track = activeTrack
         ? {
-            id: activeTrack.id,
-            title: activeTrack.title || "",
-            artist: activeTrack.artist || "",
-            thumbnail: activeTrack.artwork || "",
+            id: activeTrack.id ?? '',
+            title: activeTrack.title ?? '',
+            artist: activeTrack.artist ?? '',
+            thumbnail: typeof activeTrack.artwork === 'string' ? activeTrack.artwork : '',
           }
         : undefined,
     ) => {
-      if (!track) return;
+      if (!track?.id) return;
 
-      // Dispatch the action to toggle the favorite status in the Redux store.
-      toggleFavoriteTrack({
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        thumbnail: track.thumbnail,
-      });
+      // Toggle in the Zustand store
+      toggleFavoriteTrack(track.id);
 
-      // Update the track metadata in the player queue to reflect the new favorite status.
-      // This is used to update the notification controls.
+      // Update RNTP queue metadata so the notification rating reflects the change
       try {
         const queue = await TrackPlayer.getQueue();
         const trackIndex = queue.findIndex((t) => t.id === track.id);
-
         if (trackIndex !== -1) {
           await TrackPlayer.updateMetadataForTrack(trackIndex, {
-            rating: isFavorite ? 0 : 1, // 1 for favorite, 0 for not favorite.
+            // isFavorite is the PRE-toggle value here — so we invert it
+            rating: isFavorite ? 0 : 1,
           });
         }
       } catch (error) {
-        console.error("Error updating track metadata:", error);
+        console.error('useTrackPlayerFavorite: error updating RNTP metadata', error);
       }
     },
     [activeTrack, isFavorite, toggleFavoriteTrack],

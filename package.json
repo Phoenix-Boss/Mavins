@@ -94,13 +94,13 @@
     "web-streams-polyfill": "^4.2.0",
     "youtubei.js": "^16.0.1",
     "zod": "^4.3.6",
-    "zustand": "^5.0.11"
+    "zustand": "^5.0.11",
+    "@react-native-async-storage/async-storage": "^2.2.0"
   },
   "devDependencies": {
     "@babel/core": "^7.28.5",
     "@babel/plugin-syntax-import-attributes": "^7.27.1",
     "@babel/plugin-transform-export-namespace-from": "^7.27.1",
-    "@react-native-async-storage/async-storage": "^2.2.0",
     "@types/base-64": "^1.0.2",
     "@types/color": "^4.2.0",
     "@types/jest": "29.5.14",
@@ -203,6 +203,28 @@
         ],
         "listUnknownPackages": false
       }
+    },
+    "cspell": {
+      "words": [
+        "Honeygain",
+        "honeygain",
+        "hgsdk",
+        "HgSdk",
+        "optIn",
+        "optOut",
+        "launchOnBoot",
+        "Mavins",
+        "mavins",
+        "mexexiy",
+        "mmkv",
+        "MMKV",
+        "reanimated",
+        "supabase",
+        "Supabase",
+        "lrclib",
+        "youtubei",
+        "mavin"
+      ]
     }
   }
 }
