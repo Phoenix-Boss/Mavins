@@ -22,14 +22,13 @@ import { GlobalUIStateProvider } from "@/contexts/GlobalUIStateContext";
 import FloatingPlayer from "@/components/FloatingPlayer";
 import { UpdateModal } from "@/components/UpdateModal";
 import { MessageModal } from "@/components/MessageModal";
+import PremiumBanner from "@/components/ads/banner/premium";
 
 // ── Mavin libs ────────────────────────────────────────────────────────────────
 import { queryClient } from "@/libs/supabase";
 import { initCache } from "@/libs/cache";
 
 // ── Honeygain ─────────────────────────────────────────────────────────────────
-// Outermost wrapper — fires permission dialogs + consent modal on first launch.
-// Children render immediately behind the modal; nothing is blocked.
 import HoneygainConsentGate from "@/components/HoneygainConsentGate";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,6 +38,10 @@ SplashScreen.preventAutoHideAsync();
 TrackPlayer.registerPlaybackService(() => playbackService);
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 initCache({ startBackgroundJobs: true });
+
+// How long after app is ready before the banner appears (ms).
+// Give the user a moment to orient themselves on the home screen.
+const PREMIUM_BANNER_DELAY_MS = 2200;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LoadingScreen
@@ -63,10 +66,15 @@ export default function RootLayout() {
   const [playerReady, setPlayerReady] = useState(false);
   const [libraryReady, setLibraryReady] = useState(false);
 
+  // Premium banner state
+  const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
+
   const navigationState = useRootNavigationState();
   const segments = useSegments();
   const isPlayerScreen = segments.includes("(player)");
   const navReady = !!navigationState?.key;
+
+  const appReady = fontsLoaded && libraryReady && navReady;
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -92,10 +100,19 @@ export default function RootLayout() {
 
   // ── Hide splash ───────────────────────────────────────────────────────────
   useEffect(() => {
-    if (fontsLoaded && libraryReady && navReady) {
+    if (appReady) {
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, libraryReady, navReady]);
+  }, [appReady]);
+
+  // ── Show premium banner after app is ready ────────────────────────────────
+  useEffect(() => {
+    if (!appReady) return;
+    const timer = setTimeout(() => {
+      setPremiumBannerVisible(true);
+    }, PREMIUM_BANNER_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [appReady]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Provider tree:
@@ -110,6 +127,7 @@ export default function RootLayout() {
   //  └─ GlobalUIStateProvider
   //  └─ Stack + screens
   //  └─ LyricsFetcher / FloatingPlayer / Modals
+  //  └─ PremiumBanner (above everything, rendered last)
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <HoneygainConsentGate>
@@ -169,6 +187,12 @@ export default function RootLayout() {
 
                     <UpdateModal />
                     <MessageModal />
+
+                    {/* ── Premium banner — rendered last so it sits above everything ── */}
+                    <PremiumBanner
+                      visible={premiumBannerVisible}
+                      onDismiss={() => setPremiumBannerVisible(false)}
+                    />
 
                   </GlobalUIStateProvider>
                 </LyricsProvider>
