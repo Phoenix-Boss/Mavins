@@ -1101,12 +1101,17 @@ class MavinEngineModule : Module() {
         return null
     }
 
-    private fun extractVideoFromItem(item: JSONObject): Map<String, Any>? =
-        extractVideoFromRenderer(
-            item.optJSONObject("videoRenderer") ?: item.optJSONObject("playlistVideoRenderer")
-                ?: item.optJSONObject("gridVideoRenderer") ?: item.optJSONObject("compactVideoRenderer")
-                ?: item.optJSONObject("videoCardRenderer") ?: return null
-        )
+    private fun extractVideoFromItem(item: JSONObject): Map<String, Any>? {
+        // Expression body is forbidden when it contains a return statement.
+        // Confirmed per Kotlin spec: 'return' is only valid in block bodies.
+        val renderer = item.optJSONObject("videoRenderer")
+            ?: item.optJSONObject("playlistVideoRenderer")
+            ?: item.optJSONObject("gridVideoRenderer")
+            ?: item.optJSONObject("compactVideoRenderer")
+            ?: item.optJSONObject("videoCardRenderer")
+            ?: return null
+        return extractVideoFromRenderer(renderer)
+    }
 
     private fun extractVideoFromRichContent(content: JSONObject?): Map<String, Any>? {
         content ?: return null
@@ -1350,20 +1355,40 @@ class MavinEngineModule : Module() {
     private fun getBestStreamUrl(url: String, format: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
         val info = StreamInfo.getInfo(service.getStreamExtractor(url))
+
+        // Per NewPipe v0.26.0 javadoc (confirmed teamnewpipe.github.io/NewPipeExtractor/javadoc):
+        //   getAudioStreams()     → audio-only streams (no video)
+        //   getVideoStreams()     → muxed streams WITH embedded audio (typically ≤480p on YouTube)
+        //   getVideoOnlyStreams() → DASH adaptive streams WITHOUT audio (YouTube HD: 720p, 1080p, etc.)
+        //
+        // For video playback: always prefer videoOnlyStreams (HD DASH) over videoStreams (muxed SD).
+        // For audio playback: use audioStreams only — highest bitrate.
         val best = when (format.lowercase()) {
-            "audio", "mp3", "m4a", "ogg" -> info.audioStreams.maxByOrNull { it.getBitrate() }?.content
-            "video", "mp4", "best"        -> info.videoStreams.maxByOrNull { it.getHeight() }?.content
-                ?: info.videoOnlyStreams.maxByOrNull { it.getHeight() }?.content
-            "dash"                        -> info.dashMpdUrl.takeIf { it.isNotEmpty() }
-            "hls"                         -> info.hlsUrl.takeIf { it.isNotEmpty() }
-            else                          -> info.audioStreams.maxByOrNull { it.getBitrate() }?.content
+            "audio", "mp3", "m4a", "ogg", "webm" ->
+                // audioStreams: no video, highest bitrate = best quality
+                info.audioStreams.maxByOrNull { it.getBitrate() }?.content
+
+            "video", "mp4", "best" ->
+                // videoOnlyStreams first (HD DASH, no embedded audio — correct for video toggle
+                // where TrackPlayer handles audio separately)
+                // Fall back to muxed videoStreams if no DASH streams are available
+                info.videoOnlyStreams.maxByOrNull { it.getHeight() }?.content
+                    ?: info.videoStreams.maxByOrNull { it.getHeight() }?.content
+
+            "dash" -> info.dashMpdUrl.takeIf { it.isNotEmpty() }
+            "hls"  -> info.hlsUrl.takeIf { it.isNotEmpty() }
+
+            else ->
+                // Unknown format → fall back to best audio
+                info.audioStreams.maxByOrNull { it.getBitrate() }?.content
         }
         return mapOf<String, Any>("success" to (best != null), "url" to (best ?: ""),
             "format" to format, "title" to info.name.orEmpty(),
             // FIX [1]: .toDouble()
             "duration" to info.duration.toDouble(),
             "fallbackUrls" to listOfNotNull(
-                info.dashMpdUrl.takeIf { it.isNotEmpty() }, info.hlsUrl.takeIf { it.isNotEmpty() }))
+                info.dashMpdUrl.takeIf { it.isNotEmpty() },
+                info.hlsUrl.takeIf { it.isNotEmpty() }))
     }
 
     private fun extractAudioStreams(url: String, serviceId: Int?): Map<String, Any> {

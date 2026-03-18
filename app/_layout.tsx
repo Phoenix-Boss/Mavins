@@ -40,7 +40,6 @@ configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 initCache({ startBackgroundJobs: true });
 
 // How long after app is ready before the banner appears (ms).
-// Give the user a moment to orient themselves on the home screen.
 const PREMIUM_BANNER_DELAY_MS = 2200;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,8 +64,6 @@ export default function RootLayout() {
 
   const [playerReady, setPlayerReady] = useState(false);
   const [libraryReady, setLibraryReady] = useState(false);
-
-  // Premium banner state
   const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
 
   const navigationState = useRootNavigationState();
@@ -94,40 +91,23 @@ export default function RootLayout() {
         setLibraryReady(true);
       }
     }
-
     prepare();
   }, []);
 
   // ── Hide splash ───────────────────────────────────────────────────────────
   useEffect(() => {
-    if (appReady) {
-      SplashScreen.hideAsync();
-    }
+    if (appReady) SplashScreen.hideAsync();
   }, [appReady]);
 
   // ── Show premium banner after app is ready ────────────────────────────────
   useEffect(() => {
     if (!appReady) return;
-    const timer = setTimeout(() => {
-      setPremiumBannerVisible(true);
-    }, PREMIUM_BANNER_DELAY_MS);
+    const timer = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
     return () => clearTimeout(timer);
   }, [appReady]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Provider tree:
-  //
-  //  HoneygainConsentGate    — permissions + consent modal (outermost)
-  //  └─ QueryClientProvider
-  //  └─ MusicPlayerProvider
-  //  └─ SafeAreaProvider
-  //  └─ GestureHandlerRootView
-  //  └─ ThemeProvider
-  //  └─ LyricsProvider
-  //  └─ GlobalUIStateProvider
-  //  └─ Stack + screens
-  //  └─ LyricsFetcher / FloatingPlayer / Modals
-  //  └─ PremiumBanner (above everything, rendered last)
+  // Provider tree
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <HoneygainConsentGate>
@@ -136,11 +116,9 @@ export default function RootLayout() {
           <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <GestureHandlerRootView style={{ flex: 1 }}>
               <ThemeProvider value={DarkTheme}>
-                <StatusBar
-                  barStyle="light-content"
-                  backgroundColor="transparent"
-                  translucent
-                />
+
+                {/* ── Device status bar — completely hidden ── */}
+                <StatusBar hidden />
 
                 <LyricsProvider>
                   <GlobalUIStateProvider>
@@ -161,15 +139,19 @@ export default function RootLayout() {
                             contentStyle: { backgroundColor: "transparent" },
                           }}
                         />
-                        <Stack.Screen name="(modals)/addToPlaylist" />
-                        <Stack.Screen name="(modals)/comments" />
-                        <Stack.Screen name="(modals)/equalizer" />
-                        <Stack.Screen name="(modals)/deletePlaylist" />
-                        <Stack.Screen name="(modals)/queue" />
-                        <Stack.Screen name="(modals)/premium" />
-                        <Stack.Screen name="(modals)/related" />
-                        <Stack.Screen name="(modals)/lyrics" />
-                        <Stack.Screen name="(modals)/menu" />
+                        {/*
+                         * (modals) group has its own _layout.tsx.
+                         * Register the group here — individual screens are
+                         * declared inside app/(modals)/_layout.tsx.
+                         */}
+                        <Stack.Screen
+                          name="(modals)"
+                          options={{
+                            presentation: "transparentModal",
+                            animation: "slide_from_bottom",
+                            contentStyle: { backgroundColor: "transparent" },
+                          }}
+                        />
                         <Stack.Screen name="+not-found" />
                       </Stack>
 
