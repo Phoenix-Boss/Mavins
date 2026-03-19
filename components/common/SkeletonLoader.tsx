@@ -6,8 +6,8 @@ import {
   View,
   StyleSheet,
   Animated,
-  Easing,
 } from "react-native";
+import { Easing } from "react-native-reanimated";
 
 const COLORS = {
   surface: '#121212',

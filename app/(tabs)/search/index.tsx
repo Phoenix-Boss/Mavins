@@ -12,6 +12,11 @@
  * On subsequent searches for the same query, MavinEngine is never called —
  * Supabase returns the data directly.
  *
+ * MavinEngine.search() API (per index.ts / MavinEngineModule.kt):
+ *   - filter: '' = all content types (DO NOT pass undefined or 'all')
+ *   - returns: { results: InfoItem[], ... } — key is "results" not "items"
+ *   - serviceId: 0 = YouTube
+ *
  * Routing:
  *   Song     → playAudio(song, queue) via MusicPlayerContext
  *   Album    → /album/[encoded-url]
@@ -150,13 +155,21 @@ const formatSubs = (n: number): string => {
   return `${n} subscribers`;
 };
 
-/** Map raw MavinEngine InfoItem[] → typed SearchResults */
+/**
+ * Map raw MavinEngine InfoItem[] → typed SearchResults.
+ *
+ * Per MavinEngineModule.kt performSearch():
+ *   The Kotlin layer returns { "results": [...], "success": true, ... }
+ *   Items have type "stream" | "playlist" | "channel" matching InfoItem union.
+ *   Streams: isLive and isShortFormContent must be filtered out.
+ */
 const mapEngineResults = (items: InfoItem[]): SearchResults => {
   const out: SearchResults = { songs: [], albums: [], artists: [], playlists: [] };
 
   for (const item of items) {
     if (item.type === "stream") {
       const s = item as StreamInfoItem;
+      // Skip live streams and YouTube Shorts per NewPipe docs
       if (s.isLive || s.isShortFormContent) continue;
       out.songs.push({
         type:      "song",
@@ -178,7 +191,7 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
         url:         p.url,
         streamCount: p.streamCount,
       };
-      // Treat named-uploader playlists as albums
+      // Named-uploader playlists are treated as albums
       if (p.uploaderName) {
         out.albums.push({ type: "album", ...base });
       } else {
@@ -203,21 +216,11 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
 
 // ─── Silent Supabase persist ──────────────────────────────────────────────────
 
-/**
- * Push search results to their respective Supabase tables.
- * Fully fire-and-forget — never blocks the UI.
- *
- * Tables written:
- *   tracks  ← songs (via supabaseCache.saveTrack)
- *   artists ← artists (via supabaseCache.saveArtist)
- *   cache_metadata ← search query → track mapping
- */
 const persistResultsToSupabase = async (
   query: string,
   results: SearchResults
 ): Promise<void> => {
   try {
-    // 1. Save artists
     for (const artist of results.artists.slice(0, 5)) {
       supabaseCache.saveArtist(artist.title, {
         name:        artist.title,
@@ -228,7 +231,6 @@ const persistResultsToSupabase = async (
       }).catch(() => {});
     }
 
-    // 2. Save songs as tracks
     for (const song of results.songs.slice(0, 10)) {
       supabaseCache.saveTrack({
         title:      song.title,
@@ -239,7 +241,6 @@ const persistResultsToSupabase = async (
         metadata:   { source: "search", query, viewCount: song.viewCount },
       }).then((trackId) => {
         if (!trackId) return;
-        // 3. Record cache_metadata entry for this query → track mapping
         supabaseCache.saveSearch(query, trackId).catch(() => {});
       }).catch(() => {});
     }
@@ -250,7 +251,7 @@ const persistResultsToSupabase = async (
 
 // ─── Cache key helpers ────────────────────────────────────────────────────────
 
-const deviceCacheKey  = (q: string) => `search:results:${q.toLowerCase().trim()}`;
+const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
 
 // ─── History helpers ──────────────────────────────────────────────────────────
 
@@ -302,7 +303,6 @@ export default function SearchScreen() {
   const inputRef    = useRef<TextInput>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load history on mount + auto-focus
   useEffect(() => {
     loadHistory().then(setHistory);
     setTimeout(() => inputRef.current?.focus(), 150);
@@ -314,6 +314,7 @@ export default function SearchScreen() {
     if (query.trim().length < 2) { setSuggestions([]); return; }
     debounceRef.current = setTimeout(async () => {
       try {
+        // getSearchSuggestions returns { suggestions: string[] } per index.ts
         const res = await MavinEngine.getSearchSuggestions(query.trim(), 0);
         setSuggestions(res.suggestions?.slice(0, 6) ?? []);
       } catch { setSuggestions([]); }
@@ -338,12 +339,21 @@ export default function SearchScreen() {
     // ── L1: device cache ─────────────────────────────────────────────────────
     try {
       const cached = await cache.get(cacheKey);
-      if (cached && (cached as SearchResults).songs) {
-        console.log(`📦 [Search] L1 hit: "${trimmed}"`);
-        setResults(cached as SearchResults);
-        setLoading(false);
-        setHistory(await saveToHistory(trimmed, history));
-        return;
+      if (cached) {
+        const sr = cached as SearchResults;
+        const hasResults = sr.songs?.length > 0 || sr.albums?.length > 0 ||
+                           sr.artists?.length > 0 || sr.playlists?.length > 0;
+        if (hasResults) {
+          console.log(`📦 [Search] L1 hit: "${trimmed}"`);
+          setResults(sr);
+          setLoading(false);
+          setHistory(await saveToHistory(trimmed, history));
+          return;
+        } else {
+          // Cached result was empty — delete it and fall through to live search
+          console.log(`🗑️ [Search] L1 stale empty cache — purging: "${trimmed}"`);
+          cache.delete(cacheKey).catch(() => {});
+        }
       }
     } catch {}
 
@@ -352,7 +362,6 @@ export default function SearchScreen() {
       const sbResult = await supabaseCache.findBySearch(trimmed);
       if (sbResult) {
         console.log(`📦 [Search] L2 hit: "${trimmed}"`);
-        // Reconstruct a SearchResults shell from the single track
         const song: SongResult = {
           type:      "song",
           id:        sbResult.youtubeId ?? sbResult.id ?? "",
@@ -372,7 +381,6 @@ export default function SearchScreen() {
           playlists: [],
         };
         setResults(mapped);
-        // Promote to device cache
         cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
         setLoading(false);
         setHistory(await saveToHistory(trimmed, history));
@@ -383,31 +391,79 @@ export default function SearchScreen() {
     // ── L3: MavinEngine (NewPipe) ────────────────────────────────────────────
     try {
       console.log(`🔍 [Search] L3 MavinEngine: "${trimmed}"`);
-      const raw = await MavinEngine.search(trimmed, undefined, 0);
-      const mapped = mapEngineResults(raw.items ?? []);
+
+      // Per index.ts search() signature and MavinEngineModule.kt performSearch():
+      //   filter: '' = all content types (DO NOT pass undefined or 'all')
+      //   Response key is "results" not "items"
+      //   serviceId: 0 = YouTube
+      const raw = await MavinEngine.search(trimmed, '', undefined, 0);
+      console.log(`[Search] raw keys:`, Object.keys(raw));
+      console.log(`[Search] raw.success:`, raw.success);
+      console.log(`[Search] raw.errors:`, JSON.stringify(raw.errors));
+      console.log(`[Search] raw results count: ${raw.results?.length ?? 0}`);
+      console.log(`[Search] first result:`, JSON.stringify(raw.results?.[0] ?? null));
+
+      let results = raw.results ?? [];
+
+      // If 0 results — visitorData may not be ready yet (fetched async at init).
+      // Refresh it and retry once before giving up.
+      if (results.length === 0) {
+        console.log(`[Search] 0 results — refreshing visitorData and retrying...`);
+        try { await MavinEngine.refreshVisitorData(); } catch (_) {}
+        const retry = await MavinEngine.search(trimmed, '', undefined, 0);
+        console.log(`[Search] retry results count: ${retry.results?.length ?? 0}`);
+        results = retry.results ?? [];
+      }
+
+      const mapped = mapEngineResults(results);
+      console.log(`[Search] mapped — songs:${mapped.songs.length} albums:${mapped.albums.length} artists:${mapped.artists.length} playlists:${mapped.playlists.length}`);
 
       setResults(mapped);
 
-      // Cache in L1
-      cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
+      // Only cache if we actually got results — never cache empty arrays
+      const hasResults = mapped.songs.length > 0 || mapped.albums.length > 0 ||
+                         mapped.artists.length > 0 || mapped.playlists.length > 0;
+      if (hasResults) {
+        cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
+      } else {
+        console.warn(`[Search] MavinEngine returned 0 results for "${trimmed}" — not caching`);
+      }
 
-      // Persist to Supabase tables silently (fire & forget)
+      // Persist to Supabase (fire & forget)
       persistResultsToSupabase(trimmed, mapped);
 
-      // Save history
       setHistory(await saveToHistory(trimmed, history));
     } catch (e: any) {
-      setError(e?.message ?? "Search failed. Please try again.");
+      const msg = e?.message ?? '';
+      // If search failed due to visitorData/extraction error, refresh and retry once
+      if (msg.includes('visitorData') || msg.includes('Search failed') || msg.includes('ParsingException')) {
+        try {
+          console.log('[Search] visitorData error — refreshing and retrying...');
+          await MavinEngine.refreshVisitorData();
+          const raw2 = await MavinEngine.search(trimmed, '', undefined, 0);
+          const mapped2 = mapEngineResults(raw2.results ?? []);
+          setResults(mapped2);
+          const hasResults2 = mapped2.songs.length > 0 || mapped2.albums.length > 0 ||
+                              mapped2.artists.length > 0 || mapped2.playlists.length > 0;
+          if (hasResults2) cache.set(cacheKey, mapped2, SEARCH_CACHE_TTL_MS).catch(() => {});
+          setHistory(await saveToHistory(trimmed, history));
+          return;
+        } catch (retryErr: any) {
+          setError(retryErr?.message ?? 'Search failed after retry. Please try again.');
+          return;
+        }
+      }
+      setError(msg || 'Search failed. Please try again.');
     } finally {
       setLoading(false);
     }
   }, [history]);
 
-  const handleSubmit           = ()  => performSearch(query);
-  const handleHistoryTap       = (q: string) => { setQuery(q); performSearch(q); };
-  const handleSuggestionTap    = (s: string) => { setQuery(s); performSearch(s); };
-  const handleClearHistory     = async () => { await clearAllHistory(); setHistory([]); };
-  const handleRemoveHistory    = async (q: string) =>
+  const handleSubmit        = ()         => performSearch(query);
+  const handleHistoryTap    = (q: string) => { setQuery(q); performSearch(q); };
+  const handleSuggestionTap = (s: string) => { setQuery(s); performSearch(s); };
+  const handleClearHistory  = async ()   => { await clearAllHistory(); setHistory([]); };
+  const handleRemoveHistory = async (q: string) =>
     setHistory(await removeHistoryItem(q, history));
 
   // ── Routing ──────────────────────────────────────────────────────────────────

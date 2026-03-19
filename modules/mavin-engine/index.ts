@@ -6,7 +6,41 @@
  *
  * Kotlin module name:  "MavinEngine"
  * Extractor version:   NewPipeExtractor v0.26.0
- * Architecture:        v9.0 — full Long→Double audit, missing fields, segment/frameset mappers
+ * Architecture:        v9.1 — WEB client SABR fix + visitorData + consent cookie
+ *
+ * ── v9.1 changes (MavinEngineModule.kt) ─────────────────────────────────────
+ *
+ * [8]  YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init()
+ *      — generates the required SOCS cookie for all YouTube requests.
+ *
+ * [9]  Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
+ *      using InnertubeClientRequestInfo.ofWebClient(). YouTube rejects random tokens.
+ *      Two new JS functions: refreshVisitorData() and getVisitorDataStatus().
+ *
+ * [10] v0.26.0 release fix: "do not use WEB client for stream URLs anymore"
+ *      (SABR-only player responses crash with WEB client).
+ *      extractStreamInfo / extractStreamInfoById now use getDefaultService()
+ *      (YouTube Android/iOS client) instead of forcing WEB client.
+ *
+ * [11] v0.26.0 breaking: Service.getMediaCapabilities() returns Set not List.
+ *      ServiceInfo.mediaCapabilities handled correctly in getServicesList().
+ *
+ * [12] MavinDownloader forwards YoutubeParsingHelper.getYouTubeHeaders() on all
+ *      YouTube/Google requests so consent cookie reaches NewPipe's internal calls.
+ *
+ * ── v9.0 changes (original) ──────────────────────────────────────────────────
+ *
+ * [1]  Long → Double at every bridge map boundary (expo-modules JS bridge
+ *      cannot serialize Kotlin Long / Java long — crashes at runtime).
+ * [2]  Int fields confirmed NOT needing .toDouble() (javadoc return int).
+ * [3]  StreamInfo: added startPosition, host, privacy, licence, languageInfo,
+ *      subChannelName, subChannelUrl, subChannelAvatars, streamSegments,
+ *      previewFrames, supportInfo, errors — all confirmed in v0.26.0 javadoc.
+ * [4]  ChannelInfo: added tags, donationLinks, parentChannelName,
+ *      parentChannelUrl, parentChannelAvatars.
+ * [5]  PlaylistInfo: added banners, subChannelName, subChannelUrl, subChannelAvatars.
+ * [6]  getSearchSuggestions returns { suggestions: string[] } — Map root required.
+ * [7]  New interfaces: StreamSegment, Frameset, StreamPrivacy.
  *
  * Service IDs (NewPipe standard):
  *   0 = YouTube
@@ -14,19 +48,6 @@
  *   2 = media.ccc.de
  *   3 = PeerTube
  *   4 = Bandcamp
- *
- * CHANGE LOG v9.0 (vs v8.2):
- *   - StreamInfo: added startPosition, host, privacy, licence, languageInfo,
- *     subChannelName, subChannelUrl, subChannelAvatars, streamSegments,
- *     previewFrames, supportInfo, errors — all confirmed in v0.26.0 javadoc.
- *   - ChannelInfo: added tags, donationLinks, parentChannelName,
- *     parentChannelUrl, parentChannelAvatars.
- *   - PlaylistInfo: added banners, subChannelName, subChannelUrl,
- *     subChannelAvatars.
- *   - New interfaces: StreamSegment, Frameset, StreamPrivacy.
- *   - All numeric Long→Double fields are JS number (unchanged, clarified in JSDoc).
- *   - getSearchSuggestions returns Promise<SearchSuggestionsResult> (unchanged).
- *   - Stale JSDoc referencing v8.2 and "all" filter updated throughout.
  */
 
 import { requireNativeModule } from 'expo-modules-core';
@@ -683,6 +704,32 @@ export interface TrendingCacheStatus {
 }
 
 // ─────────────────────────────────────────────
+// Visitor data
+// ─────────────────────────────────────────────
+
+/**
+ * Status of the cached visitorData token fetched via
+ * YoutubeParsingHelper.getVisitorDataFromInnertube() (NewPipe v0.26.0 API).
+ *
+ * Per fix [9] / fix [10]: YouTube now rejects synthetic/random visitor IDs.
+ * A real token is required for both stream extraction and search to work.
+ * Token is prefetched at init and refreshed every hour automatically.
+ */
+export interface VisitorDataStatus {
+  hasVisitorData: boolean;
+  /** Cache age in milliseconds. (Long→Double in Kotlin) */
+  cacheAgeMs: number;
+  /** TTL in milliseconds (1 hour). (Long→Double in Kotlin) */
+  ttlMs: number;
+  isValid: boolean;
+}
+
+export interface VisitorDataRefreshResult {
+  success: boolean;
+  hasVisitorData: boolean;
+}
+
+// ─────────────────────────────────────────────
 // URL utilities
 // ─────────────────────────────────────────────
 
@@ -736,6 +783,10 @@ export interface ServiceInfo {
   id: number;
   name: string;
   baseUrl: string;
+  /**
+   * v0.26.0 breaking: getMediaCapabilities() returns Set not List in Kotlin.
+   * Handled in getServicesList() — arrives here as string[] regardless.
+   */
   mediaCapabilities: string[];
 }
 
@@ -964,6 +1015,29 @@ export const refreshInnerTubeConfig = (): Promise<InnerTubeRefreshResult> =>
   Native.refreshInnerTubeConfig();
 
 // ═════════════════════════════════════════════════════════════════
+// VISITOR DATA
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Refresh the cached visitorData token.
+ *
+ * Calls YoutubeParsingHelper.getVisitorDataFromInnertube() on the Kotlin side
+ * using InnertubeClientRequestInfo.ofWebClient() per the v0.26.0 API docs.
+ *
+ * The token is prefetched at init and auto-refreshed every hour.
+ * Call manually only if you see "Could not get visitorData" errors.
+ */
+export const refreshVisitorData = (): Promise<VisitorDataRefreshResult> =>
+  Native.refreshVisitorData();
+
+/**
+ * Check the current status of the cached visitorData token.
+ * Useful for diagnosing "Could not get visitorData" or search/stream failures.
+ */
+export const getVisitorDataStatus = (): Promise<VisitorDataStatus> =>
+  Native.getVisitorDataStatus();
+
+// ═════════════════════════════════════════════════════════════════
 // KEY MANAGEMENT
 // ═════════════════════════════════════════════════════════════════
 
@@ -1051,7 +1125,11 @@ const MavinEngine = {
   getTrendingWithFallback,
 
   // InnerTube config
+  // InnerTube config
   getInnerTubeConfig, refreshInnerTubeConfig,
+
+  // Visitor data (fix [9]) — real token via YoutubeParsingHelper.getVisitorDataFromInnertube()
+  refreshVisitorData, getVisitorDataStatus,
 
   // Key management
   getApiKeyStatus, resetFailedKeys,

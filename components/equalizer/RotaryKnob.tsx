@@ -1,13 +1,18 @@
 // components/equalizer/RotaryKnob.tsx
+//
+// Fixes vs original:
+//  1. Gesture.Race → Gesture.Exclusive(doubleTap, pan) so double-tap
+//     has priority and is not cancelled by micro finger movement
+//  2. runOnJS(triggerHaptic)() — was missing the () call on double-tap
+//  3. valueToAngle / angleToValue functions defined outside component
+//     so they are stable worklets (not re-created on every render)
+//  4. onUpdate uses e.translationY delta from last event (changeY) instead
+//     of absolute translationY, preventing jump on fast direction change
+
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  runOnJS,
-  clamp,
-  useDerivedValue,
+  useSharedValue, useAnimatedStyle, withSpring, runOnJS, clamp,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { scale, moderateScale, verticalScale } from 'react-native-size-matters/extend';
@@ -15,153 +20,126 @@ import { Colors } from '@/constants/Colors';
 import * as Haptics from 'expo-haptics';
 
 interface RotaryKnobProps {
-  value: number;           // 0-100
-  label: string;
-  onChange: (value: number) => void;
-  size?: number;
-  color?: string;
-  enabled?: boolean;
+  value:     number;         // 0–100
+  label:     string;
+  onChange:  (value: number) => void;
+  size?:     number;
+  color?:    string;
+  enabled?:  boolean;
 }
 
-// Constants for the knob physics
-const ROTATION_RANGE = 270; // Total degrees of travel (270 degrees)
-const KNOB_MIN_ANGLE = -135; // Start angle (fully left/down)
-const KNOB_MAX_ANGLE = 135;  // End angle (fully right/up)
+const ROTATION_RANGE = 270;   // degrees total travel
+const MIN_ANGLE      = -135;  // fully counter-clockwise
+const MAX_ANGLE      =  135;  // fully clockwise
+
+function valueToAngle(val: number): number {
+  'worklet';
+  return MIN_ANGLE + (clamp(val, 0, 100) / 100) * ROTATION_RANGE;
+}
+
+function angleToValue(angle: number): number {
+  'worklet';
+  return Math.round(clamp((angle - MIN_ANGLE) / ROTATION_RANGE, 0, 1) * 100);
+}
 
 export const RotaryKnob: React.FC<RotaryKnobProps> = ({
   value,
   label,
   onChange,
-  size = 80,
-  color = Colors.metallicBrown.primary,
+  size    = 80,
+  color   = Colors.metallicBrown.primary,
   enabled = true,
 }) => {
-  const rotation = useSharedValue(0);
+  const rotation   = useSharedValue(valueToAngle(value));
   const isDragging = useSharedValue(false);
-  const scaleFactor = useSharedValue(1);
+  const scale_     = useSharedValue(1);
 
-  // Convert value (0-100) to angle (-135 to +135)
-  const valueToAngle = (val: number) => {
-    'worklet';
-    return KNOB_MIN_ANGLE + (val / 100) * ROTATION_RANGE;
-  };
-
-  // Convert angle back to value (0-100)
-  const angleToValue = (angle: number) => {
-    'worklet';
-    const normalized = (angle - KNOB_MIN_ANGLE) / ROTATION_RANGE;
-    return Math.round(clamp(normalized, 0, 1) * 100);
-  };
-
-  // Sync external value changes to rotation
+  // Sync external value (preset load / reset)
   useEffect(() => {
     if (!isDragging.value) {
-      rotation.value = withSpring(valueToAngle(value), {
-        damping: 15,
-        stiffness: 150,
-      });
+      rotation.value = withSpring(valueToAngle(value), { damping: 15, stiffness: 150 });
     }
   }, [value]);
 
-  const triggerHaptic = () => {
-    Haptics.selectionAsync();
-  };
+  const triggerSelection = () => Haptics.selectionAsync();
+  const triggerMedium    = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-  // Pan Gesture
-  const gesture = Gesture.Pan()
+  const pan = Gesture.Pan()
     .enabled(enabled)
     .onBegin(() => {
       isDragging.value = true;
-      scaleFactor.value = withSpring(0.95, { stiffness: 300 });
+      scale_.value     = withSpring(0.93, { stiffness: 300 });
     })
-    .onUpdate((e) => {
-      // Calculate rotation based on vertical drag
-      // Dragging up (negative translationY) increases value
-      const sensitivity = 0.5; // Adjust for feel
-      const newAngle = rotation.value - e.translationY * sensitivity;
-      
-      // Clamp to physical limits
-      rotation.value = clamp(newAngle, KNOB_MIN_ANGLE, KNOB_MAX_ANGLE);
-      
-      // Convert back to value and callback
-      const newValue = angleToValue(rotation.value);
-      runOnJS(onChange)(newValue);
-      
-      // Optional: Haptic on step changes
-      // runOnJS(triggerHaptic)(); 
+    .onUpdate(e => {
+      // Use changeY (incremental delta) to avoid jump on direction change
+      const sensitivity = 0.45;
+      const next  = clamp(rotation.value - e.changeY * sensitivity, MIN_ANGLE, MAX_ANGLE);
+      rotation.value = next;
+      const v = angleToValue(next);
+      runOnJS(onChange)(v);
+      if (Math.abs(e.changeY) > 4) runOnJS(triggerSelection)();
     })
     .onEnd(() => {
       isDragging.value = false;
-      scaleFactor.value = withSpring(1, { stiffness: 300 });
+      scale_.value     = withSpring(1, { stiffness: 300 });
     });
 
-  // Double tap to reset to 50%
+  // Double-tap resets to 50% — must use Exclusive so pan doesn't cancel it
   const doubleTap = Gesture.Tap()
     .numberOfTaps(2)
     .enabled(enabled)
     .onEnd(() => {
-      rotation.value = withSpring(valueToAngle(50));
+      rotation.value = withSpring(valueToAngle(50), { damping: 15, stiffness: 150 });
       runOnJS(onChange)(50);
-      runOnJS(triggerHaptic);
+      runOnJS(triggerMedium)();   // ← was missing () in original
     });
 
-  const composedGesture = Gesture.Race(gesture, doubleTap);
+  // Exclusive: doubleTap gets first chance; if it fails, pan activates
+  const composed = Gesture.Exclusive(doubleTap, pan);
 
-  // Knob visual rotation
-  const knobAnimatedStyle = useAnimatedStyle(() => ({
+  const knobStyle = useAnimatedStyle(() => ({
     transform: [
       { rotate: `${rotation.value}deg` },
-      { scale: scaleFactor.value },
+      { scale: scale_.value },
     ],
   }));
 
-  // The indicator line that rotates
-  const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rotation.value}deg` }],
-  }));
-
   return (
-    <View style={[styles.container, { width: size + 20 }]}>
+    <View style={[styles.container, { width: size + 24 }]}>
       <Text style={styles.label}>{label}</Text>
-      
       <Text style={[styles.valueText, { color: enabled ? color : '#555' }]}>
         {value}%
       </Text>
 
-      <GestureDetector gesture={composedGesture}>
-        <View style={[styles.knobContainer, { width: size, height: size }]}>
-          
-          {/* Background Track (Static) */}
-          <View style={styles.trackBackground}>
-            <View style={[styles.activeArc, { borderBottomColor: color }]} />
-          </View>
+      <GestureDetector gesture={composed}>
+        <View style={[styles.knobWrap, { width: size, height: size }]}>
 
-          {/* Rotating Knob */}
+          {/* Static outer ring */}
+          <View style={[styles.ring, { borderColor: 'rgba(255,255,255,0.1)' }]} />
+
+          {/* Rotating knob body */}
           <Animated.View
             style={[
               styles.knob,
               {
-                width: size * 0.85,
-                height: size * 0.85,
+                width:        size * 0.85,
+                height:       size * 0.85,
                 borderRadius: (size * 0.85) / 2,
               },
-              knobAnimatedStyle,
+              knobStyle,
             ]}
           >
-            {/* Indicator Dot */}
-            <View style={styles.indicatorWrapper}>
-               <Animated.View style={[styles.indicatorDot, { backgroundColor: enabled ? color : '#333' }, indicatorStyle]}>
-                 <View style={styles.dot} />
-               </Animated.View>
+            {/* Indicator dot near top edge */}
+            <View style={styles.indicatorWrap}>
+              <View style={[styles.indicatorDot, { backgroundColor: enabled ? color : '#333' }]} />
             </View>
-            
-            {/* Center Grip */}
-            <View style={styles.innerCircle}>
-               <View style={styles.gripLine} />
-               <View style={[styles.gripLine, { transform: [{ rotate: '90deg' }] }]} />
+
+            {/* Center grip cross */}
+            <View style={styles.gripCross}>
+              <View style={styles.gripLine} />
+              <View style={[styles.gripLine, { transform: [{ rotate: '90deg' }] }]} />
             </View>
           </Animated.View>
-
         </View>
       </GestureDetector>
     </View>
@@ -171,90 +149,68 @@ export const RotaryKnob: React.FC<RotaryKnobProps> = ({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    marginHorizontal: scale(5),
   },
   label: {
-    color: '#fff',
-    fontSize: moderateScale(10),
-    fontWeight: '700',
-    marginBottom: verticalScale(2),
-    textTransform: 'uppercase',
+    color:          '#fff',
+    fontSize:       moderateScale(10),
+    fontWeight:     '700',
+    marginBottom:   verticalScale(2),
+    textTransform:  'uppercase',
+    letterSpacing:  0.5,
   },
   valueText: {
-    color: '#fff',
-    fontSize: moderateScale(12),
+    fontSize:   moderateScale(12),
     fontWeight: '800',
     marginBottom: verticalScale(6),
   },
-  knobContainer: {
+  knobWrap: {
     justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
+    alignItems:     'center',
   },
-  // The outer static ring
-  trackBackground: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
+  ring: {
+    position:     'absolute',
+    width:        '100%',
+    height:       '100%',
     borderRadius: 100,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  activeArc: {
-    position: 'absolute',
-    top: -2,
-    left: -2,
-    right: -2,
-    bottom: -2,
-    borderRadius: 100,
-    borderWidth: 2,
-    borderBottomColor: 'transparent', // This is a simple visual, complex arcs require SVG
-    borderTopColor: 'transparent',
-    borderLeftColor: 'transparent',
-    // Note: For a true arc, use react-native-svg. This is a CSS approximation.
+    borderWidth:  2,
   },
   knob: {
     backgroundColor: '#1a1a1a',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-    elevation: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
+    justifyContent:  'center',
+    alignItems:      'center',
+    shadowColor:     '#000',
+    shadowOffset:    { width: 0, height: 4 },
+    shadowOpacity:   0.5,
+    shadowRadius:    6,
+    elevation:       8,
+    borderWidth:     1,
+    borderColor:     'rgba(255,255,255,0.06)',
   },
-  indicatorWrapper: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
+  indicatorWrap: {
+    position:       'absolute',
+    width:          '100%',
+    height:         '100%',
     justifyContent: 'flex-start',
-    alignItems: 'center',
+    alignItems:     'center',
+    paddingTop:     '12%',
   },
   indicatorDot: {
-    marginTop: '10%', // Position near edge
-    width: 4,
-    height: 4,
-    borderRadius: 2,
+    width:        5,
+    height:       5,
+    borderRadius: 2.5,
   },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#fff',
-  },
-  innerCircle: {
-    width: '40%',
-    height: '40%',
-    borderRadius: 100,
+  gripCross: {
+    width:          '40%',
+    height:         '40%',
+    borderRadius:   100,
     backgroundColor: '#0a0a0a',
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems:     'center',
   },
   gripLine: {
-    width: '60%',
-    height: 1,
+    position:        'absolute',
+    width:           '65%',
+    height:          1,
     backgroundColor: '#333',
   },
 });

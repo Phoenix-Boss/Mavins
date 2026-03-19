@@ -1,140 +1,136 @@
-// components/equalizer/NowPlayingBar.tsx - PROFESSIONAL NOW PLAYING BAR
+// components/equalizer/NowPlayingBar.tsx
+//
+// Fixes vs original:
+//  1. handleSeek: reads bar width via onLayout stored in ref — not from nativeEvent.layout
+//  2. Waveform bar heights: each bar has its own Animated.Value updated via setInterval
+//     on the JS thread — no shared value reads in JSX
+//  3. barHeights.value.map() removed — shared value arrays must not be read in JSX
+//  4. BlurView background removed (unreliable Android) — replaced with semi-transparent View
 
-import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useCallback } from 'react';
+import {
+  View, Text, TouchableOpacity, StyleSheet, Animated as RNAnimated,
+} from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
 import { Colors } from '@/constants/Colors';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  withRepeat,
-  withSequence,
-  interpolate,
-  runOnJS,
+  useSharedValue, useAnimatedStyle, withSpring, withTiming,
+  withSequence, withRepeat, interpolate,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { BlurView } from 'expo-blur';
+
+const NUM_BARS = 8;
 
 interface NowPlayingBarProps {
   track: {
-    title: string;
-    artist: string;
-    artwork?: string | number;
-    duration?: number; // in seconds
+    title:     string;
+    artist:    string;
+    artwork?:  string | number;
+    duration?: number;
   };
-  compact?: boolean;
-  isPlaying: boolean;
-  progress: number; // 0-1
-  elapsed?: number; // elapsed time in seconds
-  onPlayPause: () => void;
-  onPress?: () => void;
-  onSeek?: (progress: number) => void;
+  compact?:         boolean;
+  isPlaying:        boolean;
+  progress:         number;   // 0–1
+  elapsed?:         number;   // seconds
+  onPlayPause:      () => void;
+  onPress?:         () => void;
+  onSeek?:          (progress: number) => void;
   artworkFallback?: string | number;
-  showWaveform?: boolean; // Show animated waveform when playing
+}
+
+function formatTime(sec: number): string {
+  if (!sec || isNaN(sec)) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
 export const NowPlayingBar: React.FC<NowPlayingBarProps> = ({
   track,
-  compact = false,
+  compact          = false,
   isPlaying,
   progress,
-  elapsed = 0,
+  elapsed          = 0,
   onPlayPause,
   onPress,
   onSeek,
-  artworkFallback = require('@/assets/images/icon.png'),
-  showWaveform = true,
+  artworkFallback  = require('@/assets/images/icon.png'),
 }) => {
-  // Animation values
-  const buttonScale = useSharedValue(1);
+  // Animated values
+  const buttonScale   = useSharedValue(1);
   const progressWidth = useSharedValue(0);
-  const artworkGlow = useSharedValue(0);
-  const playIconRotation = useSharedValue(0);
-  const waveformScale = useSharedValue(1);
-  const barHeights = useSharedValue([0.3, 0.5, 0.7, 0.4, 0.6, 0.8, 0.5, 0.4]);
+  const artworkScale  = useSharedValue(1);
 
-  // Update progress bar width with spring animation
+  // Waveform: individual Animated.Values per bar (JS thread — safe to read in JSX)
+  const barAnims = useRef(
+    Array.from({ length: NUM_BARS }, () => new RNAnimated.Value(0.3))
+  ).current;
+  const waveInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Progress bar container width (measured on layout)
+  const progressBarWidth = useRef<number>(1);
+
+  // ── Progress bar animation ─────────────────────────────────────────────
   useEffect(() => {
-    progressWidth.value = withSpring(progress * 100, {
-      damping: 20,
-      stiffness: 150,
-    });
+    progressWidth.value = withSpring(progress * 100, { damping: 20, stiffness: 150 });
   }, [progress]);
 
-  // Animate artwork glow and icon when playing state changes
+  // ── Artwork scale + waveform on play/pause ─────────────────────────────
   useEffect(() => {
-    artworkGlow.value = withTiming(isPlaying ? 1 : 0, { duration: 300 });
-    playIconRotation.value = withSpring(isPlaying ? 0 : 180, {
-      damping: 15,
-      stiffness: 200,
-    });
+    artworkScale.value = withSpring(isPlaying ? 1.05 : 1, { damping: 15, stiffness: 200 });
 
-    // Animate waveform when playing
-    if (isPlaying && showWaveform) {
-      waveformScale.value = withRepeat(
-        withSequence(
-          withTiming(1.2, { duration: 200 }),
-          withTiming(0.8, { duration: 200 }),
-          withTiming(1, { duration: 200 })
-        ),
-        -1,
-        true
-      );
+    if (isPlaying) {
+      waveInterval.current = setInterval(() => {
+        barAnims.forEach(bar => {
+          RNAnimated.spring(bar, {
+            toValue:         Math.random() * 0.75 + 0.25,
+            damping:         8,
+            stiffness:       120,
+            useNativeDriver: false,
+          }).start();
+        });
+      }, 140);
     } else {
-      waveformScale.value = withSpring(1);
+      if (waveInterval.current) clearInterval(waveInterval.current);
+      barAnims.forEach(bar => {
+        RNAnimated.spring(bar, { toValue: 0.2, damping: 12, stiffness: 100, useNativeDriver: false }).start();
+      });
     }
-  }, [isPlaying, showWaveform]);
+    return () => {
+      if (waveInterval.current) clearInterval(waveInterval.current);
+    };
+  }, [isPlaying]);
 
-  // Animate bar heights for waveform
-  useEffect(() => {
-    if (!isPlaying || !showWaveform) return;
-
-    const interval = setInterval(() => {
-      barHeights.value = barHeights.value.map(() => Math.random() * 0.8 + 0.2) as any;
-    }, 150);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, showWaveform]);
-
-  const handlePlayPause = () => {
+  // ── Handlers ───────────────────────────────────────────────────────────
+  const handlePlayPause = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
     buttonScale.value = withSequence(
-      withSpring(0.8, { damping: 10, stiffness: 300 }),
-      withSpring(1, { damping: 12, stiffness: 350 })
+      withSpring(0.82, { damping: 10, stiffness: 300 }),
+      withSpring(1,    { damping: 12, stiffness: 350 })
     );
-    
     onPlayPause();
-  };
+  }, [onPlayPause]);
 
-  const handlePress = () => {
+  const handlePress = useCallback(() => {
     Haptics.selectionAsync();
     onPress?.();
-  };
+  }, [onPress]);
 
-  const handleSeek = (event: any) => {
+  // Seek: use measured bar width, not nativeEvent.layout
+  const handleSeekPress = useCallback((event: any) => {
     if (!onSeek || compact) return;
-    
-    const { locationX, layout } = event.nativeEvent;
-    const newProgress = Math.max(0, Math.min(1, locationX / layout.width));
+    const { locationX } = event.nativeEvent;
+    const w = progressBarWidth.current;
+    if (!w) return;
+    const p = Math.max(0, Math.min(1, locationX / w));
     Haptics.selectionAsync();
-    onSeek(newProgress);
-  };
+    onSeek(p);
+  }, [onSeek, compact]);
 
-  // Format time (seconds to mm:ss)
-  const formatTime = (seconds: number): string => {
-    if (isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  // Animated styles
-  const buttonStyle = useAnimatedStyle(() => ({
+  // ── Animated styles ─────────────────────────────────────────────────────
+  const btnStyle = useAnimatedStyle(() => ({
     transform: [{ scale: buttonScale.value }],
   }));
 
@@ -142,94 +138,76 @@ export const NowPlayingBar: React.FC<NowPlayingBarProps> = ({
     width: `${progressWidth.value}%`,
   }));
 
-  const artworkStyle = useAnimatedStyle(() => ({
-    shadowColor: Colors.metallicBrown.primary,
-    shadowOpacity: artworkGlow.value * 0.5,
-    shadowRadius: interpolate(artworkGlow.value, [0, 1], [0, 15]),
-    elevation: interpolate(artworkGlow.value, [0, 1], [2, 8]),
-    transform: [{
-      scale: withSpring(isPlaying ? 1.05 : 1, {
-        damping: 15,
-        stiffness: 200,
-      })
-    }]
+  const artStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: artworkScale.value }],
+    shadowOpacity: isPlaying ? 0.4 : 0,
+    shadowRadius:  isPlaying ? 12  : 0,
+    shadowColor:   Colors.metallicBrown.primary,
   }));
 
-  const playIconStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${playIconRotation.value}deg` }],
-  }));
-
-  const waveformStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: waveformScale.value }],
-  }));
-
-  const getImageSource = (artwork: string | number | undefined) => {
-    if (!artwork) return artworkFallback;
-    if (typeof artwork === 'number') return artwork;
-    return { uri: artwork };
-  };
+  const src = !track.artwork
+    ? artworkFallback
+    : typeof track.artwork === 'number'
+    ? track.artwork
+    : { uri: track.artwork as string };
 
   return (
     <Animated.View style={[
       styles.container,
       compact && styles.containerCompact,
-      { borderColor: isPlaying ? 'rgba(139, 115, 85, 0.3)' : 'rgba(255,255,255,0.1)' }
+      { borderColor: isPlaying ? 'rgba(139,115,85,0.35)' : 'rgba(255,255,255,0.08)' },
     ]}>
       <TouchableOpacity
-        style={styles.touchableArea}
+        style={styles.touchArea}
         onPress={handlePress}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
       >
-        <BlurView intensity={20} style={styles.blurBackground} />
-        
-        <View style={styles.content}>
-          {/* Artwork with glow effect */}
-          <Animated.View style={[styles.artworkContainer, artworkStyle]}>
+        {/* Glass background */}
+        <View style={styles.glassBg} />
+
+        <View style={styles.row}>
+          {/* Artwork */}
+          <Animated.View style={[styles.artWrap, artStyle]}>
             <Image
-              source={getImageSource(track.artwork)}
-              style={[
-                styles.artwork,
-                compact && styles.artworkCompact,
-              ]}
+              source={src}
+              style={[styles.art, compact && styles.artCompact]}
               contentFit="cover"
               transition={200}
-              cachePolicy="memory-disk"
             />
             {isPlaying && (
-              <View style={styles.playingIndicator}>
-                <View style={[styles.playingDot, { backgroundColor: Colors.metallicBrown.primary }]} />
+              <View style={styles.playingDot}>
+                <View style={[styles.dot, { backgroundColor: Colors.metallicBrown.primary }]} />
               </View>
             )}
           </Animated.View>
 
-          {/* Track Info */}
+          {/* Track info */}
           <View style={[styles.info, compact && styles.infoCompact]}>
-            <Text style={styles.title} numberOfLines={1}>
-              {track.title}
-            </Text>
-            <Text style={styles.artist} numberOfLines={1}>
-              {track.artist}
-            </Text>
+            <Text style={styles.title} numberOfLines={1}>{track.title}</Text>
+            <Text style={styles.artist} numberOfLines={1}>{track.artist}</Text>
 
-            {/* Waveform Visualization (when playing) */}
-            {showWaveform && isPlaying && !compact && (
-              <Animated.View style={[styles.waveformContainer, waveformStyle]}>
-                {barHeights.value.map((height, index) => (
-                  <Animated.View
-                    key={index}
+            {/* Waveform bars — uses individual RNAnimated.Value per bar */}
+            {isPlaying && !compact && (
+              <View style={styles.waveform}>
+                {barAnims.map((anim, i) => (
+                  <RNAnimated.View
+                    key={i}
                     style={[
-                      styles.waveformBar,
+                      styles.waveBar,
                       {
-                        height: `${height * 100}%`,
+                        height: anim.interpolate({
+                          inputRange:  [0, 1],
+                          outputRange: [2, verticalScale(16)],
+                        }),
                         backgroundColor: Colors.metallicBrown.primary,
                       },
                     ]}
                   />
                 ))}
-              </Animated.View>
+              </View>
             )}
 
-            {/* Progress Bar with Time */}
+            {/* Progress + time — full mode only */}
             {!compact && (
               <View style={styles.progressSection}>
                 <View style={styles.timeRow}>
@@ -238,67 +216,47 @@ export const NowPlayingBar: React.FC<NowPlayingBarProps> = ({
                     {track.duration ? formatTime(track.duration) : '--:--'}
                   </Text>
                 </View>
-
                 <TouchableOpacity
-                  style={styles.progressContainer}
-                  onPress={handleSeek}
+                  style={styles.progressTouchable}
+                  onPress={handleSeekPress}
                   activeOpacity={onSeek ? 0.7 : 1}
                   disabled={!onSeek}
+                  onLayout={e => { progressBarWidth.current = e.nativeEvent.layout.width; }}
                 >
-                  <View style={styles.progressBackground}>
+                  <View style={styles.progressBg}>
                     <Animated.View
-                      style={[
-                        styles.progressFill,
-                        progressStyle,
-                        { backgroundColor: Colors.metallicBrown.primary }
-                      ]}
+                      style={[styles.progressFill, progressStyle,
+                        { backgroundColor: Colors.metallicBrown.primary }]}
                     />
-                    {/* Progress handle (only when seeking) */}
-                    {onSeek && (
-                      <Animated.View
-                        style={[
-                          styles.progressHandle,
-                          { left: `${progressWidth.value}%` }
-                        ]}
-                      />
-                    )}
                   </View>
                 </TouchableOpacity>
               </View>
             )}
           </View>
 
-          {/* Play/Pause Button */}
-          <Animated.View style={[styles.buttonContainer, buttonStyle]}>
+          {/* Play/Pause button */}
+          <Animated.View style={[styles.btnWrap, btnStyle]}>
             <TouchableOpacity
-              style={[
-                styles.playButton,
-                { backgroundColor: Colors.metallicBrown.primary }
-              ]}
+              style={[styles.playBtn, { backgroundColor: Colors.metallicBrown.primary }]}
               onPress={handlePlayPause}
               activeOpacity={0.8}
             >
-              <Animated.View style={playIconStyle}>
-                <MaterialIcons
-                  name={isPlaying ? "pause" : "play-arrow"}
-                  size={compact ? 24 : 28}
-                  color="#000"
-                />
-              </Animated.View>
+              <MaterialIcons
+                name={isPlaying ? 'pause' : 'play-arrow'}
+                size={compact ? 22 : 26}
+                color="#000"
+              />
             </TouchableOpacity>
           </Animated.View>
         </View>
 
-        {/* Compact Progress Bar (shown at bottom in compact mode) */}
+        {/* Compact progress stripe at bottom */}
         {compact && (
-          <View style={styles.compactProgress}>
-            <View style={styles.compactProgressBackground}>
+          <View style={styles.compactProgressWrap}>
+            <View style={styles.compactProgressBg}>
               <Animated.View
-                style={[
-                  styles.compactProgressFill,
-                  progressStyle,
-                  { backgroundColor: Colors.metallicBrown.primary }
-                ]}
+                style={[styles.compactProgressFill, progressStyle,
+                  { backgroundColor: Colors.metallicBrown.primary }]}
               />
             </View>
           </View>
@@ -310,151 +268,118 @@ export const NowPlayingBar: React.FC<NowPlayingBarProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    marginVertical: verticalScale(5),
+    borderRadius: 14,
+    overflow:     'hidden',
+    borderWidth:  1,
+    marginVertical: verticalScale(6),
   },
-  containerCompact: {
-    borderRadius: 12,
-  },
-  touchableArea: {
-    width: '100%',
-  },
-  blurBackground: {
+  containerCompact: { borderRadius: 12 },
+  touchArea:   { width: '100%' },
+  glassBg: {
     ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(20,20,24,0.85)',
   },
-  content: {
+  row: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: scale(12),
-    gap: scale(12),
+    alignItems:    'center',
+    padding:       scale(10),
+    gap:           scale(10),
   },
-  artworkContainer: {
-    position: 'relative',
+  artWrap: {
+    position:     'relative',
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
   },
-  artwork: {
-    width: scale(50),
-    height: scale(50),
+  art: {
+    width:        scale(46),
+    height:       scale(46),
     borderRadius: 8,
+    backgroundColor: '#1a1a1a',
   },
-  artworkCompact: {
-    width: scale(40),
-    height: scale(40),
-  },
-  playingIndicator: {
-    position: 'absolute',
-    top: -scale(4),
-    right: -scale(4),
-    width: scale(16),
-    height: scale(16),
-    borderRadius: 8,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
+  artCompact: { width: scale(38), height: scale(38) },
   playingDot: {
-    width: scale(8),
-    height: scale(8),
-    borderRadius: 4,
+    position:        'absolute',
+    top:             -scale(3),
+    right:           -scale(3),
+    width:           scale(14),
+    height:          scale(14),
+    borderRadius:    7,
+    backgroundColor: '#000',
+    justifyContent:  'center',
+    alignItems:      'center',
+    borderWidth:     1.5,
+    borderColor:     '#fff',
   },
-  info: {
-    flex: 1,
-  },
-  infoCompact: {
-    // Compact specific styles
-  },
+  dot: { width: scale(6), height: scale(6), borderRadius: 3 },
+  info:        { flex: 1 },
+  infoCompact: {},
   title: {
-    color: '#fff',
-    fontSize: moderateScale(14),
-    fontWeight: '600',
+    color:        '#fff',
+    fontSize:     moderateScale(13),
+    fontWeight:   '600',
     marginBottom: verticalScale(2),
   },
   artist: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: moderateScale(12),
+    color:    'rgba(255,255,255,0.55)',
+    fontSize: moderateScale(11),
   },
-  waveformContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: verticalScale(20),
-    gap: scale(2),
-    marginTop: verticalScale(4),
-    marginBottom: verticalScale(4),
+  waveform: {
+    flexDirection:  'row',
+    alignItems:     'flex-end',
+    height:         verticalScale(18),
+    gap:            scale(2),
+    marginTop:      verticalScale(4),
   },
-  waveformBar: {
-    flex: 1,
-    borderRadius: 2,
-    opacity: 0.7,
+  waveBar: {
+    flex:        1,
+    borderRadius: 1,
+    opacity:      0.75,
+    minHeight:    2,
   },
-  progressSection: {
-    marginTop: verticalScale(6),
-  },
+  progressSection: { marginTop: verticalScale(6) },
   timeRow: {
-    flexDirection: 'row',
+    flexDirection:  'row',
     justifyContent: 'space-between',
-    marginBottom: verticalScale(4),
+    marginBottom:   verticalScale(3),
   },
   timeText: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: moderateScale(9),
-    fontWeight: '500',
+    color:      'rgba(255,255,255,0.35)',
+    fontSize:   moderateScale(9),
     fontFamily: 'monospace',
   },
-  progressContainer: {
-    width: '100%',
-  },
-  progressBackground: {
-    height: verticalScale(4),
+  progressTouchable: { width: '100%' },
+  progressBg: {
+    height:          verticalScale(3),
     backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 2,
-    overflow: 'hidden',
-    position: 'relative',
+    borderRadius:    2,
+    overflow:        'hidden',
   },
-  progressFill: {
-    height: '100%',
-    borderRadius: 2,
+  progressFill: { height: '100%', borderRadius: 2 },
+
+  btnWrap: {
+    shadowColor:   '#000',
+    shadowOffset:  { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius:  4,
   },
-  progressHandle: {
-    position: 'absolute',
-    top: -scale(3),
-    width: scale(10),
-    height: scale(10),
-    borderRadius: 5,
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: Colors.metallicBrown.primary,
-    marginLeft: -scale(5),
-  },
-  buttonContainer: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  playButton: {
-    width: scale(40),
-    height: scale(40),
-    borderRadius: 20,
+  playBtn: {
+    width:          scale(38),
+    height:         scale(38),
+    borderRadius:   19,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems:     'center',
   },
-  compactProgress: {
-    paddingHorizontal: scale(12),
-    paddingBottom: scale(12),
+
+  // Compact progress
+  compactProgressWrap: {
+    paddingHorizontal: scale(10),
+    paddingBottom:     scale(10),
   },
-  compactProgressBackground: {
-    height: verticalScale(2),
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 1,
-    overflow: 'hidden',
+  compactProgressBg: {
+    height:          verticalScale(2),
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius:    1,
+    overflow:        'hidden',
   },
-  compactProgressFill: {
-    height: '100%',
-    borderRadius: 1,
-  },
+  compactProgressFill: { height: '100%', borderRadius: 1 },
 });

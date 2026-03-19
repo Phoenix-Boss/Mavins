@@ -1,8 +1,8 @@
 {
   "name": "honeygain-sdk",
   "version": "1.0.0",
-  "main": "build/index.js",
-  "types": "build/index.d.ts",
+  "main": "index.ts",
+  "types": "index.ts",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf build"

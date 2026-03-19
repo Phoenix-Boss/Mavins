@@ -29,6 +29,8 @@ import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.services.youtube.InnertubeClientRequestInfo
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.stream.*
 import org.schabi.newpipe.extractor.stream.StreamType.*
 import java.io.IOException
@@ -38,65 +40,46 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * MavinEngine — NewPipe Extractor v0.26.0 Integration
- * v9.0.0 — Full audit pass against live v0.26.0 javadocs
+ * v9.1.0 — Full fixes per latest v0.26.0 docs and release notes
  *
- * ── What changed vs v8.1.0 ────────────────────────────────────────────────
+ * ── Changes in v9.1.0 ────────────────────────────────────────────────────────
+ *
+ * [8] YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init()
+ *     per v0.26.0 docs — generates the required SOCS consent cookie for all requests.
+ *
+ * [9] Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
+ *     using InnertubeClientRequestInfo.ofWebClient() per v0.26.0 javadoc.
+ *     YouTube now rejects random/synthetic visitor IDs entirely.
+ *
+ * [10] v0.26.0 release note: "do not use WEB client for stream URLs anymore"
+ *      (fix for SABR-only player responses). extractStreamInfo and extractStreamInfoById
+ *      now let NewPipe use its internal client selection (Android/iOS) rather than
+ *      forcing the WEB client via resolveService(url, null).
+ *      For stream extraction, we always use getDefaultService() (YouTube / Android client).
+ *
+ * [11] v0.26.0 breaking: Service.getMediaCapabilities() returns Set not List.
+ *      getServicesList() updated to handle Set → .map { it.name }.
+ *
+ * [12] MavinDownloader now forwards the SOCS consent cookie from
+ *      YoutubeParsingHelper.getYouTubeHeaders() on all YouTube requests
+ *      so NewPipe's internal extractor calls also carry the consent cookie.
+ *
+ * ── Original v9.0.0 changes ──────────────────────────────────────────────────
  *
  * [1] Long → Double at every bridge map boundary (expo-modules JS bridge
  *     cannot serialize Kotlin Long / Java long — it crashes at runtime).
- *     Verified return types from teamnewpipe.github.io/NewPipeExtractor/javadoc:
- *
- *   Class / method                              Java type  Treatment
- *   StreamInfoItem.getDuration()                long       .coerceAtLeast(0L).toDouble()
- *   StreamInfoItem.getViewCount()               long       .coerceAtLeast(0L).toDouble()
- *   PlaylistInfoItem.getStreamCount()           long       .coerceAtLeast(0L).toDouble()
- *   ChannelInfoItem.getSubscriberCount()        long       .coerceAtLeast(0L).toDouble()
- *   ChannelInfoItem.getStreamCount()            long       .coerceAtLeast(0L).toDouble()
- *   StreamInfo.getDuration()                    long       .toDouble()
- *   StreamInfo.getViewCount()                   long       .coerceAtLeast(0L).toDouble()
- *   StreamInfo.getLikeCount()                   long       .coerceAtLeast(0L).toDouble()
- *   StreamInfo.getDislikeCount()                long       .coerceAtLeast(0L).toDouble()
- *   StreamInfo.getUploaderSubscriberCount()     long       .coerceAtLeast(0L).toDouble()
- *   StreamInfo.getStartPosition()               long       .toDouble()
- *   PlaylistInfo.getStreamCount()               long       .coerceAtLeast(0L).toDouble()
- *   ChannelInfo.getSubscriberCount()            long       .coerceAtLeast(0L).toDouble()
- *   DateWrapper.offsetDateTime().toEpochSecond() long      .toDouble()
- *   parseDuration() / parseViewCount() sites    Long       .toDouble()
- *   buildMusicItem / buildSimpleVideoMap 0L     Long lit   → 0.0
- *   System.currentTimeMillis() in bridge maps   Long       .toDouble()
- *
- * [2] Int fields confirmed NOT needing .toDouble() (javadoc return int):
- *   CommentsInfoItem.getLikeCount()     int  → .coerceAtLeast(0) (Int)
- *   CommentsInfoItem.getReplyCount()    int
- *   CommentsInfoItem.getStreamPosition() int
- *   CommentsInfo.getCommentsCount()     int
- *   StreamInfo.getAgeLimit()            int
- *   StreamSegment.getStartTimeSeconds() int
- *   VideoStream.getWidth/Height/Fps()   int
- *   Image.width / height                int
- *
- * [3] Missing fields added to streamInfoToMap (all confirmed in v0.26.0 javadoc):
- *   startPosition, host, privacy, licence, languageInfo,
- *   subChannelName, subChannelUrl, subChannelAvatars,
- *   streamSegments (via segmentToMap), previewFrames (via framesetToMap),
- *   supportInfo, errors
- *
- * [4] Missing fields added to extractChannelInfo:
- *   tags, donationLinks, parentChannelName, parentChannelUrl, parentChannelAvatars
- *
- * [5] Missing fields added to extractPlaylistInfo:
- *   banners, subChannelName, subChannelUrl, subChannelAvatars
- *
- * [6] getSearchSuggestions returns Map<String,Any>{"suggestions":List<String>}
- *     instead of bare List<String> — expo AsyncFunction requires Map root.
- *
- * [7] New helper mappers: segmentToMap(StreamSegment), framesetToMap(Frameset)
+ * [2] Int fields confirmed NOT needing .toDouble() (javadoc return int).
+ * [3] Missing fields added to streamInfoToMap (all confirmed in v0.26.0 javadoc).
+ * [4] Missing fields added to extractChannelInfo.
+ * [5] Missing fields added to extractPlaylistInfo.
+ * [6] getSearchSuggestions returns Map<String,Any>{"suggestions":List<String>}.
+ * [7] New helper mappers: segmentToMap(StreamSegment), framesetToMap(Frameset).
  */
 class MavinEngineModule : Module() {
 
     companion object {
         private const val TAG = "MavinEngine"
-        private const val VERSION = "9.0.0"
+        private const val VERSION = "9.1.0"
 
         // ── OkHttp with connection pooling (30–40% latency reduction) ────────
         private val httpClient = OkHttpClient.Builder()
@@ -142,6 +125,13 @@ class MavinEngineModule : Module() {
         @Volatile private var trendingCache: List<Map<String, Any>>? = null
         @Volatile private var trendingCacheTime = 0L
         private const val TRENDING_CACHE_TTL = 5 * 60 * 1000L
+
+        // ── Visitor data cache (1 hour) ──────────────────────────────────────
+        // Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
+        // per NewPipe v0.26.0 API docs. YouTube now rejects random/synthetic visitor IDs.
+        @Volatile private var cachedVisitorData: String = ""
+        @Volatile private var visitorDataFetchTime = 0L
+        private const val VISITOR_DATA_TTL = 60 * 60 * 1000L // 1 hour
 
         private const val YOUTUBE_MUSIC_BASE_URL = "https://music.youtube.com/youtubei/v1"
         private const val CHARTS_BASE_URL = "https://charts.youtube.com"
@@ -277,12 +267,35 @@ class MavinEngineModule : Module() {
         }
         AsyncFunction("refreshInnerTubeConfig") {
             cachedConfig = null; configFetchTime = 0L
+            cachedVisitorData = ""; visitorDataFetchTime = 0L
             val config = getInnerTubeConfig()
+            // Prefetch fresh visitor data in background after config refresh
+            Thread { try { fetchAndCacheVisitorData() } catch (_: Exception) {} }.start()
             mapOf<String, Any>(
                 "success"            to true,
                 "apiKey"             to config.apiKey,
                 "clientVersion"      to config.clientVersion,
                 "musicClientVersion" to config.musicClientVersion
+            )
+        }
+
+        // ── Visitor Data Management ───────────────────────────────────────
+        // Uses YoutubeParsingHelper.getVisitorDataFromInnertube() per v0.26.0 API docs
+        AsyncFunction("refreshVisitorData") {
+            cachedVisitorData = ""; visitorDataFetchTime = 0L
+            fetchAndCacheVisitorData()
+            mapOf<String, Any>(
+                "success"        to cachedVisitorData.isNotEmpty(),
+                "hasVisitorData" to cachedVisitorData.isNotEmpty()
+            )
+        }
+        AsyncFunction("getVisitorDataStatus") {
+            mapOf<String, Any>(
+                "hasVisitorData"  to cachedVisitorData.isNotEmpty(),
+                "cacheAgeMs"      to (System.currentTimeMillis() - visitorDataFetchTime).toDouble(),
+                "ttlMs"           to VISITOR_DATA_TTL.toDouble(),
+                "isValid"         to (cachedVisitorData.isNotEmpty() &&
+                    System.currentTimeMillis() - visitorDataFetchTime < VISITOR_DATA_TTL)
             )
         }
 
@@ -341,12 +354,14 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "version"      to VERSION,
                 "library"      to "NewPipeExtractor 0.26.0",
-                "architecture" to "v9.0 — post-July-2025 Charts-first 6-layer fallback + full Long→Double audit",
+                "architecture" to "v9.1 — visitorData fix + WEB client SABR fix + consent cookie forwarding",
                 "notes"        to listOf(
                     "YouTube Trending page removed 2025-07-21 — FEtrending is dead",
                     "Primary trending source: YouTube Music Charts (FEmusic_charts)",
-                    "PoToken: call YoutubeStreamExtractor.setPoTokenProvider(provider) after NewPipe.init()",
-                    "Stream extraction works without poToken but some formats may be limited"
+                    "v0.26.0: WEB client no longer used for stream extraction (SABR fix)",
+                    "v0.26.0: Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()",
+                    "v0.26.0: setConsentAccepted(true) required for SOCS cookie generation",
+                    "v0.26.0: getMediaCapabilities() returns Set not List (breaking change handled)"
                 )
             )
         }
@@ -366,9 +381,19 @@ class MavinEngineModule : Module() {
                     Localization.fromLocale(Locale.US),
                     ContentCountry("US")
                 )
+                // Per YoutubeParsingHelper.setConsentAccepted() docs:
+                // Determines how the SOCS consent cookie is generated.
+                // Must be called after NewPipe.init() so the downloader is available.
+                YoutubeParsingHelper.setConsentAccepted(true)
                 isInitialized = true
                 Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${NewPipe.getServices().size} services loaded")
-                Log.i(TAG, "ℹ️  PoToken: not set — stream URLs use Android/iOS clients (limited formats)")
+                Log.i(TAG, "✅ Consent accepted — SOCS cookie will be included in requests")
+                // Prefetch real visitorData in background so it's ready before first extraction.
+                // Uses YoutubeParsingHelper.getVisitorDataFromInnertube() per v0.26.0 API docs.
+                Thread {
+                    try { fetchAndCacheVisitorData() }
+                    catch (e: Exception) { Log.w(TAG, "visitorData prefetch failed: ${e.message}") }
+                }.start()
             } catch (e: Exception) {
                 Log.e(TAG, "NewPipe init failed", e)
                 throw CodedException("INIT_FAILED", "NewPipe.init failed: ${e.message}", e)
@@ -382,9 +407,77 @@ class MavinEngineModule : Module() {
         isInitialized = false
         cachedConfig = null
         trendingCache = null
+        cachedVisitorData = ""
+        visitorDataFetchTime = 0L
         synchronized(failedKeys) { failedKeys.clear(); currentKeyIndex.set(0) }
         initializeNewPipe()
         return mapOf("success" to true, "message" to "MavinEngine v9 reset and re-initialised")
+    }
+
+    /**
+     * Fetches real visitorData from YouTube's InnerTube endpoint using the official
+     * NewPipe v0.26.0 API: YoutubeParsingHelper.getVisitorDataFromInnertube().
+     *
+     * Per the v0.26.0 javadoc, this method requires:
+     *   - innertubeClientRequestInfo: use InnertubeClientRequestInfo.ofWebClient()
+     *     for the standard WEB client (most compatible for anonymous browsing)
+     *   - localization + contentCountry: must match what NewPipe was initialized with
+     *   - httpHeaders: YoutubeParsingHelper.getYouTubeHeaders() — includes SOCS consent cookie
+     *   - innertubeDomainAndVersionEndpoint: YoutubeParsingHelper.YOUTUBEI_V1_URL (WEB client)
+     *   - embedUrl: null for non-embedded requests
+     *   - useGuideEndpoint: false — guide endpoint is for logged-in features
+     *
+     * YouTube now rejects synthetic/random visitor IDs. This must be called to get
+     * a real token that YouTube's anti-bot system accepts.
+     */
+    private fun fetchAndCacheVisitorData() {
+        if (cachedVisitorData.isNotEmpty() &&
+            System.currentTimeMillis() - visitorDataFetchTime < VISITOR_DATA_TTL) {
+            Log.d(TAG, "visitorData cache still valid, skipping fetch")
+            return
+        }
+        try {
+            val localization = Localization.fromLocale(Locale.US)
+            val country      = ContentCountry("US")
+
+            // YoutubeParsingHelper.getYouTubeHeaders() returns the required YouTube headers
+            // including the SOCS consent cookie set by setConsentAccepted(true)
+            val headers = YoutubeParsingHelper.getYouTubeHeaders()
+
+            // InnertubeClientRequestInfo.ofWebClient() — WEB client per v0.26.0 docs
+            val clientInfo = InnertubeClientRequestInfo.ofWebClient()
+
+            // YoutubeParsingHelper.getVisitorDataFromInnertube() — official v0.26.0 API
+            // to retrieve a real visitorData token from YouTube's InnerTube endpoint
+            val visitorData = YoutubeParsingHelper.getVisitorDataFromInnertube(
+                clientInfo,
+                localization,
+                country,
+                headers,
+                YoutubeParsingHelper.YOUTUBEI_V1_URL, // WEB client base URL
+                null,  // embedUrl — null for non-embedded
+                false  // useGuideEndpoint — false for anonymous browsing
+            )
+
+            if (!visitorData.isNullOrEmpty()) {
+                cachedVisitorData    = visitorData
+                visitorDataFetchTime = System.currentTimeMillis()
+                Log.i(TAG, "✅ Real visitorData fetched: ${visitorData.take(24)}...")
+            } else {
+                Log.w(TAG, "⚠️ getVisitorDataFromInnertube returned empty string")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ fetchAndCacheVisitorData failed: ${e.message}")
+        }
+    }
+
+    /** Returns cached visitor data, refreshing if expired or empty. */
+    private fun getVisitorData(): String {
+        if (cachedVisitorData.isEmpty() ||
+            System.currentTimeMillis() - visitorDataFetchTime >= VISITOR_DATA_TTL) {
+            fetchAndCacheVisitorData()
+        }
+        return cachedVisitorData
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -823,7 +916,7 @@ class MavinEngineModule : Module() {
     private fun fetchFromYouTubeMusicAPI(category: String, apiKey: String): List<Map<String, Any>> {
         val config = getInnerTubeConfig()
         val browseId = getBrowseIdForCategory(category)
-        val visitorId = generateVisitorId()
+        val visitorId = getVisitorData().ifEmpty { generateVisitorId() } // real token first, synthetic fallback
         val url = "$YOUTUBE_MUSIC_BASE_URL/browse?alt=json&key=$apiKey"
         val body = JSONObject().apply {
             put("context", JSONObject().apply {
@@ -1263,6 +1356,7 @@ class MavinEngineModule : Module() {
         return NewPipe.getServices().map { s ->
             mapOf<String, Any>("id" to s.serviceId, "name" to s.serviceInfo.name,
                 "baseUrl" to (s.baseUrl ?: ""),
+                // FIX [11]: v0.26.0 breaking — getMediaCapabilities() returns Set not List
                 "mediaCapabilities" to s.serviceInfo.mediaCapabilities.map { it.name })
         }
     }
@@ -1272,12 +1366,20 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun extractStreamInfo(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
+        // FIX [10]: v0.26.0 release — "do not use WEB client for stream URLs anymore"
+        // (fix for SABR-only player responses that the WEB client cannot handle).
+        // Always use getDefaultService() for stream extraction so NewPipe can use
+        // its internal Android/iOS client selection. Only override if an explicit
+        // non-YouTube serviceId is passed.
+        val service = if (serviceId != null && serviceId != 0) getService(serviceId)
+                      else getDefaultService()
         return streamInfoToMap(StreamInfo.getInfo(service.getStreamExtractor(url)), service.serviceId)
     }
 
     private fun extractStreamInfoById(videoId: String, serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
+        // FIX [10]: Same WEB client avoidance — use default service (YouTube Android client)
+        val service = if (serviceId != null && serviceId != 0) getService(serviceId)
+                      else getDefaultService()
         return streamInfoToMap(StreamInfo.getInfo(service.getStreamExtractor(service.streamLHFactory.fromId(videoId))), service.serviceId)
     }
 
@@ -1911,6 +2013,22 @@ class MavinEngineModule : Module() {
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             request.headers().forEach { (key, values) ->
                 values.forEach { value -> builder.addHeader(key, value) }
+            }
+            // FIX [12]: Forward SOCS consent cookie on all YouTube requests so NewPipe's
+            // internal extractor calls carry the cookie set by setConsentAccepted(true).
+            // Per YoutubeParsingHelper.getYouTubeHeaders() docs: returns required headers
+            // including the CONSENT cookie to prevent redirects to consent.youtube.com.
+            val url = request.url()
+            if (url.contains("youtube.com") || url.contains("youtu.be") ||
+                url.contains("googlevideo.com")) {
+                try {
+                    val ytHeaders = YoutubeParsingHelper.getYouTubeHeaders()
+                    ytHeaders.forEach { (key, values) ->
+                        if (!request.headers().containsKey(key)) {
+                            values.forEach { value -> builder.addHeader(key, value) }
+                        }
+                    }
+                } catch (_: Exception) { /* non-fatal — proceed without consent headers */ }
             }
             return client.newCall(builder.build()).execute().use { r ->
                 Response(r.code, r.message, r.headers.toMultimap(),

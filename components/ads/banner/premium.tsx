@@ -73,16 +73,16 @@ function GoldOrb({ delay = 0, size = 120, style }: { delay?: number; size?: numb
   useEffect(() => {
     opacity.value = withDelay(delay, withRepeat(
       withSequence(
-        withTiming(0.6, { duration: 2200, easing: Easing.inOut(Easing.sine) }),
-        withTiming(0.15, { duration: 2200, easing: Easing.inOut(Easing.sine) }),
+        withTiming(0.6, { duration: 2200, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0.15, { duration: 2200, easing: Easing.inOut(Easing.sin) }),
       ),
       -1,
       true
     ));
     scale.value = withDelay(delay, withRepeat(
       withSequence(
-        withTiming(1.1, { duration: 2200, easing: Easing.inOut(Easing.sine) }),
-        withTiming(0.9, { duration: 2200, easing: Easing.inOut(Easing.sine) }),
+        withTiming(1.1, { duration: 2200, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0.9, { duration: 2200, easing: Easing.inOut(Easing.sin) }),
       ),
       -1,
       true
@@ -152,6 +152,35 @@ function ShimmerLine({ delay = 0 }: { delay?: number }) {
   );
 }
 
+// ─── Feature row (needs its own component so hooks are valid) ────────────────
+
+function FeatureRow({
+  icon,
+  label,
+  opacity,
+  translateY,
+}: {
+  icon: string;
+  label: string;
+  opacity: any;
+  translateY: any;
+}) {
+  const animStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  return (
+    <Animated.View style={[styles.featureRow, animStyle]}>
+      <View style={styles.featureIconWrap}>
+        <Ionicons name={icon as any} size={14} color={C.gold} />
+      </View>
+      <Text style={styles.featureLabel}>{label}</Text>
+      <Ionicons name="checkmark-circle" size={14} color={C.gold} style={{ opacity: 0.7 }} />
+    </Animated.View>
+  );
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 interface PremiumBannerProps {
@@ -169,9 +198,14 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
   const crownScale = useSharedValue(0.4);
   const crownRotate = useSharedValue(-15);
 
-  // Feature stagger
-  const featureOpacities = FEATURES.map(() => useSharedValue(0));
-  const featureTranslates = FEATURES.map(() => useSharedValue(12));
+  // Feature stagger — must be declared individually (no hooks inside .map())
+  const fo0 = useSharedValue(0); const ft0 = useSharedValue(12);
+  const fo1 = useSharedValue(0); const ft1 = useSharedValue(12);
+  const fo2 = useSharedValue(0); const ft2 = useSharedValue(12);
+  const fo3 = useSharedValue(0); const ft3 = useSharedValue(12);
+  const fo4 = useSharedValue(0); const ft4 = useSharedValue(12);
+  const featureOpacities  = [fo0, fo1, fo2, fo3, fo4];
+  const featureTranslates = [ft0, ft1, ft2, ft3, ft4];
 
   useEffect(() => {
     if (visible) {
@@ -258,7 +292,7 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
           <GoldOrb size={120} delay={700} style={{ bottom: 20, right: -30, opacity: 0.12 }} />
 
           {/* Shimmer sweep */}
-          <View style={StyleSheet.absoluteFill} pointerEvents="none" overflow="hidden">
+          <View style={[StyleSheet.absoluteFill, { overflow: "hidden" }]} pointerEvents="none">
             <ShimmerLine delay={800} />
             <ShimmerLine delay={1600} />
           </View>
@@ -309,21 +343,15 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
 
           {/* Feature list */}
           <View style={styles.featureList}>
-            {FEATURES.map((f, i) => {
-              const animStyle = useAnimatedStyle(() => ({
-                opacity: featureOpacities[i].value,
-                transform: [{ translateY: featureTranslates[i].value }],
-              }));
-              return (
-                <Animated.View key={f.icon} style={[styles.featureRow, animStyle]}>
-                  <View style={styles.featureIconWrap}>
-                    <Ionicons name={f.icon as any} size={14} color={C.gold} />
-                  </View>
-                  <Text style={styles.featureLabel}>{f.label}</Text>
-                  <Ionicons name="checkmark-circle" size={14} color={C.gold} style={{ opacity: 0.7 }} />
-                </Animated.View>
-              );
-            })}
+            {FEATURES.map((f, i) => (
+              <FeatureRow
+                key={f.icon}
+                icon={f.icon}
+                label={f.label}
+                opacity={featureOpacities[i]}
+                translateY={featureTranslates[i]}
+              />
+            ))}
           </View>
 
           {/* Price badge */}

@@ -1134,7 +1134,7 @@ export default function LibraryScreen() {
               onPress={() => router.push("/(modals)/mostPlayed")}
             />
             <QuickPill
-              icon="cellphone"
+              icon="phone-portrait-outline"
               label="Local Music"
               sub="Files on this device"
               tint={C.local}

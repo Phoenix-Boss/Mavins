@@ -306,6 +306,82 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
     } as Track & { videoUrl?: string };
 
   } catch (e) {
+    const msg = String(e);
+    if (msg.includes('visitorData') || msg.includes('ParsingException') || msg.includes('rejected')) {
+      // Strategy 1: getStreamInfoById — uses streamLHFactory, different code path
+      // from getStreamInfo(url) and bypasses the Web client visitorData requirement
+      if (song.videoId) {
+        try {
+          console.log(`[MusicPlayer] trying getStreamInfoById for "${song.title}"...`);
+          const info = await MavinEngine.getStreamInfoById(song.videoId, 0);
+          if (info.success) {
+            const bestAudio = pickBestAudio(info.audioStreams ?? []);
+            const bestVideo = pickBestVideo(info.videoOnlyStreams ?? [])
+                           ?? pickBestVideo(info.videoStreams ?? []);
+            if (bestAudio?.url) {
+              const audioUrl = bestAudio.url;
+              const videoUrl = bestVideo?.url ?? null;
+              const duration = info.duration ?? 0;
+              cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
+              console.log(`[MusicPlayer] getStreamInfoById succeeded for "${song.title}"`);
+              return {
+                id: song.id, url: audioUrl,
+                title: info.title || song.title, artist: song.artist,
+                artwork: song.thumbnail,
+                duration: duration > 0 ? duration : undefined,
+                videoUrl: videoUrl ?? undefined,
+              } as Track & { videoUrl?: string };
+            }
+          }
+        } catch (byIdErr) {
+          console.warn(`[MusicPlayer] getStreamInfoById failed for "${song.title}":`, byIdErr);
+        }
+      }
+
+      // Strategy 2: Search with 'videos' filter (standard YouTube, not Music)
+      // Per NewPipe docs: 'music_songs' routes to YouTube Music which requires
+      // stricter session auth. 'videos' uses the standard Web/Android client.
+      const searchStrategies = [
+        { query: `${song.title} ${song.artist} official audio`, filter: 'videos' },
+        { query: `${song.title} ${song.artist}`,               filter: '' },
+        { query: `${song.title} official audio`,               filter: 'videos' },
+      ];
+
+      for (const strategy of searchStrategies) {
+        try {
+          console.log(`[MusicPlayer] searching "${strategy.query}" (filter: '${strategy.filter}')...`);
+          const results = await MavinEngine.search(strategy.query, strategy.filter, undefined, 0);
+          const firstStream = results?.results?.find(
+            (i: any) => i.type === 'stream' && !i.isLive && !i.isShortFormContent
+          );
+          if (!firstStream?.url) continue;
+
+          console.log(`[MusicPlayer] search hit → ${firstStream.url}`);
+          const info = await MavinEngine.getStreamInfo(firstStream.url, 0);
+          if (!info.success) continue;
+          const bestAudio = pickBestAudio(info.audioStreams ?? []);
+          const bestVideo = pickBestVideo(info.videoOnlyStreams ?? [])
+                         ?? pickBestVideo(info.videoStreams ?? []);
+          if (!bestAudio?.url) continue;
+          const audioUrl = bestAudio.url;
+          const videoUrl = bestVideo?.url ?? null;
+          const duration = info.duration ?? 0;
+          cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
+          return {
+            id: song.id, url: audioUrl,
+            title: info.title || song.title, artist: song.artist,
+            artwork: song.thumbnail,
+            duration: duration > 0 ? duration : undefined,
+            videoUrl: videoUrl ?? undefined,
+          } as Track & { videoUrl?: string };
+        } catch (searchErr) {
+          console.warn(`[MusicPlayer] search strategy failed:`, searchErr);
+        }
+      }
+
+      console.warn(`[MusicPlayer] all strategies exhausted for "${song.title}"`);
+      return null;
+    }
     console.warn(`[MusicPlayer] resolveTrack error for "${song.title}":`, e);
     return null;
   }

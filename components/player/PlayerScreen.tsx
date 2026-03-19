@@ -301,12 +301,12 @@ function PlayerContent() {
   const handleEqualizer   = () => router.push("/(modals)/equalizer");
   const handleCast        = () => router.push("/(player)/cast-devices");
   const handleMoreOptions = () => router.push("/(player)/track-options");
-  const handleComments    = () => router.push("/(player)/comments");
-  const handlePlaylist    = () => router.push("/(player)/add-to-playlist");
+  const handleComments    = () => router.push("/(modals)/comments");
+  const handlePlaylist    = () => router.push("/(modals)/add-to-playlist");
   const handleSleepTimer  = () => router.push("/(player)/sleep-timer");
-  const handleSeeAll      = () => router.push("/(player)/queue");
-  const handleLyrics      = () => router.push("/(player)/lyrics");
-  const handleRelated     = () => router.push("/(player)/related");
+  const handleSeeAll      = () => router.push("/(modals)/queue");
+  const handleLyrics      = () => router.push("/(modals)/lyrics");
+  const handleRelated     = () => router.push("/(modals)/related");
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (

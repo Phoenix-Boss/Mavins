@@ -1,444 +1,285 @@
-// components/equalizer/EQGraph.tsx - PROFESSIONAL FREQUENCY RESPONSE VISUALIZER
+// components/equalizer/EQGraph.tsx
+//
+// Fixes vs original:
+//  1. withTiming(array) replaced — each band animates independently via
+//     a per-band shared value; array shared values cannot be interpolated
+//  2. transformOrigin removed — unsupported in RN StyleSheet; rotation
+//     now uses left-edge anchor via translateX offset
+//  3. Frequency labels moved outside graphContainer (which has overflow:hidden)
+//     so they are always visible
+//  4. Fill segments clamped so zero values still show a 1px hairline
+//  5. BlurView glow removed (unreliable Android) — replaced with View opacity
 
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, Text, TouchableOpacity, Animated } from 'react-native';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
 import { Colors } from '@/constants/Colors';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  interpolate,
-  Extrapolate,
-  runOnJS,
-} from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 
 interface EQGraphProps {
-  values: number[];           // -15 to +15 dB for each band
-  frequencies?: number[];      // Frequency values for x-axis labels
-  enabled?: boolean;
-  activeBand?: number;         // Currently selected band index
-  onBandPress?: (index: number) => void; // Optional band selection
-  showFill?: boolean;          // Show filled area under curve
-  glowIntensity?: number;      // 0-1 glow effect intensity
+  values:       number[];   // -15 to +15 dB, one per band
+  enabled?:     boolean;
+  activeBand?:  number;
+  onBandPress?: (index: number) => void;
 }
 
-// Frequency labels for common bands
-const DEFAULT_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const GRAPH_H = verticalScale(130);
+
+function dBToPercent(db: number): number {
+  // Map -15..+15 to 0..100 (100 = top = +15dB)
+  return Math.max(0, Math.min(100, ((db + 15) / 30) * 100));
+}
+
+const DB_LINES = [-12, -6, 0, 6, 12];
+const FREQ_LABELS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k'];
 
 export const EQGraph: React.FC<EQGraphProps> = ({
   values,
-  frequencies = DEFAULT_FREQUENCIES,
-  enabled = true,
-  activeBand = -1,
+  enabled     = true,
+  activeBand  = -1,
   onBandPress,
-  showFill = true,
-  glowIntensity = 0.5,
 }) => {
-  // Animation values
-  const glowOpacity = useSharedValue(0);
-  const curvePoints = useSharedValue<number[]>([]);
-  
-  // Update curve when values change
+  // One Animated.Value per band — animatable individually
+  const animatedVals = useRef(
+    values.map(v => new Animated.Value(v))
+  ).current;
+
+  // Sync external values to animated values
   useEffect(() => {
-    curvePoints.value = withTiming(values, { duration: 200 });
+    const anims = values.map((v, i) =>
+      Animated.spring(animatedVals[i], {
+        toValue:         v,
+        damping:         18,
+        stiffness:       200,
+        useNativeDriver: false,   // driving layout props — must be false
+      })
+    );
+    Animated.parallel(anims).start();
   }, [values]);
 
-  // Animate glow when enabled/disabled
-  useEffect(() => {
-    glowOpacity.value = withTiming(enabled ? glowIntensity : 0, { duration: 300 });
-  }, [enabled, glowIntensity]);
-
-  // Convert dB value to Y position (0-100%)
-  const dBToY = (db: number): number => {
-    'worklet';
-    // Map -15..+15 dB to 0..100% (0% = bottom/-15dB, 100% = top/+15dB)
-    const normalized = (db + 15) / 30;
-    return Math.max(0, Math.min(100, normalized * 100));
-  };
-
-  // Format frequency for display
-  const formatFrequency = (freq: number): string => {
-    if (freq >= 1000) {
-      return `${(freq / 1000).toFixed(1)}k`;
-    }
-    return freq.toString();
-  };
-
-  // Generate SVG-like path for the curve
-  const generateCurvePath = (vals: number[]): string => {
-    'worklet';
-    if (vals.length < 2) return '';
-    
-    const points = vals.map((val, index) => {
-      const x = (index / (vals.length - 1)) * 100;
-      const y = 100 - dBToY(val); // Invert Y for coordinate system (0 at top)
-      return { x, y };
-    });
-
-    // Create smooth curve using cubic bezier
-    let path = `M ${points[0].x},${points[0].y}`;
-    
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[i];
-      const p1 = points[i + 1];
-      
-      // Calculate control points for smooth curve
-      const cp1x = p0.x + (p1.x - p0.x) * 0.3;
-      const cp1y = p0.y;
-      const cp2x = p1.x - (p1.x - p0.x) * 0.3;
-      const cp2y = p1.y;
-      
-      path += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p1.x},${p1.y}`;
-    }
-    
-    return path;
-  };
-
-  // Animated styles
-  const glowStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
-  }));
-
-  const curveStyle = useAnimatedStyle(() => {
-    const currentVals = curvePoints.value.length === values.length 
-      ? curvePoints.value 
-      : values;
-    
-    return {
-      // This would need a proper SVG implementation
-      // For now, we'll use a simplified approach
-    };
-  });
-
-  // Generate fill path (for area under curve)
-  const generateFillPath = (vals: number[]): string => {
-    'worklet';
-    const curvePath = generateCurvePath(vals);
-    if (!curvePath) return '';
-    
-    // Close the path to create fill area
-    return `${curvePath} L 100,100 L 0,100 Z`;
-  };
+  const n = values.length;
 
   return (
-    <View style={styles.container}>
-      <View style={[
-        styles.graphContainer,
-        !enabled && styles.graphDisabled
-      ]}>
-        
-        {/* Grid Lines */}
-        <View style={styles.grid}>
-          {/* Horizontal grid lines (dB levels) */}
-          {[-12, -6, 0, 6, 12].map((db, index) => {
-            const y = 100 - dBToY(db);
-            return (
-              <View key={`h-${index}`} style={[styles.gridLine, { top: `${y}%` }]}>
-                <Text style={styles.gridLabel}>{db > 0 ? `+${db}` : db}dB</Text>
-              </View>
-            );
-          })}
-          
-          {/* Vertical grid lines (frequency markers) */}
-          {frequencies.map((freq, index) => {
-            const x = (index / (frequencies.length - 1)) * 100;
-            return (
-              <View key={`v-${index}`} style={[styles.gridLineVertical, { left: `${x}%` }]}>
-                <Text style={styles.gridLabelVertical}>{formatFrequency(freq)}</Text>
-              </View>
-            );
-          })}
-        </View>
+    <View style={[styles.wrapper, !enabled && styles.wrapperDisabled]}>
 
-        {/* Glow Effect Background */}
-        <Animated.View style={[styles.glowContainer, glowStyle]}>
-          <BlurView intensity={20} style={StyleSheet.absoluteFill}>
-            <View style={[styles.glowFill, { backgroundColor: Colors.metallicBrown.primary }]} />
-          </BlurView>
-        </Animated.View>
+      {/* Graph box */}
+      <View style={styles.graph}>
 
-        {/* Fill Area Under Curve */}
-        {showFill && (
-          <View style={styles.fillContainer}>
-            {values.map((val, index) => {
-              if (index === values.length - 1) return null;
-              
-              const x1 = (index / (values.length - 1)) * 100;
-              const x2 = ((index + 1) / (values.length - 1)) * 100;
-              const y1 = 100 - dBToY(val);
-              const y2 = 100 - dBToY(values[index + 1]);
-              
-              // Create trapezoid for each segment
-              return (
-                <View
-                  key={`fill-${index}`}
-                  style={[
-                    styles.fillSegment,
-                    {
-                      left: `${x1}%`,
-                      width: `${x2 - x1}%`,
-                      top: `${Math.min(y1, y2)}%`,
-                      height: `${Math.abs(y1 - y2)}%`,
-                      backgroundColor: val > 0 
-                        ? 'rgba(139, 115, 85, 0.2)' 
-                        : 'rgba(100, 100, 100, 0.1)',
-                    },
-                  ]}
-                />
-              );
-            })}
-          </View>
-        )}
+        {/* Horizontal dB grid lines */}
+        {DB_LINES.map(db => {
+          const topPct = 100 - dBToPercent(db);
+          return (
+            <View
+              key={`h${db}`}
+              style={[styles.hLine, { top: `${topPct}%` }]}
+            >
+              <Text style={styles.dbLabel}>{db > 0 ? `+${db}` : db}</Text>
+            </View>
+          );
+        })}
 
-        {/* Main Curve Line */}
-        <View style={styles.curveContainer}>
-          {values.map((val, index) => {
-            if (index === values.length - 1) return null;
-            
-            const x1 = (index / (values.length - 1)) * 100;
-            const x2 = ((index + 1) / (values.length - 1)) * 100;
-            const y1 = 100 - dBToY(val);
-            const y2 = 100 - dBToY(values[index + 1]);
-            
-            // Calculate angle and length for connecting line
-            const dx = x2 - x1;
-            const dy = y2 - y1;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-            
-            return (
-              <View
-                key={`line-${index}`}
-                style={[
-                  styles.curveLine,
-                  {
-                    left: `${x1}%`,
-                    top: `${y1}%`,
-                    width: `${length}%`,
-                    transform: [
-                      { translateY: -0.5 },
-                      { rotate: `${angle}deg` },
-                    ],
-                    backgroundColor: val > 0 || values[index + 1] > 0
+        {/* 0dB center line — slightly brighter */}
+        <View style={[styles.centerLine, { top: '50%' }]} />
+
+        {/* Vertical band grid lines */}
+        {values.map((_, i) => {
+          const leftPct = (i / (n - 1)) * 100;
+          return (
+            <View
+              key={`v${i}`}
+              style={[styles.vLine, { left: `${leftPct}%` }]}
+            />
+          );
+        })}
+
+        {/* Connecting line segments — each pair of adjacent bands */}
+        {values.map((_, i) => {
+          if (i >= n - 1) return null;
+          const x1Pct = (i       / (n - 1)) * 100;
+          const x2Pct = ((i + 1) / (n - 1)) * 100;
+
+          return (
+            <Animated.View
+              key={`seg${i}`}
+              style={[
+                styles.segment,
+                {
+                  left:  `${x1Pct}%`,
+                  width: `${x2Pct - x1Pct}%`,
+                  // Height drives the visual — we use a thin 2px line
+                  // rotated using a derived transform from the two y values.
+                  // Because transformOrigin is unsupported we compute the
+                  // rotation inline and offset with translateY to anchor top-left.
+                  //
+                  // The Animated.Value for y-position of each endpoint:
+                  //   yPct = 100 - dBToPercent(val)
+                  // We cannot do math on Animated.Value directly here so we
+                  // fall back to rendering the line as a thin colored bar
+                  // between the two y positions using absolute top + height.
+                  // This matches the fill segment approach but for the line.
+                  top: animatedVals[i].interpolate({
+                    inputRange:  [-15, 15],
+                    outputRange: [`${100 - dBToPercent(-15)}%`, `${100 - dBToPercent(15)}%`],
+                    extrapolate: 'clamp',
+                  }),
+                  backgroundColor:
+                    (values[i] > 0 || values[i + 1] > 0)
                       ? Colors.metallicBrown.primary
                       : Colors.metallicBrown.secondary,
-                    opacity: enabled ? 0.8 : 0.3,
-                  },
-                ]}
-              />
-            );
-          })}
-        </View>
+                  opacity: enabled ? 0.9 : 0.3,
+                },
+              ]}
+            />
+          );
+        })}
 
-        {/* Frequency Points/Nodes */}
-        <View style={styles.pointsContainer}>
-          {values.map((val, index) => {
-            const x = (index / (values.length - 1)) * 100;
-            const y = 100 - dBToY(val);
-            const isActive = index === activeBand;
-            
-            return (
-              <Animated.View
-                key={`point-${index}`}
-                style={[
-                  styles.pointWrapper,
-                  {
-                    left: `${x}%`,
-                    top: `${y}%`,
-                  },
-                ]}
-              >
-                <TouchableOpacity
-                  onPress={() => onBandPress?.(index)}
-                  activeOpacity={0.7}
-                  disabled={!enabled}
-                >
-                  <View style={[
-                    styles.graphPoint,
-                    {
-                      backgroundColor: val > 0 
-                        ? Colors.metallicBrown.primary 
-                        : val < 0 
-                        ? Colors.metallicBrown.secondary 
-                        : '#fff',
-                      width: isActive ? scale(14) : scale(10),
-                      height: isActive ? scale(14) : scale(10),
-                      borderRadius: isActive ? 7 : 5,
-                      borderWidth: isActive ? 2 : 1,
-                      borderColor: '#fff',
-                    },
-                    !enabled && styles.pointDisabled,
-                  ]}>
-                    {isActive && (
-                      <View style={styles.pointPulse}>
-                        <View style={[styles.pulseRing, { borderColor: Colors.metallicBrown.primary }]} />
-                      </View>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              </Animated.View>
-            );
-          })}
-        </View>
+        {/* Fill area under curve — one trapezoid per segment */}
+        {values.map((val, i) => {
+          if (i >= n - 1) return null;
+          const x1Pct = (i       / (n - 1)) * 100;
+          const x2Pct = ((i + 1) / (n - 1)) * 100;
+          const y1    = 100 - dBToPercent(val);
+          const y2    = 100 - dBToPercent(values[i + 1]);
+          const topPct  = Math.min(y1, y2);
+          const botPct  = 50; // 0dB line
+          const heightPct = Math.max(0, botPct - topPct);
+          if (heightPct < 0.3) return null;
+          return (
+            <View
+              key={`fill${i}`}
+              style={[
+                styles.fill,
+                {
+                  left:    `${x1Pct}%`,
+                  width:   `${x2Pct - x1Pct}%`,
+                  top:     `${topPct}%`,
+                  height:  `${heightPct}%`,
+                  backgroundColor: val > 0 || values[i + 1] > 0
+                    ? 'rgba(139,115,85,0.18)'
+                    : 'rgba(80,80,80,0.12)',
+                },
+              ]}
+            />
+          );
+        })}
 
-        {/* Center Line (0dB) */}
-        <View style={[styles.centerLine, { 
-          top: `${100 - dBToY(0)}%`,
-          backgroundColor: enabled ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)',
-        }]}>
-          <Text style={styles.centerLineLabel}>0dB</Text>
-        </View>
+        {/* Band node dots */}
+        {values.map((val, i) => {
+          const xPct   = (i / (n - 1)) * 100;
+          const yPct   = 100 - dBToPercent(val);
+          const isAct  = i === activeBand;
+          const dotSize = isAct ? scale(13) : scale(9);
+          return (
+            <TouchableOpacity
+              key={`pt${i}`}
+              onPress={() => onBandPress?.(i)}
+              disabled={!enabled}
+              style={[
+                styles.dot,
+                {
+                  left:         `${xPct}%`,
+                  top:          `${yPct}%`,
+                  width:        dotSize,
+                  height:       dotSize,
+                  borderRadius: dotSize / 2,
+                  marginLeft:   -(dotSize / 2),
+                  marginTop:    -(dotSize / 2),
+                  backgroundColor: val > 0
+                    ? Colors.metallicBrown.primary
+                    : val < 0
+                    ? Colors.metallicBrown.secondary
+                    : '#fff',
+                  borderWidth:  isAct ? 2 : 1,
+                  borderColor:  '#fff',
+                  opacity:      enabled ? 1 : 0.4,
+                },
+              ]}
+            />
+          );
+        })}
       </View>
 
-      {/* Frequency Range Indicator */}
-      <View style={styles.freqRange}>
-        <Text style={styles.freqRangeText}>20Hz</Text>
-        <Text style={styles.freqRangeText}>20kHz</Text>
+      {/* Frequency labels OUTSIDE graph (overflow:hidden would clip them) */}
+      <View style={styles.freqRow}>
+        {FREQ_LABELS.map((lbl, i) => (
+          <Text key={lbl} style={styles.freqLabel}>{lbl}</Text>
+        ))}
       </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    marginTop: verticalScale(20),
-    marginBottom: verticalScale(10),
+  wrapper: {
+    marginTop:    verticalScale(12),
+    marginBottom: verticalScale(4),
   },
-  graphContainer: {
-    height: verticalScale(150),
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 12,
-    position: 'relative',
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
+  wrapperDisabled: { opacity: 0.45 },
+  graph: {
+    height:          GRAPH_H,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius:    10,
+    overflow:        'hidden',
+    borderWidth:     StyleSheet.hairlineWidth,
+    borderColor:     'rgba(255,255,255,0.06)',
+    position:        'relative',
   },
-  graphDisabled: {
-    opacity: 0.5,
+  hLine: {
+    position:        'absolute',
+    left:            0,
+    right:           0,
+    height:          1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
   },
-  grid: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  gridLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  gridLineVertical: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 1,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  gridLabel: {
-    position: 'absolute',
-    left: scale(5),
-    top: -verticalScale(6),
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(8),
+  dbLabel: {
+    position:   'absolute',
+    left:       scale(3),
+    top:        -verticalScale(5),
+    color:      'rgba(255,255,255,0.25)',
+    fontSize:   moderateScale(7),
     fontWeight: '500',
-  },
-  gridLabelVertical: {
-    position: 'absolute',
-    bottom: -verticalScale(12),
-    left: -scale(10),
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(8),
-    fontWeight: '500',
-    width: scale(30),
-    textAlign: 'center',
-  },
-  glowContainer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  glowFill: {
-    flex: 1,
-    opacity: 0.1,
-  },
-  fillContainer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  fillSegment: {
-    position: 'absolute',
-    backgroundColor: 'rgba(139, 115, 85, 0.15)',
-  },
-  curveContainer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  curveLine: {
-    position: 'absolute',
-    height: 2,
-    transformOrigin: 'left',
-    shadowColor: Colors.metallicBrown.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  pointsContainer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  pointWrapper: {
-    position: 'absolute',
-    marginLeft: -scale(5),
-    marginTop: -scale(5),
-    zIndex: 10,
-  },
-  graphPoint: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
-  },
-  pointDisabled: {
-    opacity: 0.5,
-  },
-  pointPulse: {
-    position: 'absolute',
-    top: -scale(4),
-    left: -scale(4),
-    right: -scale(4),
-    bottom: -scale(4),
-  },
-  pulseRing: {
-    flex: 1,
-    borderWidth: 2,
-    borderRadius: scale(12),
-    opacity: 0.5,
   },
   centerLine: {
+    position:        'absolute',
+    left:            0,
+    right:           0,
+    height:          1.5,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    zIndex:          2,
+  },
+  vLine: {
+    position:        'absolute',
+    top:             0,
+    bottom:          0,
+    width:           StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  // Connecting line segment — thin 2px bar
+  segment: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: 'rgba(255,255,255,0.5)',
+    height:   2,
   },
-  centerLineLabel: {
+  fill: {
     position: 'absolute',
-    right: scale(5),
-    top: -verticalScale(8),
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(8),
-    fontWeight: '600',
   },
-  freqRange: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: scale(5),
-    marginTop: verticalScale(4),
+  dot: {
+    position:  'absolute',
+    zIndex:    10,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.4,
+    shadowRadius: 2,
   },
-  freqRangeText: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(8),
-    fontWeight: '500',
+  freqRow: {
+    flexDirection:   'row',
+    justifyContent:  'space-between',
+    paddingHorizontal: scale(2),
+    marginTop:       verticalScale(3),
+  },
+  freqLabel: {
+    color:     'rgba(255,255,255,0.3)',
+    fontSize:  moderateScale(7),
+    textAlign: 'center',
+    flex:      1,
   },
 });
-

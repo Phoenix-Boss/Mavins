@@ -127,7 +127,7 @@ function NoFoldersState({ onAddFolder }: { onAddFolder: () => void }) {
         {[
           { icon: "eye-outline", text: "Real-time sync via MediaStore" },
           { icon: "folder-open-outline", text: "You control which folders are scanned" },
-          { icon: "wifi-off-outline", text: "Plays fully offline — no internet needed" },
+          { icon: "cloud-offline-outline", text: "Plays fully offline — no internet needed" },
           { icon: "flash-outline", text: "Zero-spinner instant launch from cache" },
         ].map(({ icon, text }) => (
           <View key={icon} style={emStyles.featureRow}>
@@ -494,7 +494,7 @@ export default function LocalMusicScreen() {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const activeTrack = useActiveTrack();
-  const { playLocalTrack } = useMusicPlayer();
+  const { playDownloadedSong } = useMusicPlayer();
 
   const {
     tracks, folders, hydrated, permissionGranted,
@@ -539,7 +539,7 @@ export default function LocalMusicScreen() {
     if (displayTracks.length === 0) return;
     triggerHaptic();
     const shuffled = [...displayTracks].sort(() => Math.random() - 0.5);
-    await playLocalTrack(shuffled[0], shuffled);
+    await playDownloadedSong({ ...shuffled[0], localTrackUri: shuffled[0].uri, localArtworkUri: shuffled[0].artworkUri }, shuffled.map(t => ({ ...t, localTrackUri: t.uri, localArtworkUri: t.artworkUri })));
     router.navigate("/player");
   }, [displayTracks]);
 
@@ -694,7 +694,10 @@ export default function LocalMusicScreen() {
                       item={item}
                       isPlaying={activeTrack?.id === item.id}
                       onPress={async () => {
-                        await playLocalTrack(item, displayTracks);
+                        await playDownloadedSong(
+                          { ...item, localTrackUri: item.uri, localArtworkUri: item.artworkUri },
+                          displayTracks.map(t => ({ ...t, localTrackUri: t.uri, localArtworkUri: t.artworkUri })),
+                        );
                         router.navigate("/player");
                       }}
                       onMore={() => {
