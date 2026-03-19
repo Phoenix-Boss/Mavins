@@ -495,7 +495,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   bottomSpacing: {
-    height: 60,
+    height: 140,  // FloatingPlayer (64) + tab bar (~56) + gap — prevents last section being hidden
   },
 
   // ── Error boundary ─────────────────────────────────────────────────────────

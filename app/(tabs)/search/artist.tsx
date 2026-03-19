@@ -55,6 +55,7 @@ interface Song {
   artist: string;
   thumbnail: string;
   url: string;
+  videoId?: string;
 }
 
 /** Normalised album / single / video card shape */
@@ -99,16 +100,23 @@ const formatSubscribers = (count: number): string => {
 };
 
 /** Convert a StreamInfoItem to the local Song shape */
-const streamItemToSong = (item: StreamInfoItem): Song => ({
-  id: item.url.split("v=")[1]?.split("&")[0] ?? item.url,
-  title: item.name,
-  artist: item.uploaderName,
-  thumbnail:
-    item.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
-    item.thumbnails[0]?.url ??
-    "",
-  url: item.url,
-});
+const streamItemToSong = (item: StreamInfoItem): Song => {
+  // Use regex to safely extract the 11-char video ID — split("v=") breaks
+  // on URLs like "music.youtube.com/watch?v=..." where "v" also appears elsewhere
+  const videoId = item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
+    ?? item.url.split("youtu.be/")[1]?.split("?")[0]
+    ?? item.url;
+  return {
+    id:        videoId,
+    title:     item.name,
+    artist:    item.uploaderName,
+    thumbnail: item.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url
+      ?? item.thumbnails[0]?.url
+      ?? "",
+    url:       item.url,
+    videoId,
+  };
+};
 
 /** Convert any InfoItem to an ArtistPageItem, returns null for channel items */
 const infoItemToPageItem = (

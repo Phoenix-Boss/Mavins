@@ -412,6 +412,17 @@ class MavinEngineModule : Module() {
                 YoutubeParsingHelper.setConsentAccepted(true)
                 Log.i(TAG, "✅ setConsentAccepted(true) — SOCS cookie will be injected per-request via getCookieHeader()")
 
+                // v0.26.0: enable iOS player responses for better stream availability.
+                // Without this, some age-sensitive or region-restricted videos only return
+                // the Android client response which may have fewer usable formats.
+                try {
+                    org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor
+                        .setFetchIosClient(true)
+                    Log.i(TAG, "✅ setFetchIosClient(true) — iOS player response enabled")
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ setFetchIosClient not available (non-fatal): ${e.message}")
+                }
+
                 isInitialized = true
                 Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${NewPipe.getServices().size} services loaded")
 
@@ -1371,12 +1382,59 @@ class MavinEngineModule : Module() {
     // STREAM EXTRACTION
     // ═══════════════════════════════════════════════════════════════════════
 
+    /**
+     * Extract a YouTube video ID from any URL format.
+     *
+     * NewPipe's YoutubeStreamLinkHandlerFactory.acceptUrl() uses the strict
+     * pattern [?&]v=([\\-a-zA-Z0-9_]{11}) — it requires EXACTLY 11 chars.
+     * When URLs are passed through Expo Router params they can be:
+     *   - double-encoded (%2526v%253D instead of &v=)
+     *   - have spaces injected (".com /watch")
+     *   - have the v= param truncated or mangled
+     * Any of these causes "ParsingException: URL not accepted".
+     *
+     * The solution: always extract the bare 11-char video ID here in Kotlin
+     * and use service.streamLHFactory.fromId(videoId) which bypasses
+     * acceptUrl() entirely — it only calls getUrl(id) internally.
+     */
+    private fun extractVideoIdFromAnyUrl(raw: String): String? {
+        val url = raw.trim()
+        // Already a bare 11-char ID
+        if (url.matches(Regex("[a-zA-Z0-9_-]{11}"))) return url
+        // [?&]v=XXXXXXXXXXX  — NewPipe's own pattern, strict 11 chars
+        Regex("[?&]v=([a-zA-Z0-9_-]{11})").find(url)?.groupValues?.get(1)?.let { return it }
+        // URL-encoded variant: %3Fv%3D or %26v%3D
+        val decoded = try { java.net.URLDecoder.decode(url, "UTF-8") } catch (_: Exception) { url }
+        Regex("[?&]v=([a-zA-Z0-9_-]{11})").find(decoded)?.groupValues?.get(1)?.let { return it }
+        // youtu.be/XXXXXXXXXXX
+        Regex("youtu\\.be/([a-zA-Z0-9_-]{11})").find(url)?.groupValues?.get(1)?.let { return it }
+        // /embed/XXXXXXXXXXX or /shorts/XXXXXXXXXXX or /v/XXXXXXXXXXX
+        Regex("/(?:embed|shorts|v)/([a-zA-Z0-9_-]{11})").find(url)?.groupValues?.get(1)?.let { return it }
+        return null
+    }
+
     private fun extractStreamInfo(url: String, serviceId: Int?): Map<String, Any> {
-        // FIX [10]: v0.26.0 — "do not use WEB client for stream URLs anymore" (SABR-only fix).
-        // Always use getDefaultService() (YouTube Android client) for stream extraction.
-        // Only override for an explicit non-YouTube serviceId.
         val service = if (serviceId != null && serviceId != 0) getService(serviceId)
                       else getDefaultService()
+
+        val videoId = extractVideoIdFromAnyUrl(url)
+        if (videoId != null) {
+            Log.d(TAG, "extractStreamInfo: using fromId('$videoId') for url='${url.take(80)}'")
+            return try {
+                streamInfoToMap(
+                    StreamInfo.getInfo(service.getStreamExtractor(service.streamLHFactory.fromId(videoId))),
+                    service.serviceId
+                )
+            } catch (e: AccountTerminatedException) {
+                // Account terminated — no point retrying; surface immediately
+                Log.w(TAG, "extractStreamInfo: account terminated for videoId=$videoId")
+                mapOf("success" to false, "error" to "ACCOUNT_TERMINATED",
+                    "message" to "The uploader's account has been terminated.")
+            }
+        }
+
+        // Fallback for non-YouTube services or exotic URL formats
+        Log.w(TAG, "extractStreamInfo: could not extract videoId, falling back to fromUrl for '${url.take(80)}'")
         return streamInfoToMap(StreamInfo.getInfo(service.getStreamExtractor(url)), service.serviceId)
     }
 
@@ -1414,7 +1472,9 @@ class MavinEngineModule : Module() {
             put("likeCount",               info.likeCount.coerceAtLeast(0L).toDouble())
             put("dislikeCount",            info.dislikeCount.coerceAtLeast(0L).toDouble())
             put("description",             info.description.content)
-            put("uploadDate",              info.uploadDate?.offsetDateTime()?.toString() ?: "")
+            // v0.26.0: DateWrapper wraps Instant via .date() — offsetDateTime() was removed
+            // in the v0.25.0 date-parsing refactor. Use .date().toString() for ISO string.
+            put("uploadDate",              info.uploadDate?.date?.toString() ?: "")
             put("textualUploadDate",       info.textualUploadDate.orEmpty())
             put("thumbnails",              info.thumbnails.map { imageToMap(it) })
             put("streamType",              info.streamType.name)
@@ -1454,8 +1514,11 @@ class MavinEngineModule : Module() {
         }
 
     private fun getBestStreamUrl(url: String, format: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
-        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val service  = resolveService(url, serviceId)
+        val videoId  = extractVideoIdFromAnyUrl(url)
+        val extractor = if (videoId != null) service.getStreamExtractor(service.streamLHFactory.fromId(videoId))
+                        else service.getStreamExtractor(url)
+        val info = StreamInfo.getInfo(extractor)
 
         // Per NewPipe v0.26.0 javadoc:
         //   getAudioStreams()     → audio-only streams (no video)
@@ -1484,15 +1547,17 @@ class MavinEngineModule : Module() {
     }
 
     private fun extractAudioStreams(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
-        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val service  = resolveService(url, serviceId)
+        val videoId  = extractVideoIdFromAnyUrl(url)
+        val info     = StreamInfo.getInfo(if (videoId != null) service.getStreamExtractor(service.streamLHFactory.fromId(videoId)) else service.getStreamExtractor(url))
         return mapOf<String, Any>("success" to true, "title" to info.name.orEmpty(),
             "audioStreams" to info.audioStreams.map { audioStreamToMap(it) })
     }
 
     private fun extractVideoStreams(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
-        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val service  = resolveService(url, serviceId)
+        val videoId  = extractVideoIdFromAnyUrl(url)
+        val info     = StreamInfo.getInfo(if (videoId != null) service.getStreamExtractor(service.streamLHFactory.fromId(videoId)) else service.getStreamExtractor(url))
         return mapOf<String, Any>("success" to true, "title" to info.name.orEmpty(),
             "videoStreams"     to info.videoStreams.map { videoStreamToMap(it) },
             "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) })
@@ -1500,7 +1565,8 @@ class MavinEngineModule : Module() {
 
     private fun extractSubtitles(url: String, language: String?, serviceId: Int?): Map<String, Any> {
         val service  = resolveService(url, serviceId)
-        val info     = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val videoId  = extractVideoIdFromAnyUrl(url)
+        val info     = StreamInfo.getInfo(if (videoId != null) service.getStreamExtractor(service.streamLHFactory.fromId(videoId)) else service.getStreamExtractor(url))
         val all      = info.subtitles
         val filtered = if (language.isNullOrBlank()) all
                        else all.filter { it.getLanguageTag().equals(language, ignoreCase = true) }
@@ -1549,8 +1615,8 @@ class MavinEngineModule : Module() {
         "commentId"          to item.commentId.orEmpty(),
         "commentText"        to item.commentText.content,
         "publishedTime"      to item.textualUploadDate.orEmpty(),
-        // FIX [1]: toEpochSecond() returns long → .toDouble()
-        "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond()?.toDouble() ?: 0.0),
+        // v0.26.0: DateWrapper.date() returns Instant — use .epochSecond directly
+        "publishedTimestamp" to (item.uploadDate?.date?.epochSecond?.toDouble() ?: 0.0),
         // FIX [2]: getLikeCount() returns int — coerce only, no .toDouble()
         "likeCount"          to item.likeCount.coerceAtLeast(0),
         "textualLikeCount"   to item.textualLikeCount.orEmpty(),

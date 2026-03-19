@@ -99,7 +99,39 @@ const streamItemToSong = (s: StreamInfoItem): Song => {
   };
 };
 
-// ─── Component ────────────────────────────────────────────────────────────────
+/**
+ * Ensure a URL is a standard YouTube watch URL.
+ * If a CDN/stream URL (googlevideo.com) or bare video ID is passed in by
+ * mistake, reconstruct the canonical watch URL from the videoId param or
+ * the value itself.
+ *
+ * This guards against callers accidentally passing a resolved stream URL
+ * (googlevideo.com/videoplayback?...) — NewPipe's extractor only accepts
+ * youtube.com/watch?v= or youtu.be/ URLs.
+ */
+const toWatchUrl = (url: string): string => {
+  // Already a valid watch URL — nothing to do
+  if (url.includes("youtube.com/watch") || url.includes("youtu.be/")) return url;
+
+  // CDN stream URL — try to extract the video id from the `id` query param
+  // (googlevideo URLs carry `id=o-<token>` not a plain video id, so this
+  //  won't help; we fall through to the videoId param path below)
+  try {
+    const parsed = new URL(url);
+    const v = parsed.searchParams.get("v");
+    if (v) return `https://www.youtube.com/watch?v=${v}`;
+  } catch {}
+
+  // Bare 11-char video ID passed directly
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+    return `https://www.youtube.com/watch?v=${url}`;
+  }
+
+  // Can't recover — return as-is and let the extractor surface the error
+  return url;
+};
+
+
 
 export default function RelatedModal() {
   const router          = useRouter();
@@ -114,6 +146,17 @@ export default function RelatedModal() {
     artist:  string;
   }>();
 
+  // Normalise to a proper YouTube watch URL — callers sometimes pass a
+  // resolved CDN stream URL (googlevideo.com) by mistake, which NewPipe
+  // cannot parse. Reconstruct from videoId when possible.
+  const watchUrl = songUrl
+    ? (() => {
+        const videoId = extractVideoId(songUrl);
+        if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+        return toWatchUrl(songUrl);
+      })()
+    : undefined;
+
   const [songs,   setSongs]   = useState<Song[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -121,7 +164,7 @@ export default function RelatedModal() {
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!songUrl) {
+    if (!watchUrl) {
       setLoading(false);
       setError("No track URL provided.");
       return;
@@ -134,10 +177,7 @@ export default function RelatedModal() {
         setLoading(true);
         setError(null);
 
-        // serviceId 0 → YouTube Android/iOS client (v0.26.0 SABR fix).
-        // getStreamInfo returns relatedItems populated from the watch-next
-        // panel — the same data source MusicPlayerContext uses.
-        const info = await MavinEngine.getStreamInfo(songUrl, 0);
+        const info = await MavinEngine.getStreamInfo(watchUrl, 0);
 
         if (cancelled) return;
 
@@ -164,17 +204,16 @@ export default function RelatedModal() {
 
     fetchRelated();
     return () => { cancelled = true; };
-  }, [songUrl]);
+  }, [watchUrl]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handlePlay = useCallback(
     async (song: Song) => {
       triggerHaptic();
-      // Pass the full songs array as the playlist so the queue is pre-populated.
       await playAudio(song, songs);
       router.back();
-      router.navigate("/player");
+      router.navigate("/(player)");
     },
     [songs, playAudio, router],
   );

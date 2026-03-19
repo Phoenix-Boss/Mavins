@@ -302,10 +302,8 @@ function TabLayoutContent() {
       {/* Custom tab bar + floating player — hidden on player screen */}
       {!isPlayerScreen && (
         <>
-          {/* FloatingPlayer sits just above the tab bar */}
-          <View style={styles.floatingPlayerWrapper}>
-            <FloatingPlayer />
-          </View>
+          {/* FloatingPlayer positions itself above the tab bar via its own animated style */}
+          <FloatingPlayer tabHeight={TAB_HEIGHT + safeAreaBottom} />
 
           {/* Custom tab bar */}
           <View
@@ -361,15 +359,6 @@ const styles = StyleSheet.create({
   root: {
     flex:            1,
     backgroundColor: COLORS.background,
-  },
-
-  // ── Floating player sits above the tab bar ──────────────────────────────
-  floatingPlayerWrapper: {
-    position: "absolute",
-    left:     0,
-    right:    0,
-    bottom:   TAB_HEIGHT, // sits directly on top of the tab bar
-    zIndex:   20,
   },
 
   // ── Tab bar ────────────────────────────────────────────────────────────

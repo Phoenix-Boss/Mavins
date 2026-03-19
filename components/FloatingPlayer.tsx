@@ -16,7 +16,7 @@
  *       expo-image handles blurhash placeholders and disk caching automatically.
  */
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -33,6 +33,12 @@ import { useActiveTrack, usePlaybackState, State } from 'react-native-track-play
 import TrackPlayer from 'react-native-track-player';
 import { useMusicPlayer } from '@/components/MusicPlayerContext';
 
+// ─── Singleton guard ──────────────────────────────────────────────────────────
+// Tracks how many FloatingPlayer instances are currently mounted.
+// If more than one mounts at the same time (e.g. tab layout + screen layout),
+// every instance beyond the first renders null to prevent the double-player bug.
+let _floatingPlayerMountCount = 0;
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface FloatingPlayerProps {
@@ -47,6 +53,18 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
   const activeTrack   = useActiveTrack();
   const playbackState = usePlaybackState();
   const { togglePlayPause, isLoading } = useMusicPlayer();
+
+  // Singleton guard — only the first mounted instance renders UI.
+  // Any duplicate mount (e.g. tab shell + screen layout) renders null.
+  const isOwnerRef = useRef(false);
+  useEffect(() => {
+    _floatingPlayerMountCount += 1;
+    isOwnerRef.current = _floatingPlayerMountCount === 1;
+    return () => {
+      if (isOwnerRef.current) _floatingPlayerMountCount = 0;
+      else _floatingPlayerMountCount -= 1;
+    };
+  }, []);
 
   // Hide when any modal screen is active — they render above the tab layout
   // so the global FloatingPlayer from the tab shell would appear twice.
@@ -76,8 +94,9 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
     [floatingPlayerBottom],
   );
 
-  // Don't render on modals/player — prevents the double-player bug
-  if (!activeTrack || isModalOrPlayer) return null;
+  // Don't render on modals/player — prevents the double-player bug.
+  // Also bail if this is a duplicate mount (singleton guard above).
+  if (!activeTrack || isModalOrPlayer || !isOwnerRef.current) return null;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 

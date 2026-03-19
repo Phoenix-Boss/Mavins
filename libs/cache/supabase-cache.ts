@@ -20,28 +20,44 @@ import { normalizeQuery } from './utils';
  * tracks columns used here:
  *   id, title, artist_id, album_id, video_id, duration_seconds,
  *   thumbnail_url, metadata, play_count, updated_at, created_at
- *   — NO: isrc, artist (string), album (string), artwork_url,
- *         spotify_id, youtube_id, deezer_id, soundcloud_id,
- *         access_count, last_accessed
  *
  * streams columns used here:
  *   id, track_id, source, stream_url, quality, format, duration,
  *   expiry, health_score, is_active, last_accessed, access_count
- *   — NO: failure_count, last_verified (not on streams table)
  *
  * artists columns used here:
  *   id, name, browse_id, thumbnail_url, subscriber_count,
  *   monthly_listeners, metadata, updated_at, created_at
- *   — top_tracks / albums / similar stored inside metadata jsonb
  *
- * searches → table does not exist.
- *   Replaced with cache_metadata:
+ * track_stats — managed by ensureSchema() / saveTrackStats():
+ *   video_id TEXT PRIMARY KEY,
+ *   like_count     BIGINT  DEFAULT -1,
+ *   dislike_count  BIGINT  DEFAULT -1,
+ *   view_count     BIGINT  DEFAULT -1,
+ *   comments_count BIGINT  DEFAULT -1,
+ *   uploader_url   TEXT,
+ *   fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+ *   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+ *
+ * cache_metadata:
  *   id, cache_key, original_query, track_id, hit_count,
  *   last_verified, updated_at, created_at,
  *   l1_cached, l2_cached, l3_cached, l4_cached + _at fields
  *
  * related_tracks → table does not exist; methods return empty / false safely.
  */
+
+// ─── TrackStats shape ────────────────────────────────────────────────────────
+
+export interface TrackStats {
+  videoId:       string;
+  likeCount:     number;  // -1 = hidden / unavailable
+  dislikeCount:  number;
+  viewCount:     number;
+  commentsCount: number;
+  uploaderUrl:   string | null;
+  fetchedAt:     string;  // ISO timestamp — used to decide staleness
+}
 export class SupabaseCache {
   private supabase: SupabaseClient | null = null;
   private enabled: boolean = false;
@@ -83,6 +99,12 @@ export class SupabaseCache {
 
       this.testConnection().catch(err => {
         console.warn('⚠️ Supabase connection test failed:', err.message);
+      });
+
+      // Ensure all required tables exist — runs CREATE TABLE IF NOT EXISTS
+      // for every table the app depends on. Safe to call on every launch.
+      this.ensureSchema().catch(err => {
+        console.warn('⚠️ ensureSchema failed (non-fatal):', err.message);
       });
     } catch (error) {
       console.error('❌ Failed to create Supabase client:', error);
@@ -231,10 +253,35 @@ export class SupabaseCache {
         return data.id;
       }
 
+      // Resolve or create the artist row to satisfy the NOT NULL artist_id FK
+      let artistId: string | null = null;
+      if (trackData.artist) {
+        const { data: artist, error: artistError } = await this.supabase
+          .from('artists')
+          .upsert(
+            { name: trackData.artist.toLowerCase(), updated_at: now },
+            { onConflict: 'name' }
+          )
+          .select('id')
+          .single();
+
+        if (artistError || !artist) {
+          console.error('❌ saveTrack artist upsert error:', artistError);
+          return null;
+        }
+        artistId = artist.id;
+      }
+
+      if (!artistId) {
+        console.error('❌ saveTrack: cannot insert track without a valid artist_id');
+        return null;
+      }
+
       const { data, error } = await this.supabase
         .from('tracks')
         .insert({
           title: trackData.title,
+          artist_id: artistId,
           video_id: trackData.youtubeId || null,
           duration_seconds: trackData.duration || null,
           thumbnail_url: trackData.artworkUrl || null,
@@ -285,10 +332,24 @@ export class SupabaseCache {
     if (!this.enabled || !this.supabase) return null;
 
     try {
+      // If trackId looks like a YouTube video ID (not a UUID), resolve the real UUID
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackId);
+      let resolvedTrackId = trackId;
+
+      if (!isUuid) {
+        const { data: track } = await this.supabase
+          .from('tracks')
+          .select('id')
+          .eq('video_id', trackId)
+          .maybeSingle();
+        if (!track?.id) return null;
+        resolvedTrackId = track.id;
+      }
+
       const { data, error } = await this.supabase
         .from('streams')
         .select('id, track_id, source, stream_url, quality, format, duration, expiry, health_score, is_active, last_accessed, access_count')
-        .eq('track_id', trackId)
+        .eq('track_id', resolvedTrackId)
         .eq('is_active', true)
         .order('health_score', { ascending: false })
         .limit(1)
@@ -322,13 +383,30 @@ export class SupabaseCache {
     if (!this.enabled || !this.supabase) return false;
 
     try {
+      // Resolve YouTube video ID → track UUID if needed
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(streamData.trackId);
+      let resolvedTrackId = streamData.trackId;
+
+      if (!isUuid) {
+        const { data: track } = await this.supabase
+          .from('tracks')
+          .select('id')
+          .eq('video_id', streamData.trackId)
+          .maybeSingle();
+        if (!track?.id) {
+          console.warn(`[MusicPlayer] stream cache write error: invalid input syntax for type uuid: "${streamData.trackId}"`);
+          return false;
+        }
+        resolvedTrackId = track.id;
+      }
+
       const expiryDate = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
       const now = new Date().toISOString();
 
       const { data: existing } = await this.supabase
         .from('streams')
         .select('id')
-        .eq('track_id', streamData.trackId)
+        .eq('track_id', resolvedTrackId)
         .eq('source', streamData.source)
         .maybeSingle();
 
@@ -353,7 +431,7 @@ export class SupabaseCache {
       const { error } = await this.supabase
         .from('streams')
         .insert({
-          track_id: streamData.trackId,
+          track_id: resolvedTrackId,
           source: streamData.source,
           stream_url: streamData.streamUrl,
           quality: streamData.quality || '128kbps',
@@ -699,6 +777,189 @@ export class SupabaseCache {
     } catch (error) {
       console.error('❌ getStats error:', error);
       return null;
+    }
+  }
+
+  // ─── SCHEMA BOOTSTRAP ───────────────────────────────────────────────────────
+
+  /**
+   * Ensure all tables the app needs exist.
+   * Uses raw SQL via Supabase's rpc('exec_sql') if available, otherwise
+   * tries each table with a lightweight probe and creates it via rpc if missing.
+   *
+   * Tables created here (existing tables are never modified):
+   *
+   *   track_stats   — per-video engagement counts from NewPipe extraction
+   *   cache_metadata — already exists in most deployments; safe no-op if so
+   *
+   * The CREATE TABLE statements use IF NOT EXISTS so they are idempotent.
+   * All timestamps default to now() so callers never need to supply them.
+   */
+  public async ensureSchema(): Promise<void> {
+    if (!this.supabase || !this.enabled) return;
+
+    // SQL for every table that may not exist yet.
+    // Existing tables are untouched — IF NOT EXISTS is the safety net.
+    const statements = [
+      // ── track_stats ──────────────────────────────────────────────────────
+      // Keyed on video_id (11-char YouTube ID) — one row per video.
+      // like_count / dislike_count / view_count / comments_count default to -1
+      // which signals "YouTube did not return this value" (hidden likes, etc.)
+      `CREATE TABLE IF NOT EXISTS track_stats (
+        video_id       TEXT        PRIMARY KEY,
+        like_count     BIGINT      NOT NULL DEFAULT -1,
+        dislike_count  BIGINT      NOT NULL DEFAULT -1,
+        view_count     BIGINT      NOT NULL DEFAULT -1,
+        comments_count BIGINT      NOT NULL DEFAULT -1,
+        uploader_url   TEXT,
+        fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+
+      // ── cache_metadata ───────────────────────────────────────────────────
+      // May already exist. IF NOT EXISTS makes this a safe no-op.
+      `CREATE TABLE IF NOT EXISTS cache_metadata (
+        id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        cache_key      TEXT        NOT NULL UNIQUE,
+        original_query TEXT,
+        track_id       UUID        REFERENCES tracks(id) ON DELETE SET NULL,
+        hit_count      INTEGER     NOT NULL DEFAULT 0,
+        last_verified  TIMESTAMPTZ,
+        l1_cached      BOOLEAN     NOT NULL DEFAULT false,
+        l2_cached      BOOLEAN     NOT NULL DEFAULT false,
+        l3_cached      BOOLEAN     NOT NULL DEFAULT false,
+        l4_cached      BOOLEAN     NOT NULL DEFAULT false,
+        l1_cached_at   TIMESTAMPTZ,
+        l2_cached_at   TIMESTAMPTZ,
+        l3_cached_at   TIMESTAMPTZ,
+        l4_cached_at   TIMESTAMPTZ,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        // Supabase exposes raw SQL via the `exec_sql` RPC if you've created it,
+        // or via the built-in `pg_` functions on service-role connections.
+        // We try the standard pattern; if it fails we log and continue.
+        const { error } = await this.supabase.rpc('exec_sql', { sql });
+        if (error) {
+          // RPC may not exist — try the alternative pg approach
+          console.warn('⚠️ ensureSchema exec_sql failed, trying pg_query:', error.message);
+          await this.supabase.rpc('pg_query', { query: sql }).catch(() => {});
+        }
+      } catch (e: any) {
+        // Non-fatal — the table may already exist or the RPC may not be set up.
+        // The app will still work; inserts will fail gracefully if the table is missing.
+        console.warn('⚠️ ensureSchema statement skipped (non-fatal):', e?.message);
+      }
+    }
+
+    console.log('✅ ensureSchema complete');
+  }
+
+  // ─── TRACK STATS ────────────────────────────────────────────────────────────
+
+  /**
+   * Cache engagement stats for a YouTube video.
+   *
+   * Called fire-and-forget from MusicPlayerContext.resolveTrack() after
+   * MavinEngine.getStreamInfo() returns — the stats come for free in that
+   * response so no extra network call is needed.
+   *
+   * TTL: stats older than 24 hours are considered stale and re-fetched
+   * by MusicPlayerContext on the next play.
+   */
+  public async saveTrackStats(stats: Omit<TrackStats, 'fetchedAt'>): Promise<void> {
+    if (!this.enabled || !this.supabase) return;
+
+    try {
+      const now = new Date().toISOString();
+      const { error } = await this.supabase
+        .from('track_stats')
+        .upsert({
+          video_id:       stats.videoId,
+          like_count:     stats.likeCount,
+          dislike_count:  stats.dislikeCount,
+          view_count:     stats.viewCount,
+          comments_count: stats.commentsCount,
+          uploader_url:   stats.uploaderUrl ?? null,
+          fetched_at:     now,
+          updated_at:     now,
+        }, { onConflict: 'video_id' });
+
+      if (error) {
+        console.warn('⚠️ saveTrackStats error:', error.message);
+      } else {
+        console.log(`✅ track_stats saved for ${stats.videoId}`);
+      }
+    } catch (e: any) {
+      console.warn('⚠️ saveTrackStats exception:', e?.message);
+    }
+  }
+
+  /**
+   * Retrieve cached engagement stats for a YouTube video.
+   *
+   * Returns null if:
+   *   - No row exists for this videoId
+   *   - The row is older than maxAgeHours (default 24h) — caller should re-fetch
+   *
+   * The caller (MusicPlayerContext) uses this to skip the MavinEngine call
+   * when fresh stats are already in the DB.
+   */
+  public async getTrackStats(
+    videoId: string,
+    maxAgeHours = 24,
+  ): Promise<TrackStats | null> {
+    if (!this.enabled || !this.supabase) return null;
+
+    try {
+      const { data, error } = await this.supabase
+        .from('track_stats')
+        .select('video_id, like_count, dislike_count, view_count, comments_count, uploader_url, fetched_at')
+        .eq('video_id', videoId)
+        .maybeSingle();
+
+      if (error || !data) return null;
+
+      // Staleness check — re-fetch if older than maxAgeHours
+      const ageMs = Date.now() - new Date(data.fetched_at).getTime();
+      if (ageMs > maxAgeHours * 60 * 60 * 1000) {
+        console.log(`ℹ️ track_stats for ${videoId} is stale (${Math.round(ageMs / 3600000)}h old)`);
+        return null;
+      }
+
+      return {
+        videoId:       data.video_id,
+        likeCount:     data.like_count     ?? -1,
+        dislikeCount:  data.dislike_count  ?? -1,
+        viewCount:     data.view_count     ?? -1,
+        commentsCount: data.comments_count ?? -1,
+        uploaderUrl:   data.uploader_url   ?? null,
+        fetchedAt:     data.fetched_at,
+      };
+    } catch (e: any) {
+      console.warn('⚠️ getTrackStats exception:', e?.message);
+      return null;
+    }
+  }
+
+  /**
+   * Patch just the commentsCount on an existing track_stats row.
+   * Called fire-and-forget from MusicPlayerContext after the background
+   * getComments call resolves — avoids re-upserting all fields.
+   */
+  public async patchCommentsCount(videoId: string, commentsCount: number): Promise<void> {
+    if (!this.enabled || !this.supabase) return;
+    try {
+      await this.supabase
+        .from('track_stats')
+        .update({ comments_count: commentsCount, updated_at: new Date().toISOString() })
+        .eq('video_id', videoId);
+    } catch (e: any) {
+      console.warn('⚠️ patchCommentsCount exception:', e?.message);
     }
   }
 

@@ -32,6 +32,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -49,6 +50,8 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withTiming,
+  interpolate,
   runOnJS,
 } from "react-native-reanimated";
 import {
@@ -118,6 +121,17 @@ const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+};
+
+/**
+ * Format a raw count into a compact readable string.
+ * 1 500 000 → "1.5M"  |  23 400 → "23.4K"  |  850 → "850"
+ */
+const formatCount = (n: number): string => {
+  if (n <= 0) return "";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return String(n);
 };
 
 const getImageSource = (artwork: string | number | undefined) => {
@@ -205,35 +219,114 @@ function PlayerContent() {
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
 
+  // ── Stats — stored on the Track by MusicPlayerContext.resolveTrack ───────────
+  // MusicPlayerContext fetches likeCount/dislikeCount/viewCount from the same
+  // getStreamInfo call used for stream extraction — zero extra network requests.
+  // commentsCount is fetched in background and may arrive slightly after play.
+  const track = activeTrack as any;
+  const likeCount     = typeof track?.likeCount     === 'number' ? track.likeCount     : -1;
+  const dislikeCount  = typeof track?.dislikeCount  === 'number' ? track.dislikeCount  : -1;
+  const commentsCount = typeof track?.commentsCount === 'number' ? track.commentsCount : -1;
+
+  // ── Artist channel URL — for routing to the artist page ─────────────────────
+  const uploaderUrl: string | undefined = track?.uploaderUrl as string | undefined;
+  const videoId: string | undefined     = track?.videoId     as string | undefined;
+
   const isPlaying =
     playbackState.state === State.Playing ||
     playbackState.state === State.Buffering;
 
   // ── Video URL — custom field written by MusicPlayerContext.buildTrack ────────
-  // MusicPlayerContext stores the DASH video stream URL as `videoUrl` on the
-  // Track object. RNTP ignores unknown fields; PlayerScreen reads it here for
-  // the Song/Video segment toggle and the video player route.
   const videoUrl: string | undefined =
     (activeTrack as any)?.videoUrl as string | undefined;
   const hasVideo = !!videoUrl;
 
-  // ── Song / Video segment toggle ──────────────────────────────────────────────
+  // ── Song / Video segment toggle ───────────────────────────────────────────────
   const [activeSegment, setActiveSegment] = useState<"song" | "video">("song");
 
-  const handleSegmentPress = useCallback((seg: "song" | "video") => {
-    triggerHaptic();
-    if (seg === "video" && !hasVideo) return; // no video stream for this track
-    setActiveSegment(seg);
-    if (seg === "video") {
-      router.push({
-        pathname: "/(player)/video",
-        params: { videoUrl },
-      });
+  // ── expo-video player (muted — audio stays in TrackPlayer) ───────────────────
+  // Created once; source is updated when videoUrl changes.
+  // Kept paused and muted at all times — we only show visuals here.
+  // On Android, currentTime cannot be set in the setup callback, so we seek
+  // imperatively via a statusChange listener after the player is readyToPlay.
+  const videoPlayerReady = useRef(false);
+  const pendingSeek = useRef<number | null>(null);
+
+  const videoPlayer = useVideoPlayer(videoUrl ?? null, (p) => {
+    p.muted = true;           // audio is TrackPlayer's job
+    p.loop = false;
+    p.pause();                // don't auto-play — wait for user to tap "Video"
+  });
+
+  // Once the player signals readyToPlay, apply any pending seek that arrived
+  // before it was ready (Android: setting currentTime in setup is ignored).
+  useEffect(() => {
+    if (!videoPlayer) return;
+    const sub = videoPlayer.addListener("statusChange", ({ status }) => {
+      if (status === "readyToPlay") {
+        videoPlayerReady.current = true;
+        if (pendingSeek.current !== null) {
+          videoPlayer.currentTime = pendingSeek.current;
+          pendingSeek.current = null;
+          if (activeSegment === "video") videoPlayer.play();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [videoPlayer]);
+
+  // Keep video in sync with TrackPlayer while video tab is active.
+  // We don't run this every frame — only when progress ticks (every 250ms).
+  const lastSyncedPosition = useRef(-1);
+  useEffect(() => {
+    if (activeSegment !== "video" || !videoPlayer) return;
+    const drift = Math.abs((videoPlayer.currentTime ?? 0) - progress.position);
+    // Re-sync only when drift exceeds 1.5 s to avoid constant micro-seeks
+    if (drift > 1.5 && lastSyncedPosition.current !== progress.position) {
+      lastSyncedPosition.current = progress.position;
+      videoPlayer.currentTime = progress.position;
     }
-  }, [hasVideo, videoUrl, router]);
+  }, [progress.position, activeSegment, videoPlayer]);
+
+  // Crossfade shared value: 0 = artwork, 1 = video
+  const videoProgress = useSharedValue(0);
+
+  const artworkAnimStyle = useAnimatedStyle(() => ({
+    opacity: withTiming(interpolate(videoProgress.value, [0, 1], [1, 0]), { duration: 300 }),
+  }));
+  const videoAnimStyle = useAnimatedStyle(() => ({
+    opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
+  }));
+
+  const handleSegmentPress = useCallback((seg: "song" | "video") => {
+    if (seg === "video" && !hasVideo) return;
+    triggerHaptic();
+    setActiveSegment(seg);
+    videoProgress.value = seg === "video" ? 1 : 0;
+
+    if (seg === "video" && videoPlayer) {
+      // Seek to current audio position before playing video
+      const seekTo = progress.position;
+      if (videoPlayerReady.current) {
+        videoPlayer.currentTime = seekTo;  // precise per docs
+        videoPlayer.play();
+      } else {
+        // Player not ready yet — queue seek for statusChange handler
+        pendingSeek.current = seekTo;
+      }
+    } else if (seg === "song" && videoPlayer) {
+      videoPlayer.pause();
+    }
+  }, [hasVideo, videoPlayer, videoProgress, progress.position]);
 
   // Reset to "song" whenever the track changes
-  useEffect(() => { setActiveSegment("song"); }, [activeTrack?.id]);
+  useEffect(() => {
+    setActiveSegment("song");
+    videoProgress.value = 0;
+    videoPlayerReady.current = false;
+    pendingSeek.current = null;
+    if (videoPlayer) videoPlayer.pause();
+  }, [activeTrack?.id]);
 
   // ── Shuffle (local state — not yet in RNTP) ─────────────────────────────────
   const [shuffleMode, setShuffleMode] = useState<"off" | "list" | "random" | "related">("off");
@@ -399,14 +492,31 @@ function PlayerContent() {
               { paddingTop: insets.top + 90, paddingBottom: insets.bottom + 8 },
             ]}
           >
-            {/* ARTWORK */}
+            {/* ARTWORK / VIDEO — crossfade, same space, no navigation */}
             <View style={styles.artworkContainer}>
-              <Image
-                source={getImageSource(activeTrack?.artwork)}
-                style={styles.artworkImage}
-                contentFit="cover"
-                transition={300}
-              />
+              {/* Artwork layer */}
+              <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
+                <Image
+                  source={getImageSource(activeTrack?.artwork)}
+                  style={styles.artworkImage}
+                  contentFit="cover"
+                  transition={300}
+                />
+              </Animated.View>
+
+              {/* Video layer — always mounted when URL exists so it prebuffers */}
+              {hasVideo && (
+                <Animated.View style={[StyleSheet.absoluteFill, videoAnimStyle]}>
+                  <VideoView
+                    player={videoPlayer}
+                    style={styles.artworkImage}
+                    contentFit="cover"
+                    nativeControls={false}
+                    allowsFullscreen={false}
+                    allowsPictureInPicture={false}
+                  />
+                </Animated.View>
+              )}
             </View>
 
             {/* SONG INFO */}
@@ -416,14 +526,40 @@ function PlayerContent() {
                 animationThreshold={20}
                 style={styles.title}
               />
-              <Text style={styles.artist}>
-                {activeTrack?.artist ?? "—"}
-              </Text>
+              {/* Artist name — tappable when we have a channel URL */}
+              <TouchableOpacity
+                activeOpacity={uploaderUrl ? 0.6 : 1}
+                onPress={() => {
+                  if (!uploaderUrl) return;
+                  triggerHaptic();
+                  // Extract channel ID from uploaderUrl for the artist page
+                  const channelId = uploaderUrl.split("/channel/")[1]?.split("?")[0]
+                    ?? uploaderUrl.split("/c/")[1]?.split("?")[0]
+                    ?? uploaderUrl.split("/user/")[1]?.split("?")[0]
+                    ?? uploaderUrl;
+                  router.push({
+                    pathname: "/(modals)/artist",
+                    params: {
+                      id:       channelId,
+                      subtitle: activeTrack?.artist ?? "",
+                    },
+                  });
+                }}
+              >
+                <Text style={[styles.artist, uploaderUrl && styles.artistTappable]}>
+                  {activeTrack?.artist ?? "—"}
+                  {uploaderUrl ? (
+                    <Text style={styles.artistChevron}> ›</Text>
+                  ) : null}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* ACTION ROW */}
             <View style={styles.actionRow}>
               <View style={styles.leftActions}>
+
+                {/* Like / Dislike pill with counts */}
                 <View style={styles.actionContainer}>
                   <TouchableOpacity
                     style={styles.actionButton}
@@ -435,20 +571,33 @@ function PlayerContent() {
                       size={16}
                       color={isFavorite ? "#D4AF37" : "#fff"}
                     />
+                    {likeCount > 0 && (
+                      <Text style={styles.statCount}>{formatCount(likeCount)}</Text>
+                    )}
                   </TouchableOpacity>
+
                   <View style={styles.actionDivider} />
+
                   <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
                     <Ionicons name="thumbs-down-outline" size={16} color="#fff" />
+                    {dislikeCount > 0 && (
+                      <Text style={styles.statCount}>{formatCount(dislikeCount)}</Text>
+                    )}
                   </TouchableOpacity>
                 </View>
 
+                {/* Comments pill with count */}
                 <TouchableOpacity
                   style={styles.actionContainer}
                   onPress={handleComments}
                   activeOpacity={0.7}
                 >
                   <MaterialCommunityIcons name="comment-text-outline" size={16} color="#fff" />
+                  {commentsCount > 0 && (
+                    <Text style={styles.statCount}>{formatCount(commentsCount)}</Text>
+                  )}
                 </TouchableOpacity>
+
               </View>
 
               <View style={styles.extraActions}>
@@ -630,6 +779,11 @@ const styles = StyleSheet.create({
   },
   artworkContainer: {
     alignItems: "center",
+    width: SCREEN_WIDTH * 0.85,
+    height: SCREEN_WIDTH * 0.85,
+    alignSelf: "center",
+    borderRadius: 16,
+    overflow: "hidden",
   },
   artworkImage: {
     width: SCREEN_WIDTH * 0.85,
@@ -651,6 +805,15 @@ const styles = StyleSheet.create({
     fontSize: moderateScale(15),
     marginTop: 4,
     textAlign: "center",
+  },
+  artistTappable: {
+    color: "rgba(255,255,255,0.85)",
+    textDecorationLine: "underline",
+    textDecorationColor: "rgba(255,255,255,0.3)",
+  },
+  artistChevron: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: moderateScale(16),
   },
   actionRow: {
     flexDirection: "row",
@@ -677,6 +840,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: scale(4),
+  },
+  statCount: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: moderateScale(11),
+    fontWeight: "600",
+    letterSpacing: 0.2,
   },
   actionDivider: {
     width: 1,

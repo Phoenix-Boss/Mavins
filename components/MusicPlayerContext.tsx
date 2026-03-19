@@ -76,6 +76,7 @@ import { Alert } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { DownloadedSongMetadata } from '@/store/library';
 import { supabase } from '@/libs/supabase';
+import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
 
 // Re-export Song so callers that currently import it from here continue to work
@@ -260,28 +261,42 @@ async function cacheStreamsToSupabase(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Construct the Track object that RNTP will play.
- *
- * videoUrl is a custom field that RNTP ignores — PlayerScreen reads it via
- * useActiveTrack() for the audio/video toggle without any extra state.
+ * Extra fields stored on the RNTP Track object.
+ * RNTP ignores unknown fields; PlayerScreen reads them via useActiveTrack().
  */
+export interface TrackExtras {
+  videoUrl?:      string;   // DASH video stream URL for the video toggle
+  videoId?:       string;   // bare 11-char YouTube ID for artist page routing
+  uploaderUrl?:   string;   // YouTube channel URL for artist page routing
+  likeCount?:     number;   // -1 = hidden/unavailable
+  dislikeCount?:  number;   // -1 = hidden/unavailable
+  viewCount?:     number;   // -1 = unavailable
+  commentsCount?: number;   // -1 = disabled/unavailable
+}
+
 function buildTrack(
   song:     Song,
   audioUrl: string,
   videoUrl: string | null,
   duration: number,
   title?:   string,
-): Track & { videoUrl?: string } {
+  extras?:  Omit<TrackExtras, 'videoUrl'>,
+): Track & TrackExtras {
   return {
     id:       song.id,
     url:      audioUrl,
-    // [C] StreamInfo.title field is "title" — confirmed against MavinEngine.ts
     title:    title || song.title,
     artist:   song.artist,
     artwork:  song.thumbnail,
     duration: duration > 0 ? duration : undefined,
     videoUrl: videoUrl ?? undefined,
-  } as Track & { videoUrl?: string };
+    videoId:        extras?.videoId       ?? song.videoId,
+    uploaderUrl:    extras?.uploaderUrl   ?? undefined,
+    likeCount:      extras?.likeCount     ?? -1,
+    dislikeCount:   extras?.dislikeCount  ?? -1,
+    viewCount:      extras?.viewCount     ?? -1,
+    commentsCount:  extras?.commentsCount ?? -1,
+  } as Track & TrackExtras;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,13 +365,71 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
     const videoUrl = bestVideo?.url ?? null;
     const duration = info.duration ?? 0;
 
+    // ── Stats: check Supabase cache first, then use extraction result ──────────
+    // getStreamInfo already returned likeCount / dislikeCount / viewCount / uploaderUrl
+    // for free — store them now so the player screen gets them instantly on the
+    // next play without any extra network call.
+    const extractedStats = {
+      likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+      dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+      viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+      uploaderUrl:  (info.uploaderUrl as string | undefined) ?? null,
+    };
+
+    // Check Supabase for a fresh cached commentsCount (avoids getComments call
+    // when the DB already has it from a recent play).
+    let commentsCount = -1;
+    if (song.videoId) {
+      const cached = await supabaseCache.getTrackStats(song.videoId).catch(() => null);
+      if (cached && cached.commentsCount > 0) {
+        commentsCount = cached.commentsCount;
+        console.log(`[MusicPlayer] commentsCount from cache: ${commentsCount}`);
+      }
+    }
+
+    const extras: Omit<TrackExtras, 'videoUrl'> = {
+      videoId:       song.videoId,
+      uploaderUrl:   extractedStats.uploaderUrl ?? undefined,
+      likeCount:     extractedStats.likeCount,
+      dislikeCount:  extractedStats.dislikeCount,
+      viewCount:     extractedStats.viewCount,
+      commentsCount,
+    };
+
     // Fire-and-forget — never block playback on a cache write
     cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(
       e => console.warn('[MusicPlayer] bg cache error:', e),
     );
 
+    // Save stats to Supabase track_stats table (fire-and-forget)
+    if (song.videoId) {
+      supabaseCache.saveTrackStats({
+        videoId:       song.videoId,
+        likeCount:     extractedStats.likeCount,
+        dislikeCount:  extractedStats.dislikeCount,
+        viewCount:     extractedStats.viewCount,
+        commentsCount,
+        uploaderUrl:   extractedStats.uploaderUrl,
+      }).catch(e => console.warn('[MusicPlayer] saveTrackStats error:', e));
+
+      // Fetch commentsCount in background only if not already cached
+      if (commentsCount === -1) {
+        const watchUrl = `https://www.youtube.com/watch?v=${song.videoId}`;
+        MavinEngine.getComments(watchUrl, null, 0)
+          .then((commentsInfo: any) => {
+            if (commentsInfo?.success && typeof commentsInfo.commentsCount === 'number' && commentsInfo.commentsCount > 0) {
+              extras.commentsCount = commentsInfo.commentsCount;
+              // Patch just the commentsCount — no need to re-upsert everything
+              supabaseCache.patchCommentsCount(song.videoId!, commentsInfo.commentsCount)
+                .catch(() => {});
+            }
+          })
+          .catch(() => { /* non-critical */ });
+      }
+    }
+
     console.log(`[MusicPlayer] resolved "${song.title}" — audio: ${bestAudio.bitrate}bps, video: ${bestVideo?.height ?? 'none'}p`);
-    return buildTrack(song, audioUrl, videoUrl, duration, info.title);
+    return buildTrack(song, audioUrl, videoUrl, duration, info.title, extras);
 
   } catch (primaryErr) {
     // [A] In v10.0.0, consent/Content-Type/visitorData errors no longer reach
@@ -387,8 +460,26 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
           const videoUrl = bestVideo?.url ?? null;
           const duration = info.duration ?? 0;
           cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
+          const fbExtras: Omit<TrackExtras, 'videoUrl'> = {
+            videoId:      song.videoId,
+            uploaderUrl:  (info.uploaderUrl as string | undefined) ?? undefined,
+            likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+            dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+            viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+            commentsCount: -1,
+          };
+          if (song.videoId) {
+            supabaseCache.saveTrackStats({
+              videoId:      song.videoId,
+              likeCount:    fbExtras.likeCount!,
+              dislikeCount: fbExtras.dislikeCount!,
+              viewCount:    fbExtras.viewCount!,
+              commentsCount: -1,
+              uploaderUrl:  fbExtras.uploaderUrl ?? null,
+            }).catch(() => {});
+          }
           console.log(`[MusicPlayer] getStreamInfoById succeeded for "${song.title}"`);
-          return buildTrack(song, audioUrl, videoUrl, duration, info.title);
+          return buildTrack(song, audioUrl, videoUrl, duration, info.title, fbExtras);
         }
       }
     } catch (byIdErr) {
@@ -448,7 +539,14 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
 
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
       console.log(`[MusicPlayer] search fallback succeeded for "${song.title}" via "${strategy.query}"`);
-      return buildTrack(song, audioUrl, videoUrl, duration, info.title);
+      return buildTrack(song, audioUrl, videoUrl, duration, info.title, {
+        videoId:      song.videoId,
+        uploaderUrl:  info.uploaderUrl ?? undefined,
+        likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+        dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+        viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+        commentsCount: -1,
+      });
 
     } catch (searchErr) {
       console.warn(`[MusicPlayer] search strategy "${strategy.query}" failed:`, searchErr);
