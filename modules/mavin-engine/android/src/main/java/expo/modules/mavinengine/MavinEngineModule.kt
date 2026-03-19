@@ -1472,9 +1472,11 @@ class MavinEngineModule : Module() {
             put("likeCount",               info.likeCount.coerceAtLeast(0L).toDouble())
             put("dislikeCount",            info.dislikeCount.coerceAtLeast(0L).toDouble())
             put("description",             info.description.content)
-            // v0.26.0: DateWrapper wraps Instant via .date() — offsetDateTime() was removed
-            // in the v0.25.0 date-parsing refactor. Use .date().toString() for ISO string.
-            put("uploadDate",              info.uploadDate?.date?.toString() ?: "")
+            // v0.26.0: DateWrapper stores java.time.OffsetDateTime internally.
+            // offsetDateTime() is the correct accessor — date() returned deprecated Calendar.
+            // DateWrapper(Calendar) constructors were removed in v0.25.0 but offsetDateTime()
+            // remains the primary accessor confirmed in serialized-form javadoc.
+            put("uploadDate",              info.uploadDate?.offsetDateTime()?.toString() ?: "")
             put("textualUploadDate",       info.textualUploadDate.orEmpty())
             put("thumbnails",              info.thumbnails.map { imageToMap(it) })
             put("streamType",              info.streamType.name)
@@ -1615,8 +1617,9 @@ class MavinEngineModule : Module() {
         "commentId"          to item.commentId.orEmpty(),
         "commentText"        to item.commentText.content,
         "publishedTime"      to item.textualUploadDate.orEmpty(),
-        // v0.26.0: DateWrapper.date() returns Instant — use .epochSecond directly
-        "publishedTimestamp" to (item.uploadDate?.date?.epochSecond?.toDouble() ?: 0.0),
+        // offsetDateTime() returns java.time.OffsetDateTime — confirmed v0.26.0 serialized-form.
+        // DateWrapper(Calendar) constructors removed in v0.25.0 but offsetDateTime() remains.
+        "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond()?.toDouble() ?: 0.0),
         // FIX [2]: getLikeCount() returns int — coerce only, no .toDouble()
         "likeCount"          to item.likeCount.coerceAtLeast(0),
         "textualLikeCount"   to item.textualLikeCount.orEmpty(),
