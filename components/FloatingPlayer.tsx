@@ -19,7 +19,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import { triggerHaptic } from '@/helpers/haptics';
 import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
@@ -38,9 +38,19 @@ interface FloatingPlayerProps {
 const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
   const router        = useRouter();
   const navigation    = useNavigation();
+  const pathname      = usePathname();
   const activeTrack   = useActiveTrack();
   const playbackState = usePlaybackState();
   const { togglePlayPause, isLoading } = useMusicPlayer();
+
+  // Hide when any modal screen is active — they render above the tab layout
+  // so the global FloatingPlayer from the tab shell would appear twice.
+  // Also hide on the player screen itself since it has its own full UI.
+  const isModalOrPlayer =
+    pathname.includes('/(modals)') ||
+    pathname.includes('/modals/')  ||
+    pathname.includes('/(player)') ||
+    pathname.includes('/player');
 
   const currentState: State = (() => {
     if (!playbackState) return State.None;
@@ -61,7 +71,8 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
     [floatingPlayerBottom],
   );
 
-  if (!activeTrack) return null;
+  // Don't render on modals/player — prevents the double-player bug
+  if (!activeTrack || isModalOrPlayer) return null;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 

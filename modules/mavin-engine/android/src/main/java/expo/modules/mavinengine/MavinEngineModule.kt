@@ -40,54 +40,79 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * MavinEngine — NewPipe Extractor v0.26.0 Integration
- * v9.1.0 — Full fixes per latest v0.26.0 docs and release notes
+ * v10.0.0 — Deep-research architecture pass (March 2026)
  *
- * ── Changes in v9.1.0 ────────────────────────────────────────────────────────
+ * ── v10.0.0 research-backed changes ─────────────────────────────────────────
  *
- * [8] YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init()
- *     per v0.26.0 docs — generates the required SOCS consent cookie for all requests.
+ * [A] MavinDownloader — Official NewPipe pattern (matches TeamNewPipe/NewPipe DownloaderImpl):
+ *     • execute() is a clean pass-through: forward the request headers exactly as provided
+ *       by NewPipe's extractors; add a User-Agent only if one is absent.
+ *     • Cookie injection is done through OkHttp's CookieJar mechanism, NOT by manual header
+ *       stitching inside execute(). This matches how DownloaderImpl.java works.
+ *     • The SOCS consent cookie is stored in an in-memory cookie store and surfaced to OkHttp
+ *       via a SimpleCookieJar so every YouTube/Google request automatically carries it.
+ *     • REMOVED: consentCookie companion-object String + manual builder.addHeader("Cookie")
+ *       injection. That approach broke when a request already had a Cookie header, and it
+ *       hard-coded a SOCS token that can expire or be region-specific.
+ *     • REMOVED: getYouTubeHeaders() call inside execute() (infinite recursion / StackOverflow).
  *
- * [9] Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
- *     using InnertubeClientRequestInfo.ofWebClient() per v0.26.0 javadoc.
- *     YouTube now rejects random/synthetic visitor IDs entirely.
+ * [B] Consent cookie sourced correctly:
+ *     • YoutubeParsingHelper.setConsentAccepted(true) is called after NewPipe.init().
+ *     • YoutubeParsingHelper.generateConsentCookie() (no-throw, no network, pure computation)
+ *       is called immediately after to obtain the SOCS cookie value and seed the cookie jar.
+ *     • This is the approach confirmed by the v0.26.0 Javadoc:
+ *         generateConsentCookie() — static, no-throws, returns the accept-all SOCS token.
+ *         getCookieHeader()       — returns Map with the cookie, used internally by the extractor.
+ *       The cookie jar approach ensures the cookie is sent on every YouTube request automatically
+ *       without any per-request conditional logic in execute().
  *
- * [10] v0.26.0 release note: "do not use WEB client for stream URLs anymore"
- *      (fix for SABR-only player responses). extractStreamInfo and extractStreamInfoById
- *      now let NewPipe use its internal client selection (Android/iOS) rather than
- *      forcing the WEB client via resolveService(url, null).
- *      For stream extraction, we always use getDefaultService() (YouTube / Android client).
+ * [C] fetchAndCacheVisitorData() — corrected sequence:
+ *     • getYouTubeHeaders() is called OUTSIDE execute() (safe: only called from a
+ *       background thread after NewPipe is fully initialised, not from within a Downloader call).
+ *     • It fetches sw.js → triggers Downloader.get() internally, but since we are NOT inside
+ *       execute() at this point, there is no recursion.
+ *     • InnertubeClientRequestInfo.ofWebClient() used as per v0.26.0 docs.
  *
- * [11] v0.26.0 breaking: Service.getMediaCapabilities() returns Set not List.
- *      getServicesList() updated to handle Set → .map { it.name }.
+ * [D] POST body Content-Type corrected in MavinDownloader:
+ *     • NewPipe InnerTube POST requests send JSON bodies. The extractor sets the body bytes
+ *       and expects the Downloader to forward them as-is with "application/json" if the
+ *       request has no explicit Content-Type header. Previously the code used
+ *       "application/x-www-form-urlencoded" as a blanket fallback — wrong for InnerTube.
+ *     • Fix: if request.headers() contains "Content-Type" use it; otherwise default to
+ *       "application/json" for POST (matches official DownloaderImpl behaviour).
  *
- * [12] MavinDownloader now forwards the SOCS consent cookie from
- *      YoutubeParsingHelper.getYouTubeHeaders() on all YouTube requests
- *      so NewPipe's internal extractor calls also carry the consent cookie.
- *
- * ── Original v9.0.0 changes ──────────────────────────────────────────────────
- *
- * [1] Long → Double at every bridge map boundary (expo-modules JS bridge
- *     cannot serialize Kotlin Long / Java long — it crashes at runtime).
- * [2] Int fields confirmed NOT needing .toDouble() (javadoc return int).
- * [3] Missing fields added to streamInfoToMap (all confirmed in v0.26.0 javadoc).
- * [4] Missing fields added to extractChannelInfo.
- * [5] Missing fields added to extractPlaylistInfo.
- * [6] getSearchSuggestions returns Map<String,Any>{"suggestions":List<String>}.
- * [7] New helper mappers: segmentToMap(StreamSegment), framesetToMap(Frameset).
+ * [E] All previous v9.x fixes retained:
+ *     [1] Long → Double at expo-modules bridge boundary.
+ *     [2] Int fields NOT converted (no .toDouble() needed).
+ *     [3] Full streamInfoToMap field coverage (segments, frames, host, privacy, etc.).
+ *     [4] Full channelInfo field coverage.
+ *     [5] Full playlistInfo field coverage.
+ *     [6] getSearchSuggestions returns Map wrapper.
+ *     [7] segmentToMap / framesetToMap helpers.
+ *     [8] setConsentAccepted(true) after NewPipe.init().
+ *     [9] Real visitorData via getVisitorDataFromInnertube().
+ *    [10] WEB client not used for stream extraction (SABR fix).
+ *    [11] getMediaCapabilities() returns Set not List.
+ *    [12] No getYouTubeHeaders() inside execute() (infinite recursion guard).
  */
 class MavinEngineModule : Module() {
 
     companion object {
         private const val TAG = "MavinEngine"
-        private const val VERSION = "9.1.0"
+        private const val VERSION = "10.0.0"
 
-        // ── OkHttp with connection pooling (30–40% latency reduction) ────────
-        private val httpClient = OkHttpClient.Builder()
+        // ── OkHttp ────────────────────────────────────────────────────────
+        // CookieJar is set during httpClient construction (after companion init)
+        // so it can reference the SimpleCookieJar singleton.
+        private val cookieJar = SimpleCookieJar()
+
+        private val httpClient: OkHttpClient = OkHttpClient.Builder()
             .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .cookieJar(cookieJar)
             .build()
 
         @Volatile private var isInitialized = false
@@ -96,7 +121,7 @@ class MavinEngineModule : Module() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-        // ── InnerTube dynamic config ─────────────────────────────────────────
+        // ── InnerTube dynamic config ──────────────────────────────────────
         data class InnerTubeConfig(
             val apiKey: String,
             val clientVersion: String,
@@ -107,8 +132,8 @@ class MavinEngineModule : Module() {
         @Volatile private var configFetchTime = 0L
         private const val CONFIG_TTL = 24 * 60 * 60 * 1000L // 24 hours
 
-        private const val FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-        private const val FALLBACK_CLIENT_VERSION = "2.20260304.01.00"
+        private const val FALLBACK_API_KEY             = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+        private const val FALLBACK_CLIENT_VERSION      = "2.20260304.01.00"
         private const val FALLBACK_MUSIC_CLIENT_VERSION = "1.20260304.03.00"
 
         private val INNER_TUBE_API_KEYS = listOf(
@@ -121,20 +146,18 @@ class MavinEngineModule : Module() {
         private val failedKeys: MutableSet<String> =
             java.util.Collections.synchronizedSet(mutableSetOf())
 
-        // ── Trending cache (5 minutes) ───────────────────────────────────────
+        // ── Trending cache (5 minutes) ────────────────────────────────────
         @Volatile private var trendingCache: List<Map<String, Any>>? = null
         @Volatile private var trendingCacheTime = 0L
         private const val TRENDING_CACHE_TTL = 5 * 60 * 1000L
 
-        // ── Visitor data cache (1 hour) ──────────────────────────────────────
-        // Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
-        // per NewPipe v0.26.0 API docs. YouTube now rejects random/synthetic visitor IDs.
+        // ── Visitor data cache (1 hour) ───────────────────────────────────
         @Volatile private var cachedVisitorData: String = ""
         @Volatile private var visitorDataFetchTime = 0L
         private const val VISITOR_DATA_TTL = 60 * 60 * 1000L // 1 hour
 
         private const val YOUTUBE_MUSIC_BASE_URL = "https://music.youtube.com/youtubei/v1"
-        private const val CHARTS_BASE_URL = "https://charts.youtube.com"
+        private const val CHARTS_BASE_URL        = "https://charts.youtube.com"
         private val CHART_URLS = listOf(
             "$CHARTS_BASE_URL/charts/TopMusicVideos/global/weekly",
             "$CHARTS_BASE_URL/charts/TrendingMusicVideos/global",
@@ -142,6 +165,60 @@ class MavinEngineModule : Module() {
             "$CHARTS_BASE_URL/charts/TopSongs/us/weekly"
         )
         private const val MAX_TRENDING_ITEMS = 6
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SIMPLE IN-MEMORY COOKIE JAR
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Minimal OkHttp CookieJar that keeps YouTube/Google cookies in memory.
+     *
+     * The official NewPipe DownloaderImpl stores cookies (including the SOCS consent
+     * cookie) inside an OkHttp CookieJar so that every request to youtube.com
+     * automatically includes them — without any manual header injection in execute().
+     *
+     * We seed this jar with the SOCS cookie after setConsentAccepted(true) +
+     * generateConsentCookie() are called during initializeNewPipe().
+     */
+    class SimpleCookieJar : okhttp3.CookieJar {
+        private val store: MutableMap<String, MutableList<okhttp3.Cookie>> =
+            java.util.concurrent.ConcurrentHashMap()
+
+        override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
+            val host = url.host
+            store.getOrPut(host) { mutableListOf() }.let { existing ->
+                for (incoming in cookies) {
+                    existing.removeAll { it.name == incoming.name }
+                    existing.add(incoming)
+                }
+            }
+        }
+
+        override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> {
+            val host = url.host
+            // Match against youtube.com, music.youtube.com, googlevideo.com, etc.
+            return store.entries
+                .filter { (domain, _) ->
+                    host == domain || host.endsWith(".$domain") || domain.endsWith(".$host")
+                }
+                .flatMap { it.value }
+                .filter { cookie -> cookie.matches(url) }
+        }
+
+        /** Manually inject a cookie for a specific domain (e.g. the SOCS consent cookie). */
+        fun addCookie(domain: String, name: String, value: String) {
+            val cookie = okhttp3.Cookie.Builder()
+                .domain(domain)
+                .name(name)
+                .value(value)
+                .path("/")
+                .build()
+            store.getOrPut(domain) { mutableListOf() }.let { list ->
+                list.removeAll { it.name == name }
+                list.add(cookie)
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -280,7 +357,6 @@ class MavinEngineModule : Module() {
         }
 
         // ── Visitor Data Management ───────────────────────────────────────
-        // Uses YoutubeParsingHelper.getVisitorDataFromInnertube() per v0.26.0 API docs
         AsyncFunction("refreshVisitorData") {
             cachedVisitorData = ""; visitorDataFetchTime = 0L
             fetchAndCacheVisitorData()
@@ -354,14 +430,15 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "version"      to VERSION,
                 "library"      to "NewPipeExtractor 0.26.0",
-                "architecture" to "v9.1 — visitorData fix + WEB client SABR fix + consent cookie forwarding",
+                "architecture" to "v10.0 — official Downloader pattern + CookieJar consent + Content-Type fix",
                 "notes"        to listOf(
                     "YouTube Trending page removed 2025-07-21 — FEtrending is dead",
                     "Primary trending source: YouTube Music Charts (FEmusic_charts)",
                     "v0.26.0: WEB client no longer used for stream extraction (SABR fix)",
                     "v0.26.0: Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()",
-                    "v0.26.0: setConsentAccepted(true) required for SOCS cookie generation",
-                    "v0.26.0: getMediaCapabilities() returns Set not List (breaking change handled)"
+                    "v10.0: MavinDownloader uses CookieJar for SOCS consent (official pattern)",
+                    "v10.0: POST Content-Type defaults to application/json (InnerTube fix)",
+                    "v10.0: generateConsentCookie() seeds CookieJar — no hard-coded token strings"
                 )
             )
         }
@@ -381,19 +458,39 @@ class MavinEngineModule : Module() {
                     Localization.fromLocale(Locale.US),
                     ContentCountry("US")
                 )
-                // Per YoutubeParsingHelper.setConsentAccepted() docs:
-                // Determines how the SOCS consent cookie is generated.
-                // Must be called after NewPipe.init() so the downloader is available.
+
+                // [B] Per v0.26.0 docs: setConsentAccepted(true) must be called after init()
+                // to configure internal SOCS cookie generation within NewPipe.
                 YoutubeParsingHelper.setConsentAccepted(true)
+
+                // [B] generateConsentCookie() is a static, no-network, no-throw computation
+                // that returns the SOCS accept-all cookie value. We seed the CookieJar with it
+                // so OkHttp sends the cookie on every YouTube/Google request automatically.
+                // This replaces the previous approach of manually injecting a hard-coded
+                // cookie string inside execute() — which was fragile and could conflict with
+                // Cookie headers already present on a request.
+                val socsValue = YoutubeParsingHelper.generateConsentCookie()
+                if (socsValue.isNotEmpty()) {
+                    cookieJar.addCookie("youtube.com",   "SOCS", socsValue)
+                    cookieJar.addCookie(".youtube.com",  "SOCS", socsValue)
+                    cookieJar.addCookie("google.com",    "SOCS", socsValue)
+                    cookieJar.addCookie(".google.com",   "SOCS", socsValue)
+                    Log.i(TAG, "✅ SOCS cookie seeded in CookieJar: ${socsValue.take(24)}...")
+                } else {
+                    Log.w(TAG, "⚠️ generateConsentCookie() returned empty — consent cookie not seeded")
+                }
+
                 isInitialized = true
                 Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${NewPipe.getServices().size} services loaded")
-                Log.i(TAG, "✅ Consent accepted — SOCS cookie will be included in requests")
-                // Prefetch real visitorData in background so it's ready before first extraction.
-                // Uses YoutubeParsingHelper.getVisitorDataFromInnertube() per v0.26.0 API docs.
+
+                // [C] Prefetch real visitorData in background.
+                // getYouTubeHeaders() is called INSIDE fetchAndCacheVisitorData() which runs
+                // on a background thread — NOT inside execute(), so there is no recursion risk.
                 Thread {
                     try { fetchAndCacheVisitorData() }
                     catch (e: Exception) { Log.w(TAG, "visitorData prefetch failed: ${e.message}") }
                 }.start()
+
             } catch (e: Exception) {
                 Log.e(TAG, "NewPipe init failed", e)
                 throw CodedException("INIT_FAILED", "NewPipe.init failed: ${e.message}", e)
@@ -411,24 +508,29 @@ class MavinEngineModule : Module() {
         visitorDataFetchTime = 0L
         synchronized(failedKeys) { failedKeys.clear(); currentKeyIndex.set(0) }
         initializeNewPipe()
-        return mapOf("success" to true, "message" to "MavinEngine v9 reset and re-initialised")
+        return mapOf("success" to true, "message" to "MavinEngine v10 reset and re-initialised")
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // VISITOR DATA
+    // ═══════════════════════════════════════════════════════════════════════
+
     /**
-     * Fetches real visitorData from YouTube's InnerTube endpoint using the official
-     * NewPipe v0.26.0 API: YoutubeParsingHelper.getVisitorDataFromInnertube().
+     * Fetches real visitorData from YouTube's InnerTube endpoint.
      *
-     * Per the v0.26.0 javadoc, this method requires:
-     *   - innertubeClientRequestInfo: use InnertubeClientRequestInfo.ofWebClient()
-     *     for the standard WEB client (most compatible for anonymous browsing)
-     *   - localization + contentCountry: must match what NewPipe was initialized with
-     *   - httpHeaders: YoutubeParsingHelper.getYouTubeHeaders() — includes SOCS consent cookie
+     * [C] IMPORTANT: getYouTubeHeaders() is called here, on a background thread,
+     * AFTER NewPipe is fully initialised. It is NOT called from within execute().
+     * This means its internal Downloader.get() call (which fetches sw.js to extract
+     * the client version) goes through MavinDownloader.execute() normally — no recursion.
+     *
+     * Per v0.26.0 Javadoc:
+     *   getVisitorDataFromInnertube() parameters:
+     *   - innertubeClientRequestInfo: InnertubeClientRequestInfo.ofWebClient()
+     *   - localization + contentCountry: must match NewPipe.init() values
+     *   - httpHeaders: YoutubeParsingHelper.getYouTubeHeaders() — safe here (background thread)
      *   - innertubeDomainAndVersionEndpoint: YoutubeParsingHelper.YOUTUBEI_V1_URL (WEB client)
      *   - embedUrl: null for non-embedded requests
      *   - useGuideEndpoint: false — guide endpoint is for logged-in features
-     *
-     * YouTube now rejects synthetic/random visitor IDs. This must be called to get
-     * a real token that YouTube's anti-bot system accepts.
      */
     private fun fetchAndCacheVisitorData() {
         if (cachedVisitorData.isNotEmpty() &&
@@ -440,23 +542,21 @@ class MavinEngineModule : Module() {
             val localization = Localization.fromLocale(Locale.US)
             val country      = ContentCountry("US")
 
-            // YoutubeParsingHelper.getYouTubeHeaders() returns the required YouTube headers
-            // including the SOCS consent cookie set by setConsentAccepted(true)
+            // [C] Safe: called from a background thread, never from within execute().
+            // getYouTubeHeaders() internally calls Downloader.get() to fetch sw.js —
+            // this is normal HTTP through MavinDownloader, not recursion.
             val headers = YoutubeParsingHelper.getYouTubeHeaders()
 
-            // InnertubeClientRequestInfo.ofWebClient() — WEB client per v0.26.0 docs
-            val clientInfo = InnertubeClientRequestInfo.ofWebClient()
+            val clientInfo  = InnertubeClientRequestInfo.ofWebClient()
 
-            // YoutubeParsingHelper.getVisitorDataFromInnertube() — official v0.26.0 API
-            // to retrieve a real visitorData token from YouTube's InnerTube endpoint
             val visitorData = YoutubeParsingHelper.getVisitorDataFromInnertube(
                 clientInfo,
                 localization,
                 country,
                 headers,
-                YoutubeParsingHelper.YOUTUBEI_V1_URL, // WEB client base URL
-                null,  // embedUrl — null for non-embedded
-                false  // useGuideEndpoint — false for anonymous browsing
+                YoutubeParsingHelper.YOUTUBEI_V1_URL,
+                null,   // embedUrl — null for non-embedded
+                false   // useGuideEndpoint — false for anonymous browsing
             )
 
             if (!visitorData.isNullOrEmpty()) {
@@ -471,7 +571,6 @@ class MavinEngineModule : Module() {
         }
     }
 
-    /** Returns cached visitor data, refreshing if expired or empty. */
     private fun getVisitorData(): String {
         if (cachedVisitorData.isEmpty() ||
             System.currentTimeMillis() - visitorDataFetchTime >= VISITOR_DATA_TTL) {
@@ -511,8 +610,8 @@ class MavinEngineModule : Module() {
             if (!r.isSuccessful) throw IOException("Homepage returned ${r.code}")
             r.body?.string() ?: throw IOException("Empty homepage body")
         }
-        val apiKey = extractApiKeyFromHtml(html)
-        val clientVersion = extractClientVersionFromHtml(html)
+        val apiKey            = extractApiKeyFromHtml(html)
+        val clientVersion     = extractClientVersionFromHtml(html)
         val musicClientVersion = extractMusicClientVersionFromHtml(html)
         return InnerTubeConfig(apiKey, clientVersion, musicClientVersion)
     }
@@ -603,8 +702,7 @@ class MavinEngineModule : Module() {
             errors.add("YouTube Music Charts returned empty")
         } catch (e: Exception) {
             val msg = "YouTube Music Charts failed: ${e.message}"
-            Log.w(TAG, "⚠️ $msg")
-            errors.add(msg)
+            Log.w(TAG, "⚠️ $msg"); errors.add(msg)
         }
 
         // LAYER 2: InnerTube Browse (FEwhat_to_watch — homepage feed)
@@ -615,8 +713,7 @@ class MavinEngineModule : Module() {
             errors.add("InnerTube Browse returned empty")
         } catch (e: Exception) {
             val msg = "InnerTube Browse failed: ${e.message}"
-            Log.w(TAG, "⚠️ $msg")
-            errors.add(msg)
+            Log.w(TAG, "⚠️ $msg"); errors.add(msg)
         }
 
         // LAYER 3: NewPipe sub-kiosks (NOT "Trending" — removed July 2025)
@@ -646,8 +743,7 @@ class MavinEngineModule : Module() {
             errors.add("Charts HTML returned empty")
         } catch (e: Exception) {
             val msg = "Charts HTML failed: ${e.message}"
-            Log.w(TAG, "⚠️ $msg")
-            errors.add(msg)
+            Log.w(TAG, "⚠️ $msg"); errors.add(msg)
         }
 
         // LAYER 5: InnerTube Next API (recommendations seed)
@@ -658,8 +754,7 @@ class MavinEngineModule : Module() {
             errors.add("InnerTube Next returned empty")
         } catch (e: Exception) {
             val msg = "InnerTube Next failed: ${e.message}"
-            Log.w(TAG, "⚠️ $msg")
-            errors.add(msg)
+            Log.w(TAG, "⚠️ $msg"); errors.add(msg)
         }
 
         // LAYER 6: Search fallback
@@ -725,8 +820,10 @@ class MavinEngineModule : Module() {
         val responseStr = httpClient.newCall(
             Request.Builder().url(url)
                 .post(body.toRequestBody("application/json".toMediaType()))
-                .header("User-Agent", USER_AGENT).header("Content-Type", "application/json")
-                .header("Origin", "https://www.youtube.com").header("Referer", "https://www.youtube.com/")
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://www.youtube.com")
+                .header("Referer", "https://www.youtube.com/")
                 .build()
         ).execute().use { r ->
             if (!r.isSuccessful) throw IOException("Browse API ${r.code}")
@@ -746,24 +843,19 @@ class MavinEngineModule : Module() {
         fun fromRichGrid(grid: JSONArray) {
             for (i in 0 until grid.length()) {
                 val entry = grid.optJSONObject(i) ?: continue
-                // Direct richItemRenderer → videoRenderer — explicit continue preserves mutual exclusion
                 val directVideo = entry.optJSONObject("richItemRenderer")
-                    ?.optJSONObject("content")
-                    ?.optJSONObject("videoRenderer")
+                    ?.optJSONObject("content")?.optJSONObject("videoRenderer")
                 if (directVideo != null) {
                     extractVideoFromRenderer(directVideo)?.let { items.add(it) }
                     continue
                 }
-                // richSectionRenderer → richShelfRenderer → contents (shelf of videos)
                 val shelfContents = entry.optJSONObject("richSectionRenderer")
-                    ?.optJSONObject("content")
-                    ?.optJSONObject("richShelfRenderer")
+                    ?.optJSONObject("content")?.optJSONObject("richShelfRenderer")
                     ?.optJSONArray("contents")
                 if (shelfContents != null) {
                     for (j in 0 until shelfContents.length()) {
                         val v = shelfContents.optJSONObject(j)
-                            ?.optJSONObject("richItemRenderer")
-                            ?.optJSONObject("content")
+                            ?.optJSONObject("richItemRenderer")?.optJSONObject("content")
                             ?.optJSONObject("videoRenderer") ?: continue
                         extractVideoFromRenderer(v)?.let { items.add(it) }
                     }
@@ -773,11 +865,9 @@ class MavinEngineModule : Module() {
 
         try {
             val contents = json.optJSONObject("contents") ?: return emptyList()
-
-            // PATH A: FEwhat_to_watch — richGridRenderer directly under contents
+            // PATH A: richGridRenderer directly under contents
             val directGrid = contents.optJSONObject("richGridRenderer")?.optJSONArray("contents")
             if (directGrid != null) fromRichGrid(directGrid)
-
             // PATH B: twoColumnBrowseResultsRenderer → tabs[0] → richGridRenderer
             if (items.isEmpty()) {
                 val tabGrid = contents.optJSONObject("twoColumnBrowseResultsRenderer")
@@ -786,8 +876,7 @@ class MavinEngineModule : Module() {
                     ?.optJSONObject("richGridRenderer")?.optJSONArray("contents")
                 if (tabGrid != null) fromRichGrid(tabGrid)
             }
-
-            // PATH C: sectionListRenderer (older / alternate response shapes)
+            // PATH C: sectionListRenderer (older response shapes)
             if (items.isEmpty()) {
                 val sectionList = contents.optJSONObject("twoColumnBrowseResultsRenderer")
                     ?.optJSONArray("tabs")?.optJSONObject(0)
@@ -796,17 +885,14 @@ class MavinEngineModule : Module() {
                 if (sectionList != null) {
                     for (i in 0 until sectionList.length()) {
                         val shelf = sectionList.optJSONObject(i)
-                            ?.optJSONObject("itemSectionRenderer")
-                            ?.optJSONArray("contents") ?: continue
+                            ?.optJSONObject("itemSectionRenderer")?.optJSONArray("contents") ?: continue
                         for (j in 0 until shelf.length()) {
                             extractVideoFromItem(shelf.optJSONObject(j) ?: continue)?.let { items.add(it) }
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "parseBrowseTrending error: ${e.message}", e)
-        }
+        } catch (e: Exception) { Log.e(TAG, "parseBrowseTrending error: ${e.message}", e) }
 
         Log.d(TAG, "parseBrowseTrending → ${items.size} items")
         return items
@@ -834,8 +920,10 @@ class MavinEngineModule : Module() {
         val responseStr = httpClient.newCall(
             Request.Builder().url(url)
                 .post(body.toRequestBody("application/json".toMediaType()))
-                .header("User-Agent", USER_AGENT).header("Content-Type", "application/json")
-                .header("Origin", "https://www.youtube.com").header("Referer", "https://www.youtube.com/")
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://www.youtube.com")
+                .header("Referer", "https://www.youtube.com/")
                 .build()
         ).execute().use { r ->
             if (!r.isSuccessful) throw IOException("Next API ${r.code}")
@@ -855,22 +943,16 @@ class MavinEngineModule : Module() {
             val secondaryResults = json
                 .optJSONObject("contents")
                 ?.optJSONObject("twoColumnWatchNextResults")
-                ?.optJSONObject("secondaryResults")
-                ?.optJSONObject("secondaryResults")
+                ?.optJSONObject("secondaryResults")?.optJSONObject("secondaryResults")
                 ?.optJSONArray("results")
-
             if (secondaryResults != null) {
                 for (i in 0 until secondaryResults.length()) {
                     val result = secondaryResults.optJSONObject(i) ?: continue
-
-                    // Standard compact video — explicit continue to skip autoplay path
                     val directRenderer = result.optJSONObject("compactVideoRenderer")
                     if (directRenderer != null) {
                         extractVideoFromRenderer(directRenderer)?.let { items.add(it) }
                         continue
                     }
-
-                    // Autoplay shelf — contains an array of compactVideoRenderer
                     val autoplayContents = result.optJSONObject("compactAutoplayVideoRenderer")
                         ?.optJSONArray("contents")
                     if (autoplayContents != null) {
@@ -882,10 +964,7 @@ class MavinEngineModule : Module() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "parseNextRecommendations error: ${e.message}", e)
-        }
-
+        } catch (e: Exception) { Log.e(TAG, "parseNextRecommendations error: ${e.message}", e) }
         Log.d(TAG, "parseNextRecommendations → ${items.size} items")
         return items
     }
@@ -914,10 +993,10 @@ class MavinEngineModule : Module() {
     }
 
     private fun fetchFromYouTubeMusicAPI(category: String, apiKey: String): List<Map<String, Any>> {
-        val config = getInnerTubeConfig()
-        val browseId = getBrowseIdForCategory(category)
-        val visitorId = getVisitorData().ifEmpty { generateVisitorId() } // real token first, synthetic fallback
-        val url = "$YOUTUBE_MUSIC_BASE_URL/browse?alt=json&key=$apiKey"
+        val config     = getInnerTubeConfig()
+        val browseId   = getBrowseIdForCategory(category)
+        val visitorId  = getVisitorData().ifEmpty { generateVisitorId() }
+        val url        = "$YOUTUBE_MUSIC_BASE_URL/browse?alt=json&key=$apiKey"
         val body = JSONObject().apply {
             put("context", JSONObject().apply {
                 put("client", JSONObject().apply {
@@ -939,7 +1018,8 @@ class MavinEngineModule : Module() {
         val responseStr = httpClient.newCall(
             Request.Builder().url(url)
                 .post(body.toRequestBody("application/json".toMediaType()))
-                .header("User-Agent", USER_AGENT).header("Accept", "application/json")
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
                 .header("Origin", "https://music.youtube.com")
                 .header("Referer", "https://music.youtube.com/")
@@ -948,7 +1028,8 @@ class MavinEngineModule : Module() {
         ).execute().use { r ->
             val bodyStr = r.body?.string() ?: ""
             if (!r.isSuccessful) {
-                if (r.code == 403 || bodyStr.contains("API key not valid")) throw IOException("API key not valid (403)")
+                if (r.code == 403 || bodyStr.contains("API key not valid"))
+                    throw IOException("API key not valid (403)")
                 throw IOException("YouTube Music API ${r.code}: $bodyStr")
             }
             bodyStr
@@ -972,11 +1053,11 @@ class MavinEngineModule : Module() {
 
     private fun generateVisitorId(): String {
         val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-        val rng = java.security.SecureRandom()
-        val id = (1..11).map { chars[rng.nextInt(chars.length)] }.joinToString("")
-        val ts = (System.currentTimeMillis() / 1000L).toInt()
+        val rng   = java.security.SecureRandom()
+        val id    = (1..11).map { chars[rng.nextInt(chars.length)] }.joinToString("")
+        val ts    = (System.currentTimeMillis() / 1000L).toInt()
         val idBytes = id.toByteArray(Charsets.UTF_8)
-        val buf = java.io.ByteArrayOutputStream()
+        val buf   = java.io.ByteArrayOutputStream()
         buf.write(0x0A); buf.write(idBytes.size); buf.write(idBytes)
         buf.write(0x28)
         var v = ts.toLong() and 0xFFFFFFFFL
@@ -995,14 +1076,14 @@ class MavinEngineModule : Module() {
                 ?.optJSONObject("sectionListRenderer")?.optJSONArray("contents") ?: return emptyList()
             for (i in 0 until contents.length()) {
                 val section = contents.optJSONObject(i) ?: continue
-                val shelf = section.optJSONObject("musicShelfRenderer")
+                val shelf   = section.optJSONObject("musicShelfRenderer")
                     ?: section.optJSONObject("musicCarouselShelfRenderer") ?: continue
                 val shelfContents = shelf.optJSONArray("contents") ?: continue
                 for (j in 0 until shelfContents.length()) {
-                    val item = shelfContents.optJSONObject(j) ?: continue
+                    val item     = shelfContents.optJSONObject(j) ?: continue
                     val renderer = item.optJSONObject("musicResponsiveListItemRenderer")
                         ?: item.optJSONObject("musicTwoRowItemRenderer") ?: continue
-                    val videoId = extractVideoIdFromMusicRenderer(renderer) ?: continue
+                    val videoId  = extractVideoIdFromMusicRenderer(renderer) ?: continue
                     items.add(buildMusicItem(renderer, videoId))
                 }
             }
@@ -1069,8 +1150,6 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun fetchFromYouTubeChartsHTML(category: String): List<Map<String, Any>> {
-        // Try each chart URL in order — stop at first that returns valid data.
-        // TrendingVideos/RightNow was removed July 2025 along with the Trending page.
         for (chartUrl in CHART_URLS) {
             val url = "$chartUrl?hl=en"
             Log.d(TAG, "📊 Charts HTML → $url")
@@ -1083,10 +1162,7 @@ class MavinEngineModule : Module() {
                         .header("DNT", "1")
                         .build()
                 ).execute().use { r ->
-                    if (!r.isSuccessful) {
-                        Log.d(TAG, "Charts $url → ${r.code}, trying next")
-                        return@use null
-                    }
+                    if (!r.isSuccessful) { Log.d(TAG, "Charts $url → ${r.code}, trying next"); return@use null }
                     r.body?.string()
                 } ?: continue
 
@@ -1099,18 +1175,16 @@ class MavinEngineModule : Module() {
                     Log.d(TAG, "📊 Charts success via $chartUrl: ${items.size} items")
                     return items
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "Charts $url failed: ${e.message}, trying next")
-            }
+            } catch (e: Exception) { Log.d(TAG, "Charts $url failed: ${e.message}, trying next") }
         }
         throw IOException("No chart data found from any chart URL")
     }
 
     private fun extractYtInitialData(html: String): String? {
         for (marker in listOf("ytInitialData = ", "ytInitialData=", """window["ytInitialData"] = """, "var ytInitialData = ")) {
-            val start = html.indexOf(marker); if (start == -1) continue
+            val start  = html.indexOf(marker); if (start == -1) continue
             val jStart = html.indexOf('{', start + marker.length); if (jStart == -1) continue
-            val s = extractBalancedJson(html, jStart) ?: continue
+            val s      = extractBalancedJson(html, jStart) ?: continue
             if (s.length > 100) return s
         }
         return null
@@ -1118,7 +1192,7 @@ class MavinEngineModule : Module() {
 
     private fun extractYtInitialPlayerResponse(html: String): String? {
         for (marker in listOf("ytInitialPlayerResponse = ", "ytInitialPlayerResponse=")) {
-            val start = html.indexOf(marker); if (start == -1) continue
+            val start  = html.indexOf(marker); if (start == -1) continue
             val jStart = html.indexOf('{', start + marker.length); if (jStart == -1) continue
             return extractBalancedJson(html, jStart)
         }
@@ -1130,9 +1204,9 @@ class MavinEngineModule : Module() {
         while (i < html.length) {
             val c = html[i]
             when {
-                escape          -> escape = false
-                c == '\\'       -> if (inStr) escape = true
-                c == '"'        -> inStr = !inStr
+                escape             -> escape = false
+                c == '\\'          -> if (inStr) escape = true
+                c == '"'           -> inStr = !inStr
                 !inStr && c == '{' -> depth++
                 !inStr && c == '}' -> { depth--; if (depth == 0) return html.substring(startIndex, i + 1) }
             }
@@ -1155,18 +1229,20 @@ class MavinEngineModule : Module() {
     private fun parseYouTubeInitialData(jsonStr: String): List<Map<String, Any>> {
         val items = mutableListOf<Map<String, Any>>()
         try {
-            val json = JSONObject(jsonStr)
+            val json     = JSONObject(jsonStr)
             val contents = findVideoArray(json) ?: return emptyList()
             for (i in 0 until contents.length()) {
                 val section = contents.optJSONObject(i) ?: continue
                 section.optJSONObject("itemSectionRenderer")?.optJSONArray("contents")?.let { arr ->
-                    for (j in 0 until arr.length()) extractVideoFromItem(arr.optJSONObject(j) ?: continue)?.let { items.add(it) }
+                    for (j in 0 until arr.length())
+                        extractVideoFromItem(arr.optJSONObject(j) ?: continue)?.let { items.add(it) }
                 }
                 section.optJSONObject("shelfRenderer")?.optJSONObject("content")?.let { content ->
                     val shelf = content.optJSONObject("horizontalListRenderer")?.optJSONArray("items")
                         ?: content.optJSONObject("verticalListRenderer")?.optJSONArray("items")
                     shelf?.let { arr ->
-                        for (j in 0 until arr.length()) extractVideoFromItem(arr.optJSONObject(j) ?: continue)?.let { items.add(it) }
+                        for (j in 0 until arr.length())
+                            extractVideoFromItem(arr.optJSONObject(j) ?: continue)?.let { items.add(it) }
                     }
                 }
                 section.optJSONObject("richSectionRenderer")?.optJSONObject("content")
@@ -1195,8 +1271,6 @@ class MavinEngineModule : Module() {
     }
 
     private fun extractVideoFromItem(item: JSONObject): Map<String, Any>? {
-        // Expression body is forbidden when it contains a return statement.
-        // Confirmed per Kotlin spec: 'return' is only valid in block bodies.
         val renderer = item.optJSONObject("videoRenderer")
             ?: item.optJSONObject("playlistVideoRenderer")
             ?: item.optJSONObject("gridVideoRenderer")
@@ -1219,7 +1293,7 @@ class MavinEngineModule : Module() {
         val videoId = musicItem.optJSONObject("playlistItemData")?.optString("videoId", "")?.takeIf { it.isNotEmpty() }
             ?: musicItem.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")
                 ?.optString("videoId", "")?.takeIf { it.isNotEmpty() } ?: return null
-        val title = musicItem.optJSONArray("flexColumns")?.optJSONObject(0)
+        val title  = musicItem.optJSONArray("flexColumns")?.optJSONObject(0)
             ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
             ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)
             ?.optString("text", "Unknown Title") ?: "Unknown Title"
@@ -1264,12 +1338,12 @@ class MavinEngineModule : Module() {
         val lengthText = vr.optJSONObject("lengthText")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text", "")
             ?: vr.optString("lengthSeconds", "")
         // FIX [1]: .toDouble()
-        val duration = if (lengthText.isNotEmpty()) parseDuration(lengthText).toDouble() else 0.0
+        val duration      = if (lengthText.isNotEmpty()) parseDuration(lengthText).toDouble() else 0.0
         val viewCountText = vr.optJSONObject("viewCountText")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text", "") ?: ""
         // FIX [1]: .toDouble()
-        val viewCount = parseViewCount(viewCountText).toDouble()
-        val isLive = vr.optJSONObject("badges")?.toString()?.contains("LIVE") == true
-        val isShort = vr.optBoolean("isShort", false) || title.contains("#shorts", ignoreCase = true)
+        val viewCount     = parseViewCount(viewCountText).toDouble()
+        val isLive        = vr.optJSONObject("badges")?.toString()?.contains("LIVE") == true
+        val isShort       = vr.optBoolean("isShort", false) || title.contains("#shorts", ignoreCase = true)
         return mapOf(
             "type" to "stream", "serviceId" to 0,
             "url" to "https://www.youtube.com/watch?v=$videoId",
@@ -1291,7 +1365,7 @@ class MavinEngineModule : Module() {
                 if (type == "ItemList") {
                     val list = json.optJSONArray("itemListElement") ?: continue
                     for (i in 0 until list.length()) {
-                        val item = list.optJSONObject(i)?.optJSONObject("item") ?: continue
+                        val item    = list.optJSONObject(i)?.optJSONObject("item") ?: continue
                         val videoId = extractVideoIdFromUrl(item.optString("url", ""))
                             ?: extractVideoIdFromUrl(item.optString("@id", "")) ?: continue
                         items.add(buildSimpleVideoMap(videoId, item.optString("name", "Unknown Title"),
@@ -1343,7 +1417,7 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun getService(serviceId: Int): StreamingService = NewPipe.getService(serviceId)
-    private fun getDefaultService(): StreamingService = NewPipe.getService(0)
+    private fun getDefaultService(): StreamingService        = NewPipe.getService(0)
     private fun getServiceForUrl(url: String): StreamingService =
         NewPipe.getServices().firstOrNull { s ->
             try { s.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE } catch (_: Exception) { false }
@@ -1366,11 +1440,9 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun extractStreamInfo(url: String, serviceId: Int?): Map<String, Any> {
-        // FIX [10]: v0.26.0 release — "do not use WEB client for stream URLs anymore"
-        // (fix for SABR-only player responses that the WEB client cannot handle).
-        // Always use getDefaultService() for stream extraction so NewPipe can use
-        // its internal Android/iOS client selection. Only override if an explicit
-        // non-YouTube serviceId is passed.
+        // FIX [10]: v0.26.0 — "do not use WEB client for stream URLs anymore" (SABR-only fix).
+        // Always use getDefaultService() (YouTube Android client) for stream extraction.
+        // Only override for an explicit non-YouTube serviceId.
         val service = if (serviceId != null && serviceId != 0) getService(serviceId)
                       else getDefaultService()
         return streamInfoToMap(StreamInfo.getInfo(service.getStreamExtractor(url)), service.serviceId)
@@ -1380,7 +1452,10 @@ class MavinEngineModule : Module() {
         // FIX [10]: Same WEB client avoidance — use default service (YouTube Android client)
         val service = if (serviceId != null && serviceId != 0) getService(serviceId)
                       else getDefaultService()
-        return streamInfoToMap(StreamInfo.getInfo(service.getStreamExtractor(service.streamLHFactory.fromId(videoId))), service.serviceId)
+        return streamInfoToMap(
+            StreamInfo.getInfo(service.getStreamExtractor(service.streamLHFactory.fromId(videoId))),
+            service.serviceId
+        )
     }
 
     /**
@@ -1402,13 +1477,9 @@ class MavinEngineModule : Module() {
             put("uploaderVerified",        info.isUploaderVerified)
             // FIX [1]: long → .toDouble()
             put("uploaderSubscriberCount", info.uploaderSubscriberCount.coerceAtLeast(0L).toDouble())
-            // FIX [1]: long → .toDouble()
             put("duration",                info.duration.toDouble())
-            // FIX [1]: long → .toDouble()
             put("viewCount",               info.viewCount.coerceAtLeast(0L).toDouble())
-            // FIX [1]: long (-1 if unavailable per javadoc) → coerce then .toDouble()
             put("likeCount",               info.likeCount.coerceAtLeast(0L).toDouble())
-            // FIX [1]: long (-1 if unavailable per javadoc) → coerce then .toDouble()
             put("dislikeCount",            info.dislikeCount.coerceAtLeast(0L).toDouble())
             put("description",             info.description.content)
             put("uploadDate",              info.uploadDate?.offsetDateTime()?.toString() ?: "")
@@ -1422,18 +1493,15 @@ class MavinEngineModule : Module() {
             put("ageLimit",                info.ageLimit)
             put("tags",                    info.tags)
             put("category",                info.category.orEmpty())
-            // FIX [3]: NEW — startPosition is long → .toDouble()
+            // FIX [3]: startPosition is long → .toDouble()
             put("startPosition",           info.startPosition.toDouble())
-            // FIX [3]: NEW — host, privacy, licence, languageInfo (all confirmed in v0.26.0 javadoc)
             put("host",                    info.host.orEmpty())
             put("privacy",                 info.privacy.name)
             put("licence",                 info.licence.orEmpty())
             put("languageInfo",            info.languageInfo?.toLanguageTag() ?: "")
-            // FIX [3]: NEW — subChannel fields
             put("subChannelName",          info.subChannelName.orEmpty())
             put("subChannelUrl",           info.subChannelUrl.orEmpty())
             put("subChannelAvatars",       info.subChannelAvatars.map { imageToMap(it) })
-            // FIX [3]: NEW — supportInfo
             put("supportInfo",             info.supportInfo.orEmpty())
             put("audioStreams",            info.audioStreams.map { audioStreamToMap(it) })
             put("videoStreams",            info.videoStreams.map { videoStreamToMap(it) })
@@ -1442,47 +1510,37 @@ class MavinEngineModule : Module() {
             put("hlsUrl",                  info.hlsUrl.orEmpty())
             put("subtitles",               info.subtitles.map { subtitleToMap(it) })
             put("relatedItems",            info.relatedItems.take(20).mapNotNull { infoItemToMap(it) })
-            // FIX [3]: NEW — streamSegments (StreamSegment.getStartTimeSeconds() returns int per javadoc)
+            // FIX [3]: streamSegments — StreamSegment.startTimeSeconds returns int per javadoc
             put("streamSegments",          info.streamSegments.map { segmentToMap(it) })
-            // FIX [3]: NEW — previewFrames
+            // FIX [3]: previewFrames
             put("previewFrames",           info.previewFrames.map { framesetToMap(it) })
             put("metaInfo",                info.metaInfo.map { m ->
                 mapOf<String, Any>("title" to m.title.orEmpty(), "content" to (m.content?.content ?: ""),
                     "urls" to m.urls.map { it.toString() }, "urlTexts" to m.urlTexts)
             })
-            // FIX [3]: NEW — errors from Info.getErrors()
             put("errors",                  info.errors.map { it.message.orEmpty() })
         }
 
     private fun getBestStreamUrl(url: String, format: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val info = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
 
-        // Per NewPipe v0.26.0 javadoc (confirmed teamnewpipe.github.io/NewPipeExtractor/javadoc):
+        // Per NewPipe v0.26.0 javadoc:
         //   getAudioStreams()     → audio-only streams (no video)
         //   getVideoStreams()     → muxed streams WITH embedded audio (typically ≤480p on YouTube)
         //   getVideoOnlyStreams() → DASH adaptive streams WITHOUT audio (YouTube HD: 720p, 1080p, etc.)
-        //
-        // For video playback: always prefer videoOnlyStreams (HD DASH) over videoStreams (muxed SD).
-        // For audio playback: use audioStreams only — highest bitrate.
         val best = when (format.lowercase()) {
             "audio", "mp3", "m4a", "ogg", "webm" ->
-                // audioStreams: no video, highest bitrate = best quality
                 info.audioStreams.maxByOrNull { it.getBitrate() }?.content
 
             "video", "mp4", "best" ->
-                // videoOnlyStreams first (HD DASH, no embedded audio — correct for video toggle
-                // where TrackPlayer handles audio separately)
-                // Fall back to muxed videoStreams if no DASH streams are available
                 info.videoOnlyStreams.maxByOrNull { it.getHeight() }?.content
                     ?: info.videoStreams.maxByOrNull { it.getHeight() }?.content
 
             "dash" -> info.dashMpdUrl.takeIf { it.isNotEmpty() }
             "hls"  -> info.hlsUrl.takeIf { it.isNotEmpty() }
 
-            else ->
-                // Unknown format → fall back to best audio
-                info.audioStreams.maxByOrNull { it.getBitrate() }?.content
+            else -> info.audioStreams.maxByOrNull { it.getBitrate() }?.content
         }
         return mapOf<String, Any>("success" to (best != null), "url" to (best ?: ""),
             "format" to format, "title" to info.name.orEmpty(),
@@ -1495,25 +1553,25 @@ class MavinEngineModule : Module() {
 
     private fun extractAudioStreams(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val info = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
         return mapOf<String, Any>("success" to true, "title" to info.name.orEmpty(),
             "audioStreams" to info.audioStreams.map { audioStreamToMap(it) })
     }
 
     private fun extractVideoStreams(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val info = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val info    = StreamInfo.getInfo(service.getStreamExtractor(url))
         return mapOf<String, Any>("success" to true, "title" to info.name.orEmpty(),
-            "videoStreams" to info.videoStreams.map { videoStreamToMap(it) },
+            "videoStreams"     to info.videoStreams.map { videoStreamToMap(it) },
             "videoOnlyStreams" to info.videoOnlyStreams.map { videoStreamToMap(it) })
     }
 
     private fun extractSubtitles(url: String, language: String?, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
-        val info = StreamInfo.getInfo(service.getStreamExtractor(url))
-        val all = info.subtitles
+        val service  = resolveService(url, serviceId)
+        val info     = StreamInfo.getInfo(service.getStreamExtractor(url))
+        val all      = info.subtitles
         val filtered = if (language.isNullOrBlank()) all
-            else all.filter { it.getLanguageTag().equals(language, ignoreCase = true) }
+                       else all.filter { it.getLanguageTag().equals(language, ignoreCase = true) }
         return mapOf<String, Any>("success" to true, "title" to info.name.orEmpty(),
             "subtitles" to filtered.map { subtitleToMap(it) },
             "availableLanguages" to all.map { it.getLanguageTag() }.distinct())
@@ -1544,7 +1602,7 @@ class MavinEngineModule : Module() {
 
     private fun extractCommentReplies(commentsUrl: String, repliesPageUrl: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(commentsUrl, serviceId)
-        val page = CommentsInfo.getMoreItems(service, commentsUrl, Page(repliesPageUrl))
+        val page    = CommentsInfo.getMoreItems(service, commentsUrl, Page(repliesPageUrl))
         return mapOf<String, Any>("success" to true,
             "replies" to page.items.map { commentItemToMap(it) },
             "nextPage" to pageOrEmpty(page.nextPage), "hasNextPage" to (page.nextPage != null),
@@ -1561,7 +1619,7 @@ class MavinEngineModule : Module() {
         "publishedTime"      to item.textualUploadDate.orEmpty(),
         // FIX [1]: toEpochSecond() returns long → .toDouble()
         "publishedTimestamp" to (item.uploadDate?.offsetDateTime()?.toEpochSecond()?.toDouble() ?: 0.0),
-        // FIX [2]: getLikeCount() returns int (confirmed javadoc) — .coerceAtLeast(0) only, no .toDouble()
+        // FIX [2]: getLikeCount() returns int — coerce only, no .toDouble()
         "likeCount"          to item.likeCount.coerceAtLeast(0),
         "textualLikeCount"   to item.textualLikeCount.orEmpty(),
         // FIX [2]: getReplyCount() returns int — no .toDouble()
@@ -1581,9 +1639,9 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun performSearch(query: String, filter: String?, pageUrl: String?, serviceId: Int?): Map<String, Any> {
-        val service = NewPipe.getService(serviceId ?: 0)
-        val contentFilters: List<String> = if (filter.isNullOrBlank()) emptyList() else listOf(filter)
-        val sortFilter = ""
+        val service        = NewPipe.getService(serviceId ?: 0)
+        val contentFilters = if (filter.isNullOrBlank()) emptyList() else listOf(filter)
+        val sortFilter     = ""
         return if (pageUrl.isNullOrEmpty()) {
             val extractor = service.getSearchExtractor(query, contentFilters, sortFilter)
             extractor.fetchPage()
@@ -1595,7 +1653,7 @@ class MavinEngineModule : Module() {
                 "errors" to info.errors.map { it.message.orEmpty() })
         } else {
             val handler = service.searchQHFactory.fromQuery(query, contentFilters, sortFilter)
-            val more = SearchInfo.getMoreItems(service, handler, Page(pageUrl))
+            val more    = SearchInfo.getMoreItems(service, handler, Page(pageUrl))
             mapOf<String, Any>("success" to true,
                 "results" to more.items.mapNotNull { infoItemToMap(it) },
                 "nextPage" to pageOrEmpty(more.nextPage), "hasNextPage" to (more.nextPage != null),
@@ -1605,7 +1663,7 @@ class MavinEngineModule : Module() {
 
     // FIX [6]: returns Map<String,Any> — expo-modules AsyncFunction cannot return bare List
     private fun getSearchSuggestions(query: String, serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
+        val service     = if (serviceId != null) getService(serviceId) else getDefaultService()
         val suggestions = service.getSuggestionExtractor().suggestionList(query)
         return mapOf<String, Any>("suggestions" to suggestions)
     }
@@ -1622,18 +1680,18 @@ class MavinEngineModule : Module() {
 
     private fun extractPlaylistInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val info = PlaylistInfo.getInfo(service, url)
+        val info    = PlaylistInfo.getInfo(service, url)
         return mapOf<String, Any>(
             "success" to true, "serviceId" to service.serviceId,
             "id" to info.id, "url" to info.url, "originalUrl" to info.originalUrl,
             "name" to info.name.orEmpty(), "description" to info.description.content,
             "thumbnails" to info.thumbnails.map { imageToMap(it) },
-            // FIX [5]: NEW — banners confirmed in v0.26.0 javadoc
+            // FIX [5]: banners confirmed in v0.26.0 javadoc
             "banners" to info.banners.map { imageToMap(it) },
             "uploaderName" to info.uploaderName.orEmpty(),
             "uploaderUrl" to info.uploaderUrl.orEmpty(),
             "uploaderAvatars" to info.uploaderAvatars.map { imageToMap(it) },
-            // FIX [5]: NEW — subChannel fields confirmed in v0.26.0 javadoc
+            // FIX [5]: subChannel fields confirmed in v0.26.0 javadoc
             "subChannelName" to info.subChannelName.orEmpty(),
             "subChannelUrl" to info.subChannelUrl.orEmpty(),
             "subChannelAvatars" to info.subChannelAvatars.map { imageToMap(it) },
@@ -1667,7 +1725,7 @@ class MavinEngineModule : Module() {
 
     private fun extractChannelInfo(url: String, serviceId: Int?): Map<String, Any> {
         val service = resolveService(url, serviceId)
-        val info = ChannelInfo.getInfo(service, url)
+        val info    = ChannelInfo.getInfo(service, url)
         return mapOf<String, Any>(
             "success" to true, "serviceId" to service.serviceId,
             "id" to info.id, "url" to info.url, "originalUrl" to info.originalUrl,
@@ -1678,11 +1736,11 @@ class MavinEngineModule : Module() {
             // FIX [1]: long → .toDouble()
             "subscriberCount" to info.subscriberCount.coerceAtLeast(0L).toDouble(),
             "isVerified" to info.isVerified,
-            // FIX [4]: NEW — tags confirmed in v0.26.0 javadoc
+            // FIX [4]: tags confirmed in v0.26.0 javadoc
             "tags" to info.tags,
-            // FIX [4]: NEW — donationLinks is String[] in javadoc → .toList()
+            // FIX [4]: donationLinks is String[] in javadoc → .toList()
             "donationLinks" to (info.donationLinks?.toList() ?: emptyList<String>()),
-            // FIX [4]: NEW — parentChannel fields confirmed in v0.26.0 javadoc
+            // FIX [4]: parentChannel fields confirmed in v0.26.0 javadoc
             "parentChannelName" to info.parentChannelName.orEmpty(),
             "parentChannelUrl" to info.parentChannelUrl.orEmpty(),
             "parentChannelAvatars" to info.parentChannelAvatars.map { imageToMap(it) },
@@ -1697,8 +1755,8 @@ class MavinEngineModule : Module() {
     )
 
     private fun extractChannelTabItems(channelUrl: String, tabFilter: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(channelUrl, serviceId)
-        val channelInfo = ChannelInfo.getInfo(service, channelUrl)
+        val service      = resolveService(channelUrl, serviceId)
+        val channelInfo  = ChannelInfo.getInfo(service, channelUrl)
         val targetTab: ListLinkHandler = (
             if (tabFilter.isBlank()) channelInfo.tabs.firstOrNull()
             else channelInfo.tabs.firstOrNull { t -> t.contentFilters.any { it.equals(tabFilter, ignoreCase = true) } }
@@ -1719,7 +1777,7 @@ class MavinEngineModule : Module() {
     }
 
     private fun extractChannelFeed(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
+        val service       = resolveService(url, serviceId)
         val feedExtractor = service.getFeedExtractor(url)
             ?: return mapOf<String, Any>("success" to false, "error" to "NO_FEED",
                 "message" to "No feed available for this service/channel")
@@ -1734,9 +1792,9 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun listAvailableKiosks(serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
+        val service   = if (serviceId != null) getService(serviceId) else getDefaultService()
         val kioskList = service.kioskList
-        val kiosks = kioskList.availableKiosks.map { id ->
+        val kiosks    = kioskList.availableKiosks.map { id ->
             val entry = mutableMapOf<String, Any>()
             try {
                 val extractor = kioskList.getExtractorById(id, null)
@@ -1753,8 +1811,8 @@ class MavinEngineModule : Module() {
     }
 
     private fun extractKioskInfo(kioskId: String, pageUrl: String?, serviceId: Int?): Map<String, Any> {
-        val service = if (serviceId != null) getService(serviceId) else getDefaultService()
-        val availableKiosks = service.kioskList.availableKiosks
+        val service           = if (serviceId != null) getService(serviceId) else getDefaultService()
+        val availableKiosks   = service.kioskList.availableKiosks
         if (!availableKiosks.contains(kioskId)) {
             return mapOf("success" to false, "kioskId" to kioskId, "error" to "KIOSK_NOT_FOUND",
                 "message" to "Kiosk '$kioskId' not found. Available: $availableKiosks",
@@ -1781,7 +1839,7 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun resolveUrl(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
+        val service  = resolveService(url, serviceId)
         val linkType = try { service.getLinkTypeByUrl(url) }
             catch (e: Exception) { throw ExtractionException("Cannot determine link type for $url: ${e.message}", e) }
         if (linkType == StreamingService.LinkType.NONE)
@@ -1793,7 +1851,7 @@ class MavinEngineModule : Module() {
 
     private fun checkCanHandle(url: String, serviceId: Int?): Map<String, Any> {
         if (serviceId != null) {
-            val service = getService(serviceId)
+            val service  = getService(serviceId)
             val linkType = try { service.getLinkTypeByUrl(url) } catch (_: Exception) { StreamingService.LinkType.NONE }
             return mapOf<String, Any>("canHandle" to (linkType != StreamingService.LinkType.NONE),
                 "linkType" to linkType.name.lowercase(), "serviceId" to service.serviceId,
@@ -1813,7 +1871,7 @@ class MavinEngineModule : Module() {
     }
 
     private fun extractIdFromUrl(url: String, serviceId: Int?): Map<String, Any> {
-        val service = resolveService(url, serviceId)
+        val service  = resolveService(url, serviceId)
         val linkType = try { service.getLinkTypeByUrl(url) }
             catch (e: Exception) { throw ExtractionException("Cannot determine link type for $url: ${e.message}", e) }
         if (linkType == StreamingService.LinkType.NONE) throw ExtractionException("URL not handled: $url")
@@ -1823,12 +1881,12 @@ class MavinEngineModule : Module() {
 
     private fun extractIdForLinkType(service: StreamingService, linkType: StreamingService.LinkType, url: String): String =
         when (linkType) {
-            StreamingService.LinkType.STREAM  -> service.streamLHFactory.fromUrl(url).id
-            StreamingService.LinkType.CHANNEL -> (service.channelLHFactory
+            StreamingService.LinkType.STREAM   -> service.streamLHFactory.fromUrl(url).id
+            StreamingService.LinkType.CHANNEL  -> (service.channelLHFactory
                 ?: throw ExtractionException("'${service.serviceInfo.name}' has no channel factory")).fromUrl(url).id
             StreamingService.LinkType.PLAYLIST -> (service.playlistLHFactory
                 ?: throw ExtractionException("'${service.serviceInfo.name}' has no playlist factory")).fromUrl(url).id
-            StreamingService.LinkType.NONE    -> throw ExtractionException("URL not handled: $url")
+            StreamingService.LinkType.NONE     -> throw ExtractionException("URL not handled: $url")
         }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1845,7 +1903,6 @@ class MavinEngineModule : Module() {
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
             // FIX [1]: long → .toDouble()
             "duration" to item.duration.coerceAtLeast(0L).toDouble(),
-            // FIX [1]: long → .toDouble()
             "viewCount" to item.viewCount.coerceAtLeast(0L).toDouble(),
             "textualUploadDate" to item.textualUploadDate.orEmpty(),
             "streamType" to item.streamType.name,
@@ -1868,7 +1925,6 @@ class MavinEngineModule : Module() {
             "thumbnails" to item.thumbnails.map { imageToMap(it) },
             // FIX [1]: long → .toDouble()
             "subscriberCount" to item.subscriberCount.coerceAtLeast(0L).toDouble(),
-            // FIX [1]: long → .toDouble()
             "streamCount" to item.streamCount.coerceAtLeast(0L).toDouble(),
             "isVerified" to item.isVerified,
             "description" to item.description.orEmpty()
@@ -1909,7 +1965,7 @@ class MavinEngineModule : Module() {
         "isAutoGenerated" to s.isAutoGenerated, "manifestUrl" to (s.manifestUrl ?: "")
     )
 
-    /** FIX [7]: New helper — StreamSegment.getStartTimeSeconds() returns int (javadoc confirmed) */
+    // FIX [7]: StreamSegment.getStartTimeSeconds() returns int (javadoc confirmed)
     private fun segmentToMap(s: StreamSegment): Map<String, Any> = mapOf<String, Any>(
         "title"            to s.title,
         // FIX [2]: getStartTimeSeconds() returns int — no .toDouble() needed
@@ -1919,12 +1975,12 @@ class MavinEngineModule : Module() {
         "previewUrl"       to (s.previewUrl ?: "")
     )
 
-    /** FIX [7]: New helper — Frameset mapper for getPreviewFrames() */
+    // FIX [7]: Frameset mapper for getPreviewFrames()
     private fun framesetToMap(f: Frameset): Map<String, Any> = mapOf<String, Any>(
-        "urls"          to f.urls.toList(),
-        "frameWidth"    to f.frameWidth,
-        "frameHeight"   to f.frameHeight,
-        "totalCount"    to f.totalCount,
+        "urls"             to f.urls.toList(),
+        "frameWidth"       to f.frameWidth,
+        "frameHeight"      to f.frameHeight,
+        "totalCount"       to f.totalCount,
         "durationPerFrame" to f.durationPerFrame,
         "framesPerPageX"   to f.framesPerPageX,
         "framesPerPageY"   to f.framesPerPageY
@@ -1937,7 +1993,7 @@ class MavinEngineModule : Module() {
     )
 
     private fun pageOrEmpty(p: Page?): Map<String, Any> = p?.let { pageToMap(it) } ?: emptyMap()
-    private fun pageToMap(p: Page): Map<String, Any> = mapOf<String, Any>(
+    private fun pageToMap(p: Page): Map<String, Any>    = mapOf<String, Any>(
         "url" to (p.url ?: ""),
         "ids" to (p.ids ?: emptyList<String>()),
         "cookies" to (p.cookies ?: emptyMap<String, String>())
@@ -1949,10 +2005,10 @@ class MavinEngineModule : Module() {
 
     private fun extractVideoIdFromUrl(url: String): String? {
         if (url.isEmpty()) return null
-        if (url.contains("youtu.be/")) return url.substringAfter("youtu.be/").substringBefore("?").substringBefore("&")
-        if (url.contains("v=")) return url.substringAfter("v=").substringBefore("&").substringBefore("?")
-        if (url.contains("/shorts/")) return url.substringAfter("/shorts/").substringBefore("?").substringBefore("&")
-        if (url.contains("/embed/")) return url.substringAfter("/embed/").substringBefore("?").substringBefore("&")
+        if (url.contains("youtu.be/"))  return url.substringAfter("youtu.be/").substringBefore("?").substringBefore("&")
+        if (url.contains("v="))         return url.substringAfter("v=").substringBefore("&").substringBefore("?")
+        if (url.contains("/shorts/"))   return url.substringAfter("/shorts/").substringBefore("?").substringBefore("&")
+        if (url.contains("/embed/"))    return url.substringAfter("/embed/").substringBefore("?").substringBefore("&")
         if (url.matches("^[a-zA-Z0-9_-]{11}$".toRegex())) return url
         return null
     }
@@ -1993,46 +2049,84 @@ class MavinEngineModule : Module() {
     // DOWNLOADER
     // ═══════════════════════════════════════════════════════════════════════
 
+    /**
+     * MavinDownloader — Official NewPipe Downloader implementation pattern.
+     *
+     * Architecture matches TeamNewPipe/NewPipe DownloaderImpl.java:
+     *
+     * 1. execute() is a clean pass-through. It forwards NewPipe's request headers
+     *    exactly as provided. It does NOT inject cookies manually — the CookieJar
+     *    on the OkHttpClient handles all cookie management automatically.
+     *
+     * 2. The SOCS consent cookie is carried by SimpleCookieJar (seeded during
+     *    initializeNewPipe() via generateConsentCookie()). OkHttp attaches it
+     *    to every youtube.com/google.com request without any per-request logic here.
+     *
+     * 3. [D] POST Content-Type: NewPipe InnerTube requests use JSON bodies.
+     *    The extractor sets the body bytes but does NOT always include a Content-Type
+     *    header in the request object — it relies on the Downloader to default to
+     *    "application/json". The old code defaulted to "application/x-www-form-urlencoded"
+     *    which caused InnerTube POST requests to be rejected with 400/415 errors.
+     *    Fix: check request headers for Content-Type; default to "application/json" if absent.
+     *
+     * 4. User-Agent: added only when absent (same as official DownloaderImpl).
+     *
+     * IMPORTANT — what is NOT done here (unlike the old v9.x implementation):
+     *   ✗ No getYouTubeHeaders() call (infinite recursion risk)
+     *   ✗ No manual Cookie header injection (conflicts with CookieJar)
+     *   ✗ No hard-coded SOCS token string (fragile, region-dependent)
+     */
     class MavinDownloader(private val client: OkHttpClient) : Downloader() {
+
         override fun execute(request: org.schabi.newpipe.extractor.downloader.Request): Response {
             val builder = Request.Builder().url(request.url())
+
+            // [D] Determine Content-Type for POST bodies:
+            //     Use the Content-Type from the extractor's headers if provided,
+            //     otherwise default to "application/json" (NewPipe InnerTube pattern).
+            //     Never fall back to "application/x-www-form-urlencoded" — InnerTube rejects it.
+            val requestContentType: String = request.headers()["Content-Type"]?.firstOrNull()
+                ?: "application/json"
+
             when (request.httpMethod()) {
                 "POST" -> {
                     val body = request.dataToSend()
                     builder.post(
-                        if (body != null) body.toRequestBody("application/x-www-form-urlencoded".toMediaType())
-                        else ByteArray(0).toRequestBody()
+                        if (body != null) body.toRequestBody(requestContentType.toMediaType())
+                        else              ByteArray(0).toRequestBody()
                     )
                 }
                 "HEAD" -> builder.head()
                 else   -> builder.get()
             }
-            if (!request.headers().containsKey("User-Agent"))
-                builder.addHeader("User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+            // Forward all headers from NewPipe's request object.
+            // The extractor classes set the correct YouTube-specific headers (X-YouTube-Client-Name,
+            // X-YouTube-Client-Version, Origin, Referer, etc.) internally — we just forward them.
             request.headers().forEach { (key, values) ->
                 values.forEach { value -> builder.addHeader(key, value) }
             }
-            // FIX [12]: Forward SOCS consent cookie on all YouTube requests so NewPipe's
-            // internal extractor calls carry the cookie set by setConsentAccepted(true).
-            // Per YoutubeParsingHelper.getYouTubeHeaders() docs: returns required headers
-            // including the CONSENT cookie to prevent redirects to consent.youtube.com.
-            val url = request.url()
-            if (url.contains("youtube.com") || url.contains("youtu.be") ||
-                url.contains("googlevideo.com")) {
-                try {
-                    val ytHeaders = YoutubeParsingHelper.getYouTubeHeaders()
-                    ytHeaders.forEach { (key, values) ->
-                        if (!request.headers().containsKey(key)) {
-                            values.forEach { value -> builder.addHeader(key, value) }
-                        }
-                    }
-                } catch (_: Exception) { /* non-fatal — proceed without consent headers */ }
+
+            // Add User-Agent only if the extractor did not already set one.
+            if (!request.headers().containsKey("User-Agent")) {
+                builder.addHeader("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             }
+
+            // NOTE: No manual Cookie injection here.
+            // The SOCS consent cookie (and any cookies YouTube sets via Set-Cookie) are
+            // managed entirely by the SimpleCookieJar attached to the OkHttpClient.
+            // OkHttp automatically attaches matching cookies to every request.
+
             return client.newCall(builder.build()).execute().use { r ->
-                Response(r.code, r.message, r.headers.toMultimap(),
-                    r.body?.string() ?: "", r.request.url.toString())
+                Response(
+                    r.code,
+                    r.message,
+                    r.headers.toMultimap(),
+                    r.body?.string() ?: "",
+                    r.request.url.toString()
+                )
             }
         }
     }

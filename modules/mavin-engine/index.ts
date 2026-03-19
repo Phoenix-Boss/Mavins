@@ -6,41 +6,48 @@
  *
  * Kotlin module name:  "MavinEngine"
  * Extractor version:   NewPipeExtractor v0.26.0
- * Architecture:        v9.1 — WEB client SABR fix + visitorData + consent cookie
+ * Architecture:        v10.0.0 — official Downloader pattern + CookieJar consent
  *
- * ── v9.1 changes (MavinEngineModule.kt) ─────────────────────────────────────
+ * ── v10.0.0 changes (MavinEngineModule.kt) ──────────────────────────────────
  *
- * [8]  YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init()
- *      — generates the required SOCS cookie for all YouTube requests.
+ * [A] MavinDownloader rewritten to match the official TeamNewPipe/NewPipe
+ *     DownloaderImpl pattern: clean pass-through, no manual cookie injection.
+ *     execute() forwards NewPipe's request headers as-is and lets the extractor
+ *     classes populate YouTube-specific headers internally.
  *
- * [9]  Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
- *      using InnertubeClientRequestInfo.ofWebClient(). YouTube rejects random tokens.
- *      Two new JS functions: refreshVisitorData() and getVisitorDataStatus().
+ * [B] SOCS consent cookie is now seeded into an OkHttp SimpleCookieJar via
+ *     YoutubeParsingHelper.generateConsentCookie() (static, no-network, no-throw).
+ *     OkHttp attaches it automatically to every youtube.com/google.com request.
+ *     The old hard-coded SOCS token string and manual addHeader("Cookie") injection
+ *     inside execute() have been removed.
  *
- * [10] v0.26.0 release fix: "do not use WEB client for stream URLs anymore"
- *      (SABR-only player responses crash with WEB client).
- *      extractStreamInfo / extractStreamInfoById now use getDefaultService()
- *      (YouTube Android/iOS client) instead of forcing WEB client.
+ * [C] fetchAndCacheVisitorData() correctly calls getYouTubeHeaders() on a
+ *     background thread (after init), not inside execute(). No recursion risk.
  *
- * [11] v0.26.0 breaking: Service.getMediaCapabilities() returns Set not List.
- *      ServiceInfo.mediaCapabilities handled correctly in getServicesList().
+ * [D] POST Content-Type default corrected from "application/x-www-form-urlencoded"
+ *     to "application/json" — what InnerTube actually expects. The extractor's
+ *     Content-Type header is forwarded as-is when present.
  *
- * [12] MavinDownloader forwards YoutubeParsingHelper.getYouTubeHeaders() on all
- *      YouTube/Google requests so consent cookie reaches NewPipe's internal calls.
+ * ── v9.1 changes (retained) ─────────────────────────────────────────────────
  *
- * ── v9.0 changes (original) ──────────────────────────────────────────────────
+ * [8]  YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init().
+ * [9]  Real visitorData via YoutubeParsingHelper.getVisitorDataFromInnertube()
+ *      using InnertubeClientRequestInfo.ofWebClient().
+ * [10] WEB client no longer used for stream extraction (SABR-only player fix).
+ * [11] Service.getMediaCapabilities() returns Set not List (breaking change handled).
+ * [12] No getYouTubeHeaders() inside execute() (infinite recursion guard — now
+ *      structurally impossible because the CookieJar pattern makes it unnecessary).
  *
- * [1]  Long → Double at every bridge map boundary (expo-modules JS bridge
- *      cannot serialize Kotlin Long / Java long — crashes at runtime).
- * [2]  Int fields confirmed NOT needing .toDouble() (javadoc return int).
- * [3]  StreamInfo: added startPosition, host, privacy, licence, languageInfo,
- *      subChannelName, subChannelUrl, subChannelAvatars, streamSegments,
- *      previewFrames, supportInfo, errors — all confirmed in v0.26.0 javadoc.
- * [4]  ChannelInfo: added tags, donationLinks, parentChannelName,
- *      parentChannelUrl, parentChannelAvatars.
- * [5]  PlaylistInfo: added banners, subChannelName, subChannelUrl, subChannelAvatars.
- * [6]  getSearchSuggestions returns { suggestions: string[] } — Map root required.
- * [7]  New interfaces: StreamSegment, Frameset, StreamPrivacy.
+ * ── v9.0 changes (retained) ─────────────────────────────────────────────────
+ *
+ * [1]  Long → Double at every bridge map boundary.
+ * [2]  Int fields confirmed NOT needing .toDouble().
+ * [3]  StreamInfo: startPosition, host, privacy, licence, languageInfo,
+ *      subChannel*, streamSegments, previewFrames, supportInfo, errors.
+ * [4]  ChannelInfo: tags, donationLinks, parentChannel*.
+ * [5]  PlaylistInfo: banners, subChannel*.
+ * [6]  getSearchSuggestions returns { suggestions: string[] } (Map root required).
+ * [7]  StreamSegment and Frameset interfaces.
  *
  * Service IDs (NewPipe standard):
  *   0 = YouTube
@@ -227,9 +234,9 @@ export interface StreamInfoItem {
   uploaderUrl: string;
   uploaderVerified: boolean;
   thumbnails: NativeImage[];
-  /** Seconds. 0 if unknown. (Long→Double in Kotlin, JS number here) */
+  /** Seconds. 0 if unknown. (Long→Double in Kotlin) */
   duration: number;
-  /** 0 if unknown. (Long→Double in Kotlin, JS number here) */
+  /** 0 if unknown. (Long→Double in Kotlin) */
   viewCount: number;
   textualUploadDate: string;
   streamType: StreamType;
@@ -237,9 +244,7 @@ export interface StreamInfoItem {
   isShortFormContent: boolean;
 }
 
-/**
- * streamCount is Long in extractor, coerced to >= 0 then Double.
- */
+/** streamCount is Long in extractor, coerced to >= 0 then Double. */
 export interface PlaylistInfoItem {
   type: 'playlist';
   serviceId: number;
@@ -253,9 +258,7 @@ export interface PlaylistInfoItem {
   playlistType: string;
 }
 
-/**
- * subscriberCount and streamCount are Long in extractor, coerced then Double.
- */
+/** subscriberCount and streamCount are Long in extractor, coerced then Double. */
 export interface ChannelInfoItem {
   type: 'channel';
   serviceId: number;
@@ -280,6 +283,10 @@ export type InfoItem = StreamInfoItem | PlaylistInfoItem | ChannelInfoItem;
  * Full stream info returned by getStreamInfo() / getStreamInfoById().
  * All fields confirmed against v0.26.0 javadoc.
  * Long fields in Kotlin are coerced to Double and arrive here as JS number.
+ *
+ * v10.0.0 note: stream URLs are now extracted using the YouTube Android/iOS
+ * client (not WEB) — fix [10] / [A]. This resolves SABR-only player responses
+ * that previously caused empty audioStreams/videoStreams arrays.
  */
 export interface StreamInfo {
   success: boolean;
@@ -319,7 +326,7 @@ export interface StreamInfo {
    * Typically 0. Non-zero when the URL includes a timestamp.
    */
   startPosition: number;
-  /** PeerTube/Peertube host, empty for YouTube */
+  /** PeerTube host, empty for YouTube */
   host: string;
   /** StreamExtractor.Privacy enum name */
   privacy: StreamPrivacy;
@@ -339,6 +346,11 @@ export interface StreamInfo {
   supportInfo: string;
   audioStreams: AudioStream[];
   videoStreams: VideoStream[];
+  /**
+   * DASH adaptive video-only streams (no embedded audio).
+   * These are the HD streams (720p, 1080p, etc.) on YouTube.
+   * Pair with the highest-bitrate audioStream for full HD playback.
+   */
   videoOnlyStreams: VideoStream[];
   dashMpdUrl: string;
   hlsUrl: string;
@@ -349,9 +361,7 @@ export interface StreamInfo {
    * StreamSegment.startTimeSeconds is int in Kotlin.
    */
   streamSegments: StreamSegment[];
-  /**
-   * Storyboard/sprite-sheet preview frames for seek thumbnails.
-   */
+  /** Storyboard/sprite-sheet preview frames for seek thumbnails. */
   previewFrames: Frameset[];
   metaInfo: MetaInfo[];
   /** Extraction errors (non-fatal). Usually empty. */
@@ -424,17 +434,16 @@ export interface CommentRepliesPage {
 /**
  * Valid content filter tokens for YouTube (NewPipe SearchQueryHandlerFactory).
  *
- * ''              → no filter — returns all content types (videos, channels, playlists)
- * 'videos'        → video results only
- * 'channels'      → channel results only
- * 'playlists'     → playlist results only
- * 'music_songs'   → YouTube Music: songs
- * 'music_videos'  → YouTube Music: music videos
- * 'music_albums'  → YouTube Music: albums
+ * ''                → no filter — returns all content types
+ * 'videos'          → video results only
+ * 'channels'        → channel results only
+ * 'playlists'       → playlist results only
+ * 'music_songs'     → YouTube Music: songs
+ * 'music_videos'    → YouTube Music: music videos
+ * 'music_albums'    → YouTube Music: albums
  * 'music_playlists' → YouTube Music: playlists
  *
  * IMPORTANT: 'all' is NOT a valid NewPipe filter token.
- * Passing 'all' corrupts the generated search URL.
  * Use '' (empty string) for unfiltered / all-types search.
  */
 export type YouTubeSearchFilter =
@@ -472,8 +481,8 @@ export interface SearchMorePage {
 
 /**
  * Returned by getSearchSuggestions().
- * The Kotlin layer returns Map<String,Any> { "suggestions": List<String> }.
- * A Map root type is required for expo-modules-core to serialise correctly.
+ * The Kotlin layer wraps the List<String> in a Map so the bridge can serialise it.
+ * Fix [6]: Map root required for expo-modules-core serialisation.
  */
 export interface SearchSuggestionsResult {
   suggestions: string[];
@@ -490,8 +499,8 @@ export interface SearchFiltersResult {
 // ─────────────────────────────────────────────
 
 /**
- * Full playlist info. All fields confirmed against v0.26.0 javadoc.
- * Added in v9.0: banners, subChannelName, subChannelUrl, subChannelAvatars.
+ * Full playlist info — all fields confirmed against v0.26.0 javadoc.
+ * Fix [5]: banners, subChannelName, subChannelUrl, subChannelAvatars added in v9.0.
  */
 export interface PlaylistInfo {
   success: boolean;
@@ -502,19 +511,12 @@ export interface PlaylistInfo {
   name: string;
   description: string;
   thumbnails: NativeImage[];
-  /** Banner images (e.g. YouTube playlist banners). Added v9.0. */
   banners: NativeImage[];
   uploaderName: string;
   uploaderUrl: string;
   uploaderAvatars: NativeImage[];
-  /**
-   * Sub-channel name (e.g. auto-generated topic channel). Added v9.0.
-   * Empty string if not provided.
-   */
   subChannelName: string;
-  /** Sub-channel URL. Added v9.0. Empty string if not provided. */
   subChannelUrl: string;
-  /** Sub-channel avatars. Added v9.0. */
   subChannelAvatars: NativeImage[];
   /** (Long→Double) */
   streamCount: number;
@@ -538,9 +540,8 @@ export interface PlaylistItemsPage {
 // ─────────────────────────────────────────────
 
 /**
- * Full channel info. All fields confirmed against v0.26.0 javadoc.
- * Added in v9.0: tags, donationLinks, parentChannelName,
- *   parentChannelUrl, parentChannelAvatars.
+ * Full channel info — all fields confirmed against v0.26.0 javadoc.
+ * Fix [4]: tags, donationLinks, parentChannel* added in v9.0.
  */
 export interface ChannelInfo {
   success: boolean;
@@ -556,24 +557,12 @@ export interface ChannelInfo {
   /** (Long→Double) */
   subscriberCount: number;
   isVerified: boolean;
-  /**
-   * Channel tags. Added v9.0.
-   * ChannelInfo.getTags() returns List<String> in v0.26.0.
-   */
+  /** ChannelInfo.getTags() → List<String> in v0.26.0 */
   tags: string[];
-  /**
-   * Donation/crowdfunding links. Added v9.0.
-   * ChannelInfo.getDonationLinks() returns String[] — converted to string[].
-   */
+  /** ChannelInfo.getDonationLinks() → String[] in v0.26.0, converted to string[] */
   donationLinks: string[];
-  /**
-   * Parent channel name (e.g. for YouTube Music topic channels). Added v9.0.
-   * Empty string if not provided.
-   */
   parentChannelName: string;
-  /** Parent channel URL. Added v9.0. Empty string if not provided. */
   parentChannelUrl: string;
-  /** Parent channel avatar images. Added v9.0. */
   parentChannelAvatars: NativeImage[];
   tabs: ChannelTab[];
   errors: string[];
@@ -708,12 +697,14 @@ export interface TrendingCacheStatus {
 // ─────────────────────────────────────────────
 
 /**
- * Status of the cached visitorData token fetched via
- * YoutubeParsingHelper.getVisitorDataFromInnertube() (NewPipe v0.26.0 API).
+ * Status of the cached visitorData token.
  *
- * Per fix [9] / fix [10]: YouTube now rejects synthetic/random visitor IDs.
- * A real token is required for both stream extraction and search to work.
- * Token is prefetched at init and refreshed every hour automatically.
+ * Fix [9] / [C]: Fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()
+ * on a background thread after init. YouTube rejects synthetic visitor IDs.
+ * Token is prefetched at init and auto-refreshed every hour.
+ *
+ * v10.0.0: getYouTubeHeaders() is called inside fetchAndCacheVisitorData()
+ * on a background thread — never inside execute() — so there is no recursion risk.
  */
 export interface VisitorDataStatus {
   hasVisitorData: boolean;
@@ -784,8 +775,8 @@ export interface ServiceInfo {
   name: string;
   baseUrl: string;
   /**
-   * v0.26.0 breaking: getMediaCapabilities() returns Set not List in Kotlin.
-   * Handled in getServicesList() — arrives here as string[] regardless.
+   * Fix [11]: getMediaCapabilities() returns Set not List in v0.26.0.
+   * Handled in Kotlin's getServicesList() — arrives here as string[] regardless.
    */
   mediaCapabilities: string[];
 }
@@ -794,12 +785,32 @@ export interface ServiceInfo {
 // STREAMS
 // ═════════════════════════════════════════════════════════════════
 
+/**
+ * Extract full stream info including all audio/video streams, metadata, etc.
+ *
+ * Fix [10] / [A]: Uses the YouTube Android/iOS client internally (not WEB client).
+ * This resolves the SABR-only player response issue that caused empty stream arrays
+ * with the WEB client in v0.26.0.
+ */
 export const getStreamInfo = (url: string, serviceId?: number): Promise<StreamInfo> =>
   Native.getStreamInfo(url, serviceId ?? null);
 
 export const getStreamInfoById = (videoId: string, serviceId?: number): Promise<StreamInfo> =>
   Native.getStreamInfoById(videoId, serviceId ?? null);
 
+/**
+ * Get the single best stream URL for a given format.
+ *
+ * format notes:
+ *   'audio'/'mp3'/'m4a'/'ogg'/'webm' → highest-bitrate audio-only stream
+ *   'video'/'mp4'/'best'             → highest-resolution videoOnlyStream (DASH),
+ *                                      falling back to muxed videoStream
+ *   'dash'                           → dashMpdUrl
+ *   'hls'                            → hlsUrl
+ *
+ * For full HD video+audio playback use getStreamInfo() directly and pair
+ * videoOnlyStreams (DASH, no audio) with audioStreams in your player.
+ */
 export const getStreamUrl = (
   url: string,
   format?: 'audio' | 'video' | 'mp3' | 'm4a' | 'ogg' | 'mp4' | 'best' | 'dash' | 'hls',
@@ -895,7 +906,7 @@ export const search = (
  * Get search suggestions for a partial query.
  *
  * Returns { suggestions: string[] }.
- * The Kotlin layer wraps the List<String> in a Map so the bridge can serialise it.
+ * Fix [6]: The Kotlin layer wraps List<String> in a Map root for bridge serialisation.
  */
 export const getSearchSuggestions = (
   query: string,
@@ -946,6 +957,8 @@ export const getKioskList = (serviceId?: number): Promise<KioskListResult> =>
   Native.getKioskList(serviceId ?? null);
 
 /**
+ * Fetch a specific kiosk by ID.
+ *
  * Valid YouTube kiosk IDs in v0.26.0:
  *   "Live" | "trending_music" | "trending_gaming" |
  *   "trending_movies_and_shows" | "trending_podcasts_episodes"
@@ -960,15 +973,15 @@ export const getKioskInfo = (
 ): Promise<KioskPage> =>
   Native.getKioskInfo(kioskId, pageUrl ?? null, serviceId ?? null);
 
-/** @deprecated Use getTrendingWithFallback() */
+/** @deprecated Use getTrendingWithFallback() — YouTube Trending removed 2025-07-21 */
 export const getTrending = (serviceId?: number): Promise<TrendingResult> =>
   Native.getTrending(serviceId ?? null);
 
-/** @deprecated Use getTrendingWithFallback() */
+/** @deprecated Use getTrendingWithFallback() — YouTube Trending removed 2025-07-21 */
 export const getMostPopular = (serviceId?: number): Promise<TrendingResult> =>
   Native.getMostPopular(serviceId ?? null);
 
-/** @deprecated Use getTrendingWithFallback() */
+/** @deprecated Use getTrendingWithFallback() — YouTube Trending removed 2025-07-21 */
 export const getYouTubeKiosk = (
   kioskType:
     | 'live' | 'Live'
@@ -989,14 +1002,18 @@ export const getYouTubeKiosk = (
  * Fetch trending content with 6-layer fallback.
  * Recommended since YouTube removed the global Trending page (2025-07-21).
  *
- * Layer 1: YouTube Music Charts (FEmusic_charts)
- * Layer 2: InnerTube Browse (FEwhat_to_watch)
- * Layer 3: NewPipe sub-kiosks
- * Layer 4: YouTube Charts HTML (charts.youtube.com)
- * Layer 5: InnerTube Next API recommendations seed
- * Layer 6: Search fallback
+ * Layer 1: YouTube Music Charts (FEmusic_charts)    — InnerTube WEB_REMIX client
+ * Layer 2: InnerTube Browse (FEwhat_to_watch)       — homepage feed
+ * Layer 3: NewPipe sub-kiosks                       — trending_music / trending_gaming / etc.
+ * Layer 4: YouTube Charts HTML (charts.youtube.com) — HTML scrape
+ * Layer 5: InnerTube Next API                       — recommendations seed
+ * Layer 6: Search fallback                          — "trending music official video {year}"
  *
- * Results are cached for 5 minutes. Check result.source for which layer succeeded.
+ * Results are cached for 5 minutes. Inspect result.source to see which layer succeeded.
+ * result.success === false means all 6 layers failed; result.errors lists each failure.
+ *
+ * v10.0.0: Layers 1, 2, 4, 5 use the direct OkHttpClient (not MavinDownloader),
+ * so they benefit from the CookieJar consent cookie automatically.
  */
 export const getTrendingWithFallback = (
   category: 'music' | 'gaming' | 'movies' | 'podcast' | 'videos' | string = 'music',
@@ -1021,18 +1038,22 @@ export const refreshInnerTubeConfig = (): Promise<InnerTubeRefreshResult> =>
 /**
  * Refresh the cached visitorData token.
  *
- * Calls YoutubeParsingHelper.getVisitorDataFromInnertube() on the Kotlin side
- * using InnertubeClientRequestInfo.ofWebClient() per the v0.26.0 API docs.
+ * Fix [9] / [C]: Calls YoutubeParsingHelper.getVisitorDataFromInnertube() on
+ * a background thread using InnertubeClientRequestInfo.ofWebClient().
  *
- * The token is prefetched at init and auto-refreshed every hour.
- * Call manually only if you see "Could not get visitorData" errors.
+ * The token is prefetched at module init and auto-refreshed every hour.
+ * Call manually only if you see "Could not get visitorData" errors or
+ * getVisitorDataStatus() reports isValid === false.
+ *
+ * v10.0.0: getYouTubeHeaders() (called internally during fetch) runs on the
+ * background thread, not inside execute() — zero recursion risk.
  */
 export const refreshVisitorData = (): Promise<VisitorDataRefreshResult> =>
   Native.refreshVisitorData();
 
 /**
  * Check the current status of the cached visitorData token.
- * Useful for diagnosing "Could not get visitorData" or search/stream failures.
+ * Useful for diagnosing stream extraction or search failures.
  */
 export const getVisitorDataStatus = (): Promise<VisitorDataStatus> =>
   Native.getVisitorDataStatus();
@@ -1074,7 +1095,7 @@ export const extractIdFromUrl = (url: string, serviceId?: number): Promise<Extra
 // MODULE PROPERTIES
 // ═════════════════════════════════════════════════════════════════
 
-export const version: string = Native.version;
+export const version: string      = Native.version;
 export const initialized: boolean = Native.initialized;
 export const services: ServiceInfo[] = Native.services;
 
@@ -1082,11 +1103,14 @@ export const services: ServiceInfo[] = Native.services;
 // UTILITY
 // ═════════════════════════════════════════════════════════════════
 
-export const ping = (): Promise<PingResult> => Native.ping();
+export const ping = (): Promise<PingResult> =>
+  Native.ping();
 
-export const emergencyReset = (): Promise<ResetResult> => Native.emergencyReset();
+export const emergencyReset = (): Promise<ResetResult> =>
+  Native.emergencyReset();
 
-export const getVersion = (): Promise<VersionInfo> => Native.getVersion();
+export const getVersion = (): Promise<VersionInfo> =>
+  Native.getVersion();
 
 // ═════════════════════════════════════════════════════════════════
 // DEFAULT EXPORT
@@ -1094,26 +1118,39 @@ export const getVersion = (): Promise<VersionInfo> => Native.getVersion();
 
 const MavinEngine = {
   // Properties
-  version, initialized, services,
+  version,
+  initialized,
+  services,
 
-  // Stream
-  getStreamInfo, getStreamInfoById, getStreamUrl,
-  getAudioStreams, getVideoStreams, getSubtitles,
+  // Streams
+  getStreamInfo,
+  getStreamInfoById,
+  getStreamUrl,
+  getAudioStreams,
+  getVideoStreams,
+  getSubtitles,
 
   // Comments
-  getComments, getCommentReplies,
+  getComments,
+  getCommentReplies,
 
   // Search
-  search, getSearchSuggestions, getSearchFilters,
+  search,
+  getSearchSuggestions,
+  getSearchFilters,
 
   // Playlist
-  getPlaylistInfo, getPlaylistItems,
+  getPlaylistInfo,
+  getPlaylistItems,
 
   // Channel
-  getChannelInfo, getChannelTabItems, getChannelFeed,
+  getChannelInfo,
+  getChannelTabItems,
+  getChannelFeed,
 
   // Kiosk
-  getKioskList, getKioskInfo,
+  getKioskList,
+  getKioskInfo,
   /** @deprecated Use getTrendingWithFallback() */
   getTrending,
   /** @deprecated Use getTrendingWithFallback() */
@@ -1125,23 +1162,30 @@ const MavinEngine = {
   getTrendingWithFallback,
 
   // InnerTube config
-  // InnerTube config
-  getInnerTubeConfig, refreshInnerTubeConfig,
+  getInnerTubeConfig,
+  refreshInnerTubeConfig,
 
-  // Visitor data (fix [9]) — real token via YoutubeParsingHelper.getVisitorDataFromInnertube()
-  refreshVisitorData, getVisitorDataStatus,
+  // Visitor data — fix [9] / [C]
+  refreshVisitorData,
+  getVisitorDataStatus,
 
   // Key management
-  getApiKeyStatus, resetFailedKeys,
+  getApiKeyStatus,
+  resetFailedKeys,
 
   // Trending cache
-  clearTrendingCache, getTrendingCacheStatus,
+  clearTrendingCache,
+  getTrendingCacheStatus,
 
   // URL utilities
-  resolveUrl, canHandleUrl, extractIdFromUrl,
+  resolveUrl,
+  canHandleUrl,
+  extractIdFromUrl,
 
   // Utility
-  ping, emergencyReset, getVersion,
+  ping,
+  emergencyReset,
+  getVersion,
 };
 
 export default MavinEngine;
