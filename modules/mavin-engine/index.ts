@@ -6,39 +6,47 @@
  *
  * Kotlin module name:  "MavinEngine"
  * Extractor version:   NewPipeExtractor v0.26.0
- * Architecture:        v10.0.0 — official Downloader pattern + CookieJar consent
+ * Architecture:        v10.1.0 — getCookieHeader() consent pattern (official DownloaderImpl)
  *
- * ── v10.0.0 changes (MavinEngineModule.kt) ──────────────────────────────────
+ * ── v10.1.0 fixes (MavinEngineModule.kt) ─────────────────────────────────────
  *
- * [A] MavinDownloader rewritten to match the official TeamNewPipe/NewPipe
- *     DownloaderImpl pattern: clean pass-through, no manual cookie injection.
- *     execute() forwards NewPipe's request headers as-is and lets the extractor
- *     classes populate YouTube-specific headers internally.
+ * ROOT CAUSE FIXED: IllegalArgumentException: unexpected domain: .youtube.com
+ *   OkHttp's Cookie.Builder.domain() rejects leading-dot domain strings.
+ *   The v10.0.0 SimpleCookieJar called addCookie(".youtube.com", ...) and
+ *   addCookie(".google.com", ...) which threw at init time.
  *
- * [B] SOCS consent cookie is now seeded into an OkHttp SimpleCookieJar via
- *     YoutubeParsingHelper.generateConsentCookie() (static, no-network, no-throw).
- *     OkHttp attaches it automatically to every youtube.com/google.com request.
- *     The old hard-coded SOCS token string and manual addHeader("Cookie") injection
- *     inside execute() have been removed.
+ * [A] SimpleCookieJar and CookieJar entirely removed from OkHttpClient.
+ *     No Cookie.Builder, no domain string handling at all.
  *
- * [C] fetchAndCacheVisitorData() correctly calls getYouTubeHeaders() on a
- *     background thread (after init), not inside execute(). No recursion risk.
+ * [B] SOCS consent cookie is now injected per-request in MavinDownloader.execute()
+ *     via YoutubeParsingHelper.getCookieHeader() — the official v0.26.0 Javadoc
+ *     method: static, no throws, returns Map<String,List<String>>,
+ *     "Create a map with the required cookie header."
+ *     setConsentAccepted(true) is still called after NewPipe.init() to configure
+ *     the internal state that getCookieHeader() reads.
  *
- * [D] POST Content-Type default corrected from "application/x-www-form-urlencoded"
- *     to "application/json" — what InnerTube actually expects. The extractor's
- *     Content-Type header is forwarded as-is when present.
+ * [C] execute() header forwarding: removeHeader() + addHeader() per key,
+ *     matching the official DownloaderImpl (PR #11969, merged Jan 31 2025).
+ *     Ensures extractor headers override any defaults, not duplicate them.
  *
- * ── v9.1 changes (retained) ─────────────────────────────────────────────────
+ * [D] HTTP 429 → ReCaptchaException, matching the official DownloaderImpl.
+ *
+ * ── v10.0.0 changes (retained) ───────────────────────────────────────────────
+ *
+ * [E] POST Content-Type defaults to "application/json" (InnerTube fix).
+ * [F] No getYouTubeHeaders() inside execute() (infinite recursion guard).
+ * [G] visitorData prefetched on background thread via getVisitorDataFromInnertube().
+ *
+ * ── v9.1 changes (retained) ──────────────────────────────────────────────────
  *
  * [8]  YoutubeParsingHelper.setConsentAccepted(true) called after NewPipe.init().
  * [9]  Real visitorData via YoutubeParsingHelper.getVisitorDataFromInnertube()
  *      using InnertubeClientRequestInfo.ofWebClient().
  * [10] WEB client no longer used for stream extraction (SABR-only player fix).
  * [11] Service.getMediaCapabilities() returns Set not List (breaking change handled).
- * [12] No getYouTubeHeaders() inside execute() (infinite recursion guard — now
- *      structurally impossible because the CookieJar pattern makes it unnecessary).
+ * [12] No getYouTubeHeaders() inside execute() (infinite recursion guard).
  *
- * ── v9.0 changes (retained) ─────────────────────────────────────────────────
+ * ── v9.0 changes (retained) ──────────────────────────────────────────────────
  *
  * [1]  Long → Double at every bridge map boundary.
  * [2]  Int fields confirmed NOT needing .toDouble().
@@ -1012,8 +1020,9 @@ export const getYouTubeKiosk = (
  * Results are cached for 5 minutes. Inspect result.source to see which layer succeeded.
  * result.success === false means all 6 layers failed; result.errors lists each failure.
  *
- * v10.0.0: Layers 1, 2, 4, 5 use the direct OkHttpClient (not MavinDownloader),
- * so they benefit from the CookieJar consent cookie automatically.
+ * v10.1.0: Layers 1, 2, 4, 5 use the direct OkHttpClient. The SOCS consent cookie
+ * is injected per-request via getCookieHeader() in MavinDownloader.execute() —
+ * the official v0.26.0 Javadoc pattern. No CookieJar or Cookie.Builder involved.
  */
 export const getTrendingWithFallback = (
   category: 'music' | 'gaming' | 'movies' | 'podcast' | 'videos' | string = 'music',

@@ -2,11 +2,18 @@
  * FloatingPlayer
  *
  * Fixed from original:
- *   - router.push("/(player)") — correct Expo Router group path.
- *     Original used router.push("/player") (no parentheses) which
- *     does not match the (player) group folder → "screen doesn't exist".
+ *   [1] router.push("/(player)") — correct Expo Router group path.
+ *       Original used router.push("/player") (no parentheses) which
+ *       does not match the (player) group folder → "screen doesn't exist".
  *
- * Everything else is unchanged from the original implementation.
+ *   [2] Removed useNavigation from @react-navigation/native.
+ *       canGoBack() is now router.canGoBack() — the Expo Router v3 API.
+ *       Mixing @react-navigation/native with expo-router's router caused
+ *       inconsistent back-stack reads.
+ *
+ *   [3] Image swapped from react-native → expo-image.
+ *       Consistent with PlayerScreen, related.tsx, and index.tsx.
+ *       expo-image handles blurhash placeholders and disk caching automatically.
  */
 
 import React from 'react';
@@ -14,13 +21,12 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Platform,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
-import { useNavigation } from '@react-navigation/native';
 import { triggerHaptic } from '@/helpers/haptics';
 import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useActiveTrack, usePlaybackState, State } from 'react-native-track-player';
@@ -37,7 +43,6 @@ interface FloatingPlayerProps {
 
 const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
   const router        = useRouter();
-  const navigation    = useNavigation();
   const pathname      = usePathname();
   const activeTrack   = useActiveTrack();
   const playbackState = usePlaybackState();
@@ -78,9 +83,9 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
 
   const openPlayerScreen = () => {
     triggerHaptic();
-    // ✅ FIXED: '/(player)' matches the app/(player)/ group folder.
-    // Previously '/player' (no parentheses) caused "screen doesn't exist".
-    if (navigation.canGoBack()) {
+    // ✅ '/(player)' matches the app/(player)/ group folder.
+    // router.canGoBack() is the Expo Router v3 API — no @react-navigation/native needed.
+    if (router.canGoBack()) {
       router.push('/(player)');
     } else {
       router.replace('/(player)');
@@ -99,11 +104,11 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
     try { await TrackPlayer.skipToNext(); } catch {}
   };
 
-  const artworkSource =
-    activeTrack.artwork
-      ? typeof activeTrack.artwork === 'number'
+  const artworkUri: string | null =
+    activeTrack?.artwork
+      ? typeof activeTrack.artwork === 'string'
         ? activeTrack.artwork
-        : { uri: activeTrack.artwork as string }
+        : null   // number (local require) — expo-image uses source prop differently
       : null;
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -120,8 +125,13 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
         >
           {/* Artwork */}
           <View style={styles.artWrap}>
-            {artworkSource ? (
-              <Image source={artworkSource} style={styles.art} />
+            {artworkUri ? (
+              <Image
+                source={{ uri: artworkUri }}
+                style={styles.art}
+                contentFit="cover"
+                transition={200}
+              />
             ) : (
               <View style={styles.artPlaceholder}>
                 <Ionicons name="musical-notes" size={20} color="rgba(255,255,255,0.7)" />

@@ -40,79 +40,70 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * MavinEngine — NewPipe Extractor v0.26.0 Integration
- * v10.0.0 — Deep-research architecture pass (March 2026)
+ * v10.1.0 — Official DownloaderImpl pattern (cross-checked against live Javadoc + PR #11969)
  *
- * ── v10.0.0 research-backed changes ─────────────────────────────────────────
+ * ── v10.1.0 fixes (this file) ────────────────────────────────────────────────
  *
- * [A] MavinDownloader — Official NewPipe pattern (matches TeamNewPipe/NewPipe DownloaderImpl):
- *     • execute() is a clean pass-through: forward the request headers exactly as provided
- *       by NewPipe's extractors; add a User-Agent only if one is absent.
- *     • Cookie injection is done through OkHttp's CookieJar mechanism, NOT by manual header
- *       stitching inside execute(). This matches how DownloaderImpl.java works.
- *     • The SOCS consent cookie is stored in an in-memory cookie store and surfaced to OkHttp
- *       via a SimpleCookieJar so every YouTube/Google request automatically carries it.
- *     • REMOVED: consentCookie companion-object String + manual builder.addHeader("Cookie")
- *       injection. That approach broke when a request already had a Cookie header, and it
- *       hard-coded a SOCS token that can expire or be region-specific.
- *     • REMOVED: getYouTubeHeaders() call inside execute() (infinite recursion / StackOverflow).
+ * ROOT CAUSE OF CRASH:
+ *   IllegalArgumentException: unexpected domain: .youtube.com
+ *   OkHttp's Cookie.Builder.domain() rejects any string beginning with ".".
+ *   The v10.0.0 code called cookieJar.addCookie(".youtube.com", ...) and
+ *   cookieJar.addCookie(".google.com", ...) inside initializeNewPipe(), which
+ *   threw inside the synchronized try-block and was re-thrown as
+ *   CodedException("INIT_FAILED", "NewPipe.init failed: unexpected domain: .youtube.com").
  *
- * [B] Consent cookie sourced correctly:
- *     • YoutubeParsingHelper.setConsentAccepted(true) is called after NewPipe.init().
- *     • YoutubeParsingHelper.generateConsentCookie() (no-throw, no network, pure computation)
- *       is called immediately after to obtain the SOCS cookie value and seed the cookie jar.
- *     • This is the approach confirmed by the v0.26.0 Javadoc:
- *         generateConsentCookie() — static, no-throws, returns the accept-all SOCS token.
- *         getCookieHeader()       — returns Map with the cookie, used internally by the extractor.
- *       The cookie jar approach ensures the cookie is sent on every YouTube request automatically
- *       without any per-request conditional logic in execute().
+ * FIX SUMMARY (4 changes, all cross-checked against official sources):
  *
- * [C] fetchAndCacheVisitorData() — corrected sequence:
- *     • getYouTubeHeaders() is called OUTSIDE execute() (safe: only called from a
- *       background thread after NewPipe is fully initialised, not from within a Downloader call).
- *     • It fetches sw.js → triggers Downloader.get() internally, but since we are NOT inside
- *       execute() at this point, there is no recursion.
- *     • InnertubeClientRequestInfo.ofWebClient() used as per v0.26.0 docs.
+ * [1] Removed cookieJar (SimpleCookieJar) from companion object.
+ *     Removed .cookieJar(cookieJar) from OkHttpClient.Builder.
+ *     Removed the entire SimpleCookieJar inner class.
  *
- * [D] POST body Content-Type corrected in MavinDownloader:
- *     • NewPipe InnerTube POST requests send JSON bodies. The extractor sets the body bytes
- *       and expects the Downloader to forward them as-is with "application/json" if the
- *       request has no explicit Content-Type header. Previously the code used
- *       "application/x-www-form-urlencoded" as a blanket fallback — wrong for InnerTube.
- *     • Fix: if request.headers() contains "Content-Type" use it; otherwise default to
- *       "application/json" for POST (matches official DownloaderImpl behaviour).
+ * [2] initializeNewPipe(): removed all cookieJar.addCookie() calls.
+ *     Only YoutubeParsingHelper.setConsentAccepted(true) remains.
+ *     Javadoc: "false (default) → SOCS=CAE=; true → SOCS=CAISAiAD.
+ *     Needed to extract mixes and some YouTube Music playlists in EU countries."
  *
- * [E] All previous v9.x fixes retained:
- *     [1] Long → Double at expo-modules bridge boundary.
- *     [2] Int fields NOT converted (no .toDouble() needed).
- *     [3] Full streamInfoToMap field coverage (segments, frames, host, privacy, etc.).
- *     [4] Full channelInfo field coverage.
- *     [5] Full playlistInfo field coverage.
- *     [6] getSearchSuggestions returns Map wrapper.
- *     [7] segmentToMap / framesetToMap helpers.
- *     [8] setConsentAccepted(true) after NewPipe.init().
- *     [9] Real visitorData via getVisitorDataFromInnertube().
- *    [10] WEB client not used for stream extraction (SABR fix).
- *    [11] getMediaCapabilities() returns Set not List.
- *    [12] No getYouTubeHeaders() inside execute() (infinite recursion guard).
+ * [3] MavinDownloader.execute(): inject SOCS cookie via getCookieHeader() BEFORE
+ *     forwarding extractor headers. Official Javadoc: getCookieHeader() is static,
+ *     no throws, returns Map<String,List<String>> — "Create a map with the required
+ *     cookie header." No Cookie.Builder, no domain strings, no CookieJar needed.
+ *     Only injected when extractor has not already provided a Cookie header.
+ *
+ * [4] execute() header forwarding: changed addHeader() to removeHeader() + addHeader()
+ *     per key — matching the official DownloaderImpl (PR #11969, merged Jan 31 2025).
+ *     Ensures extractor headers override any previously set defaults, not append to them.
+ *
+ * [5] execute(): added HTTP 429 → ReCaptchaException, matching official DownloaderImpl.
+ *
+ * ── v10.0.0 architecture (retained) ─────────────────────────────────────────
+ *
+ * [A] POST Content-Type defaults to "application/json" (InnerTube fix).
+ * [B] No getYouTubeHeaders() inside execute() (infinite recursion guard).
+ * [C] visitorData fetched on background thread via getVisitorDataFromInnertube().
+ * [D] Long → Double at expo-modules bridge boundary.
+ * [E] Full streamInfoToMap / channelInfo / playlistInfo field coverage.
+ * [F] YouTube Trending page removed 2025-07-21 → 6-layer fallback.
+ * [G] WEB client not used for stream extraction (SABR fix).
  */
 class MavinEngineModule : Module() {
 
     companion object {
         private const val TAG = "MavinEngine"
-        private const val VERSION = "10.0.0"
+        private const val VERSION = "10.1.0"
 
         // ── OkHttp ────────────────────────────────────────────────────────
-        // CookieJar is set during httpClient construction (after companion init)
-        // so it can reference the SimpleCookieJar singleton.
-        private val cookieJar = SimpleCookieJar()
-
+        // No CookieJar. The SOCS consent cookie is injected per-request in
+        // MavinDownloader.execute() via YoutubeParsingHelper.getCookieHeader(),
+        // matching the official TeamNewPipe DownloaderImpl pattern (PR #11969).
+        // Using Cookie.Builder with OkHttp requires dot-free domain strings;
+        // the getCookieHeader() approach avoids Cookie.Builder entirely and is
+        // immune to IllegalArgumentException: unexpected domain: .youtube.com.
         private val httpClient: OkHttpClient = OkHttpClient.Builder()
             .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .cookieJar(cookieJar)
             .build()
 
         @Volatile private var isInitialized = false
@@ -165,60 +156,6 @@ class MavinEngineModule : Module() {
             "$CHARTS_BASE_URL/charts/TopSongs/us/weekly"
         )
         private const val MAX_TRENDING_ITEMS = 6
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // SIMPLE IN-MEMORY COOKIE JAR
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Minimal OkHttp CookieJar that keeps YouTube/Google cookies in memory.
-     *
-     * The official NewPipe DownloaderImpl stores cookies (including the SOCS consent
-     * cookie) inside an OkHttp CookieJar so that every request to youtube.com
-     * automatically includes them — without any manual header injection in execute().
-     *
-     * We seed this jar with the SOCS cookie after setConsentAccepted(true) +
-     * generateConsentCookie() are called during initializeNewPipe().
-     */
-    class SimpleCookieJar : okhttp3.CookieJar {
-        private val store: MutableMap<String, MutableList<okhttp3.Cookie>> =
-            java.util.concurrent.ConcurrentHashMap()
-
-        override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
-            val host = url.host
-            store.getOrPut(host) { mutableListOf() }.let { existing ->
-                for (incoming in cookies) {
-                    existing.removeAll { it.name == incoming.name }
-                    existing.add(incoming)
-                }
-            }
-        }
-
-        override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> {
-            val host = url.host
-            // Match against youtube.com, music.youtube.com, googlevideo.com, etc.
-            return store.entries
-                .filter { (domain, _) ->
-                    host == domain || host.endsWith(".$domain") || domain.endsWith(".$host")
-                }
-                .flatMap { it.value }
-                .filter { cookie -> cookie.matches(url) }
-        }
-
-        /** Manually inject a cookie for a specific domain (e.g. the SOCS consent cookie). */
-        fun addCookie(domain: String, name: String, value: String) {
-            val cookie = okhttp3.Cookie.Builder()
-                .domain(domain)
-                .name(name)
-                .value(value)
-                .path("/")
-                .build()
-            store.getOrPut(domain) { mutableListOf() }.let { list ->
-                list.removeAll { it.name == name }
-                list.add(cookie)
-            }
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -430,15 +367,17 @@ class MavinEngineModule : Module() {
             mapOf<String, Any>(
                 "version"      to VERSION,
                 "library"      to "NewPipeExtractor 0.26.0",
-                "architecture" to "v10.0 — official Downloader pattern + CookieJar consent + Content-Type fix",
+                "architecture" to "v10.1 — getCookieHeader() consent injection (official DownloaderImpl pattern, PR #11969)",
                 "notes"        to listOf(
                     "YouTube Trending page removed 2025-07-21 — FEtrending is dead",
                     "Primary trending source: YouTube Music Charts (FEmusic_charts)",
                     "v0.26.0: WEB client no longer used for stream extraction (SABR fix)",
                     "v0.26.0: Real visitorData fetched via YoutubeParsingHelper.getVisitorDataFromInnertube()",
-                    "v10.0: MavinDownloader uses CookieJar for SOCS consent (official pattern)",
-                    "v10.0: POST Content-Type defaults to application/json (InnerTube fix)",
-                    "v10.0: generateConsentCookie() seeds CookieJar — no hard-coded token strings"
+                    "v10.1: CRASH FIX — removed Cookie.Builder / CookieJar (IllegalArgumentException: unexpected domain: .youtube.com)",
+                    "v10.1: SOCS consent cookie injected per-request via getCookieHeader() — static, no-throw, no domain strings",
+                    "v10.1: execute() uses removeHeader()+addHeader() per official DownloaderImpl (PR #11969)",
+                    "v10.1: HTTP 429 → ReCaptchaException (official DownloaderImpl pattern)",
+                    "v10.0: POST Content-Type defaults to application/json (InnerTube fix)"
                 )
             )
         }
@@ -459,26 +398,19 @@ class MavinEngineModule : Module() {
                     ContentCountry("US")
                 )
 
-                // [B] Per v0.26.0 docs: setConsentAccepted(true) must be called after init()
-                // to configure internal SOCS cookie generation within NewPipe.
+                // [B] v0.26.0 official pattern (confirmed Javadoc + DownloaderImpl PR #11969):
+                // setConsentAccepted(true) configures internal SOCS cookie state so that
+                // getCookieHeader() returns the "accept-all" cookie Map<String,List<String>>.
+                // MavinDownloader.execute() calls getCookieHeader() per-request to inject
+                // the cookie as a plain header — no Cookie.Builder, no CookieJar, no domain
+                // strings. This avoids IllegalArgumentException: unexpected domain: .youtube.com
+                // which OkHttp's Cookie.Builder throws for any leading-dot domain string.
+                //
+                // Javadoc for setConsentAccepted:
+                //   false (default) → SOCS=CAE=
+                //   true            → SOCS=CAISAiAD  (needed for EU, mixes, Music playlists)
                 YoutubeParsingHelper.setConsentAccepted(true)
-
-                // [B] generateConsentCookie() is a static, no-network, no-throw computation
-                // that returns the SOCS accept-all cookie value. We seed the CookieJar with it
-                // so OkHttp sends the cookie on every YouTube/Google request automatically.
-                // This replaces the previous approach of manually injecting a hard-coded
-                // cookie string inside execute() — which was fragile and could conflict with
-                // Cookie headers already present on a request.
-                val socsValue = YoutubeParsingHelper.generateConsentCookie()
-                if (socsValue.isNotEmpty()) {
-                    cookieJar.addCookie("youtube.com",   "SOCS", socsValue)
-                    cookieJar.addCookie(".youtube.com",  "SOCS", socsValue)
-                    cookieJar.addCookie("google.com",    "SOCS", socsValue)
-                    cookieJar.addCookie(".google.com",   "SOCS", socsValue)
-                    Log.i(TAG, "✅ SOCS cookie seeded in CookieJar: ${socsValue.take(24)}...")
-                } else {
-                    Log.w(TAG, "⚠️ generateConsentCookie() returned empty — consent cookie not seeded")
-                }
+                Log.i(TAG, "✅ setConsentAccepted(true) — SOCS cookie will be injected per-request via getCookieHeader()")
 
                 isInitialized = true
                 Log.i(TAG, "✅ NewPipe v0.26.0 initialized — ${NewPipe.getServices().size} services loaded")
@@ -2050,43 +1982,56 @@ class MavinEngineModule : Module() {
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * MavinDownloader — Official NewPipe Downloader implementation pattern.
+     * MavinDownloader — v0.26.0 official pattern (cross-checked against Javadoc +
+     * TeamNewPipe/NewPipe DownloaderImpl.java PR #11969, merged Jan 31 2025).
      *
-     * Architecture matches TeamNewPipe/NewPipe DownloaderImpl.java:
+     * ── execute() step-by-step (mirrors official DownloaderImpl order) ──────────
      *
-     * 1. execute() is a clean pass-through. It forwards NewPipe's request headers
-     *    exactly as provided. It does NOT inject cookies manually — the CookieJar
-     *    on the OkHttpClient handles all cookie management automatically.
+     * Step 1 — Build request method + body.
+     *   POST: use Content-Type from extractor headers if present, else "application/json".
+     *         "application/x-www-form-urlencoded" is NEVER used — InnerTube rejects it.
+     *   HEAD/GET: standard.
      *
-     * 2. The SOCS consent cookie is carried by SimpleCookieJar (seeded during
-     *    initializeNewPipe() via generateConsentCookie()). OkHttp attaches it
-     *    to every youtube.com/google.com request without any per-request logic here.
+     * Step 2 — Inject SOCS consent cookie via getCookieHeader() BEFORE extractor headers.
+     *   Javadoc: getCookieHeader() — static, no throws, returns Map<String,List<String>>,
+     *   documented as "Create a map with the required cookie header. Returns: A singleton
+     *   map containing the header." It reads the setConsentAccepted(true) state set during
+     *   init — no network, no Cookie.Builder, no domain strings. Injected only when the
+     *   extractor has not already provided a Cookie header.
+     *   This eliminates the IllegalArgumentException: unexpected domain: .youtube.com crash
+     *   that the old Cookie.Builder / CookieJar approach caused.
      *
-     * 3. [D] POST Content-Type: NewPipe InnerTube requests use JSON bodies.
-     *    The extractor sets the body bytes but does NOT always include a Content-Type
-     *    header in the request object — it relies on the Downloader to default to
-     *    "application/json". The old code defaulted to "application/x-www-form-urlencoded"
-     *    which caused InnerTube POST requests to be rejected with 400/415 errors.
-     *    Fix: check request headers for Content-Type; default to "application/json" if absent.
+     * Step 3 — Forward extractor headers using removeHeader() + addHeader() per key.
+     *   Official DownloaderImpl uses .header() (= removeHeader + addHeader) for single
+     *   values and removeHeader + addHeader loop for multi-value lists. This ensures
+     *   extractor headers properly override any previously set values (e.g. User-Agent,
+     *   Cookie) rather than duplicating them.
      *
-     * 4. User-Agent: added only when absent (same as official DownloaderImpl).
+     * Step 4 — Add User-Agent if absent.
      *
-     * IMPORTANT — what is NOT done here (unlike the old v9.x implementation):
-     *   ✗ No getYouTubeHeaders() call (infinite recursion risk)
-     *   ✗ No manual Cookie header injection (conflicts with CookieJar)
-     *   ✗ No hard-coded SOCS token string (fragile, region-dependent)
+     * Step 5 — Execute, handle HTTP 429 → ReCaptchaException (official DownloaderImpl
+     *   always throws ReCaptchaException on 429, not a generic IOException).
+     *
+     * Step 6 — Read body and return Response. Body is auto-closed via .use {}.
+     *
+     * What is NOT done:
+     *   ✗ No getYouTubeHeaders() call inside execute() — that causes infinite recursion.
+     *   ✗ No CookieJar on OkHttpClient — getCookieHeader() injection replaces it.
+     *   ✗ No Cookie.Builder — it throws on leading-dot domain strings (.youtube.com).
+     *   ✗ No hard-coded SOCS token — getCookieHeader() derives it from consent state.
      */
     class MavinDownloader(private val client: OkHttpClient) : Downloader() {
 
+        @Throws(IOException::class, ReCaptchaException::class)
         override fun execute(request: org.schabi.newpipe.extractor.downloader.Request): Response {
-            val builder = Request.Builder().url(request.url())
+            val url = request.url()
+            val builder = Request.Builder().url(url)
 
-            // [D] Determine Content-Type for POST bodies:
-            //     Use the Content-Type from the extractor's headers if provided,
-            //     otherwise default to "application/json" (NewPipe InnerTube pattern).
-            //     Never fall back to "application/x-www-form-urlencoded" — InnerTube rejects it.
-            val requestContentType: String = request.headers()["Content-Type"]?.firstOrNull()
-                ?: "application/json"
+            // ── Step 1: Build method + body ───────────────────────────────────────
+            // [D] Content-Type: use extractor's value if provided, else "application/json".
+            //     InnerTube API exclusively uses JSON — never fall back to form-urlencoded.
+            val requestContentType: String =
+                request.headers()["Content-Type"]?.firstOrNull() ?: "application/json"
 
             when (request.httpMethod()) {
                 "POST" -> {
@@ -2100,26 +2045,49 @@ class MavinEngineModule : Module() {
                 else   -> builder.get()
             }
 
-            // Forward all headers from NewPipe's request object.
-            // The extractor classes set the correct YouTube-specific headers (X-YouTube-Client-Name,
-            // X-YouTube-Client-Version, Origin, Referer, etc.) internally — we just forward them.
+            // ── Step 2: Inject SOCS consent cookie via getCookieHeader() ──────────
+            // Official v0.26.0 Javadoc: getCookieHeader() is static, no throws, returns
+            // Map<String,List<String>> — "Create a map with the required cookie header."
+            // Called after setConsentAccepted(true) is set in initializeNewPipe().
+            // Only injected when the extractor has not already provided a Cookie header,
+            // so extractor-supplied cookies (e.g. for age-gated videos) are never overridden.
+            if (!request.headers().containsKey("Cookie")) {
+                try {
+                    YoutubeParsingHelper.getCookieHeader().forEach { (key, values) ->
+                        values.forEach { value -> builder.addHeader(key, value) }
+                    }
+                } catch (e: Exception) {
+                    // getCookieHeader() is documented no-throw, but guard defensively.
+                    android.util.Log.w("MavinDownloader", "getCookieHeader() failed (non-fatal): ${e.message}")
+                }
+            }
+
+            // ── Step 3: Forward extractor headers (removeHeader + addHeader) ──────
+            // Using removeHeader() before addHeader() matches the official DownloaderImpl
+            // pattern (PR #11969): ensures extractor headers override any defaults above
+            // (User-Agent, Cookie) rather than appending duplicate values.
             request.headers().forEach { (key, values) ->
+                builder.removeHeader(key)
                 values.forEach { value -> builder.addHeader(key, value) }
             }
 
-            // Add User-Agent only if the extractor did not already set one.
+            // ── Step 4: Add User-Agent if not set by the extractor ────────────────
+            // Step 3 above will have set User-Agent if the extractor provided one.
+            // Only add our fallback when the extractor did not supply any.
             if (!request.headers().containsKey("User-Agent")) {
                 builder.addHeader("User-Agent",
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             }
 
-            // NOTE: No manual Cookie injection here.
-            // The SOCS consent cookie (and any cookies YouTube sets via Set-Cookie) are
-            // managed entirely by the SimpleCookieJar attached to the OkHttpClient.
-            // OkHttp automatically attaches matching cookies to every request.
-
+            // ── Step 5+6: Execute, handle 429, read body, return ─────────────────
+            // .use {} auto-closes the OkHttp Response, matching the official try-with-resources.
             return client.newCall(builder.build()).execute().use { r ->
+                if (r.code == 429) {
+                    // Official DownloaderImpl always throws ReCaptchaException on 429,
+                    // not a generic IOException — preserves NewPipe's retry/captcha handling.
+                    throw ReCaptchaException("reCaptcha Challenge requested", url)
+                }
                 Response(
                     r.code,
                     r.message,

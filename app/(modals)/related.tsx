@@ -1,13 +1,30 @@
 /**
  * (modals)/related.tsx
  *
- * Receives params:
- *   songId: string
- *   title:  string
- *   artist: string
+ * Displays songs related to the currently playing track.
+ *
+ * Approach (mirrors fetchRelatedSongs in MusicPlayerContext):
+ *   1. Receives songUrl (full YouTube watch URL) via route params.
+ *   2. Calls MavinEngine.getStreamInfo(songUrl, 0) to get relatedItems.
+ *   3. Filters to non-live, non-short StreamInfoItems.
+ *   4. Maps to the canonical Song type (same mapping as MusicPlayerContext).
+ *   5. Renders the list; tapping a row calls playAudio(song, allSongs).
+ *
+ * Params:
+ *   songUrl: string  — full YouTube watch URL of the current track
+ *   title:   string  — display title (shown in header subtitle)
+ *   artist:  string  — display artist (shown in header subtitle)
+ *
+ * Architecture alignment (v10.1.0):
+ *   - serviceId 0 → MavinEngineModule routes to Android/iOS client (SABR fix).
+ *   - SOCS consent cookie injected per-request via getCookieHeader() in
+ *     MavinDownloader.execute() — no manual cookie handling here.
+ *   - StreamInfoItem.name is used (not .title) — NewPipe InfoItem base field.
+ *   - videoId extracted from both youtube.com?v= and youtu.be/ URL formats.
+ *   - Song type imported from MusicPlayerContext re-export (canonical definition).
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -20,83 +37,183 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useMusicPlayer } from "@/components/MusicPlayerContext";
+import MavinEngine, { StreamInfoItem } from "@/modules/mavin-engine";
+import { useMusicPlayer, Song } from "@/components/MusicPlayerContext";
 import { triggerHaptic } from "@/helpers/haptics";
 
+// ─── Colours ──────────────────────────────────────────────────────────────────
+
 const C = {
-  bg: "#000000",
-  surface: "#0D0D0D",
-  surfaceRaised: "#161616",
-  border: "rgba(255,255,255,0.07)",
-  borderGold: "rgba(212,175,55,0.22)",
-  gold: "#D4AF37",
-  goldFill: "rgba(212,175,55,0.1)",
-  text: "#FFFFFF",
-  textSub: "#888888",
-  textMuted: "#4A4A4A",
+  bg:           "#000000",
+  surface:      "#0D0D0D",
+  surfaceRaised:"#161616",
+  border:       "rgba(255,255,255,0.07)",
+  borderGold:   "rgba(212,175,55,0.22)",
+  gold:         "#D4AF37",
+  text:         "#FFFFFF",
+  textSub:      "#888888",
+  textMuted:    "#4A4A4A",
 };
 
-// Replace with your real track type from the store
-interface RelatedTrack {
-  id: string;
-  title: string;
-  artist: string;
-  thumbnail?: string;
-  duration?: number;
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Extract a bare YouTube video ID from a full URL.
+ * Handles both youtube.com?v= and youtu.be/ formats.
+ */
+const extractVideoId = (url: string): string | undefined => {
+  if (url.includes("v="))
+    return url.split("v=")[1]?.split("&")[0] || undefined;
+  if (url.includes("youtu.be/"))
+    return url.split("youtu.be/")[1]?.split("?")[0] || undefined;
+  return undefined;
+};
+
+/**
+ * Pick the best thumbnail from a NewPipe thumbnails array.
+ * Prefers MEDIUM → HIGH → first available.
+ */
+const bestThumb = (
+  thumbs: { url: string; resolutionLevel: string }[]
+): string =>
+  thumbs.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
+  thumbs.find((t) => t.resolutionLevel === "HIGH")?.url ??
+  thumbs[0]?.url ??
+  "";
+
+/**
+ * Map a NewPipe StreamInfoItem to the canonical Song type.
+ * Mirrors the mapping in MusicPlayerContext.fetchRelatedSongs.
+ *
+ * Note: StreamInfoItem uses `.name` (NewPipe InfoItem base field), not `.title`.
+ */
+const streamItemToSong = (s: StreamInfoItem): Song => {
+  const videoId = extractVideoId(s.url);
+  return {
+    id:        videoId ?? s.url,
+    title:     s.name,
+    artist:    s.uploaderName,
+    thumbnail: bestThumb(s.thumbnails),
+    url:       s.url,
+    videoId,
+  };
+};
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function RelatedModal() {
-  const router = useRouter();
+  const router          = useRouter();
   const { top, bottom } = useSafeAreaInsets();
-  const { songId, title, artist } = useLocalSearchParams<{
-    songId: string;
-    title: string;
-    artist: string;
+  const { playAudio }   = useMusicPlayer();
+
+  // songUrl is the full YouTube watch URL of the currently playing track.
+  // title / artist are display-only, shown in the header subtitle.
+  const { songUrl, title, artist } = useLocalSearchParams<{
+    songUrl: string;
+    title:   string;
+    artist:  string;
   }>();
 
-  const { playAudio } = useMusicPlayer();
-  const [tracks, setTracks] = useState<RelatedTrack[]>([]);
+  const [songs,   setSongs]   = useState<Song[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  // ── Fetch ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    // TODO: fetch related tracks from your API using songId / title / artist
-    const timer = setTimeout(() => {
-      setTracks([]); // replace with API result
+    if (!songUrl) {
       setLoading(false);
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [songId]);
+      setError("No track URL provided.");
+      return;
+    }
 
-  const handlePlay = (track: RelatedTrack) => {
-    triggerHaptic();
-    playAudio(track as any, tracks as any);
-    router.back();
-    router.navigate("/player");
-  };
+    let cancelled = false;
 
-  const renderItem = ({ item }: { item: RelatedTrack }) => (
+    const fetchRelated = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // serviceId 0 → YouTube Android/iOS client (v0.26.0 SABR fix).
+        // getStreamInfo returns relatedItems populated from the watch-next
+        // panel — the same data source MusicPlayerContext uses.
+        const info = await MavinEngine.getStreamInfo(songUrl, 0);
+
+        if (cancelled) return;
+
+        if (!info.success) {
+          setError("Could not load related tracks.");
+          return;
+        }
+
+        const related: Song[] = info.relatedItems
+          // Only standard video streams — skip live streams and Shorts
+          .filter((i): i is StreamInfoItem => i.type === "stream")
+          .filter((s) => !s.isLive && !s.isShortFormContent)
+          .map(streamItemToSong);
+
+        setSongs(related);
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message ?? "Failed to load related tracks.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchRelated();
+    return () => { cancelled = true; };
+  }, [songUrl]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
+  const handlePlay = useCallback(
+    async (song: Song) => {
+      triggerHaptic();
+      // Pass the full songs array as the playlist so the queue is pre-populated.
+      await playAudio(song, songs);
+      router.back();
+      router.navigate("/player");
+    },
+    [songs, playAudio, router],
+  );
+
+  // ── Render row ─────────────────────────────────────────────────────────────
+
+  const renderItem = ({ item }: { item: Song }) => (
     <TouchableOpacity
       style={styles.row}
       onPress={() => handlePlay(item)}
       activeOpacity={0.7}
     >
       {item.thumbnail ? (
-        <Image source={{ uri: item.thumbnail }} style={styles.cover} contentFit="cover" transition={200} />
+        <Image
+          source={{ uri: item.thumbnail }}
+          style={styles.cover}
+          contentFit="cover"
+          transition={200}
+        />
       ) : (
         <View style={[styles.cover, styles.coverPlaceholder]}>
           <Ionicons name="musical-notes" size={18} color={C.textMuted} />
         </View>
       )}
+
       <View style={{ flex: 1 }}>
         <Text style={styles.trackTitle} numberOfLines={1}>{item.title}</Text>
         <Text style={styles.trackArtist} numberOfLines={1}>{item.artist}</Text>
       </View>
+
       <Ionicons name="play-circle-outline" size={24} color={C.gold} />
     </TouchableOpacity>
   );
 
+  // ── Layout ─────────────────────────────────────────────────────────────────
+
   return (
     <View style={[styles.container, { paddingTop: top }]}>
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -106,36 +223,70 @@ export default function RelatedModal() {
         >
           <Ionicons name="chevron-down" size={22} color={C.text} />
         </TouchableOpacity>
+
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Related Songs</Text>
-          {artist && (
-            <Text style={styles.headerSub} numberOfLines={1}>Similar to {artist}</Text>
+          {(artist || title) && (
+            <Text style={styles.headerSub} numberOfLines={1}>
+              Similar to {artist || title}
+            </Text>
           )}
         </View>
+
+        {/* Spacer — mirrors backBtn width to keep title centred */}
         <View style={{ width: 36 }} />
       </View>
 
       <View style={styles.divider} />
 
-      {loading ? (
+      {/* Loading */}
+      {loading && (
         <View style={styles.centered}>
           <ActivityIndicator color={C.gold} />
           <Text style={styles.loadingText}>Finding related tracks…</Text>
         </View>
-      ) : (
+      )}
+
+      {/* Error */}
+      {!loading && !!error && (
+        <View style={styles.centered}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={40}
+            color={C.textMuted}
+            style={{ marginBottom: 12 }}
+          />
+          <Text style={styles.emptyTitle}>Something went wrong</Text>
+          <Text style={styles.emptySub}>{error}</Text>
+        </View>
+      )}
+
+      {/* Results */}
+      {!loading && !error && (
         <FlatList
-          data={tracks}
-          keyExtractor={(i) => i.id}
+          data={songs}
+          keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottom + 32 }}
+          contentContainerStyle={{
+            paddingHorizontal: 16,
+            paddingBottom: bottom + 32,
+          }}
+          showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => (
-            <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: 68 }} />
+            <View style={styles.separator} />
           )}
           ListEmptyComponent={
             <View style={styles.centered}>
-              <Ionicons name="git-network-outline" size={48} color={C.textMuted} style={{ marginBottom: 16 }} />
+              <Ionicons
+                name="git-network-outline"
+                size={48}
+                color={C.textMuted}
+                style={{ marginBottom: 16 }}
+              />
               <Text style={styles.emptyTitle}>No Related Songs</Text>
-              <Text style={styles.emptySub}>We couldn't find related tracks right now.</Text>
+              <Text style={styles.emptySub}>
+                We couldn't find related tracks right now.
+              </Text>
             </View>
           }
         />
@@ -144,21 +295,100 @@ export default function RelatedModal() {
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
-  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12 },
-  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
-  headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: { fontSize: 16, fontWeight: "700", color: C.text },
-  headerSub: { fontSize: 12, color: C.textSub, marginTop: 2 },
-  divider: { height: 0.5, backgroundColor: C.borderGold, marginHorizontal: 16, marginBottom: 8 },
-  row: { flexDirection: "row", alignItems: "center", paddingVertical: 12 },
-  cover: { width: 48, height: 48, borderRadius: 8, marginRight: 12 },
-  coverPlaceholder: { backgroundColor: C.surfaceRaised, alignItems: "center", justifyContent: "center", borderWidth: 0.5, borderColor: C.border },
-  trackTitle: { fontSize: 14, fontWeight: "600", color: C.text },
-  trackArtist: { fontSize: 12, color: C.textSub, marginTop: 2 },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
-  loadingText: { fontSize: 13, color: C.textSub, marginTop: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: "700", color: C.text, marginBottom: 8 },
-  emptySub: { fontSize: 13, color: C.textSub, textAlign: "center" },
+  container: {
+    flex: 1,
+    backgroundColor: C.bg,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: C.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: C.text,
+  },
+  headerSub: {
+    fontSize: 12,
+    color: C.textSub,
+    marginTop: 2,
+  },
+  divider: {
+    height: 0.5,
+    backgroundColor: C.borderGold,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  cover: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    marginRight: 12,
+  },
+  coverPlaceholder: {
+    backgroundColor: C.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 0.5,
+    borderColor: C.border,
+  },
+  trackTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: C.text,
+  },
+  trackArtist: {
+    fontSize: 12,
+    color: C.textSub,
+    marginTop: 2,
+  },
+  separator: {
+    height: 0.5,
+    backgroundColor: C.border,
+    marginLeft: 68,
+  },
+  centered: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+  },
+  loadingText: {
+    fontSize: 13,
+    color: C.textSub,
+    marginTop: 12,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: C.text,
+    marginBottom: 8,
+  },
+  emptySub: {
+    fontSize: 13,
+    color: C.textSub,
+    textAlign: "center",
+  },
 });

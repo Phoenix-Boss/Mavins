@@ -209,6 +209,32 @@ function PlayerContent() {
     playbackState.state === State.Playing ||
     playbackState.state === State.Buffering;
 
+  // ── Video URL — custom field written by MusicPlayerContext.buildTrack ────────
+  // MusicPlayerContext stores the DASH video stream URL as `videoUrl` on the
+  // Track object. RNTP ignores unknown fields; PlayerScreen reads it here for
+  // the Song/Video segment toggle and the video player route.
+  const videoUrl: string | undefined =
+    (activeTrack as any)?.videoUrl as string | undefined;
+  const hasVideo = !!videoUrl;
+
+  // ── Song / Video segment toggle ──────────────────────────────────────────────
+  const [activeSegment, setActiveSegment] = useState<"song" | "video">("song");
+
+  const handleSegmentPress = useCallback((seg: "song" | "video") => {
+    triggerHaptic();
+    if (seg === "video" && !hasVideo) return; // no video stream for this track
+    setActiveSegment(seg);
+    if (seg === "video") {
+      router.push({
+        pathname: "/(player)/video",
+        params: { videoUrl },
+      });
+    }
+  }, [hasVideo, videoUrl, router]);
+
+  // Reset to "song" whenever the track changes
+  useEffect(() => { setActiveSegment("song"); }, [activeTrack?.id]);
+
   // ── Shuffle (local state — not yet in RNTP) ─────────────────────────────────
   const [shuffleMode, setShuffleMode] = useState<"off" | "list" | "random" | "related">("off");
 
@@ -306,7 +332,19 @@ function PlayerContent() {
   const handleSleepTimer  = () => router.push("/(player)/sleep-timer");
   const handleSeeAll      = () => router.push("/(modals)/queue");
   const handleLyrics      = () => router.push("/(modals)/lyrics");
-  const handleRelated     = () => router.push("/(modals)/related");
+  const handleRelated     = () => {
+    if (!activeTrack?.url) return;
+    router.push({
+      pathname: "/(modals)/related",
+      params: {
+        // activeTrack.url is the YouTube watch URL — the exact param
+        // MavinEngine.getStreamInfo() needs to fetch relatedItems.
+        songUrl: activeTrack.url as string,
+        title:   (activeTrack.title  ?? "") as string,
+        artist:  (activeTrack.artist ?? "") as string,
+      },
+    });
+  };
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -322,8 +360,22 @@ function PlayerContent() {
 
             <View style={styles.topBarContent}>
               <View style={styles.segmentSwitch}>
-                <Text style={styles.segmentActive}>Song</Text>
-                <Text style={styles.segmentInactive}>Video</Text>
+                <TouchableOpacity onPress={() => handleSegmentPress("song")} activeOpacity={0.7}>
+                  <Text style={activeSegment === "song" ? styles.segmentActive : styles.segmentInactive}>
+                    Song
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleSegmentPress("video")}
+                  activeOpacity={hasVideo ? 0.7 : 1}
+                >
+                  <Text style={[
+                    activeSegment === "video" ? styles.segmentActive : styles.segmentInactive,
+                    !hasVideo && { opacity: 0.3 },
+                  ]}>
+                    Video
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <View style={styles.topBarRight}>

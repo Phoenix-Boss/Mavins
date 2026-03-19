@@ -12,10 +12,27 @@
  * On subsequent searches for the same query, MavinEngine is never called —
  * Supabase returns the data directly.
  *
- * MavinEngine.search() API (per index.ts / MavinEngineModule.kt):
+ * MavinEngine.search() API (per MavinEngine.ts / MavinEngineModule.kt):
  *   - filter: '' = all content types (DO NOT pass undefined or 'all')
  *   - returns: { results: InfoItem[], ... } — key is "results" not "items"
  *   - serviceId: 0 = YouTube
+ *
+ * v10.1.0 architecture notes:
+ *   - CRASH FIX: IllegalArgumentException: unexpected domain: .youtube.com
+ *     was caused by SimpleCookieJar calling OkHttp's Cookie.Builder.domain()
+ *     with leading-dot strings (".youtube.com", ".google.com") at init time.
+ *     SimpleCookieJar and the OkHttp CookieJar entirely removed from the client.
+ *   - SOCS consent cookie is now injected per-request in MavinDownloader.execute()
+ *     via YoutubeParsingHelper.getCookieHeader() — the official v0.26.0 Javadoc
+ *     method: static, no throws, "Create a map with the required cookie header."
+ *   - POST Content-Type defaults to "application/json" — InnerTube requests
+ *     are now accepted without 400/415 errors.
+ *   - visitorData is prefetched at module init on a background thread.
+ *     By the time the user searches, the token is ready. A single silent retry
+ *     on empty results is kept for the rare edge case where the background
+ *     thread hasn't completed yet on very fast first searches.
+ *   - getYouTubeHeaders() is called on the background thread (not in execute()),
+ *     zero recursion risk. No special handling needed here.
  *
  * Routing:
  *   Song     → playAudio(song, queue) via MusicPlayerContext
@@ -54,7 +71,6 @@ import MavinEngine, {
   InfoItem,
 } from "@/modules/mavin-engine";
 import { cache, supabaseCache } from "@/libs/cache";
-import { supabase } from "@/libs/supabase";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { triggerHaptic } from "@/helpers/haptics";
 
@@ -72,7 +88,7 @@ const COLORS = {
   danger:        "#EF4444",
 };
 
-const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;   // 30 min device cache
+const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;          // 30 min device cache
 const HISTORY_CACHE_KEY   = "search:history:v1";
 const HISTORY_CACHE_TTL   = 365 * 24 * 60 * 60 * 1000; // 1 year
 const HISTORY_MAX         = 20;
@@ -88,7 +104,8 @@ interface SongResult {
   title: string;
   artist: string;
   thumbnail: string;
-  url: string;         // full YouTube watch URL
+  url: string;          // full YouTube watch URL
+  videoId: string;      // bare YouTube video ID (for resolveTrack fallback)
   duration: number;
   viewCount: number;
 }
@@ -143,7 +160,7 @@ const bestThumb = (
 
 const formatDuration = (s: number): string => {
   if (!s) return "";
-  const m = Math.floor(s / 60);
+  const m   = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
@@ -159,9 +176,18 @@ const formatSubs = (n: number): string => {
  * Map raw MavinEngine InfoItem[] → typed SearchResults.
  *
  * Per MavinEngineModule.kt performSearch():
- *   The Kotlin layer returns { "results": [...], "success": true, ... }
- *   Items have type "stream" | "playlist" | "channel" matching InfoItem union.
- *   Streams: isLive and isShortFormContent must be filtered out.
+ *   The response key is "results" (not "items") — already unwrapped by the
+ *   caller before this function is invoked.
+ *
+ *   item.type values: "stream" | "playlist" | "channel"
+ *
+ *   Streams:
+ *     isLive           → skip (live streams are not playable as audio tracks)
+ *     isShortFormContent → skip (YouTube Shorts are excluded per NewPipe docs)
+ *
+ *   Playlists:
+ *     uploaderName present → treat as album (named-uploader playlist)
+ *     uploaderName absent  → treat as generic playlist
  */
 const mapEngineResults = (items: InfoItem[]): SearchResults => {
   const out: SearchResults = { songs: [], albums: [], artists: [], playlists: [] };
@@ -169,15 +195,22 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
   for (const item of items) {
     if (item.type === "stream") {
       const s = item as StreamInfoItem;
-      // Skip live streams and YouTube Shorts per NewPipe docs
       if (s.isLive || s.isShortFormContent) continue;
+      // videoId: handle both youtube.com?v= and youtu.be/ URL formats
+      const videoId =
+        s.url.includes("v=")
+          ? s.url.split("v=")[1]?.split("&")[0] ?? ""
+          : s.url.includes("youtu.be/")
+          ? s.url.split("youtu.be/")[1]?.split("?")[0] ?? ""
+          : "";
       out.songs.push({
         type:      "song",
-        id:        s.url.split("v=")[1]?.split("&")[0] ?? s.url,
+        id:        videoId || s.url,
         title:     s.name,
         artist:    s.uploaderName,
         thumbnail: bestThumb(s.thumbnails),
         url:       s.url,
+        videoId,
         duration:  s.duration,
         viewCount: s.viewCount,
       });
@@ -191,7 +224,6 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
         url:         p.url,
         streamCount: p.streamCount,
       };
-      // Named-uploader playlists are treated as albums
       if (p.uploaderName) {
         out.albums.push({ type: "album", ...base });
       } else {
@@ -251,7 +283,8 @@ const persistResultsToSupabase = async (
 
 // ─── Cache key helpers ────────────────────────────────────────────────────────
 
-const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
+const deviceCacheKey = (q: string) =>
+  `search:results:${q.toLowerCase().trim()}`;
 
 // ─── History helpers ──────────────────────────────────────────────────────────
 
@@ -314,10 +347,12 @@ export default function SearchScreen() {
     if (query.trim().length < 2) { setSuggestions([]); return; }
     debounceRef.current = setTimeout(async () => {
       try {
-        // getSearchSuggestions returns { suggestions: string[] } per index.ts
+        // getSearchSuggestions returns { suggestions: string[] } per MavinEngine.ts
         const res = await MavinEngine.getSearchSuggestions(query.trim(), 0);
         setSuggestions(res.suggestions?.slice(0, 6) ?? []);
-      } catch { setSuggestions([]); }
+      } catch {
+        setSuggestions([]);
+      }
     }, DEBOUNCE_MS);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
@@ -341,19 +376,19 @@ export default function SearchScreen() {
       const cached = await cache.get(cacheKey);
       if (cached) {
         const sr = cached as SearchResults;
-        const hasResults = sr.songs?.length > 0 || sr.albums?.length > 0 ||
-                           sr.artists?.length > 0 || sr.playlists?.length > 0;
+        const hasResults =
+          sr.songs?.length > 0 || sr.albums?.length > 0 ||
+          sr.artists?.length > 0 || sr.playlists?.length > 0;
         if (hasResults) {
           console.log(`📦 [Search] L1 hit: "${trimmed}"`);
           setResults(sr);
           setLoading(false);
           setHistory(await saveToHistory(trimmed, history));
           return;
-        } else {
-          // Cached result was empty — delete it and fall through to live search
-          console.log(`🗑️ [Search] L1 stale empty cache — purging: "${trimmed}"`);
-          cache.delete(cacheKey).catch(() => {});
         }
+        // Cached result was empty — purge and fall through to live search
+        console.log(`🗑️ [Search] L1 stale empty cache — purging: "${trimmed}"`);
+        cache.delete(cacheKey).catch(() => {});
       }
     } catch {}
 
@@ -375,10 +410,7 @@ export default function SearchScreen() {
           viewCount: sbResult.accessCount ?? 0,
         };
         const mapped: SearchResults = {
-          songs:     [song],
-          albums:    [],
-          artists:   [],
-          playlists: [],
+          songs: [song], albums: [], artists: [], playlists: [],
         };
         setResults(mapped);
         cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
@@ -389,80 +421,100 @@ export default function SearchScreen() {
     } catch {}
 
     // ── L3: MavinEngine (NewPipe) ────────────────────────────────────────────
+    //
+    // v10.1.0 notes:
+    //   • search() filter must be '' (empty string) for all content types.
+    //     Never pass 'all' — not a valid NewPipe filter token.
+    //   • CRASH FIX: the SOCS consent cookie is now injected per-request in
+    //     MavinDownloader.execute() via getCookieHeader() (official v0.26.0
+    //     Javadoc pattern). The old SimpleCookieJar / Cookie.Builder approach
+    //     has been removed — it threw IllegalArgumentException at init time.
+    //   • POST bodies are sent as application/json (v10.0.0 fix).
+    //   • visitorData is fetched on a background thread at module init.
+    //     In the common case it is ready before the first search fires.
+    //     We retain a single silent retry for the rare edge case where the
+    //     background thread hasn't completed yet on very fast first searches.
     try {
       console.log(`🔍 [Search] L3 MavinEngine: "${trimmed}"`);
 
-      // Per index.ts search() signature and MavinEngineModule.kt performSearch():
-      //   filter: '' = all content types (DO NOT pass undefined or 'all')
-      //   Response key is "results" not "items"
-      //   serviceId: 0 = YouTube
-      const raw = await MavinEngine.search(trimmed, '', undefined, 0);
-      console.log(`[Search] raw keys:`, Object.keys(raw));
-      console.log(`[Search] raw.success:`, raw.success);
-      console.log(`[Search] raw.errors:`, JSON.stringify(raw.errors));
-      console.log(`[Search] raw results count: ${raw.results?.length ?? 0}`);
-      console.log(`[Search] first result:`, JSON.stringify(raw.results?.[0] ?? null));
+      const raw = await MavinEngine.search(trimmed, "", undefined, 0);
 
-      let results = raw.results ?? [];
-
-      // If 0 results — visitorData may not be ready yet (fetched async at init).
-      // Refresh it and retry once before giving up.
-      if (results.length === 0) {
-        console.log(`[Search] 0 results — refreshing visitorData and retrying...`);
-        try { await MavinEngine.refreshVisitorData(); } catch (_) {}
-        const retry = await MavinEngine.search(trimmed, '', undefined, 0);
-        console.log(`[Search] retry results count: ${retry.results?.length ?? 0}`);
-        results = retry.results ?? [];
+      console.log(`[Search] success: ${raw.success}, results: ${raw.results?.length ?? 0}`);
+      if (raw.errors?.length) {
+        console.warn(`[Search] non-fatal errors:`, raw.errors);
       }
 
-      const mapped = mapEngineResults(results);
-      console.log(`[Search] mapped — songs:${mapped.songs.length} albums:${mapped.albums.length} artists:${mapped.artists.length} playlists:${mapped.playlists.length}`);
+      let items = raw.results ?? [];
+
+      // Single silent retry: visitorData background-fetch may not have
+      // completed yet if the user searches within the first few seconds of
+      // app launch. Re-issuing the search is sufficient — no token refresh
+      // needed because the token is already being fetched concurrently.
+      if (items.length === 0 && raw.success) {
+        console.log(`[Search] 0 results on first attempt — retrying once...`);
+        const retry = await MavinEngine.search(trimmed, "", undefined, 0);
+        console.log(`[Search] retry results: ${retry.results?.length ?? 0}`);
+        items = retry.results ?? [];
+      }
+
+      const mapped = mapEngineResults(items);
+      console.log(
+        `[Search] mapped — songs:${mapped.songs.length} ` +
+        `albums:${mapped.albums.length} ` +
+        `artists:${mapped.artists.length} ` +
+        `playlists:${mapped.playlists.length}`
+      );
 
       setResults(mapped);
 
-      // Only cache if we actually got results — never cache empty arrays
-      const hasResults = mapped.songs.length > 0 || mapped.albums.length > 0 ||
-                         mapped.artists.length > 0 || mapped.playlists.length > 0;
-      if (hasResults) {
-        cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
-      } else {
-        console.warn(`[Search] MavinEngine returned 0 results for "${trimmed}" — not caching`);
-      }
+      const hasResults =
+        mapped.songs.length > 0 || mapped.albums.length > 0 ||
+        mapped.artists.length > 0 || mapped.playlists.length > 0;
 
-      // Persist to Supabase (fire & forget)
-      persistResultsToSupabase(trimmed, mapped);
+      if (hasResults) {
+        // Only cache non-empty results — never pollute the cache with
+        // empty arrays that would shadow future live results.
+        cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
+        persistResultsToSupabase(trimmed, mapped);
+      } else {
+        console.warn(`[Search] 0 results for "${trimmed}" after retry — not caching`);
+      }
 
       setHistory(await saveToHistory(trimmed, history));
+
     } catch (e: any) {
-      const msg = e?.message ?? '';
-      // If search failed due to visitorData/extraction error, refresh and retry once
-      if (msg.includes('visitorData') || msg.includes('Search failed') || msg.includes('ParsingException')) {
-        try {
-          console.log('[Search] visitorData error — refreshing and retrying...');
-          await MavinEngine.refreshVisitorData();
-          const raw2 = await MavinEngine.search(trimmed, '', undefined, 0);
-          const mapped2 = mapEngineResults(raw2.results ?? []);
-          setResults(mapped2);
-          const hasResults2 = mapped2.songs.length > 0 || mapped2.albums.length > 0 ||
-                              mapped2.artists.length > 0 || mapped2.playlists.length > 0;
-          if (hasResults2) cache.set(cacheKey, mapped2, SEARCH_CACHE_TTL_MS).catch(() => {});
-          setHistory(await saveToHistory(trimmed, history));
-          return;
-        } catch (retryErr: any) {
-          setError(retryErr?.message ?? 'Search failed after retry. Please try again.');
-          return;
+      // v10.1.0: with getCookieHeader() consent injection and corrected
+      // Content-Type, most transient errors (consent redirects, InnerTube
+      // 400/415) are resolved at the Kotlin Downloader level before reaching
+      // here. A single transparent retry is sufficient for genuine network errors.
+      const msg = e?.message ?? "";
+      console.error(`[Search] error: ${msg}`);
+
+      try {
+        console.log("[Search] retrying after error...");
+        const raw2 = await MavinEngine.search(trimmed, "", undefined, 0);
+        const mapped2 = mapEngineResults(raw2.results ?? []);
+        setResults(mapped2);
+        const hasResults2 =
+          mapped2.songs.length > 0 || mapped2.albums.length > 0 ||
+          mapped2.artists.length > 0 || mapped2.playlists.length > 0;
+        if (hasResults2) {
+          cache.set(cacheKey, mapped2, SEARCH_CACHE_TTL_MS).catch(() => {});
+          persistResultsToSupabase(trimmed, mapped2);
         }
+        setHistory(await saveToHistory(trimmed, history));
+      } catch (retryErr: any) {
+        setError(retryErr?.message ?? "Search failed. Please try again.");
       }
-      setError(msg || 'Search failed. Please try again.');
     } finally {
       setLoading(false);
     }
   }, [history]);
 
-  const handleSubmit        = ()         => performSearch(query);
+  const handleSubmit        = ()          => performSearch(query);
   const handleHistoryTap    = (q: string) => { setQuery(q); performSearch(q); };
   const handleSuggestionTap = (s: string) => { setQuery(s); performSearch(s); };
-  const handleClearHistory  = async ()   => { await clearAllHistory(); setHistory([]); };
+  const handleClearHistory  = async ()    => { await clearAllHistory(); setHistory([]); };
   const handleRemoveHistory = async (q: string) =>
     setHistory(await removeHistoryItem(q, history));
 
@@ -470,9 +522,21 @@ export default function SearchScreen() {
   const handleSongPress = async (song: SongResult) => {
     triggerHaptic();
     await playAudio(
-      { id: song.id, title: song.title, artist: song.artist, thumbnail: song.thumbnail, url: song.url },
+      {
+        id:        song.id,
+        title:     song.title,
+        artist:    song.artist,
+        thumbnail: song.thumbnail,
+        url:       song.url,
+        videoId:   song.videoId || undefined,
+      },
       (results?.songs ?? []).map((s) => ({
-        id: s.id, title: s.title, artist: s.artist, thumbnail: s.thumbnail, url: s.url,
+        id:        s.id,
+        title:     s.title,
+        artist:    s.artist,
+        thumbnail: s.thumbnail,
+        url:       s.url,
+        videoId:   s.videoId || undefined,
       }))
     );
   };
@@ -484,7 +548,10 @@ export default function SearchScreen() {
 
   const handleArtistPress = (a: ArtistResult) => {
     triggerHaptic();
-    router.push({ pathname: "/artist/[id]", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } });
+    router.push({
+      pathname: "/artist/[id]",
+      params: { id: encodeURIComponent(a.url), subtitle: a.subtitle },
+    });
   };
 
   const handlePlaylistPress = (p: PlaylistResult) => {
@@ -511,7 +578,8 @@ export default function SearchScreen() {
   };
 
   const totalCount = results
-    ? results.songs.length + results.albums.length + results.artists.length + results.playlists.length
+    ? results.songs.length + results.albums.length +
+      results.artists.length + results.playlists.length
     : 0;
 
   // ── Render result row ─────────────────────────────────────────────────────────
@@ -533,16 +601,19 @@ export default function SearchScreen() {
           {item.thumbnail ? (
             <Image
               source={{ uri: item.thumbnail }}
-              style={[styles.thumb, item.type === "artist" && styles.thumbCircle]}
+              style={[
+                styles.thumb,
+                item.type === "artist" && styles.thumbCircle,
+              ]}
               contentFit="cover"
             />
           ) : (
             <View style={[styles.thumb, styles.thumbFallback]}>
               <Ionicons
                 name={
-                  item.type === "artist"   ? "person"        :
-                  item.type === "album"    ? "disc"           :
-                  item.type === "playlist" ? "list"           :
+                  item.type === "artist"   ? "person"       :
+                  item.type === "album"    ? "disc"          :
+                  item.type === "playlist" ? "list"          :
                                              "musical-notes"
                 }
                 size={20}
@@ -581,9 +652,9 @@ export default function SearchScreen() {
         {/* Type badge */}
         <View style={styles.typeBadge}>
           <Text style={styles.typeBadgeText}>
-            {item.type === "song" ? "SONG" :
-             item.type === "album" ? "ALBUM" :
-             item.type === "artist" ? "ARTIST" : "PLAYLIST"}
+            {item.type === "song"     ? "SONG"     :
+             item.type === "album"    ? "ALBUM"    :
+             item.type === "artist"   ? "ARTIST"   : "PLAYLIST"}
           </Text>
         </View>
 
@@ -596,8 +667,10 @@ export default function SearchScreen() {
                 pathname: "/(modals)/menu",
                 params: {
                   songData: JSON.stringify({
-                    id: item.id, title: item.title,
-                    artist: item.artist, thumbnail: item.thumbnail,
+                    id:        item.id,
+                    title:     item.title,
+                    artist:    item.artist,
+                    thumbnail: item.thumbnail,
                   }),
                   type: "song",
                 },
@@ -628,7 +701,12 @@ export default function SearchScreen() {
         </TouchableOpacity>
 
         <View style={styles.searchBar}>
-          <Ionicons name="search" size={18} color={COLORS.textTertiary} style={{ marginRight: 8 }} />
+          <Ionicons
+            name="search"
+            size={18}
+            color={COLORS.textTertiary}
+            style={{ marginRight: 8 }}
+          />
           <TextInput
             ref={inputRef}
             style={styles.searchInput}
@@ -643,7 +721,13 @@ export default function SearchScreen() {
             selectionColor={COLORS.goldPrimary}
           />
           {query.length > 0 && (
-            <TouchableOpacity onPress={() => { setQuery(""); setResults(null); setSuggestions([]); }}>
+            <TouchableOpacity
+              onPress={() => {
+                setQuery("");
+                setResults(null);
+                setSuggestions([]);
+              }}
+            >
               <Ionicons name="close-circle" size={18} color={COLORS.textTertiary} />
             </TouchableOpacity>
           )}
@@ -659,7 +743,12 @@ export default function SearchScreen() {
               style={styles.suggestionRow}
               onPress={() => handleSuggestionTap(s)}
             >
-              <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} style={{ marginRight: 10 }} />
+              <Ionicons
+                name="search-outline"
+                size={14}
+                color={COLORS.textTertiary}
+                style={{ marginRight: 10 }}
+              />
               <Text style={styles.suggestionText}>{s}</Text>
             </TouchableOpacity>
           ))}
@@ -677,8 +766,16 @@ export default function SearchScreen() {
           </View>
           {history.map((q) => (
             <View key={q} style={styles.historyRow}>
-              <TouchableOpacity style={styles.historyRowMain} onPress={() => handleHistoryTap(q)}>
-                <Ionicons name="time-outline" size={16} color={COLORS.textTertiary} style={{ marginRight: 12 }} />
+              <TouchableOpacity
+                style={styles.historyRowMain}
+                onPress={() => handleHistoryTap(q)}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={16}
+                  color={COLORS.textTertiary}
+                  style={{ marginRight: 12 }}
+                />
                 <Text style={styles.historyText}>{q}</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => handleRemoveHistory(q)} hitSlop={10}>
@@ -728,8 +825,8 @@ export default function SearchScreen() {
           >
             {(["all", "songs", "albums", "artists", "playlists"] as FilterTab[]).map((tab) => {
               const count =
-                tab === "all"       ? totalCount :
-                tab === "songs"     ? results!.songs.length :
+                tab === "all"       ? totalCount             :
+                tab === "songs"     ? results!.songs.length  :
                 tab === "albums"    ? results!.albums.length :
                 tab === "artists"   ? results!.artists.length :
                                       results!.playlists.length;
