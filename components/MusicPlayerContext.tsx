@@ -71,13 +71,127 @@ import MavinEngine, {
   AudioStream,
   VideoStream,
 } from '@/modules/mavin-engine';
-import TrackPlayer, { State, Track } from 'react-native-track-player';
+import TrackPlayer, { State, Track, Event, useTrackPlayerEvents } from 'react-native-track-player';
 import { Alert } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { DownloadedSongMetadata } from '@/store/library';
 import { supabase } from '@/libs/supabase';
 import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UUID v5 — deterministic UUID from YouTube video ID
+//
+// The `streams` table uses a UUID primary key / track_id column.
+// YouTube video IDs are 11-char strings — passing them raw causes:
+//   "invalid input syntax for type uuid: 'Abc123defgh'"
+//
+// We generate a stable UUID v5 (SHA-1 namespace hash) so the same video ID
+// always maps to the same UUID, enabling upsert/lookup to work correctly.
+//
+// Namespace: DNS namespace UUID (RFC 4122 §Appendix C) — arbitrary but fixed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// RFC 4122 DNS namespace as byte array
+const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+function uuidToBytes(uuid: string): number[] {
+  return uuid.replace(/-/g, '').match(/.{2}/g)!.map(h => parseInt(h, 16));
+}
+
+async function sha1(data: Uint8Array): Promise<Uint8Array> {
+  // React Native doesn't have SubtleCrypto — use a pure-JS SHA-1 implementation
+  // that runs synchronously so it doesn't need the Web Crypto API.
+  // Based on RFC 3174 / FIPS 180-4.
+  const H = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+  const msg = Array.from(data);
+  const bitLen = msg.length * 8;
+  msg.push(0x80);
+  while (msg.length % 64 !== 56) msg.push(0);
+  for (let i = 7; i >= 0; i--) msg.push((bitLen / Math.pow(2, i * 8)) & 0xff);
+
+  for (let i = 0; i < msg.length; i += 64) {
+    const W: number[] = [];
+    for (let t = 0; t < 16; t++)
+      W[t] = (msg[i+t*4]<<24)|(msg[i+t*4+1]<<16)|(msg[i+t*4+2]<<8)|msg[i+t*4+3];
+    for (let t = 16; t < 80; t++) {
+      const v = W[t-3]^W[t-8]^W[t-14]^W[t-16];
+      W[t] = ((v<<1)|(v>>>31)) >>> 0;
+    }
+    let [a,b,c,d,e] = H;
+    for (let t = 0; t < 80; t++) {
+      const rot = (((a<<5)|(a>>>27))>>>0);
+      const f   = t<20 ? ((b&c)|((~b>>>0)&d)) : t<40 ? (b^c^d) : t<60 ? ((b&c)|(b&d)|(c&d)) : (b^c^d);
+      const k   = t<20 ? 0x5A827999 : t<40 ? 0x6ED9EBA1 : t<60 ? 0x8F1BBCDC : 0xCA62C1D6;
+      const tmp = (rot + f + e + k + W[t]) >>> 0;
+      e=d; d=c; c=((b<<30)|(b>>>2))>>>0; b=a; a=tmp;
+    }
+    H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0;
+    H[3]=(H[3]+d)>>>0; H[4]=(H[4]+e)>>>0;
+  }
+  const out = new Uint8Array(20);
+  H.forEach((v,i) => { out[i*4]=(v>>>24)&0xff; out[i*4+1]=(v>>>16)&0xff; out[i*4+2]=(v>>>8)&0xff; out[i*4+3]=v&0xff; });
+  return out;
+}
+
+// Cache so we don't hash the same video ID twice
+const _uuidCache = new Map<string, string>();
+
+async function videoIdToUuid(videoId: string): Promise<string> {
+  if (_uuidCache.has(videoId)) return _uuidCache.get(videoId)!;
+  const nsBytes  = uuidToBytes(UUID_NAMESPACE);
+  const idBytes  = Array.from(new TextEncoder().encode(videoId));
+  const combined = new Uint8Array([...nsBytes, ...idBytes]);
+  const hash     = await sha1(combined);
+  // Set version (5) and variant bits per RFC 4122 §4.3
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const h  = Array.from(hash.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const uuid = `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+  _uuidCache.set(videoId, uuid);
+  return uuid;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// safeTrackStats — guards all track_stats calls
+//
+// The `track_stats` table may not exist yet in Supabase.
+// These wrappers swallow the "table not found in schema cache" error silently
+// so the player never logs it. Once you create the table, they start working.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TABLE_NOT_FOUND_MSG = 'track_stats';
+
+const safeGetTrackStats = async (videoId: string) => {
+  try {
+    return await supabaseCache.getTrackStats(videoId);
+  } catch (e: any) {
+    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
+      console.warn('[MusicPlayer] getTrackStats error:', e?.message);
+    }
+    return null;
+  }
+};
+
+const safeSaveTrackStats = async (params: Parameters<typeof supabaseCache.saveTrackStats>[0]) => {
+  try {
+    await supabaseCache.saveTrackStats(params);
+  } catch (e: any) {
+    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
+      console.warn('[MusicPlayer] saveTrackStats error:', e?.message);
+    }
+  }
+};
+
+const safePatchCommentsCount = async (videoId: string, count: number) => {
+  try {
+    await supabaseCache.patchCommentsCount(videoId, count);
+  } catch (e: any) {
+    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
+      console.warn('[MusicPlayer] patchCommentsCount error:', e?.message);
+    }
+  }
+};
 
 // Re-export Song so callers that currently import it from here continue to work
 export type { Song };
@@ -158,10 +272,11 @@ function pickBestVideo(streams: VideoStream[]): VideoStream | null {
  */
 async function getCachedAudioStream(trackId: string): Promise<string | null> {
   try {
+    const uuid = await videoIdToUuid(trackId);
     const { data, error } = await supabase
       .from('streams')
       .select('stream_url, expiry')
-      .eq('track_id', trackId)
+      .eq('track_id', uuid)
       .eq('stream_type', 'audio')
       .eq('is_active', true)
       .gt('expiry', new Date().toISOString())
@@ -178,10 +293,11 @@ async function getCachedAudioStream(trackId: string): Promise<string | null> {
  */
 async function getCachedVideoStream(trackId: string): Promise<string | null> {
   try {
+    const uuid = await videoIdToUuid(trackId);
     const { data, error } = await supabase
       .from('streams')
       .select('stream_url, expiry')
-      .eq('track_id', trackId)
+      .eq('track_id', uuid)
       .eq('stream_type', 'video')
       .eq('is_active', true)
       .gt('expiry', new Date().toISOString())
@@ -205,12 +321,15 @@ async function cacheStreamsToSupabase(
   duration: number,
 ): Promise<void> {
   try {
+    // trackId is a raw YouTube video ID (e.g. "67Pylw3Kukc").
+    // The streams table expects a UUID — derive a stable one via v5 hash.
+    const uuid   = await videoIdToUuid(trackId);
     const expiry = new Date(Date.now() + STREAM_TTL_MS).toISOString();
     const now    = new Date().toISOString();
 
     const rows: any[] = [
       {
-        track_id:      trackId,
+        track_id:      uuid,
         source:        'youtube',
         stream_url:    audioUrl,
         stream_type:   'audio',
@@ -227,7 +346,7 @@ async function cacheStreamsToSupabase(
 
     if (videoUrl) {
       rows.push({
-        track_id:      trackId,
+        track_id:      uuid,
         source:        'youtube',
         stream_url:    videoUrl,
         stream_type:   'video',
@@ -265,7 +384,8 @@ async function cacheStreamsToSupabase(
  * RNTP ignores unknown fields; PlayerScreen reads them via useActiveTrack().
  */
 export interface TrackExtras {
-  videoUrl?:      string;   // DASH video stream URL for the video toggle
+  videoUrl?:      string;   // DASH video-only stream URL (no audio — kept for legacy)
+  muxedVideoUrl?: string;   // Muxed MP4 stream URL (audio + video) — used for full video mode
   videoId?:       string;   // bare 11-char YouTube ID for artist page routing
   uploaderUrl?:   string;   // YouTube channel URL for artist page routing
   likeCount?:     number;   // -1 = hidden/unavailable
@@ -275,12 +395,13 @@ export interface TrackExtras {
 }
 
 function buildTrack(
-  song:     Song,
-  audioUrl: string,
-  videoUrl: string | null,
-  duration: number,
-  title?:   string,
-  extras?:  Omit<TrackExtras, 'videoUrl'>,
+  song:          Song,
+  audioUrl:      string,
+  videoUrl:      string | null,
+  muxedVideoUrl: string | null,
+  duration:      number,
+  title?:        string,
+  extras?:       Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'>,
 ): Track & TrackExtras {
   return {
     id:       song.id,
@@ -289,7 +410,8 @@ function buildTrack(
     artist:   song.artist,
     artwork:  song.thumbnail,
     duration: duration > 0 ? duration : undefined,
-    videoUrl: videoUrl ?? undefined,
+    videoUrl:       videoUrl      ?? undefined,
+    muxedVideoUrl:  muxedVideoUrl ?? undefined,
     videoId:        extras?.videoId       ?? song.videoId,
     uploaderUrl:    extras?.uploaderUrl   ?? undefined,
     likeCount:      extras?.likeCount     ?? -1,
@@ -326,7 +448,7 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
 
     if (cachedAudio) {
       console.log(`[MusicPlayer] cache hit for "${song.title}"`);
-      return buildTrack(song, cachedAudio, cachedVideo, 0);
+      return buildTrack(song, cachedAudio, cachedVideo, null, 0);
     }
   } catch (cacheErr) {
     // Cache read failure is non-fatal — fall through to live extraction
@@ -350,20 +472,25 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
     // audioStreams = audio-only (no video), pick highest bitrate
     const bestAudio = pickBestAudio(info.audioStreams ?? []);
 
-    // videoOnlyStreams = DASH HD (no embedded audio) — preferred
-    // videoStreams     = muxed SD (audio + video)    — fallback
+    // videoOnlyStreams = DASH HD (no embedded audio) — for legacy/artwork overlay
+    // videoStreams     = muxed SD (audio + video)    — used for full video mode
     const bestVideo =
       pickBestVideo(info.videoOnlyStreams ?? []) ??
       pickBestVideo(info.videoStreams ?? []);
+
+    // Pick best muxed stream (has both audio + video) for full video playback.
+    // Prefer highest resolution ≤ 720p to balance quality and bandwidth.
+    const bestMuxed = pickBestVideo(info.videoStreams ?? []);
 
     if (!bestAudio?.url) {
       console.warn(`[MusicPlayer] no usable audio stream for "${song.title}"`);
       throw new Error('no audio stream available');
     }
 
-    const audioUrl = bestAudio.url;
-    const videoUrl = bestVideo?.url ?? null;
-    const duration = info.duration ?? 0;
+    const audioUrl      = bestAudio.url;
+    const videoUrl      = bestVideo?.url  ?? null;
+    const muxedVideoUrl = bestMuxed?.url  ?? null;
+    const duration      = info.duration   ?? 0;
 
     // ── Stats: check Supabase cache first, then use extraction result ──────────
     // getStreamInfo already returned likeCount / dislikeCount / viewCount / uploaderUrl
@@ -380,7 +507,7 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
     // when the DB already has it from a recent play).
     let commentsCount = -1;
     if (song.videoId) {
-      const cached = await supabaseCache.getTrackStats(song.videoId).catch(() => null);
+      const cached = await safeGetTrackStats(song.videoId);
       if (cached && cached.commentsCount > 0) {
         commentsCount = cached.commentsCount;
         console.log(`[MusicPlayer] commentsCount from cache: ${commentsCount}`);
@@ -403,14 +530,14 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
 
     // Save stats to Supabase track_stats table (fire-and-forget)
     if (song.videoId) {
-      supabaseCache.saveTrackStats({
+      safeSaveTrackStats({
         videoId:       song.videoId,
         likeCount:     extractedStats.likeCount,
         dislikeCount:  extractedStats.dislikeCount,
         viewCount:     extractedStats.viewCount,
         commentsCount,
         uploaderUrl:   extractedStats.uploaderUrl,
-      }).catch(e => console.warn('[MusicPlayer] saveTrackStats error:', e));
+      });
 
       // Fetch commentsCount in background only if not already cached
       if (commentsCount === -1) {
@@ -420,16 +547,15 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
             if (commentsInfo?.success && typeof commentsInfo.commentsCount === 'number' && commentsInfo.commentsCount > 0) {
               extras.commentsCount = commentsInfo.commentsCount;
               // Patch just the commentsCount — no need to re-upsert everything
-              supabaseCache.patchCommentsCount(song.videoId!, commentsInfo.commentsCount)
-                .catch(() => {});
+              safePatchCommentsCount(song.videoId!, commentsInfo.commentsCount);
             }
           })
           .catch(() => { /* non-critical */ });
       }
     }
 
-    console.log(`[MusicPlayer] resolved "${song.title}" — audio: ${bestAudio.bitrate}bps, video: ${bestVideo?.height ?? 'none'}p`);
-    return buildTrack(song, audioUrl, videoUrl, duration, info.title, extras);
+    console.log(`[MusicPlayer] resolved "${song.title}" — audio: ${bestAudio.bitrate}bps, video: ${bestVideo?.height ?? 'none'}p, muxed: ${bestMuxed?.height ?? 'none'}p`);
+    return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, extras);
 
   } catch (primaryErr) {
     // [A] In v10.0.0, consent/Content-Type/visitorData errors no longer reach
@@ -456,11 +582,12 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
           pickBestVideo(info.videoStreams ?? []);
 
         if (bestAudio?.url) {
-          const audioUrl = bestAudio.url;
-          const videoUrl = bestVideo?.url ?? null;
-          const duration = info.duration ?? 0;
+          const audioUrl      = bestAudio.url;
+          const videoUrl      = bestVideo?.url ?? null;
+          const muxedVideoUrl = pickBestVideo(info.videoStreams ?? [])?.url ?? null;
+          const duration      = info.duration ?? 0;
           cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
-          const fbExtras: Omit<TrackExtras, 'videoUrl'> = {
+          const fbExtras: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'> = {
             videoId:      song.videoId,
             uploaderUrl:  (info.uploaderUrl as string | undefined) ?? undefined,
             likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
@@ -469,17 +596,17 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
             commentsCount: -1,
           };
           if (song.videoId) {
-            supabaseCache.saveTrackStats({
+            safeSaveTrackStats({
               videoId:      song.videoId,
               likeCount:    fbExtras.likeCount!,
               dislikeCount: fbExtras.dislikeCount!,
               viewCount:    fbExtras.viewCount!,
               commentsCount: -1,
               uploaderUrl:  fbExtras.uploaderUrl ?? null,
-            }).catch(() => {});
+            });
           }
           console.log(`[MusicPlayer] getStreamInfoById succeeded for "${song.title}"`);
-          return buildTrack(song, audioUrl, videoUrl, duration, info.title, fbExtras);
+          return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, fbExtras);
         }
       }
     } catch (byIdErr) {
@@ -530,16 +657,18 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       const bestVideo =
         pickBestVideo(info.videoOnlyStreams ?? []) ??
         pickBestVideo(info.videoStreams ?? []);
+      const bestMuxed = pickBestVideo(info.videoStreams ?? []);
 
       if (!bestAudio?.url) continue;
 
-      const audioUrl = bestAudio.url;
-      const videoUrl = bestVideo?.url ?? null;
-      const duration = info.duration ?? 0;
+      const audioUrl      = bestAudio.url;
+      const videoUrl      = bestVideo?.url ?? null;
+      const muxedVideoUrl = bestMuxed?.url ?? null;
+      const duration      = info.duration ?? 0;
 
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
       console.log(`[MusicPlayer] search fallback succeeded for "${song.title}" via "${strategy.query}"`);
-      return buildTrack(song, audioUrl, videoUrl, duration, info.title, {
+      return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, {
         videoId:      song.videoId,
         uploaderUrl:  info.uploaderUrl ?? undefined,
         likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
@@ -910,27 +1039,48 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     }
   };
 
-  // ── togglePlayPause ────────────────────────────────────────────────────────
+  // ── Native event → isPlaying sync ──────────────────────────────────────────
+  // This is the ground-truth sync. Any external pause (OS audio focus loss,
+  // headphones unplugged, phone call) will land here and correct isPlaying
+  // state so the optimistic flip in togglePlayPause always starts from an
+  // accurate baseline. Without this, optimistic flips can go the wrong way
+  // after any external interruption.
+  useTrackPlayerEvents([Event.PlaybackState], (event) => {
+    if (event.type !== Event.PlaybackState) return;
+    // Only State.Playing = playing. Buffering keeps the existing optimistic
+    // value — the user already saw the flip, no need to revert it mid-buffer.
+    if (event.state === State.Playing) setIsPlaying(true);
+    else if (
+      event.state === State.Paused ||
+      event.state === State.Stopped ||
+      event.state === State.Ended ||
+      event.state === State.Error
+    ) setIsPlaying(false);
+    // State.Buffering intentionally omitted — optimistic value already correct.
+  });
 
-  const togglePlayPause = async () => {
+  // ── togglePlayPause ────────────────────────────────────────────────────────
+  // Optimistic-first: flip isPlaying in React state BEFORE the async native
+  // call so the icon updates in <16 ms (next render) instead of after the
+  // JS→Native bridge round-trip (~80-230 ms). The useTrackPlayerEvents listener
+  // above corrects the value if the native call fails or an external event
+  // changes state. getPlaybackState() is intentionally removed — it was a
+  // redundant bridge round-trip since isPlaying is already kept in sync.
+
+  const togglePlayPause = useCallback(async () => {
     try {
-      const { state: currentState } = await TrackPlayer.getPlaybackState();
-      if (currentState === State.Playing || currentState === State.Buffering) {
+      if (isPlaying) {
+        setIsPlaying(false);         // optimistic flip — icon updates <16 ms
         await TrackPlayer.pause();
-        setIsPlaying(false);
       } else {
-        const queue = await TrackPlayer.getQueue();
-        if (queue.length > 0) {
-          await TrackPlayer.play();
-          setIsPlaying(true);
-        } else {
-          Alert.alert('Playback Info', 'Queue is empty.');
-        }
+        setIsPlaying(true);          // optimistic flip
+        await TrackPlayer.play();    // no-op if queue empty; native handles it
       }
     } catch (error) {
+      setIsPlaying(isPlaying);       // roll back on native failure
       Alert.alert('Playback Error', 'Failed to toggle playback.');
     }
-  };
+  }, [isPlaying]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 

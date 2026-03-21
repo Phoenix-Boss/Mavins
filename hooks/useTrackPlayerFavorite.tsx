@@ -3,42 +3,37 @@
  *
  * Manages the favourite status of the currently active track.
  *
- * Key fixes vs the original:
+ * Fix vs previous version:
+ *   checkIfFavorite used a dynamic `await import('@/store/library')` inside
+ *   a useCallback. Dynamic imports inside callbacks are fragile — they create
+ *   a new module reference on every call, bypass tree-shaking, and can cause
+ *   timing issues if the module hasn't been evaluated yet. The library store
+ *   is always needed here, so we import it statically at the top of the file
+ *   and call `useLibraryStore.getState()` directly — zero overhead, always safe.
  *
- * 1. No more useEffect + setState to derive isFavorite.
- *    The original pattern was:
- *      - useFavorites() returns a new array every render (no useShallow)
- *      - useEffect sees favoriteTracks as changed → calls setIsFavorite
- *      - setIsFavorite → re-render → useFavorites re-runs → new array → loop
- *
- *    Fix: useIsSongFavorite(id) selects a single boolean from the store.
- *    Booleans are primitives — Zustand's === check is always correct.
- *    No array allocation, no useEffect, no derived state.
- *
- * 2. toggleFavoriteTrack now comes from useFavorites() which exposes
- *    the store's toggleFavoriteSong action under that name.
+ * Other fixes preserved:
+ *   [1] useIsSongFavorite(id) — single boolean selector, no render loop.
+ *   [2] toggleFavoriteTrack — stable action reference from the store.
  */
 
-import { useIsSongFavorite, useFavorites } from "@/store/library";
 import { useCallback } from "react";
 import TrackPlayer, { useActiveTrack } from "react-native-track-player";
+import { useIsSongFavorite, useFavorites, useLibraryStore } from "@/store/library";
 
 export const useTrackPlayerFavorite = () => {
   const activeTrack = useActiveTrack();
 
-  // ── isFavorite — direct boolean selector, never causes a loop ──────────────
+  // ── isFavorite — direct boolean selector, never causes a render loop ───────
   // Falls back to false when no track is active (activeTrack?.id is undefined).
-  // useIsSongFavorite internally does: s.favoriteSongIds.includes(id)
-  // which returns a primitive boolean — safe without useShallow.
-  const isFavorite = useIsSongFavorite(activeTrack?.id ?? '');
+  const isFavorite = useIsSongFavorite(activeTrack?.id ?? "");
 
-  // ── toggleFavoriteTrack — stable action reference from the store ───────────
+  // ── toggleFavoriteTrack — stable action reference from the Zustand store ───
   const { toggleFavoriteTrack } = useFavorites();
 
   // ── checkIfFavorite — reads current store state outside React ─────────────
-  // Uses getState() so it doesn't subscribe to re-renders.
-  const checkIfFavorite = useCallback(async (id: string): Promise<boolean> => {
-    const { useLibraryStore } = await import('@/store/library');
+  // Uses getState() (not a hook) so it does NOT subscribe to re-renders.
+  // Static import means no dynamic-import overhead or timing issues.
+  const checkIfFavorite = useCallback((id: string): boolean => {
     return useLibraryStore.getState().favoriteSongIds.includes(id);
   }, []);
 
@@ -47,10 +42,10 @@ export const useTrackPlayerFavorite = () => {
     async (
       track = activeTrack
         ? {
-            id: activeTrack.id ?? '',
-            title: activeTrack.title ?? '',
-            artist: activeTrack.artist ?? '',
-            thumbnail: typeof activeTrack.artwork === 'string' ? activeTrack.artwork : '',
+            id:        activeTrack.id       ?? "",
+            title:     activeTrack.title    ?? "",
+            artist:    activeTrack.artist   ?? "",
+            thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
           }
         : undefined,
     ) => {
@@ -59,18 +54,18 @@ export const useTrackPlayerFavorite = () => {
       // Toggle in the Zustand store
       toggleFavoriteTrack(track.id);
 
-      // Update RNTP queue metadata so the notification rating reflects the change
+      // Update RNTP queue metadata so the notification rating reflects the change.
+      // isFavorite is the PRE-toggle value here, so we invert it for the rating.
       try {
-        const queue = await TrackPlayer.getQueue();
+        const queue      = await TrackPlayer.getQueue();
         const trackIndex = queue.findIndex((t) => t.id === track.id);
         if (trackIndex !== -1) {
           await TrackPlayer.updateMetadataForTrack(trackIndex, {
-            // isFavorite is the PRE-toggle value here — so we invert it
             rating: isFavorite ? 0 : 1,
           });
         }
       } catch (error) {
-        console.error('useTrackPlayerFavorite: error updating RNTP metadata', error);
+        console.error("useTrackPlayerFavorite: error updating RNTP metadata", error);
       }
     },
     [activeTrack, isFavorite, toggleFavoriteTrack],

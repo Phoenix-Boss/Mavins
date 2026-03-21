@@ -49,6 +49,32 @@ module.exports = {
     backgroundColor: "#000",
     edgeToEdgeEnabled: true,
     versionCode: 1,
+    intentFilters: [
+      {
+        // Handles taps on the lock screen / notification media card.
+        // Android re-launches or resumes the app with this intent when the
+        // user taps the media notification card.
+        action: "android.intent.action.MAIN",
+        category: ["android.intent.category.LAUNCHER"],
+      },
+      {
+        // Custom scheme so Linking.getInitialURL() / addEventListener can
+        // detect that the app was opened from the media notification.
+        action: "android.intent.action.VIEW",
+        autoVerify: true,
+        data: [
+          {
+            scheme: "mavins-player",
+            host: "player",
+            pathPrefix: "/open",
+          },
+        ],
+        category: [
+          "android.intent.category.DEFAULT",
+          "android.intent.category.BROWSABLE",
+        ],
+      },
+    ],
   },
   plugins: [
     withAbiSplit,

@@ -1,22 +1,32 @@
 /**
- * FloatingPlayer
+ * FloatingPlayer — v2
  *
- * Fixed from original:
+ * Core change: the pill now appears IMMEDIATELY when a song is tapped,
+ * before RNTP has loaded the track and useActiveTrack() returns a value.
+ *
+ * How it works:
+ *   1. The search screen (or any playback trigger) calls setPendingTrack()
+ *      synchronously on tap — before calling playAudio(). This is a
+ *      module-level signal, so it fires in the same JS frame as the tap.
+ *
+ *   2. FloatingPlayer subscribes to that signal and immediately renders
+ *      a skeleton pill with the pending track's title/artist/artwork.
+ *      The pill is visible before any audio starts playing.
+ *
+ *   3. Once useActiveTrack() returns the real RNTP track object, the
+ *      component switches to live data and clears the pending signal.
+ *
+ *   4. If RNTP fails to load (error), the pill disappears naturally
+ *      because both activeTrack and pendingTrack will be null.
+ *
+ * Previous fixes preserved:
  *   [1] router.push("/(player)") — correct Expo Router group path.
- *       Original used router.push("/player") (no parentheses) which
- *       does not match the (player) group folder → "screen doesn't exist".
- *
- *   [2] Removed useNavigation from @react-navigation/native.
- *       canGoBack() is now router.canGoBack() — the Expo Router v3 API.
- *       Mixing @react-navigation/native with expo-router's router caused
- *       inconsistent back-stack reads.
- *
- *   [3] Image swapped from react-native → expo-image.
- *       Consistent with PlayerScreen, related.tsx, and index.tsx.
- *       expo-image handles blurhash placeholders and disk caching automatically.
+ *   [2] router.canGoBack() — Expo Router v3 API, no @react-navigation/native.
+ *   [3] expo-image instead of react-native Image.
+ *   [4] Singleton guard — prevents double-player bug on duplicate mounts.
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -26,17 +36,22 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, usePathname } from 'expo-router';
+import { usePathname } from 'expo-router';
 import { triggerHaptic } from '@/helpers/haptics';
 import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useActiveTrack, usePlaybackState, State } from 'react-native-track-player';
 import TrackPlayer from 'react-native-track-player';
 import { useMusicPlayer } from '@/components/MusicPlayerContext';
+import {
+  getPendingTrack,
+  clearPendingTrack,
+  subscribePendingTrack,
+  type PendingTrackInfo,
+} from '@/helpers/pendingTrack';
+import { usePlayerOverlay } from '@/components/player/playerProvider';
 
 // ─── Singleton guard ──────────────────────────────────────────────────────────
-// Tracks how many FloatingPlayer instances are currently mounted.
-// If more than one mounts at the same time (e.g. tab layout + screen layout),
-// every instance beyond the first renders null to prevent the double-player bug.
+
 let _floatingPlayerMountCount = 0;
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -48,14 +63,32 @@ interface FloatingPlayerProps {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
-  const router        = useRouter();
   const pathname      = usePathname();
   const activeTrack   = useActiveTrack();
   const playbackState = usePlaybackState();
   const { togglePlayPause, isLoading } = useMusicPlayer();
+  const { expandPlayer, isExpanded } = usePlayerOverlay();
 
-  // Singleton guard — only the first mounted instance renders UI.
-  // Any duplicate mount (e.g. tab shell + screen layout) renders null.
+  // ── Pending track signal ───────────────────────────────────────────────────
+  // Subscribes to the module-level pending track store. Updated synchronously
+  // when any screen calls setPendingTrack() — before RNTP loads anything.
+  const [pendingTrack, setPendingTrackState] = useState<PendingTrackInfo | null>(
+    getPendingTrack,
+  );
+
+  useEffect(() => {
+    // Sync initial value in case it was set before we mounted
+    setPendingTrackState(getPendingTrack());
+    // Subscribe to future changes
+    return subscribePendingTrack((t) => setPendingTrackState(t));
+  }, []);
+
+  // Once the real track arrives from RNTP, the pending signal is no longer needed
+  useEffect(() => {
+    if (activeTrack) clearPendingTrack();
+  }, [activeTrack?.id]);
+
+  // ── Singleton guard ────────────────────────────────────────────────────────
   const isOwnerRef = useRef(false);
   useEffect(() => {
     _floatingPlayerMountCount += 1;
@@ -66,15 +99,14 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
     };
   }, []);
 
-  // Hide when any modal screen is active — they render above the tab layout
-  // so the global FloatingPlayer from the tab shell would appear twice.
-  // Also hide on the player screen itself since it has its own full UI.
+  // ── Route guard ────────────────────────────────────────────────────────────
+  // Hide during modal screens. Player is an overlay (not a route) so we no
+  // longer need to check for /(player) in the pathname.
   const isModalOrPlayer =
     pathname.includes('/(modals)') ||
-    pathname.includes('/modals/')  ||
-    pathname.includes('/(player)') ||
-    pathname.includes('/player');
+    pathname.includes('/modals/');
 
+  // ── Playback state ─────────────────────────────────────────────────────────
   const currentState: State = (() => {
     if (!playbackState) return State.None;
     if (typeof playbackState === 'object' && 'state' in playbackState) {
@@ -87,73 +119,89 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
     currentState === State.Playing ||
     currentState === State.Buffering;
 
-  const floatingPlayerBottom = tabHeight + 4;
+  // ── Decide what to display ─────────────────────────────────────────────────
+  // Use the real RNTP track if available, fall back to the pending track.
+  // This is what makes the pill appear before RNTP finishes loading.
+  const displayTrack = activeTrack
+    ? {
+        title:   activeTrack.title   ?? 'Unknown Title',
+        artist:  activeTrack.artist  ?? 'Unknown Artist',
+        artwork: typeof activeTrack.artwork === 'string' ? activeTrack.artwork : null,
+        isReal:  true,
+      }
+    : pendingTrack
+    ? {
+        title:   pendingTrack.title,
+        artist:  pendingTrack.artist,
+        artwork: pendingTrack.artwork || null,
+        isReal:  false,   // still loading — show skeleton controls
+      }
+    : null;
 
+  // ── Animated position ──────────────────────────────────────────────────────
+  const floatingPlayerBottom = tabHeight + 4;
   const animatedStyle = useAnimatedStyle(
     () => ({ bottom: withTiming(floatingPlayerBottom, { duration: 300 }) }),
     [floatingPlayerBottom],
   );
 
-  // Don't render on modals/player — prevents the double-player bug.
-  // Also bail if this is a duplicate mount (singleton guard above).
-  if (!activeTrack || isModalOrPlayer || !isOwnerRef.current) return null;
+  // ── Guards ─────────────────────────────────────────────────────────────────
+  if (!displayTrack || isModalOrPlayer || !isOwnerRef.current) return null;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
   const openPlayerScreen = () => {
+    // Expand the PlayerProvider overlay directly — no routing needed.
+    // The overlay is always pre-mounted; expanding it is instant.
+    if (!activeTrack) return;
     triggerHaptic();
-    // ✅ '/(player)' matches the app/(player)/ group folder.
-    // router.canGoBack() is the Expo Router v3 API — no @react-navigation/native needed.
-    if (router.canGoBack()) {
-      router.push('/(player)');
-    } else {
-      router.replace('/(player)');
-    }
+    expandPlayer();
   };
 
   const handleTogglePlay = async (e: any) => {
     e.stopPropagation();
+    if (!activeTrack) return;   // can't toggle while still loading
     triggerHaptic();
     await togglePlayPause();
   };
 
   const handleSkipNext = async (e: any) => {
     e.stopPropagation();
+    if (!activeTrack) return;
     triggerHaptic();
     try { await TrackPlayer.skipToNext(); } catch {}
   };
 
-  const artworkUri: string | null =
-    activeTrack?.artwork
-      ? typeof activeTrack.artwork === 'string'
-        ? activeTrack.artwork
-        : null   // number (local require) — expo-image uses source prop differently
-      : null;
+  // ── Render ──────────────────────────────────────────────────────────────────
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  const isPending = !displayTrack.isReal;
 
   return (
     <Animated.View style={[styles.wrapper, { left: 8, right: 8 }, animatedStyle]}>
       <View style={styles.glassBase} />
 
-      <View style={styles.card}>
+      <View style={[styles.card, isPending && styles.cardLoading]}>
         <TouchableOpacity
           style={styles.content}
           onPress={openPlayerScreen}
-          activeOpacity={0.9}
+          activeOpacity={isPending ? 1 : 0.9}
         >
           {/* Artwork */}
           <View style={styles.artWrap}>
-            {artworkUri ? (
+            {displayTrack.artwork ? (
               <Image
-                source={{ uri: artworkUri }}
+                source={{ uri: displayTrack.artwork }}
                 style={styles.art}
                 contentFit="cover"
                 transition={200}
               />
             ) : (
-              <View style={styles.artPlaceholder}>
-                <Ionicons name="musical-notes" size={20} color="rgba(255,255,255,0.7)" />
+              <View style={[styles.artPlaceholder, isPending && styles.artPending]}>
+                <Ionicons
+                  name={isPending ? 'hourglass-outline' : 'musical-notes'}
+                  size={20}
+                  color="rgba(255,255,255,0.5)"
+                />
               </View>
             )}
           </View>
@@ -161,33 +209,38 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({ tabHeight = 56 }) => {
           {/* Track info */}
           <View style={styles.info}>
             <Text style={styles.title} numberOfLines={1}>
-              {activeTrack.title || 'Unknown Title'}
+              {displayTrack.title}
             </Text>
             <Text style={styles.artist} numberOfLines={1}>
-              {activeTrack.artist || 'Unknown Artist'}
+              {isPending ? 'Loading…' : displayTrack.artist}
             </Text>
           </View>
 
-          {/* Controls */}
-          <View style={styles.controls}>
+          {/* Controls — dimmed while pending */}
+          <View style={[styles.controls, isPending && styles.controlsPending]}>
             <TouchableOpacity
               style={styles.controlBtn}
               onPress={handleSkipNext}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              disabled={isPending}
             >
-              <Ionicons name="play-skip-forward" size={20} color="#FFFFFF" />
+              <Ionicons
+                name="play-skip-forward"
+                size={20}
+                color={isPending ? 'rgba(255,255,255,0.25)' : '#FFFFFF'}
+              />
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.controlBtn, styles.playBtn]}
+              style={[styles.controlBtn, styles.playBtn, isPending && styles.playBtnPending]}
               onPress={handleTogglePlay}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              disabled={isLoading}
+              disabled={isLoading || isPending}
             >
               <Ionicons
-                name={isLoading ? 'hourglass-outline' : isPlaying ? 'pause' : 'play'}
+                name={isPending || isLoading ? 'hourglass-outline' : isPlaying ? 'pause' : 'play'}
                 size={22}
-                color="#FFFFFF"
+                color={isPending ? 'rgba(255,255,255,0.35)' : '#FFFFFF'}
               />
             </TouchableOpacity>
           </View>
@@ -216,6 +269,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 10,
+  },
+  cardLoading: {
+    // Slightly dimmer border while the track is still loading
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   glassBase: {
     ...StyleSheet.absoluteFillObject,
@@ -252,6 +309,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.15)',
   },
+  artPending: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
   info: {
     flex: 1,
     justifyContent: 'center',
@@ -276,6 +337,9 @@ const styles = StyleSheet.create({
     zIndex: 1,
     gap: 8,
   },
+  controlsPending: {
+    opacity: 0.4,
+  },
   controlBtn: {
     width: 36,
     height: 36,
@@ -289,6 +353,10 @@ const styles = StyleSheet.create({
   playBtn: {
     backgroundColor: 'rgba(139,115,85,0.8)',
     borderColor: 'rgba(255,255,255,0.3)',
+  },
+  playBtnPending: {
+    backgroundColor: 'rgba(139,115,85,0.3)',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
 });
 

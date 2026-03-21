@@ -2,7 +2,35 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { TrackData } from '../services/types/track';
+import { createJSONStorage } from 'zustand/middleware';
+
+// Use the same Song type from your existing types
+// Option 1: If you have types/song.ts
+import type { Song } from '@/types/song';
+
+// Option 2: If you want to define TrackData locally based on Song
+// Uncomment this and remove the import above if needed:
+/*
+interface TrackData {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail?: string;
+  url?: string;
+  duration?: number;
+  videoId?: string;
+  uploaderUrl?: string;
+  albumId?: string;
+  albumName?: string;
+}
+*/
+
+// Use Song as TrackData (they're the same shape)
+type TrackData = Song;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Store State & Actions
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface PlayerState {
   currentTrack: TrackData | null;
@@ -15,8 +43,13 @@ interface PlayerState {
   isAutoplay: boolean;
   queue: TrackData[];
   history: TrackData[];
+}
+
+interface PlayerActions {
   setPlaying: (track: TrackData) => void;
   setPaused: () => void;
+  /** Flip isPlaying instantly — UI intent, no engine call. */
+  setIsPlaying: (playing: boolean) => void;
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
@@ -30,7 +63,13 @@ interface PlayerState {
   previous: () => void;
 }
 
-export const usePlayerStore = create<PlayerState>()(
+type PlayerStore = PlayerState & PlayerActions;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Zustand Store
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const usePlayerStore = create<PlayerStore>()(
   persist(
     (set, get) => ({
       currentTrack: null,
@@ -44,40 +83,40 @@ export const usePlayerStore = create<PlayerState>()(
       queue: [],
       history: [],
 
-      setPlaying: (track) => {
-        set({
+      setPlaying: (track: TrackData) => {
+        set((state: PlayerState) => ({
           currentTrack: track,
           isPlaying: true,
           duration: track.duration || 0,
-        });
-        // Add to history
-        set((state) => ({
           history: [track, ...state.history].slice(0, 50),
         }));
       },
 
       setPaused: () => set({ isPlaying: false }),
 
-      setCurrentTime: (time) => set({ currentTime: time }),
+      setIsPlaying: (playing: boolean) => set({ isPlaying: playing }),
 
-      setDuration: (duration) => set({ duration }),
+      setCurrentTime: (time: number) => set({ currentTime: time }),
 
-      setVolume: (volume) => set({ volume: Math.max(0, Math.min(1, volume)) }),
+      setDuration: (duration: number) => set({ duration }),
 
-      setMuted: (isMuted) => set({ isMuted }),
+      setVolume: (volume: number) => 
+        set({ volume: Math.max(0, Math.min(1, volume)) }),
 
-      setLoop: (isLoop) => set({ isLoop }),
+      setMuted: (isMuted: boolean) => set({ isMuted }),
 
-      setAutoplay: (isAutoplay) => set({ isAutoplay }),
+      setLoop: (isLoop: boolean) => set({ isLoop }),
 
-      addToQueue: (track) =>
-        set((state) => ({
+      setAutoplay: (isAutoplay: boolean) => set({ isAutoplay }),
+
+      addToQueue: (track: TrackData) =>
+        set((state: PlayerState) => ({
           queue: [...state.queue, track],
         })),
 
-      removeFromQueue: (index) =>
-        set((state) => ({
-          queue: state.queue.filter((_, i) => i !== index),
+      removeFromQueue: (index: number) =>
+        set((state: PlayerState) => ({
+          queue: state.queue.filter((_: TrackData, i: number) => i !== index),
         })),
 
       clearQueue: () => set({ queue: [] }),
@@ -86,9 +125,9 @@ export const usePlayerStore = create<PlayerState>()(
         const { queue } = get();
         if (queue.length > 0) {
           const nextTrack = queue[0];
-          set({
-            queue: queue.slice(1),
-          });
+          set((state: PlayerState) => ({
+            queue: state.queue.slice(1),
+          }));
           get().setPlaying(nextTrack);
         }
       },
@@ -97,9 +136,9 @@ export const usePlayerStore = create<PlayerState>()(
         const { history } = get();
         if (history.length > 1) {
           const prevTrack = history[1];
-          set({
-            history: history.slice(1),
-          });
+          set((state: PlayerState) => ({
+            history: state.history.slice(1),
+          }));
           get().setPlaying(prevTrack);
         }
       },
@@ -107,7 +146,7 @@ export const usePlayerStore = create<PlayerState>()(
     {
       name: 'player-storage',
       storage: createJSONStorage(() => AsyncStorage),
-      partialize: (state) => ({
+      partialize: (state: PlayerStore) => ({
         volume: state.volume,
         isLoop: state.isLoop,
         isAutoplay: state.isAutoplay,

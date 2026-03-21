@@ -5,12 +5,29 @@
  */
 
 import TrackPlayer, { Event } from "react-native-track-player";
+import { Linking } from "react-native";
+
+// Deep link URL sent when the user taps the notification / lock screen card.
+// _layout.tsx listens for this via Linking.addEventListener and expands the player.
+const PLAYER_DEEP_LINK = "mavins-player://player/open";
 
 /**
  * The playback service function that registers event listeners for remote control commands.
  * This function runs in a separate background thread managed by `react-native-track-player`.
  */
 export const playbackService = async () => {
+  // When the user taps the notification media card or lock screen card,
+  // RNTP fires RemotePlayId. We open the deep link so _layout.tsx can
+  // detect the tap and expand the player overlay.
+  TrackPlayer.addEventListener(Event.RemotePlayId, async () => {
+    try {
+      await Linking.openURL(PLAYER_DEEP_LINK);
+    } catch {
+      // App may already be in foreground — ignore
+    }
+  });
+
+
   // Listen for the "play" command from remote controls.
   TrackPlayer.addEventListener(Event.RemotePlay, () => {
     TrackPlayer.play();

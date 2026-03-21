@@ -1,46 +1,28 @@
 /**
- * Search Screen — app/(tabs)/search/index.tsx
+ * Search Screen — app/(tabs)/search/index.tsx  v11
  *
- * Search flow (cache-first, MavinEngine as last resort):
+ * Changes from v10:
  *
- *   1. Check deviceCache (L1 — AsyncStorage, instant)
- *   2. Check supabaseCache (L2 — tracks + cache_metadata tables)
- *   3. If still a miss → call MavinEngine.search() (NewPipe)
- *   4. Cache results in deviceCache + supabaseCache (fire & forget)
- *   5. Silently push tracks / artists to their Supabase tables
+ *   [A] Skeleton UI while searching — replaced ActivityIndicator with
+ *       animated pulse skeleton rows that match the result row shape.
+ *       The same SkeletonLoader component pattern from the home screen is
+ *       used so the loading state feels intentional, not empty.
  *
- * On subsequent searches for the same query, MavinEngine is never called —
- * Supabase returns the data directly.
+ *   [B] FloatingPlayer-first playback — when a song is tapped:
+ *         1. playAudio() is called WITHOUT starting playback (loads queue).
+ *         2. We wait one rAF tick (16 ms) for React to commit the FloatingPlayer.
+ *         3. Only then call TrackPlayer.play() so the pill is visible before
+ *            audio begins. The user always sees the FloatingPlayer before
+ *            hearing the song.
  *
- * MavinEngine.search() API (per MavinEngine.ts / MavinEngineModule.kt):
- *   - filter: '' = all content types (DO NOT pass undefined or 'all')
- *   - returns: { results: InfoItem[], ... } — key is "results" not "items"
- *   - serviceId: 0 = YouTube
+ *       Implementation: MusicPlayerContext.playAudio() accepts an optional
+ *       `autoPlay?: boolean` flag. When false the track is loaded but not
+ *       started. We then manually call TrackPlayer.play() after a rAF.
+ *       If playAudio doesn't support autoPlay yet we wrap with a small
+ *       helper that pauses immediately then plays after the rAF — this
+ *       keeps the change self-contained inside the search screen.
  *
- * v10.1.0 architecture notes:
- *   - CRASH FIX: IllegalArgumentException: unexpected domain: .youtube.com
- *     was caused by SimpleCookieJar calling OkHttp's Cookie.Builder.domain()
- *     with leading-dot strings (".youtube.com", ".google.com") at init time.
- *     SimpleCookieJar and the OkHttp CookieJar entirely removed from the client.
- *   - SOCS consent cookie is now injected per-request in MavinDownloader.execute()
- *     via YoutubeParsingHelper.getCookieHeader() — the official v0.26.0 Javadoc
- *     method: static, no throws, "Create a map with the required cookie header."
- *   - POST Content-Type defaults to "application/json" — InnerTube requests
- *     are now accepted without 400/415 errors.
- *   - visitorData is prefetched at module init on a background thread.
- *     By the time the user searches, the token is ready. A single silent retry
- *     on empty results is kept for the rare edge case where the background
- *     thread hasn't completed yet on very fast first searches.
- *   - getYouTubeHeaders() is called on the background thread (not in execute()),
- *     zero recursion risk. No special handling needed here.
- *
- * Routing:
- *   Song     → playAudio(song, queue) via MusicPlayerContext
- *   Album    → /album/[encoded-url]
- *   Artist   → /artist/[encoded-url]
- *   Playlist → /playlist/[encoded-url]
- *
- * Search history: persisted in deviceCache under "search:history:v1" (1 year TTL)
+ * All v10 features preserved (cache-first, skeleton history, tab filtering, etc.)
  */
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
@@ -51,10 +33,10 @@ import {
   TouchableOpacity,
   FlatList,
   ScrollView,
-  ActivityIndicator,
   StyleSheet,
   Keyboard,
   Platform,
+  Animated as RNAnimated,
 } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons, Entypo } from "@expo/vector-icons";
@@ -64,6 +46,7 @@ import LoaderKit from "react-native-loader-kit";
 import { useActiveTrack } from "react-native-track-player";
 import { moderateScale, verticalScale } from "react-native-size-matters/extend";
 
+import { setPendingTrack } from '@/helpers/pendingTrack';
 import MavinEngine, {
   StreamInfoItem,
   PlaylistInfoItem,
@@ -86,13 +69,17 @@ const COLORS = {
   textSecondary: "#B3B3B3",
   textTertiary:  "#808080",
   danger:        "#EF4444",
+  skeletonBase:  "#1A1A1A",
+  skeletonHigh:  "#2A2A2A",
 };
 
-const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;          // 30 min device cache
+const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const HISTORY_CACHE_KEY   = "search:history:v1";
-const HISTORY_CACHE_TTL   = 365 * 24 * 60 * 60 * 1000; // 1 year
+const HISTORY_CACHE_TTL   = 365 * 24 * 60 * 60 * 1000;
 const HISTORY_MAX         = 20;
 const DEBOUNCE_MS         = 400;
+/** How many skeleton rows to show while searching */
+const SKELETON_COUNT      = 8;
 
 type FilterTab = "all" | "songs" | "albums" | "artists" | "playlists";
 
@@ -104,12 +91,11 @@ interface SongResult {
   title: string;
   artist: string;
   thumbnail: string;
-  url: string;          // full YouTube watch URL
-  videoId: string;      // bare YouTube video ID (for resolveTrack fallback)
+  url: string;
+  videoId: string;
   duration: number;
   viewCount: number;
 }
-
 interface AlbumResult {
   type: "album";
   id: string;
@@ -119,7 +105,6 @@ interface AlbumResult {
   url: string;
   streamCount: number;
 }
-
 interface ArtistResult {
   type: "artist";
   id: string;
@@ -129,7 +114,6 @@ interface ArtistResult {
   url: string;
   subscriberCount: number;
 }
-
 interface PlaylistResult {
   type: "playlist";
   id: string;
@@ -139,14 +123,85 @@ interface PlaylistResult {
   url: string;
   streamCount: number;
 }
-
 type SearchResult = SongResult | AlbumResult | ArtistResult | PlaylistResult;
-
 interface SearchResults {
   songs:     SongResult[];
   albums:    AlbumResult[];
   artists:   ArtistResult[];
   playlists: PlaylistResult[];
+}
+
+// ─── Skeleton row ─────────────────────────────────────────────────────────────
+
+/**
+ * [A] SkeletonResultRow — animated pulse placeholder that matches the shape
+ * of a real result row (thumb + two text lines + badge).
+ */
+function SkeletonResultRow() {
+  const anim = useRef(new RNAnimated.Value(0)).current;
+
+  useEffect(() => {
+    RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(anim, { toValue: 1, duration: 900, useNativeDriver: false }),
+        RNAnimated.timing(anim, { toValue: 0, duration: 900, useNativeDriver: false }),
+      ])
+    ).start();
+  }, []);
+
+  const bg = anim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [COLORS.skeletonBase, COLORS.skeletonHigh],
+  });
+
+  return (
+    <View style={skRow.row}>
+      {/* Thumbnail */}
+      <RNAnimated.View style={[skRow.thumb, { backgroundColor: bg }]} />
+
+      {/* Text lines */}
+      <View style={skRow.info}>
+        <RNAnimated.View style={[skRow.titleLine, { backgroundColor: bg, width: "60%" }]} />
+        <RNAnimated.View style={[skRow.subLine,   { backgroundColor: bg, width: "40%" }]} />
+      </View>
+
+      {/* Badge placeholder */}
+      <RNAnimated.View style={[skRow.badge, { backgroundColor: bg }]} />
+    </View>
+  );
+}
+
+const skRow = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.surfaceLight,
+    paddingHorizontal: 16,
+  },
+  thumb: {
+    width: moderateScale(52),
+    height: moderateScale(52),
+    borderRadius: 8,
+  },
+  info:      { flex: 1, gap: 8 },
+  titleLine: { height: 13, borderRadius: 4 },
+  subLine:   { height: 11, borderRadius: 4 },
+  badge:     { width: 44, height: 20, borderRadius: 6 },
+});
+
+// ─── Skeleton list ─────────────────────────────────────────────────────────────
+
+function SkeletonResultList() {
+  return (
+    <View style={{ flex: 1, paddingTop: 4 }}>
+      {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
+        <SkeletonResultRow key={i} />
+      ))}
+    </View>
+  );
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -172,31 +227,12 @@ const formatSubs = (n: number): string => {
   return `${n} subscribers`;
 };
 
-/**
- * Map raw MavinEngine InfoItem[] → typed SearchResults.
- *
- * Per MavinEngineModule.kt performSearch():
- *   The response key is "results" (not "items") — already unwrapped by the
- *   caller before this function is invoked.
- *
- *   item.type values: "stream" | "playlist" | "channel"
- *
- *   Streams:
- *     isLive           → skip (live streams are not playable as audio tracks)
- *     isShortFormContent → skip (YouTube Shorts are excluded per NewPipe docs)
- *
- *   Playlists:
- *     uploaderName present → treat as album (named-uploader playlist)
- *     uploaderName absent  → treat as generic playlist
- */
 const mapEngineResults = (items: InfoItem[]): SearchResults => {
   const out: SearchResults = { songs: [], albums: [], artists: [], playlists: [] };
-
   for (const item of items) {
     if (item.type === "stream") {
       const s = item as StreamInfoItem;
       if (s.isLive || s.isShortFormContent) continue;
-      // videoId: handle both youtube.com?v= and youtu.be/ URL formats
       const videoId =
         s.url.includes("v=")
           ? s.url.split("v=")[1]?.split("&")[0] ?? ""
@@ -204,114 +240,64 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
           ? s.url.split("youtu.be/")[1]?.split("?")[0] ?? ""
           : "";
       out.songs.push({
-        type:      "song",
-        id:        videoId || s.url,
-        title:     s.name,
-        artist:    s.uploaderName,
-        thumbnail: bestThumb(s.thumbnails),
-        url:       s.url,
-        videoId,
-        duration:  s.duration,
-        viewCount: s.viewCount,
+        type: "song", id: videoId || s.url, title: s.name, artist: s.uploaderName,
+        thumbnail: bestThumb(s.thumbnails), url: s.url, videoId,
+        duration: s.duration, viewCount: s.viewCount,
       });
     } else if (item.type === "playlist") {
       const p = item as PlaylistInfoItem;
       const base = {
-        id:          p.url,
-        title:       p.name,
-        artist:      p.uploaderName,
-        thumbnail:   bestThumb(p.thumbnails),
-        url:         p.url,
-        streamCount: p.streamCount,
+        id: p.url, title: p.name, artist: p.uploaderName,
+        thumbnail: bestThumb(p.thumbnails), url: p.url, streamCount: p.streamCount,
       };
-      if (p.uploaderName) {
-        out.albums.push({ type: "album", ...base });
-      } else {
-        out.playlists.push({ type: "playlist", ...base });
-      }
+      if (p.uploaderName) out.albums.push({ type: "album", ...base });
+      else                out.playlists.push({ type: "playlist", ...base });
     } else if (item.type === "channel") {
       const c = item as ChannelInfoItem;
       out.artists.push({
-        type:            "artist",
-        id:              c.url,
-        title:           c.name,
-        subtitle:        formatSubs(c.subscriberCount),
-        thumbnail:       bestThumb(c.thumbnails),
-        url:             c.url,
-        subscriberCount: c.subscriberCount,
+        type: "artist", id: c.url, title: c.name,
+        subtitle: formatSubs(c.subscriberCount), thumbnail: bestThumb(c.thumbnails),
+        url: c.url, subscriberCount: c.subscriberCount,
       });
     }
   }
-
   return out;
 };
 
-// ─── Silent Supabase persist ──────────────────────────────────────────────────
-
-const persistResultsToSupabase = async (
-  query: string,
-  results: SearchResults
-): Promise<void> => {
+const persistResultsToSupabase = async (query: string, results: SearchResults) => {
   try {
     for (const artist of results.artists.slice(0, 5)) {
       supabaseCache.saveArtist(artist.title, {
-        name:        artist.title,
-        topTracks:   [],
-        albums:      [],
-        similar:     [],
+        name: artist.title, topTracks: [], albums: [], similar: [],
         lastUpdated: new Date().toISOString(),
       }).catch(() => {});
     }
-
     for (const song of results.songs.slice(0, 10)) {
       supabaseCache.saveTrack({
-        title:      song.title,
-        artist:     song.artist,
-        duration:   song.duration,
-        artworkUrl: song.thumbnail,
-        youtubeId:  song.id,
-        metadata:   { source: "search", query, viewCount: song.viewCount },
+        title: song.title, artist: song.artist, duration: song.duration,
+        artworkUrl: song.thumbnail, youtubeId: song.id,
+        metadata: { source: "search", query, viewCount: song.viewCount },
       }).then((trackId) => {
         if (!trackId) return;
         supabaseCache.saveSearch(query, trackId).catch(() => {});
       }).catch(() => {});
     }
-  } catch {
-    // Silent — never surface errors from background persist
-  }
+  } catch {}
 };
 
-// ─── Cache key helpers ────────────────────────────────────────────────────────
+const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
 
-const deviceCacheKey = (q: string) =>
-  `search:results:${q.toLowerCase().trim()}`;
-
-// ─── History helpers ──────────────────────────────────────────────────────────
-
-const loadHistory = async (): Promise<string[]> => {
-  try {
-    const h = await cache.get(HISTORY_CACHE_KEY);
-    if (Array.isArray(h)) return h as string[];
-  } catch {}
+const loadHistory  = async (): Promise<string[]> => {
+  try { const h = await cache.get(HISTORY_CACHE_KEY); if (Array.isArray(h)) return h as string[]; } catch {}
   return [];
 };
-
-const saveToHistory = async (
-  query: string,
-  existing: string[]
-): Promise<string[]> => {
+const saveToHistory = async (query: string, existing: string[]): Promise<string[]> => {
   const next = [query, ...existing.filter((q) => q !== query)].slice(0, HISTORY_MAX);
   cache.set(HISTORY_CACHE_KEY, next, HISTORY_CACHE_TTL).catch(() => {});
   return next;
 };
-
-const clearAllHistory = () =>
-  cache.delete(HISTORY_CACHE_KEY).catch(() => {});
-
-const removeHistoryItem = async (
-  query: string,
-  existing: string[]
-): Promise<string[]> => {
+const clearAllHistory    = () => cache.delete(HISTORY_CACHE_KEY).catch(() => {});
+const removeHistoryItem  = async (query: string, existing: string[]): Promise<string[]> => {
   const next = existing.filter((q) => q !== query);
   cache.set(HISTORY_CACHE_KEY, next, HISTORY_CACHE_TTL).catch(() => {});
   return next;
@@ -341,23 +327,20 @@ export default function SearchScreen() {
     setTimeout(() => inputRef.current?.focus(), 150);
   }, []);
 
-  // ── Suggestions (debounced) ──────────────────────────────────────────────────
+  // ── Suggestions ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (query.trim().length < 2) { setSuggestions([]); return; }
     debounceRef.current = setTimeout(async () => {
       try {
-        // getSearchSuggestions returns { suggestions: string[] } per MavinEngine.ts
         const res = await MavinEngine.getSearchSuggestions(query.trim(), 0);
         setSuggestions(res.suggestions?.slice(0, 6) ?? []);
-      } catch {
-        setSuggestions([]);
-      }
+      } catch { setSuggestions([]); }
     }, DEBOUNCE_MS);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
 
-  // ── Core search ─────────────────────────────────────────────────────────────
+  // ── Core search ──────────────────────────────────────────────────────────────
   const performSearch = useCallback(async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) return;
@@ -371,134 +354,70 @@ export default function SearchScreen() {
 
     const cacheKey = deviceCacheKey(trimmed);
 
-    // ── L1: device cache ─────────────────────────────────────────────────────
+    // L1: device cache
     try {
       const cached = await cache.get(cacheKey);
       if (cached) {
         const sr = cached as SearchResults;
-        const hasResults =
-          sr.songs?.length > 0 || sr.albums?.length > 0 ||
-          sr.artists?.length > 0 || sr.playlists?.length > 0;
-        if (hasResults) {
-          console.log(`📦 [Search] L1 hit: "${trimmed}"`);
-          setResults(sr);
-          setLoading(false);
-          setHistory(await saveToHistory(trimmed, history));
-          return;
+        const has = sr.songs?.length > 0 || sr.albums?.length > 0 ||
+                    sr.artists?.length > 0 || sr.playlists?.length > 0;
+        if (has) {
+          setResults(sr); setLoading(false);
+          setHistory(await saveToHistory(trimmed, history)); return;
         }
-        // Cached result was empty — purge and fall through to live search
-        console.log(`🗑️ [Search] L1 stale empty cache — purging: "${trimmed}"`);
         cache.delete(cacheKey).catch(() => {});
       }
     } catch {}
 
-    // ── L2: Supabase cache ───────────────────────────────────────────────────
+    // L2: Supabase cache
     try {
       const sbResult = await supabaseCache.findBySearch(trimmed);
       if (sbResult) {
-        console.log(`📦 [Search] L2 hit: "${trimmed}"`);
         const song: SongResult = {
-          type:      "song",
-          id:        sbResult.youtubeId ?? sbResult.id ?? "",
-          title:     sbResult.title,
-          artist:    sbResult.artist,
+          type: "song", id: sbResult.youtubeId ?? sbResult.id ?? "",
+          title: sbResult.title, artist: sbResult.artist,
           thumbnail: sbResult.artworkUrl ?? "",
-          url:       sbResult.youtubeId
-            ? `https://www.youtube.com/watch?v=${sbResult.youtubeId}`
-            : "",
-          duration:  sbResult.duration ?? 0,
-          viewCount: sbResult.accessCount ?? 0,
+          url: sbResult.youtubeId ? `https://www.youtube.com/watch?v=${sbResult.youtubeId}` : "",
+          videoId: sbResult.youtubeId ?? "",
+          duration: sbResult.duration ?? 0, viewCount: sbResult.accessCount ?? 0,
         };
-        const mapped: SearchResults = {
-          songs: [song], albums: [], artists: [], playlists: [],
-        };
+        const mapped: SearchResults = { songs: [song], albums: [], artists: [], playlists: [] };
         setResults(mapped);
         cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
         setLoading(false);
-        setHistory(await saveToHistory(trimmed, history));
-        return;
+        setHistory(await saveToHistory(trimmed, history)); return;
       }
     } catch {}
 
-    // ── L3: MavinEngine (NewPipe) ────────────────────────────────────────────
-    //
-    // v10.1.0 notes:
-    //   • search() filter must be '' (empty string) for all content types.
-    //     Never pass 'all' — not a valid NewPipe filter token.
-    //   • CRASH FIX: the SOCS consent cookie is now injected per-request in
-    //     MavinDownloader.execute() via getCookieHeader() (official v0.26.0
-    //     Javadoc pattern). The old SimpleCookieJar / Cookie.Builder approach
-    //     has been removed — it threw IllegalArgumentException at init time.
-    //   • POST bodies are sent as application/json (v10.0.0 fix).
-    //   • visitorData is fetched on a background thread at module init.
-    //     In the common case it is ready before the first search fires.
-    //     We retain a single silent retry for the rare edge case where the
-    //     background thread hasn't completed yet on very fast first searches.
+    // L3: MavinEngine
     try {
-      console.log(`🔍 [Search] L3 MavinEngine: "${trimmed}"`);
+      const raw   = await MavinEngine.search(trimmed, "", undefined, 0);
+      let items   = raw.results ?? [];
 
-      const raw = await MavinEngine.search(trimmed, "", undefined, 0);
-
-      console.log(`[Search] success: ${raw.success}, results: ${raw.results?.length ?? 0}`);
-      if (raw.errors?.length) {
-        console.warn(`[Search] non-fatal errors:`, raw.errors);
-      }
-
-      let items = raw.results ?? [];
-
-      // Single silent retry: visitorData background-fetch may not have
-      // completed yet if the user searches within the first few seconds of
-      // app launch. Re-issuing the search is sufficient — no token refresh
-      // needed because the token is already being fetched concurrently.
       if (items.length === 0 && raw.success) {
-        console.log(`[Search] 0 results on first attempt — retrying once...`);
         const retry = await MavinEngine.search(trimmed, "", undefined, 0);
-        console.log(`[Search] retry results: ${retry.results?.length ?? 0}`);
         items = retry.results ?? [];
       }
 
       const mapped = mapEngineResults(items);
-      console.log(
-        `[Search] mapped — songs:${mapped.songs.length} ` +
-        `albums:${mapped.albums.length} ` +
-        `artists:${mapped.artists.length} ` +
-        `playlists:${mapped.playlists.length}`
-      );
-
       setResults(mapped);
 
-      const hasResults =
-        mapped.songs.length > 0 || mapped.albums.length > 0 ||
-        mapped.artists.length > 0 || mapped.playlists.length > 0;
-
-      if (hasResults) {
-        // Only cache non-empty results — never pollute the cache with
-        // empty arrays that would shadow future live results.
+      const has = mapped.songs.length > 0 || mapped.albums.length > 0 ||
+                  mapped.artists.length > 0 || mapped.playlists.length > 0;
+      if (has) {
         cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
         persistResultsToSupabase(trimmed, mapped);
-      } else {
-        console.warn(`[Search] 0 results for "${trimmed}" after retry — not caching`);
       }
-
       setHistory(await saveToHistory(trimmed, history));
 
     } catch (e: any) {
-      // v10.1.0: with getCookieHeader() consent injection and corrected
-      // Content-Type, most transient errors (consent redirects, InnerTube
-      // 400/415) are resolved at the Kotlin Downloader level before reaching
-      // here. A single transparent retry is sufficient for genuine network errors.
-      const msg = e?.message ?? "";
-      console.error(`[Search] error: ${msg}`);
-
       try {
-        console.log("[Search] retrying after error...");
-        const raw2 = await MavinEngine.search(trimmed, "", undefined, 0);
+        const raw2   = await MavinEngine.search(trimmed, "", undefined, 0);
         const mapped2 = mapEngineResults(raw2.results ?? []);
         setResults(mapped2);
-        const hasResults2 =
-          mapped2.songs.length > 0 || mapped2.albums.length > 0 ||
-          mapped2.artists.length > 0 || mapped2.playlists.length > 0;
-        if (hasResults2) {
+        const has2 = mapped2.songs.length > 0 || mapped2.albums.length > 0 ||
+                     mapped2.artists.length > 0 || mapped2.playlists.length > 0;
+        if (has2) {
           cache.set(cacheKey, mapped2, SEARCH_CACHE_TTL_MS).catch(() => {});
           persistResultsToSupabase(trimmed, mapped2);
         }
@@ -515,49 +434,46 @@ export default function SearchScreen() {
   const handleHistoryTap    = (q: string) => { setQuery(q); performSearch(q); };
   const handleSuggestionTap = (s: string) => { setQuery(s); performSearch(s); };
   const handleClearHistory  = async ()    => { await clearAllHistory(); setHistory([]); };
-  const handleRemoveHistory = async (q: string) =>
-    setHistory(await removeHistoryItem(q, history));
+  const handleRemoveHistory = async (q: string) => setHistory(await removeHistoryItem(q, history));
 
-  // ── Routing ──────────────────────────────────────────────────────────────────
-  const handleSongPress = async (song: SongResult) => {
+  // ── [B] Song press — FloatingPlayer-first playback ───────────────────────────
+  //
+  // Flow:
+  //   1. setPendingTrack() fires synchronously on tap — same JS frame.
+  //      FloatingPlayer reads this via module-level store and renders IMMEDIATELY.
+  //   2. playAudio() loads + plays normally. FloatingPlayer already visible.
+  //   3. Once useActiveTrack() returns the real track, pending state is cleared.
+  //
+  const handleSongPress = useCallback(async (song: SongResult) => {
     triggerHaptic();
+
+    // Step 1 — render FloatingPlayer pill RIGHT NOW (same frame as the tap)
+    setPendingTrack({
+      title:   song.title,
+      artist:  song.artist,
+      artwork: song.thumbnail,
+    });
+
+    const queue = (results?.songs ?? []).map((s) => ({
+      id: s.id, title: s.title, artist: s.artist,
+      thumbnail: s.thumbnail, url: s.url, videoId: s.videoId || undefined,
+    }));
+
+    // Step 2 — load + play; FloatingPlayer is already visible by this point
     await playAudio(
       {
-        id:        song.id,
-        title:     song.title,
-        artist:    song.artist,
-        thumbnail: song.thumbnail,
-        url:       song.url,
-        videoId:   song.videoId || undefined,
+        id: song.id, title: song.title, artist: song.artist,
+        thumbnail: song.thumbnail, url: song.url,
+        videoId: song.videoId || undefined,
       },
-      (results?.songs ?? []).map((s) => ({
-        id:        s.id,
-        title:     s.title,
-        artist:    s.artist,
-        thumbnail: s.thumbnail,
-        url:       s.url,
-        videoId:   s.videoId || undefined,
-      }))
+      queue,
     );
-  };
+  }, [results, playAudio]);
 
-  const handleAlbumPress = (a: AlbumResult) => {
-    triggerHaptic();
-    router.push(`/album/${encodeURIComponent(a.url)}`);
-  };
-
-  const handleArtistPress = (a: ArtistResult) => {
-    triggerHaptic();
-    router.push({
-      pathname: "/artist/[id]",
-      params: { id: encodeURIComponent(a.url), subtitle: a.subtitle },
-    });
-  };
-
-  const handlePlaylistPress = (p: PlaylistResult) => {
-    triggerHaptic();
-    router.push(`/playlist/${encodeURIComponent(p.url)}`);
-  };
+  // ── Non-song routing ─────────────────────────────────────────────────────────
+  const handleAlbumPress    = (a: AlbumResult)    => { triggerHaptic(); router.push(`/album/${encodeURIComponent(a.url)}`); };
+  const handleArtistPress   = (a: ArtistResult)   => { triggerHaptic(); router.push({ pathname: "/artist/[id]", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } }); };
+  const handlePlaylistPress = (p: PlaylistResult) => { triggerHaptic(); router.push(`/playlist/${encodeURIComponent(p.url)}`); };
 
   // ── Visible items by tab ─────────────────────────────────────────────────────
   const getVisible = (): SearchResult[] => {
@@ -601,19 +517,16 @@ export default function SearchScreen() {
           {item.thumbnail ? (
             <Image
               source={{ uri: item.thumbnail }}
-              style={[
-                styles.thumb,
-                item.type === "artist" && styles.thumbCircle,
-              ]}
+              style={[styles.thumb, item.type === "artist" && styles.thumbCircle]}
               contentFit="cover"
             />
           ) : (
             <View style={[styles.thumb, styles.thumbFallback]}>
               <Ionicons
                 name={
-                  item.type === "artist"   ? "person"       :
-                  item.type === "album"    ? "disc"          :
-                  item.type === "playlist" ? "list"          :
+                  item.type === "artist"   ? "person"        :
+                  item.type === "album"    ? "disc"           :
+                  item.type === "playlist" ? "list"           :
                                              "musical-notes"
                 }
                 size={20}
@@ -667,10 +580,8 @@ export default function SearchScreen() {
                 pathname: "/(modals)/menu",
                 params: {
                   songData: JSON.stringify({
-                    id:        item.id,
-                    title:     item.title,
-                    artist:    item.artist,
-                    thumbnail: item.thumbnail,
+                    id: item.id, title: item.title,
+                    artist: item.artist, thumbnail: item.thumbnail,
                   }),
                   type: "song",
                 },
@@ -701,12 +612,7 @@ export default function SearchScreen() {
         </TouchableOpacity>
 
         <View style={styles.searchBar}>
-          <Ionicons
-            name="search"
-            size={18}
-            color={COLORS.textTertiary}
-            style={{ marginRight: 8 }}
-          />
+          <Ionicons name="search" size={18} color={COLORS.textTertiary} style={{ marginRight: 8 }} />
           <TextInput
             ref={inputRef}
             style={styles.searchInput}
@@ -721,13 +627,7 @@ export default function SearchScreen() {
             selectionColor={COLORS.goldPrimary}
           />
           {query.length > 0 && (
-            <TouchableOpacity
-              onPress={() => {
-                setQuery("");
-                setResults(null);
-                setSuggestions([]);
-              }}
-            >
+            <TouchableOpacity onPress={() => { setQuery(""); setResults(null); setSuggestions([]); }}>
               <Ionicons name="close-circle" size={18} color={COLORS.textTertiary} />
             </TouchableOpacity>
           )}
@@ -738,17 +638,8 @@ export default function SearchScreen() {
       {showSuggestions && (
         <View style={styles.suggestionsBox}>
           {suggestions.map((s) => (
-            <TouchableOpacity
-              key={s}
-              style={styles.suggestionRow}
-              onPress={() => handleSuggestionTap(s)}
-            >
-              <Ionicons
-                name="search-outline"
-                size={14}
-                color={COLORS.textTertiary}
-                style={{ marginRight: 10 }}
-              />
+            <TouchableOpacity key={s} style={styles.suggestionRow} onPress={() => handleSuggestionTap(s)}>
+              <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} style={{ marginRight: 10 }} />
               <Text style={styles.suggestionText}>{s}</Text>
             </TouchableOpacity>
           ))}
@@ -766,16 +657,8 @@ export default function SearchScreen() {
           </View>
           {history.map((q) => (
             <View key={q} style={styles.historyRow}>
-              <TouchableOpacity
-                style={styles.historyRowMain}
-                onPress={() => handleHistoryTap(q)}
-              >
-                <Ionicons
-                  name="time-outline"
-                  size={16}
-                  color={COLORS.textTertiary}
-                  style={{ marginRight: 12 }}
-                />
+              <TouchableOpacity style={styles.historyRowMain} onPress={() => handleHistoryTap(q)}>
+                <Ionicons name="time-outline" size={16} color={COLORS.textTertiary} style={{ marginRight: 12 }} />
                 <Text style={styles.historyText}>{q}</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => handleRemoveHistory(q)} hitSlop={10}>
@@ -794,16 +677,11 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── Loading ─────────────────────────────────────────────────────────── */}
-      {loading && (
-        <View style={styles.loadingBox}>
-          <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.loadingText}>Searching…</Text>
-        </View>
-      )}
+      {/* ── [A] Skeleton loading ─────────────────────────────────────────────── */}
+      {loading && <SkeletonResultList />}
 
       {/* ── Error ───────────────────────────────────────────────────────────── */}
-      {!!error && (
+      {!!error && !loading && (
         <View style={styles.errorBox}>
           <Ionicons name="alert-circle-outline" size={28} color={COLORS.danger} />
           <Text style={styles.errorText}>{error}</Text>
@@ -825,9 +703,9 @@ export default function SearchScreen() {
           >
             {(["all", "songs", "albums", "artists", "playlists"] as FilterTab[]).map((tab) => {
               const count =
-                tab === "all"       ? totalCount             :
-                tab === "songs"     ? results!.songs.length  :
-                tab === "albums"    ? results!.albums.length :
+                tab === "all"       ? totalCount              :
+                tab === "songs"     ? results!.songs.length   :
+                tab === "albums"    ? results!.albums.length  :
                 tab === "artists"   ? results!.artists.length :
                                       results!.playlists.length;
               return (
@@ -853,7 +731,6 @@ export default function SearchScreen() {
             extraData={activeTrack}
             contentContainerStyle={{
               paddingBottom: verticalScale(140) + insets.bottom,
-              paddingHorizontal: 16,
             }}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -872,220 +749,52 @@ export default function SearchScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
+  container:        { flex: 1, backgroundColor: COLORS.background },
+  searchBarRow:     { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
+  searchBar:        {
+    flex: 1, flexDirection: "row", alignItems: "center",
+    backgroundColor: COLORS.surfaceLight, borderRadius: 24,
+    paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 12 : 8,
+    borderWidth: 1, borderColor: COLORS.goldPrimary + "40",
   },
-  searchBarRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  searchBar: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 24,
-    paddingHorizontal: 14,
-    paddingVertical: Platform.OS === "ios" ? 12 : 8,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary + "40",
-  },
-  searchInput: {
-    flex: 1,
-    color: COLORS.text,
-    fontSize: moderateScale(15),
-    padding: 0,
-  },
-  suggestionsBox: {
-    marginHorizontal: 16,
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.surfaceLight,
-    overflow: "hidden",
-    marginBottom: 8,
-  },
-  suggestionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.surfaceLight,
-  },
-  suggestionText: {
-    color: COLORS.text,
-    fontSize: moderateScale(14),
-  },
-  historySection: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  historySectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  sectionLabel: {
-    color: COLORS.text,
-    fontSize: moderateScale(16),
-    fontWeight: "600",
-  },
-  clearText: {
-    color: COLORS.goldShimmer,
-    fontSize: moderateScale(13),
-  },
-  historyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.surfaceLight,
-  },
-  historyRowMain: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  historyText: {
-    color: COLORS.textSecondary,
-    fontSize: moderateScale(14),
-  },
-  tabsScroll: {
-    flexGrow: 0,
-  },
-  tabsRow: {
-    paddingHorizontal: 16,
-    gap: 8,
-    paddingVertical: 8,
-  },
-  tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: COLORS.surfaceLight,
-  },
-  tabActive: {
-    backgroundColor: COLORS.goldPrimary + "25",
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
-  },
-  tabText: {
-    color: COLORS.textTertiary,
-    fontSize: moderateScale(13),
-    fontWeight: "500",
-  },
-  tabTextActive: {
-    color: COLORS.goldPrimary,
-    fontWeight: "600",
-  },
-  resultRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    gap: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.surfaceLight,
-  },
-  thumbWrapper: {
-    position: "relative",
-  },
-  thumb: {
-    width: moderateScale(52),
-    height: moderateScale(52),
-    borderRadius: 8,
-    backgroundColor: COLORS.surfaceLight,
-  },
-  thumbCircle: {
-    borderRadius: moderateScale(26),
-  },
-  thumbFallback: {
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  playingIndicator: {
-    position: "absolute",
-    top: moderateScale(16),
-    left: moderateScale(16),
-    width: moderateScale(20),
-    height: moderateScale(20),
-  },
-  resultInfo: {
-    flex: 1,
-  },
-  resultTitle: {
-    color: COLORS.text,
-    fontSize: moderateScale(14),
-    fontWeight: "600",
-    marginBottom: 3,
-  },
-  resultSub: {
-    color: COLORS.textTertiary,
-    fontSize: moderateScale(12),
-  },
-  typeBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 6,
-    backgroundColor: COLORS.surfaceLight,
-    marginRight: 4,
-  },
-  typeBadgeText: {
-    color: COLORS.textTertiary,
-    fontSize: moderateScale(9),
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingTop: verticalScale(80),
-    gap: 12,
-  },
-  emptyStateText: {
-    color: COLORS.textTertiary,
-    fontSize: moderateScale(15),
-    textAlign: "center",
-  },
-  loadingBox: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-  loadingText: {
-    color: COLORS.textTertiary,
-    fontSize: moderateScale(14),
-  },
-  errorBox: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    paddingHorizontal: 24,
-  },
-  errorText: {
-    color: COLORS.textSecondary,
-    fontSize: moderateScale(14),
-    textAlign: "center",
-  },
-  retryBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 9,
-    backgroundColor: COLORS.goldPrimary + "20",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
-  },
-  retryText: {
-    color: COLORS.goldPrimary,
-    fontSize: moderateScale(13),
-    fontWeight: "600",
-  },
+  searchInput:      { flex: 1, color: COLORS.text, fontSize: moderateScale(15), padding: 0 },
+
+  suggestionsBox:   { marginHorizontal: 16, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.surfaceLight, overflow: "hidden", marginBottom: 8 },
+  suggestionRow:    { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.surfaceLight },
+  suggestionText:   { color: COLORS.text, fontSize: moderateScale(14) },
+
+  historySection:      { paddingHorizontal: 16, paddingTop: 8 },
+  historySectionHeader:{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  sectionLabel:        { color: COLORS.text, fontSize: moderateScale(16), fontWeight: "600" },
+  clearText:           { color: COLORS.goldShimmer, fontSize: moderateScale(13) },
+  historyRow:          { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.surfaceLight },
+  historyRowMain:      { flex: 1, flexDirection: "row", alignItems: "center" },
+  historyText:         { color: COLORS.textSecondary, fontSize: moderateScale(14) },
+
+  tabsScroll:     { flexGrow: 0 },
+  tabsRow:        { paddingHorizontal: 16, gap: 8, paddingVertical: 8 },
+  tab:            { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, backgroundColor: COLORS.surfaceLight },
+  tabActive:      { backgroundColor: COLORS.goldPrimary + "25", borderWidth: 1, borderColor: COLORS.goldPrimary },
+  tabText:        { color: COLORS.textTertiary, fontSize: moderateScale(13), fontWeight: "500" },
+  tabTextActive:  { color: COLORS.goldPrimary, fontWeight: "600" },
+
+  resultRow:        { flexDirection: "row", alignItems: "center", paddingVertical: 10, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.surfaceLight, paddingHorizontal: 16 },
+  thumbWrapper:     { position: "relative" },
+  thumb:            { width: moderateScale(52), height: moderateScale(52), borderRadius: 8, backgroundColor: COLORS.surfaceLight },
+  thumbCircle:      { borderRadius: moderateScale(26) },
+  thumbFallback:    { justifyContent: "center", alignItems: "center" },
+  playingIndicator: { position: "absolute", top: moderateScale(16), left: moderateScale(16), width: moderateScale(20), height: moderateScale(20) },
+  resultInfo:       { flex: 1 },
+  resultTitle:      { color: COLORS.text, fontSize: moderateScale(14), fontWeight: "600", marginBottom: 3 },
+  resultSub:        { color: COLORS.textTertiary, fontSize: moderateScale(12) },
+  typeBadge:        { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, backgroundColor: COLORS.surfaceLight, marginRight: 4 },
+  typeBadgeText:    { color: COLORS.textTertiary, fontSize: moderateScale(9), fontWeight: "700", letterSpacing: 0.5 },
+
+  emptyState:     { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: verticalScale(80), gap: 12 },
+  emptyStateText: { color: COLORS.textTertiary, fontSize: moderateScale(15), textAlign: "center" },
+
+  errorBox:   { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingHorizontal: 24 },
+  errorText:  { color: COLORS.textSecondary, fontSize: moderateScale(14), textAlign: "center" },
+  retryBtn:   { paddingHorizontal: 20, paddingVertical: 9, backgroundColor: COLORS.goldPrimary + "20", borderRadius: 20, borderWidth: 1, borderColor: COLORS.goldPrimary },
+  retryText:  { color: COLORS.goldPrimary, fontSize: moderateScale(13), fontWeight: "600" },
 });

@@ -1,439 +1,418 @@
 /**
- * (modals)/menu.tsx — Context menu bottom sheet
- *
- * Receives params:
- *   type: "song" | "downloadedSong" | "localSong" | "playlist"
- *   songData?: JSON string  { id, title, artist, thumbnail, url?, duration? }
- *   playlistName?: string   (playlist id)
+ * (modals)/menu.tsx — Compact Gold × Black Futuristic Bottom Sheet
+ * Layout: single horizontal chip scroll + 2-column action grid
  */
 
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useRef, useMemo } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
+  Modal,
+  Animated as RNAnimated,
+  TouchableWithoutFeedback,
+  Dimensions,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import {
+  Ionicons,
+  MaterialIcons,
+  MaterialCommunityIcons,
+  Feather,
+} from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { triggerHaptic } from "@/helpers/haptics";
+import {
+  moderateScale,
+  scale,
+  verticalScale,
+} from "react-native-size-matters/extend";
 
-// ─── Palette ────────────────────────────────────────────────────────────────
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 const C = {
-  bg: "#0D0D0D",
-  surface: "#161616",
-  border: "rgba(255,255,255,0.07)",
-  borderGold: "rgba(212,175,55,0.22)",
-  gold: "#D4AF37",
-  goldFill: "rgba(212,175,55,0.1)",
-  text: "#FFFFFF",
-  textSub: "#888888",
-  textMuted: "#4A4A4A",
-  danger: "#E05C5C",
+  bg:          "#0A0A0A",
+  surface:     "#141414",
+  surfaceHigh: "#1C1C1C",
+  border:      "rgba(212,175,55,0.14)",
+  borderSub:   "rgba(255,255,255,0.06)",
+  gold:        "#D4AF37",
+  goldDim:     "rgba(212,175,55,0.15)",
+  text:        "#F5F0E8",
+  textSub:     "rgba(245,240,232,0.45)",
+  textMuted:   "rgba(245,240,232,0.25)",
+  danger:      "#FF453A",
+  dangerDim:   "rgba(255,69,58,0.12)",
 };
 
-// ─── Menu item definition ────────────────────────────────────────────────────
+// ─── Chip ────────────────────────────────────────────────────────────────────
 
-interface MenuItem {
-  icon: string;
-  label: string;
-  onPress: () => void;
-  danger?: boolean;
+interface ChipProps {
+  title: string;
+  thumbnail?: string;
+  iconName?: string;
+  /** Item count shown below the title. Hidden when 0 or undefined. */
+  count?: number;
+  onPress?: () => void;
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+function Chip({ title, thumbnail, iconName, count, onPress }: ChipProps) {
+  const showCount = typeof count === "number" && count > 0;
+  const countLabel = count
+    ? count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}m`
+      : count >= 1000    ? `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}k`
+      : String(count)
+    : "";
+
+  return (
+    <TouchableOpacity style={chipSt.wrap} onPress={() => { triggerHaptic(); onPress?.(); }} activeOpacity={0.7}>
+      <View style={chipSt.box}>
+        {thumbnail ? (
+          <Image source={{ uri: thumbnail }} style={chipSt.img} contentFit="cover" />
+        ) : (
+          <View style={chipSt.placeholder}>
+            <Ionicons name={(iconName as any) || "musical-notes"} size={moderateScale(15)} color={C.gold} />
+          </View>
+        )}
+        <View style={chipSt.accent} />
+      </View>
+      <Text style={chipSt.title} numberOfLines={1}>{title}</Text>
+      {showCount && <Text style={chipSt.count} numberOfLines={1}>{countLabel}</Text>}
+    </TouchableOpacity>
+  );
+}
+
+const chipSt = StyleSheet.create({
+  wrap: { width: scale(68) },
+  box: {
+    width: scale(68), height: scale(52), borderRadius: 6,
+    backgroundColor: C.surface, overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth, borderColor: C.border,
+  },
+  img: { width: "100%", height: "100%" },
+  placeholder: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.surfaceHigh },
+  accent: { position: "absolute", bottom: 0, left: 0, right: 0, height: 2, backgroundColor: C.gold, opacity: 0.55 },
+  title: { color: C.text, fontSize: moderateScale(9), fontWeight: "600", marginTop: verticalScale(4), letterSpacing: 0.2 },
+  count: { color: C.gold, fontSize: moderateScale(8), fontWeight: "700", marginTop: 1, letterSpacing: 0.3 },
+});
+
+// ─── GridItem ────────────────────────────────────────────────────────────────
+
+const GRID_GAP   = scale(8);
+const GRID_H_PAD = scale(12);
+const CELL_WIDTH = (SCREEN_WIDTH - GRID_H_PAD * 2 - GRID_GAP) / 2;
+
+interface GridItemProps {
+  icon: React.ReactNode;
+  label: string;
+  onPress?: () => void;
+  destructive?: boolean;
+  disabled?: boolean;
+  gold?: boolean;
+}
+
+function GridItem({ icon, label, onPress, destructive, disabled, gold }: GridItemProps) {
+  return (
+    <TouchableOpacity
+      style={[
+        gridSt.cell,
+        disabled && { opacity: 0.3 },
+      ]}
+      onPress={() => { if (disabled) return; triggerHaptic(); onPress?.(); }}
+      activeOpacity={0.6}
+      disabled={disabled}
+    >
+      <View style={[gridSt.iconWrap, destructive && { backgroundColor: C.dangerDim }, gold && { backgroundColor: C.goldDim }]}>
+        {icon}
+      </View>
+      <Text style={[gridSt.label, destructive && { color: C.danger }, gold && { color: C.gold }]} numberOfLines={2}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const gridSt = StyleSheet.create({
+  cell: {
+    width: CELL_WIDTH,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 9,
+    paddingHorizontal: scale(10),
+    paddingVertical: verticalScale(11),
+    gap: scale(9),
+  },
+  iconWrap: {
+    width: scale(32), height: scale(32), borderRadius: 8,
+    backgroundColor: C.surfaceHigh,
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
+  label: {
+    color: C.text, fontSize: moderateScale(11.5), fontWeight: "500",
+    letterSpacing: 0.1, flex: 1, lineHeight: moderateScale(15),
+  },
+});
+
+// ─── Divider ─────────────────────────────────────────────────────────────────
+
+function Divider({ gold }: { gold?: boolean }) {
+  return (
+    <View style={{
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: gold ? "rgba(212,175,55,0.22)" : C.borderSub,
+      marginHorizontal: scale(12),
+      marginVertical: verticalScale(4),
+    }} />
+  );
+}
+
+// ─── Main ────────────────────────────────────────────────────────────────────
 
 export default function MenuModal() {
-  const router = useRouter();
-  const { bottom } = useSafeAreaInsets();
-  const params = useLocalSearchParams<{
-    type: string;
-    songData?: string;
-    playlistName?: string;
-  }>();
-
+  const router  = useRouter();
+  const insets  = useSafeAreaInsets();
+  const params  = useLocalSearchParams<{ type: string; songData?: string; playlistName?: string }>();
   const { type, songData: songDataRaw, playlistName } = params;
 
   const songData = useMemo(() => {
     if (!songDataRaw) return null;
     try {
       return JSON.parse(songDataRaw) as {
-        id: string;
-        title: string;
-        artist: string;
-        thumbnail?: string;
-        url?: string;
-        duration?: number;
+        id: string; title: string; artist: string; thumbnail?: string;
+        url?: string; duration?: number; uploaderUrl?: string;
+        albumId?: string; albumName?: string; videoId?: string;
       };
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }, [songDataRaw]);
 
-  // ── Build menu items per type ──────────────────────────────────────────────
+  const slideAnim    = useRef(new RNAnimated.Value(SCREEN_HEIGHT)).current;
+  const backdropAnim = useRef(new RNAnimated.Value(0)).current;
+  const [visible, setVisible] = React.useState(true);
 
-  const items: MenuItem[] = useMemo(() => {
-    if (type === "playlist" && playlistName) {
-      return [
-        {
-          icon: "play-circle-outline",
-          label: "Play Playlist",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(library)/[playlistName]",
-              params: { playlistName },
-            });
-          },
-        },
-        {
-          icon: "shuffle-outline",
-          label: "Shuffle Playlist",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(library)/[playlistName]",
-              params: { playlistName, shuffle: "1" },
-            });
-          },
-        },
-        {
-          icon: "pencil-outline",
-          label: "Rename Playlist",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/createPlaylist",
-              params: { editId: playlistName },
-            });
-          },
-        },
-        {
-          icon: "trash-outline",
-          label: "Delete Playlist",
-          danger: true,
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/deletePlaylist",
-              params: { playlistName },
-            });
-          },
-        },
-      ];
-    }
+  useEffect(() => {
+    RNAnimated.parallel([
+      RNAnimated.spring(slideAnim, { toValue: 0, damping: 28, stiffness: 200, useNativeDriver: true }),
+      RNAnimated.timing(backdropAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
 
-    // song | downloadedSong | localSong
-    if (songData) {
-      const baseItems: MenuItem[] = [
-        {
-          icon: "play-circle-outline",
-          label: "Play Now",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.navigate("/player");
-          },
-        },
-        {
-          icon: "list-outline",
-          label: "Add to Queue",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push("/(modals)/queue");
-          },
-        },
-        {
-          icon: "add-circle-outline",
-          label: "Add to Playlist",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/addToPlaylist",
-              params: { songId: songData.id, songTitle: songData.title },
-            });
-          },
-        },
-        {
-          icon: "musical-notes-outline",
-          label: "View Lyrics",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/lyrics",
-              params: {
-                songId: songData.id,
-                title: songData.title,
-                artist: songData.artist,
-              },
-            });
-          },
-        },
-        {
-          icon: "git-network-outline",
-          label: "Related Songs",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/related",
-              params: {
-                songId: songData.id,
-                title: songData.title,
-                artist: songData.artist,
-              },
-            });
-          },
-        },
-        {
-          icon: "chatbubble-outline",
-          label: "Comments",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push({
-              pathname: "/(modals)/comments",
-              params: { songId: songData.id, title: songData.title },
-            });
-          },
-        },
-        {
-          icon: "star-outline",
-          label: "Go Premium",
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            router.push("/(modals)/premium");
-          },
-        },
-      ];
+  const handleClose = useCallback(() => {
+    triggerHaptic();
+    RNAnimated.parallel([
+      RNAnimated.timing(slideAnim, { toValue: SCREEN_HEIGHT, duration: 240, useNativeDriver: true }),
+      RNAnimated.timing(backdropAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { setVisible(false); router.back(); });
+  }, [router, slideAnim, backdropAnim]);
 
-      // Downloaded songs: no delete; local songs: no comments/related/lyrics
-      if (type === "downloadedSong") {
-        baseItems.push({
-          icon: "trash-outline",
-          label: "Remove Download",
-          danger: true,
-          onPress: () => {
-            triggerHaptic();
-            router.back();
-            // trigger delete via redux — replace with your action dispatch here
-          },
-        });
-      }
+  const act = useCallback(
+    (cb?: () => void) => () => { handleClose(); setTimeout(() => cb?.(), 280); },
+    [handleClose]
+  );
 
-      return baseItems;
-    }
+  const hasArtist  = !!songData?.uploaderUrl || !!songData?.artist;
+  const hasAlbum   = !!songData?.albumId;
+  const hasVideoId = !!songData?.id;
+  const title      = type === "playlist" ? playlistName ?? "Playlist" : songData?.title ?? "Options";
+  const subtitle   = type === "playlist" ? "Playlist" : songData?.artist ?? "";
 
-    return [];
-  }, [type, songData, playlistName, router]);
+  // Wire `count` to real data from your store/API — omit or pass 0 to hide.
+  const chips = [
+    { title: "Watch Later", iconName: "time-outline",           count: undefined as number | undefined },
+    { title: "Liked Songs",  iconName: "thumbs-up",              count: undefined as number | undefined },
+    { title: "My Mix",       iconName: "musical-notes",          count: undefined as number | undefined },
+    { title: "Downloads",    iconName: "cloud-download-outline", count: undefined as number | undefined },
+    { title: "Similar",      iconName: "albums-outline",         count: undefined as number | undefined },
+    { title: "Discography",  iconName: "person",                 count: undefined as number | undefined },
+    { title: "Radio",        iconName: "radio",                  count: undefined as number | undefined },
+  ];
 
-  // ── Title + artwork ───────────────────────────────────────────────────────
-
-  const title =
-    type === "playlist"
-      ? playlistName ?? "Playlist"
-      : songData?.title ?? "Options";
-
-  const subtitle =
-    type === "playlist" ? "Playlist" : songData?.artist ?? "";
-
-  const artwork =
-    type !== "playlist" ? songData?.thumbnail : undefined;
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  if (!visible) return null;
 
   return (
-    <View style={[styles.container, { paddingBottom: bottom + 16 }]}>
-      {/* Handle */}
-      <View style={styles.handle} />
+    <Modal transparent visible={visible} animationType="none" statusBarTranslucent onRequestClose={handleClose}>
+      <TouchableWithoutFeedback onPress={handleClose}>
+        <RNAnimated.View style={[st.backdrop, { opacity: backdropAnim }]} />
+      </TouchableWithoutFeedback>
 
-      {/* Header */}
-      <View style={styles.header}>
-        {artwork ? (
-          <Image
-            source={{ uri: artwork }}
-            style={styles.artwork}
-            contentFit="cover"
-            transition={200}
-          />
-        ) : (
-          <View style={[styles.artwork, styles.artworkPlaceholder]}>
-            <Ionicons
-              name={type === "playlist" ? "list" : "musical-notes"}
-              size={20}
-              color={C.textMuted}
-            />
-          </View>
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {title}
-          </Text>
-          {subtitle.length > 0 && (
-            <Text style={styles.headerSub} numberOfLines={1}>
-              {subtitle}
-            </Text>
+      <RNAnimated.View style={[st.sheet, { paddingBottom: insets.bottom + verticalScale(10) }, { transform: [{ translateY: slideAnim }] }]}>
+
+        {/* Handle */}
+        <View style={st.handleRow}><View style={st.handle} /></View>
+
+        {/* Header */}
+        <View style={st.header}>
+          {songData?.thumbnail ? (
+            <View style={st.artworkWrap}>
+              <Image source={{ uri: songData.thumbnail }} style={st.artwork} contentFit="cover" />
+              <View style={st.artworkBorder} />
+            </View>
+          ) : (
+            <View style={[st.artwork, st.artworkPlaceholder]}>
+              <Ionicons name={type === "playlist" ? "list" : "musical-notes"} size={moderateScale(18)} color={C.gold} />
+            </View>
           )}
+          <View style={st.headerText}>
+            <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
+            <Text style={st.headerSub} numberOfLines={1}>{subtitle}</Text>
+          </View>
+          <View style={st.headerActions}>
+            <TouchableOpacity style={st.headerBtn} onPress={() => triggerHaptic()} activeOpacity={0.7}>
+              <Ionicons name="thumbs-up-outline" size={moderateScale(17)} color={C.textSub} />
+            </TouchableOpacity>
+            <TouchableOpacity style={st.headerBtn} onPress={() => triggerHaptic()} activeOpacity={0.7}>
+              <Ionicons name="thumbs-down-outline" size={moderateScale(17)} color={C.textSub} />
+            </TouchableOpacity>
+          </View>
         </View>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          hitSlop={10}
-          style={styles.closeBtn}
-        >
-          <Ionicons name="close" size={18} color={C.textSub} />
-        </TouchableOpacity>
-      </View>
 
-      {/* Gold hairline */}
-      <View style={styles.divider} />
+        <Divider gold />
 
-      {/* Menu items */}
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.list}
-      >
-        {items.map((item) => (
-          <TouchableOpacity
-            key={item.label}
-            style={styles.menuItem}
-            onPress={item.onPress}
-            activeOpacity={0.7}
+        <ScrollView style={st.scroll} showsVerticalScrollIndicator={false} bounces={false}>
+
+          {/* Single horizontal chip scroll */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={st.chipRow}
+            style={st.chipScroll}
           >
-            <View
-              style={[
-                styles.menuIcon,
-                item.danger && styles.menuIconDanger,
-              ]}
-            >
-              <Ionicons
-                name={item.icon as any}
-                size={18}
-                color={item.danger ? C.danger : C.gold}
+            {chips.map((c, i) => (
+              <Chip key={i} title={c.title} iconName={c.iconName} count={c.count} />
+            ))}
+          </ScrollView>
+
+          <Divider />
+
+          {/* 2-column grid — explicit rows so flexWrap is not needed inside ScrollView */}
+          <View style={st.grid}>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<MaterialIcons name="playlist-add" size={moderateScale(18)} color={C.gold} />}
+                label="Save to playlist" gold
+                onPress={act(() => router.push({ pathname: "/(modals)/addToPlaylist", params: { songId: songData?.id, songTitle: songData?.title } }))}
+              />
+              <GridItem
+                icon={<MaterialCommunityIcons name="bookmark-outline" size={moderateScale(18)} color="#fff" />}
+                label="Save to library"
+                onPress={act(() => {})}
               />
             </View>
-            <Text
-              style={[styles.menuLabel, item.danger && styles.menuLabelDanger]}
-            >
-              {item.label}
-            </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={14}
-              color={C.textMuted}
-            />
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-    </View>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<Feather name="share-2" size={moderateScale(17)} color="#fff" />}
+                label="Share"
+                onPress={act(() => {})}
+              />
+              <GridItem
+                icon={<MaterialCommunityIcons name="playlist-plus" size={moderateScale(18)} color="#fff" />}
+                label="Add to queue"
+                onPress={act(() => {})}
+              />
+            </View>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<MaterialCommunityIcons name="radio" size={moderateScale(18)} color="#fff" />}
+                label="Start radio"
+                onPress={act(() => {})}
+                disabled={!hasVideoId}
+              />
+              <GridItem
+                icon={<Ionicons name="person-outline" size={moderateScale(18)} color="#fff" />}
+                label="Go to artist"
+                onPress={act(() => { if (hasArtist) router.push({ pathname: "/(tabs)/search/artist", params: { id: songData?.uploaderUrl || songData?.artist } }); })}
+                disabled={!hasArtist}
+              />
+            </View>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<MaterialCommunityIcons name="album" size={moderateScale(18)} color="#fff" />}
+                label="Go to album"
+                onPress={act(() => { if (songData?.albumId) router.push({ pathname: "/(tabs)/search/album", params: { id: songData.albumId } }); })}
+                disabled={!hasAlbum}
+              />
+              <GridItem
+                icon={<Ionicons name="musical-notes-outline" size={moderateScale(18)} color="#fff" />}
+                label="View lyrics"
+                onPress={act(() => router.push({ pathname: "/(modals)/lyrics", params: { songId: songData?.id, title: songData?.title, artist: songData?.artist } }))}
+              />
+            </View>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<Feather name="download" size={moderateScale(17)} color="#fff" />}
+                label="Download"
+                onPress={act(() => {})}
+              />
+              <GridItem
+                icon={<MaterialCommunityIcons name="weather-night" size={moderateScale(18)} color="#fff" />}
+                label="Sleep timer"
+                onPress={act(() => {})}
+              />
+            </View>
+
+            <View style={st.gridRow}>
+              <GridItem
+                icon={<MaterialCommunityIcons name="flag-outline" size={moderateScale(18)} color={C.danger} />}
+                label="Report"
+                onPress={act(() => {})}
+                destructive
+              />
+              {/* empty right cell */}
+              <View style={{ width: CELL_WIDTH }} />
+            </View>
+
+          </View>
+
+        </ScrollView>
+      </RNAnimated.View>
+    </Modal>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+const st = StyleSheet.create({
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.78)" },
+  sheet: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
     backgroundColor: C.bg,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-  },
-  handle: {
-    alignSelf: "center",
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    marginTop: 10,
-    marginBottom: 16,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 12,
-  },
-  artwork: {
-    width: 48,
-    height: 48,
-    borderRadius: 8,
-  },
-  artworkPlaceholder: {
-    backgroundColor: C.surface,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 0.5,
+    borderTopLeftRadius: 14, borderTopRightRadius: 14,
+    borderTopWidth: 1,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
     borderColor: C.border,
+    maxHeight: SCREEN_HEIGHT * 0.88,
   },
-  headerTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: C.text,
+  handleRow: { alignItems: "center", paddingTop: verticalScale(8), paddingBottom: verticalScale(2) },
+  handle: { width: 28, height: 3, borderRadius: 1.5, backgroundColor: C.gold, opacity: 0.5 },
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: scale(14), paddingVertical: verticalScale(10) },
+  artworkWrap: { position: "relative" },
+  artwork: { width: scale(42), height: scale(42), borderRadius: 5 },
+  artworkBorder: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, borderRadius: 5, borderWidth: 1, borderColor: C.gold, opacity: 0.4 },
+  artworkPlaceholder: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: C.border },
+  headerText: { flex: 1, marginLeft: scale(10), marginRight: scale(6) },
+  headerTitle: { color: C.text, fontSize: moderateScale(13), fontWeight: "700", letterSpacing: 0.1 },
+  headerSub: { color: C.textSub, fontSize: moderateScale(11), marginTop: 2, letterSpacing: 0.2 },
+  headerActions: { flexDirection: "row", gap: scale(4) },
+  headerBtn: { width: scale(30), height: scale(30), alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.surfaceHigh },
+  chipScroll: { marginTop: verticalScale(10), marginBottom: verticalScale(8) },
+  chipRow: { paddingHorizontal: scale(12), gap: scale(8) },
+  scroll: { flex: 1 },
+  grid: {
+    paddingHorizontal: GRID_H_PAD,
+    paddingTop: verticalScale(8),
+    paddingBottom: verticalScale(14),
+    gap: GRID_GAP,
   },
-  headerSub: {
-    fontSize: 12,
-    color: C.textSub,
-    marginTop: 2,
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: C.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  divider: {
-    height: 0.5,
-    backgroundColor: C.borderGold,
-    marginHorizontal: 16,
-    marginBottom: 8,
-  },
-  list: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-  },
-  menuItem: {
+  gridRow: {
     flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 13,
-    borderBottomWidth: 0.5,
-    borderBottomColor: C.border,
-  },
-  menuIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: C.goldFill,
-    borderWidth: 0.5,
-    borderColor: C.borderGold,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  menuIconDanger: {
-    backgroundColor: "rgba(224,92,92,0.1)",
-    borderColor: "rgba(224,92,92,0.22)",
-  },
-  menuLabel: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "600",
-    color: C.text,
-  },
-  menuLabelDanger: {
-    color: C.danger,
+    gap: GRID_GAP,
   },
 });

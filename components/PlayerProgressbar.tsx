@@ -10,9 +10,10 @@ import { formatSecondsToMinutes } from "@/helpers/miscellaneous";
 import { defaultStyles } from "@/styles";
 import { Text, View, ViewProps } from "react-native";
 import { Slider } from "react-native-awesome-slider";
-import { useSharedValue } from "react-native-reanimated";
+import { useSharedValue, runOnJS } from "react-native-reanimated";
 import TrackPlayer, { useProgress } from "react-native-track-player";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
+import { useRef, useCallback } from "react";
 
 /**
  * `PlayerProgressBar` component.
@@ -20,22 +21,32 @@ import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
  * @param {ViewProps} { style } Props for the container View.
  */
 export const PlayerProgressBar = ({ style }: ViewProps) => {
-  // Get current playback progress and duration amount from TrackPlayer.
-  const { duration, position } = useProgress(250); // Update every 250ms.
+  // useProgress reads from TrackPlayer — correct for audio mode and also
+  // for muxed video mode because playerContent keeps TrackPlayer seeked to
+  // the same position before handing control to the video player.
+  // 250ms interval matches playerContent's own useProgress interval.
+  const { duration, position } = useProgress(250);
 
-  // Shared values for the slider's internal state, used with `react-native-reanimated`.
-  const isSliding = useSharedValue(false);
-  const progress = useSharedValue(0);
+  // All shared values live on the UI thread — zero JS bridge for slider motion.
+  const isSliding    = useSharedValue(false);
+  const progress     = useSharedValue(0);
   const slidingValue = useSharedValue(0);
   const min = useSharedValue(0);
   const max = useSharedValue(1);
 
-  // Format time values for display.
-  const trackElapsedTime = formatSecondsToMinutes(position);
-  const trackRemainingTime = formatSecondsToMinutes(duration - position);
-  const trackDuration = formatSecondsToMinutes(duration);
+  // 80ms debounce: rapid drags batch into one seek instead of hammering TrackPlayer.
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commitSeek = useCallback((fraction: number) => {
+    if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
+    seekDebounceRef.current = setTimeout(() => {
+      TrackPlayer.seekTo(fraction * duration);
+    }, 80);
+  }, [duration]);
 
-  // Update progress and cache values only when the user is not actively sliding the bar.
+  const trackElapsedTime   = formatSecondsToMinutes(position);
+  const trackRemainingTime = formatSecondsToMinutes(duration - position);
+  const trackDuration      = formatSecondsToMinutes(duration);
+
   if (!isSliding.value) {
     progress.value = duration > 0 ? position / duration : 0;
   }
@@ -73,21 +84,17 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           minimumTrackTintColor: Colors.minimumTrackTintColor,
           maximumTrackTintColor: Colors.maximumTrackTintColor,
         }}
-        // Callback when the user starts sliding the thumb.
-        onSlidingStart={() => (isSliding.value = true)}
-        // Callback during sliding, updates the `slidingValue` and seeks the track.
-        onValueChange={async (value) => {
+        onSlidingStart={() => { isSliding.value = true; }}
+        // Time bubble updates on UI thread; seek is debounced to avoid buffer thrash.
+        onValueChange={(value) => {
           slidingValue.value = value;
-          await TrackPlayer.seekTo(value * duration);
+          runOnJS(commitSeek)(value);
         }}
-        // Callback when the user releases the thumb after sliding.
-        onSlidingComplete={async (value) => {
-          // Only seek if the user was actually sliding.
+        onSlidingComplete={(value) => {
           if (!isSliding.value) return;
-
           isSliding.value = false;
-
-          await TrackPlayer.seekTo(value * duration);
+          if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
+          TrackPlayer.seekTo(value * duration);
         }}
       />
 

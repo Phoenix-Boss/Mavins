@@ -27,4 +27,6 @@ export interface Song {
   videoId?:  string;
   /** Resolved video stream URL — set by MusicPlayerContext after extraction */
   videoUrl?: string;
+   /** Track duration in seconds */
+  duration?: number;
 }

@@ -253,23 +253,47 @@ export class SupabaseCache {
         return data.id;
       }
 
-      // Resolve or create the artist row to satisfy the NOT NULL artist_id FK
+      // Resolve or create the artist row to satisfy the NOT NULL artist_id FK.
+      //
+      // CANNOT use onConflict:'name' — artists.name has no unique constraint
+      // (only id is unique). Doing so throws Postgres 42P10.
+      // Pattern: SELECT first → INSERT if missing → retry SELECT on race.
       let artistId: string | null = null;
       if (trackData.artist) {
-        const { data: artist, error: artistError } = await this.supabase
-          .from('artists')
-          .upsert(
-            { name: trackData.artist.toLowerCase(), updated_at: now },
-            { onConflict: 'name' }
-          )
-          .select('id')
-          .single();
+        const artistName = trackData.artist.toLowerCase();
 
-        if (artistError || !artist) {
-          console.error('❌ saveTrack artist upsert error:', artistError);
-          return null;
+        const { data: existingArtist } = await this.supabase
+          .from('artists')
+          .select('id')
+          .eq('name', artistName)
+          .maybeSingle();
+
+        if (existingArtist?.id) {
+          artistId = existingArtist.id;
+        } else {
+          const { data: newArtist, error: insertErr } = await this.supabase
+            .from('artists')
+            .insert({ name: artistName, updated_at: now, created_at: now })
+            .select('id')
+            .single();
+
+          if (insertErr || !newArtist) {
+            // Race: another concurrent insert won — look it up
+            const { data: retryArtist } = await this.supabase
+              .from('artists')
+              .select('id')
+              .eq('name', artistName)
+              .maybeSingle();
+            if (retryArtist?.id) {
+              artistId = retryArtist.id;
+            } else {
+              console.error('❌ saveTrack: could not resolve artist:', insertErr?.message);
+              return null;
+            }
+          } else {
+            artistId = newArtist.id;
+          }
         }
-        artistId = artist.id;
       }
 
       if (!artistId) {
@@ -639,18 +663,44 @@ export class SupabaseCache {
 
     const now = new Date().toISOString();
 
+    // CANNOT use onConflict:'name' — no unique constraint on artists.name.
+    // Pattern: SELECT → UPDATE if found, INSERT if not.
     try {
-      await this.supabase
+      const nameLower = artistName.toLowerCase();
+      const metadata  = {
+        topTracks: data.topTracks || [],
+        albums:    data.albums    || [],
+        similar:   data.similar   || [],
+      };
+
+      const { data: existing } = await this.supabase
         .from('artists')
-        .upsert({
-          name: artistName.toLowerCase(),
-          metadata: {
-            topTracks: data.topTracks || [],
-            albums: data.albums || [],
-            similar: data.similar || []
-          },
-          updated_at: now
-        }, { onConflict: 'name' });
+        .select('id')
+        .eq('name', nameLower)
+        .maybeSingle();
+
+      if (existing?.id) {
+        await this.supabase
+          .from('artists')
+          .update({ metadata, updated_at: now })
+          .eq('id', existing.id);
+      } else {
+        const { error: insertErr } = await this.supabase
+          .from('artists')
+          .insert({ name: nameLower, metadata, updated_at: now, created_at: now });
+
+        if (insertErr) {
+          // Race: another insert won — update it instead
+          const { data: raceRow } = await this.supabase
+            .from('artists').select('id').eq('name', nameLower).maybeSingle();
+          if (raceRow?.id) {
+            await this.supabase
+              .from('artists')
+              .update({ metadata, updated_at: now })
+              .eq('id', raceRow.id);
+          }
+        }
+      }
 
       console.log('✅ Artist saved');
       return true;
@@ -838,22 +888,33 @@ export class SupabaseCache {
       )`,
     ];
 
-    for (const sql of statements) {
+    // exec_sql and pg_query RPCs are not available on standard Supabase projects.
+    // Instead, probe each table with a lightweight SELECT — if it fails with
+    // 'relation does not exist' (42P01) the table is missing and we log a
+    // one-time reminder to run the migration SQL manually.
+    // Tables that already exist produce no output at all.
+    const tablesToProbe = ['track_stats', 'cache_metadata', 'lyrics'];
+
+    for (const table of tablesToProbe) {
       try {
-        // Supabase exposes raw SQL via the `exec_sql` RPC if you've created it,
-        // or via the built-in `pg_` functions on service-role connections.
-        // We try the standard pattern; if it fails we log and continue.
-        const { error } = await this.supabase.rpc('exec_sql', { sql });
+        const { error } = await this.supabase
+          .from(table)
+          .select('*', { count: 'exact', head: true });
         if (error) {
-          // RPC may not exist — try the alternative pg approach
-          console.warn('⚠️ ensureSchema exec_sql failed, trying pg_query:', error.message);
-          await this.supabase.rpc('pg_query', { query: sql }).catch(() => {});
+          const isMissing =
+            error.code === '42P01' ||
+            error.message?.includes('does not exist') ||
+            error.message?.includes('schema cache');
+          if (isMissing) {
+            console.warn(
+              `⚠️ Table '${table}' does not exist. ` +
+              `Run the migration SQL from the project docs to create it. ` +
+              `The app will continue without it.`
+            );
+          }
+          // Any other error (permissions etc.) is silently ignored — non-fatal.
         }
-      } catch (e: any) {
-        // Non-fatal — the table may already exist or the RPC may not be set up.
-        // The app will still work; inserts will fail gracefully if the table is missing.
-        console.warn('⚠️ ensureSchema statement skipped (non-fatal):', e?.message);
-      }
+      } catch { /* non-fatal */ }
     }
 
     console.log('✅ ensureSchema complete');
