@@ -13,8 +13,6 @@ module.exports = {
     eas: {
       projectId: "403f8812-42f9-4386-9930-c647c6002b5c",
     },
-    // NOTE: Honeygain API key is NOT stored here.
-    // It lives only in components/HoneygainConsentGate.tsx (or a gitignored secrets file).
   },
   platforms: ["android"],
   orientation: "portrait",
@@ -37,6 +35,9 @@ module.exports = {
       "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.RECEIVE_BOOT_COMPLETED",
+      // Required by DynamicsProcessing (mavin-eq) to attach to the
+      // TrackPlayer audio session. Without this the EQ silently does nothing.
+      "android.permission.MODIFY_AUDIO_SETTINGS",
     ],
     usesCleartextTraffic: true,
     icon: "./assets/images/icon.png",
@@ -51,15 +52,10 @@ module.exports = {
     versionCode: 1,
     intentFilters: [
       {
-        // Handles taps on the lock screen / notification media card.
-        // Android re-launches or resumes the app with this intent when the
-        // user taps the media notification card.
         action: "android.intent.action.MAIN",
         category: ["android.intent.category.LAUNCHER"],
       },
       {
-        // Custom scheme so Linking.getInitialURL() / addEventListener can
-        // detect that the app was opened from the media notification.
         action: "android.intent.action.VIEW",
         autoVerify: true,
         data: [

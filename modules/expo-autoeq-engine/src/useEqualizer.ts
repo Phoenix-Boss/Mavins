@@ -1,54 +1,42 @@
 /**
  * useEqualizer.ts — expo-autoeq-engine
  *
- * React hook that wires the EQ module to your player and Supabase.
- * Manages setup, teardown, preset application, and UI state in one place.
+ * Wires the EQ module to MusicPlayerContext's audio session.
  *
- * Usage in your player or EQ screen:
- *
- *   const eq = useEqualizer({ supabase, audioSessionId, trackDuration });
- *
- *   // Toggle EQ on/off
- *   <Switch value={eq.isEnabled} onValueChange={eq.toggle} />
- *
- *   // Apply a preset
- *   <Button onPress={() => eq.applyPreset(BUILT_IN_PRESETS.harman)} />
- *
- *   // Render sliders from eq.gains
+ * Key design decisions:
+ * - setupEQ() is called only when a song is actively playing AND the user
+ *   enables EQ — not on mount. DynamicsProcessing must attach to a live session.
+ * - sessionClaimedRef tracks whether minutes were deducted for THIS track.
+ *   It resets when audioSessionId changes (new track).
+ * - toggle() on an already-setup EQ just calls setEnabled() — no minute deduction.
+ * - toggle() on a not-yet-setup EQ runs the full Pro gate → deduct → setupEQ.
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import MyEQ, { applyEqPreset } from "./index";
-import { fetchUserPresets, claimEqMinutesForPlayback } from "./supabase-helpers";
+import MyEQ, { applyEqPreset } from "../index";
+import {
+  fetchUserPresets,
+  claimEqMinutesForPlayback,
+} from "./supabase-helpers";
 import { BUILT_IN_PRESETS, FLAT } from "./presets";
 import type { EqPreset, EqState } from "./types";
 
 interface UseEqualizerOptions {
-  /** Your authenticated Supabase client */
   supabase: SupabaseClient;
-  /** Audio session ID from TrackPlayer.getAudioSessionId() */
+  /** From TrackPlayer.getAudioSessionId() — pass null when no track loaded */
   audioSessionId: number | null;
-  /** Current track duration in seconds — used for minute deduction */
+  /** Current track duration in seconds */
   trackDuration: number;
-  /**
-   * Called when the user needs more EQ minutes.
-   * Return true if they completed a top-up (e.g. opened purchase sheet and confirmed).
-   * Return false to abort EQ setup.
-   */
+  /** Called when EQ minutes are insufficient. Return true if user topped up. */
   onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>;
 }
 
 interface UseEqualizerReturn extends EqState {
-  /** All presets: built-ins + user's Supabase presets */
   presets: EqPreset[];
-  /** Toggle EQ on or off (keeps setup alive for instant re-enable) */
   toggle: () => Promise<void>;
-  /** Apply a preset and update the gains in UI state */
   applyPreset: (preset: EqPreset) => Promise<void>;
-  /** Adjust a single band gain in UI state and apply to native */
   setBand: (index: number, gainDb: number) => Promise<void>;
-  /** Refresh presets from Supabase */
   refreshPresets: () => Promise<void>;
 }
 
@@ -58,7 +46,6 @@ export function useEqualizer({
   trackDuration,
   onNeedTopUp,
 }: UseEqualizerOptions): UseEqualizerReturn {
-
   const [state, setState] = useState<EqState>({
     isSetup: false,
     isEnabled: false,
@@ -69,34 +56,35 @@ export function useEqualizer({
   });
 
   const [presets, setPresets] = useState<EqPreset[]>(
-    Object.values(BUILT_IN_PRESETS)
+    Object.values(BUILT_IN_PRESETS),
   );
 
-  // Track whether we've claimed EQ minutes for the current session.
-  // Prevents double-deduction if the hook re-renders.
+  // true = minutes already deducted for this track's session
+  // Resets to false when audioSessionId changes (new track)
   const sessionClaimedRef = useRef(false);
+  // true = setupEQ() is in-flight, prevents concurrent calls
+  const setupInProgressRef = useRef(false);
 
-  // ── Setup / teardown on track change ────────────────────────────────────────
+  // ── Teardown on track change ────────────────────────────────────────────────
   useEffect(() => {
-    if (!audioSessionId) return;
+    // New track — reset claim guard
     sessionClaimedRef.current = false;
+    setupInProgressRef.current = false;
 
-    // Teardown on track change — always release the old AudioEffect chain
     return () => {
-      MyEQ.release().catch((e) =>
-        console.warn("[AutoEQ] release error:", e)
-      );
+      // Release when audioSessionId changes or component unmounts
+      MyEQ.release().catch((e) => console.warn("[AutoEQ] release:", e));
       setState((s) => ({ ...s, isSetup: false, isEnabled: false }));
     };
   }, [audioSessionId]);
 
-  // ── Load user presets from Supabase ─────────────────────────────────────────
+  // ── Load presets from Supabase ──────────────────────────────────────────────
   const refreshPresets = useCallback(async () => {
     try {
       const userPresets = await fetchUserPresets(supabase);
       setPresets([...Object.values(BUILT_IN_PRESETS), ...userPresets]);
     } catch (e) {
-      console.warn("[AutoEQ] fetchUserPresets error:", e);
+      console.warn("[AutoEQ] fetchUserPresets:", e);
     }
   }, [supabase]);
 
@@ -104,102 +92,125 @@ export function useEqualizer({
     refreshPresets();
   }, [refreshPresets]);
 
-  // ── Toggle ───────────────────────────────────────────────────────────────────
+  // ── Toggle EQ on / off ──────────────────────────────────────────────────────
   const toggle = useCallback(async () => {
     if (!audioSessionId) return;
 
+    // Already set up this session — just flip enabled, no minute cost
     if (state.isSetup) {
-      // Already set up — just toggle enabled state (no minute deduction)
       const next = !state.isEnabled;
-      await MyEQ.setEnabled(next);
-      setState((s) => ({ ...s, isEnabled: next }));
+      try {
+        await MyEQ.setEnabled(next);
+        setState((s) => ({ ...s, isEnabled: next }));
+      } catch (e: any) {
+        setState((s) => ({ ...s, error: e?.message }));
+      }
       return;
     }
 
-    // First enable for this track — claim minutes and set up
-    if (sessionClaimedRef.current) return; // guard against double-tap
-    sessionClaimedRef.current = true;
-
+    // Guard: prevent double-tap or concurrent setup
+    if (setupInProgressRef.current) return;
+    setupInProgressRef.current = true;
     setState((s) => ({ ...s, isLoading: true, error: null }));
+
     try {
+      // claimEqMinutesForPlayback checks Pro → deducts minutes → calls setupEQ()
       const ok = await claimEqMinutesForPlayback(
         supabase,
         audioSessionId,
         trackDuration,
-        onNeedTopUp
+        onNeedTopUp,
       );
 
       if (!ok) {
-        sessionClaimedRef.current = false;
+        setupInProgressRef.current = false;
         setState((s) => ({
           ...s,
           isLoading: false,
-          error: "EQ requires an active Pro subscription with sufficient minutes.",
+          error:
+            "EQ requires an active Pro subscription with sufficient minutes.",
         }));
         return;
       }
 
-      // Re-apply the last active preset after setup
+      sessionClaimedRef.current = true;
+
+      // Re-apply the active preset so it takes effect immediately
       if (state.activePreset) {
         await applyEqPreset(state.activePreset);
-        const gains = state.activePreset.type === "graphic_31band"
-          ? [...state.activePreset.gains_31]
-          : state.gains;
-        setState((s) => ({ ...s, isSetup: true, isEnabled: true, isLoading: false, gains }));
+        const gains =
+          state.activePreset.type === "graphic_31band"
+            ? [...state.activePreset.gains_31]
+            : state.gains;
+        setState((s) => ({
+          ...s,
+          isSetup: true,
+          isEnabled: true,
+          isLoading: false,
+          gains,
+        }));
       } else {
-        setState((s) => ({ ...s, isSetup: true, isEnabled: true, isLoading: false }));
+        setState((s) => ({
+          ...s,
+          isSetup: true,
+          isEnabled: true,
+          isLoading: false,
+        }));
       }
     } catch (e: any) {
       sessionClaimedRef.current = false;
-      setState((s) => ({ ...s, isLoading: false, error: e?.message ?? "Unknown EQ error" }));
+      setState((s) => ({
+        ...s,
+        isLoading: false,
+        error: e?.message ?? "EQ setup failed",
+      }));
+    } finally {
+      setupInProgressRef.current = false;
     }
   }, [audioSessionId, state, supabase, trackDuration, onNeedTopUp]);
 
-  // ── Apply preset ─────────────────────────────────────────────────────────────
-  const applyPreset = useCallback(async (preset: EqPreset) => {
-    if (!state.isSetup) return;
+  // ── Apply preset ────────────────────────────────────────────────────────────
+  const applyPreset = useCallback(
+    async (preset: EqPreset) => {
+      if (!state.isSetup) return;
+      setState((s) => ({ ...s, isLoading: true }));
+      try {
+        await applyEqPreset(preset);
+        const gains =
+          preset.type === "graphic_31band"
+            ? [...preset.gains_31]
+            : await MyEQ.getGains(); // read back computed band gains from parametric
+        setState((s) => ({
+          ...s,
+          activePreset: preset,
+          gains,
+          isLoading: false,
+        }));
+      } catch (e: any) {
+        setState((s) => ({ ...s, isLoading: false, error: e?.message }));
+      }
+    },
+    [state.isSetup],
+  );
 
-    setState((s) => ({ ...s, isLoading: true }));
-    try {
-      await applyEqPreset(preset);
-      const gains = preset.type === "graphic_31band"
-        ? [...preset.gains_31]
-        : state.gains; // biquad presets don't map 1:1 to all 31 bands
-      setState((s) => ({
-        ...s,
-        activePreset: preset,
-        gains,
-        isLoading: false,
-      }));
-    } catch (e: any) {
-      setState((s) => ({ ...s, isLoading: false, error: e?.message }));
-    }
-  }, [state.isSetup, state.gains]);
+  // ── Set single band (optimistic UI) ────────────────────────────────────────
+  const setBand = useCallback(
+    async (index: number, gainDb: number) => {
+      if (!state.isSetup) return;
+      // Update UI immediately
+      setState((s) => {
+        const gains = [...s.gains];
+        gains[index] = gainDb;
+        return { ...s, gains, activePreset: null };
+      });
+      try {
+        await MyEQ.setBand(index, gainDb);
+      } catch (e: any) {
+        console.warn("[AutoEQ] setBand:", e?.message);
+      }
+    },
+    [state.isSetup],
+  );
 
-  // ── Set single band ──────────────────────────────────────────────────────────
-  const setBand = useCallback(async (index: number, gainDb: number) => {
-    if (!state.isSetup) return;
-
-    // Optimistic UI update — update gains array immediately
-    setState((s) => {
-      const gains = [...s.gains];
-      gains[index] = gainDb;
-      return { ...s, gains, activePreset: null }; // clear preset name since custom
-    });
-
-    try {
-      await MyEQ.setBand(index, gainDb);
-    } catch (e: any) {
-      console.warn("[AutoEQ] setBand error:", e?.message);
-    }
-  }, [state.isSetup]);
-
-  return {
-    ...state,
-    presets,
-    toggle,
-    applyPreset,
-    setBand,
-    refreshPresets,
-  };
+  return { ...state, presets, toggle, applyPreset, setBand, refreshPresets };
 }

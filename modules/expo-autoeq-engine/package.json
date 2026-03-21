@@ -1,28 +1,23 @@
 {
-  "name": "expo-autoeq-engine",
+  "name": "mavin-eq",
   "version": "1.0.0",
-  "description": "31-band DynamicsProcessing EQ engine for Expo — Pro-gated with per-minute Supabase tokens",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "description": "31-band DynamicsProcessing EQ engine for Mavins Player",
+  "main": "index.ts",
+  "source": "index.ts",
+  "types": "index.ts",
   "files": [
-    "src",
-    "plugin",
-    "android"
+    "index.ts",
+    "types.ts",
+    "presets.ts",
+    "supabase-helpers.ts",
+    "useEqualizer.ts",
+    "android",
+    "expo-module.config.json"
   ],
-  "keywords": ["expo", "audio", "eq", "equalizer", "autoeq", "supabase", "react-native"],
+  "keywords": ["expo", "audio", "eq", "equalizer", "autoeq"],
   "peerDependencies": {
     "expo": "*",
     "expo-modules-core": "*",
     "react-native": "*"
-  },
-  "peerDependenciesMeta": {
-    "@supabase/supabase-js": {
-      "optional": true
-    }
-  },
-  "expo": {
-    "plugins": [
-      "./plugin/withAutoEQPlugin"
-    ]
   }
 }

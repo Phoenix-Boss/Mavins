@@ -1,25 +1,13 @@
 /**
  * supabase-helpers.ts — expo-autoeq-engine
  *
- * All Supabase interactions for the EQ module:
- *   - fetchUserProfile()         → Pro status + eq_minutes_remaining
- *   - fetchUserPresets()         → user's saved 31-band / biquad presets
- *   - savePreset()               → persist a new preset to Supabase
- *   - deletePreset()             → remove a preset by id
- *   - claimEqMinutes()           → deduct minutes via RPC (atomic, safe)
- *   - addEqMinutes()             → top-up after purchase
- *   - claimEqMinutesForPlayback()→ full Pro gate: check → deduct → setupEQ
- *
- * Import your Supabase client from wherever it lives in your app.
- * This file does NOT create a Supabase client — it receives one as a parameter
- * so it works with your existing auth session.
+ * All Supabase interactions. Receives your Supabase client as a parameter
+ * so it works with your existing auth session from MusicPlayerContext.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { EqPreset, EqBiquadFilter, EqBandGains } from "./types";
-import MyEQ from "./index";
-
-// ── Supabase row shapes ───────────────────────────────────────────────────────
+import MyEQ from "../index";
 
 interface ProfileRow {
   id: string;
@@ -28,60 +16,33 @@ interface ProfileRow {
   eq_minutes_remaining: number;
 }
 
-interface PresetRow {
-  id: string;
-  user_id: string;
-  name: string;
-  type: "graphic_31band" | "biquad";
-  gains_31: number[] | null;
-  biquad_filters: EqBiquadFilter[] | null;
-  created_at: string;
-}
-
 // ── Profile ───────────────────────────────────────────────────────────────────
 
-/**
- * Fetch the current user's Pro status and remaining EQ minutes.
- * Returns null if the user is not authenticated.
- */
 export async function fetchUserProfile(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
 ): Promise<ProfileRow | null> {
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) return null;
-
   const { data, error } = await supabase
     .from("profiles")
     .select("id, is_pro, pro_ends_at, eq_minutes_remaining")
     .eq("id", authData.user.id)
     .single();
-
   if (error) throw new Error(`fetchUserProfile: ${error.message}`);
   return data as ProfileRow;
 }
 
-/**
- * Returns true if the profile has an active, unexpired Pro subscription.
- */
 export function isProActive(profile: ProfileRow): boolean {
   if (!profile.is_pro) return false;
-  if (!profile.pro_ends_at) return true; // lifetime / no expiry
+  if (!profile.pro_ends_at) return true;
   return new Date(profile.pro_ends_at) > new Date();
 }
 
 // ── EQ minutes ────────────────────────────────────────────────────────────────
 
-/**
- * Atomically deduct `minutes` from the current user's eq_minutes_remaining.
- * Calls the `deduct_eq_minutes` Supabase RPC which:
- *   1. Checks remaining >= requested amount.
- *   2. Deducts atomically.
- *   3. Inserts a row in eq_usage for audit.
- *   4. Returns true on success, false if insufficient balance.
- */
 export async function claimEqMinutes(
   supabase: SupabaseClient,
-  minutes: number
+  minutes: number,
 ): Promise<boolean> {
   const { data, error } = await supabase.rpc("deduct_eq_minutes", {
     p_minutes: minutes,
@@ -90,13 +51,9 @@ export async function claimEqMinutes(
   return data === true;
 }
 
-/**
- * Add minutes to the current user's balance after a successful purchase.
- * Call this after Stripe / IAP confirmation — not before.
- */
 export async function addEqMinutes(
   supabase: SupabaseClient,
-  minutes: number
+  minutes: number,
 ): Promise<void> {
   const { error } = await supabase.rpc("add_eq_minutes", {
     p_minutes: minutes,
@@ -104,113 +61,87 @@ export async function addEqMinutes(
   if (error) throw new Error(`addEqMinutes: ${error.message}`);
 }
 
-// ── Full Pro gate ─────────────────────────────────────────────────────────────
-
 /**
- * claimEqMinutesForPlayback
- *
- * The full Pro gate. Call this when the user enables EQ for a track.
- *
- * Flow:
- *   1. Check Pro status — reject if expired or not subscribed.
- *   2. Compute minutes needed from durationSeconds.
- *   3. Check balance — if insufficient, surface top-up prompt via onNeedTopUp().
- *   4. Atomically deduct minutes from Supabase.
- *   5. Call MyEQ.setupEQ(audioSessionId) only on success.
- *
- * @param supabase        Your Supabase client (authenticated).
- * @param audioSessionId  From TrackPlayer.getAudioSessionId().
- * @param durationSeconds Track duration — used to compute minutes needed.
- * @param onNeedTopUp     Optional callback when balance is insufficient.
- *                        Return true if the user completed a top-up, false to abort.
- * @returns true if EQ was successfully set up, false if aborted.
+ * Full Pro gate — check subscription → deduct minutes → call setupEQ.
+ * Called from useEqualizer when the user first enables EQ for a track.
  */
 export async function claimEqMinutesForPlayback(
   supabase: SupabaseClient,
   audioSessionId: number,
   durationSeconds: number,
-  onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>
+  onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>,
 ): Promise<boolean> {
   const profile = await fetchUserProfile(supabase);
-
   if (!profile) {
-    console.warn("[AutoEQ] User not authenticated");
+    console.warn("[AutoEQ] Not authenticated");
     return false;
   }
-
-  // 1. Pro check
   if (!isProActive(profile)) {
-    console.warn("[AutoEQ] Pro subscription required or expired");
+    console.warn("[AutoEQ] Pro required");
     return false;
   }
 
-  // 2. Compute minutes (round up — partial minutes cost a full minute)
   const minutesNeeded = Math.ceil(durationSeconds / 60);
 
-  // 3. Balance check
   if (profile.eq_minutes_remaining < minutesNeeded) {
     if (!onNeedTopUp) return false;
-    const didTopUp = await onNeedTopUp(minutesNeeded, profile.eq_minutes_remaining);
+    const didTopUp = await onNeedTopUp(
+      minutesNeeded,
+      profile.eq_minutes_remaining,
+    );
     if (!didTopUp) return false;
   }
 
-  // 4. Deduct atomically — the RPC handles the race condition
   const success = await claimEqMinutes(supabase, minutesNeeded);
   if (!success) {
-    console.warn("[AutoEQ] claimEqMinutes returned false — insufficient balance");
+    console.warn("[AutoEQ] Insufficient minutes");
     return false;
   }
 
-  // 5. Wire up EQ now that we have the budget
   await MyEQ.setupEQ(audioSessionId);
   return true;
 }
 
 // ── Presets ───────────────────────────────────────────────────────────────────
 
-/**
- * Fetch all EQ presets saved by the current user.
- * Returns built-in presets should be merged client-side with BUILT_IN_PRESETS.
- */
 export async function fetchUserPresets(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
 ): Promise<EqPreset[]> {
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) return [];
 
   const { data, error } = await supabase
     .from("eq_presets")
-    .select("id, name, type, gains_31, biquad_filters, created_at")
+    .select("id, name, type, gains_31, biquad_filters, preamp_db, created_at")
     .eq("user_id", authData.user.id)
     .order("created_at", { ascending: false });
 
   if (error) throw new Error(`fetchUserPresets: ${error.message}`);
 
-  return (data as PresetRow[]).map((row) => {
+  return (data ?? []).map((row: any) => {
     if (row.type === "graphic_31band") {
       return {
         id: row.id,
         name: row.name,
         type: "graphic_31band",
         gains_31: row.gains_31 as EqBandGains,
-      };
+        preamp_db: row.preamp_db ?? 0,
+      } as EqPreset;
     }
     return {
       id: row.id,
       name: row.name,
       type: "biquad",
-      biquad_filters: row.biquad_filters as EqBiquadFilter[],
-    };
-  }) as EqPreset[];
+      // Supabase stores filters as jsonb — field names match EqBiquadFilter
+      biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
+      preamp_db: row.preamp_db ?? 0,
+    } as EqPreset;
+  });
 }
 
-/**
- * Save a new preset to Supabase.
- * Returns the created preset row id.
- */
 export async function savePreset(
   supabase: SupabaseClient,
-  preset: Omit<EqPreset, "id">
+  preset: Omit<EqPreset, "id">,
 ): Promise<string> {
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) throw new Error("Not authenticated");
@@ -221,6 +152,7 @@ export async function savePreset(
     type: preset.type,
     gains_31: preset.type === "graphic_31band" ? preset.gains_31 : null,
     biquad_filters: preset.type === "biquad" ? preset.biquad_filters : null,
+    preamp_db: (preset as any).preamp_db ?? 0,
   };
 
   const { data, error } = await supabase
@@ -228,24 +160,17 @@ export async function savePreset(
     .insert(row)
     .select("id")
     .single();
-
   if (error) throw new Error(`savePreset: ${error.message}`);
   return (data as { id: string }).id;
 }
 
-/**
- * Delete a preset by id. Only deletes presets owned by the current user
- * (Supabase RLS enforces this — the DELETE will silently no-op if the
- * user doesn't own the row).
- */
 export async function deletePreset(
   supabase: SupabaseClient,
-  presetId: string
+  presetId: string,
 ): Promise<void> {
   const { error } = await supabase
     .from("eq_presets")
     .delete()
     .eq("id", presetId);
-
   if (error) throw new Error(`deletePreset: ${error.message}`);
 }
