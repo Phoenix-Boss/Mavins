@@ -16,7 +16,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand",
-    "test:clear": "jest --clearCache"
+    "test:clear": "jest --clearCache",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@animatereactnative/marquee": "^0.5.2",
@@ -72,7 +73,7 @@
     "honeygain-sdk": "file:./modules/honeygain",
     "lrclib-api": "^2.0.4",
     "mavin-engine": "file:./modules/mavin-engine",
-    "mavin-eq": "file:./modules/expo-autoeq-engine",
+    "mavin-eq": "file:./modules/mavin-eq",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -147,7 +148,7 @@
       "^@/(.*)$": "<rootDir>/src/$1",
       "^../libs/cache$": "<rootDir>/libs/cache/index.ts",
       "^.+\\\\.(css|less|scss|sass)$": "identity-obj-proxy",
-      "^mavin-eq$": "<rootDir>/modules/expo-autoeq-engine/index.ts"
+      "^mavin-eq$": "<rootDir>/modules/mavin-eq/index.ts"
     },
     "transform": {
       "^.+\\\\.(js|jsx|ts|tsx)$": "babel-jest"
@@ -237,3 +238,6 @@
     }
   }
 }
+
+
+

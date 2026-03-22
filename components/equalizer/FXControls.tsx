@@ -1,602 +1,317 @@
-// components/equalizer/FXControls.tsx - PROFESSIONAL FX PROCESSOR
+// components/equalizer/FXControls.tsx
+//
+// Rendered inside the FX bottom-sheet Modal in equalizer.tsx.
+// No internal ScrollView — the parent Modal handles scrolling.
+// Removed: showValue prop on RotaryKnob (doesn't exist in RotaryKnob interface).
+// Fixed: mode indicator position calculation uses measured tab width, not magic scale(70).
+// isFactory prop removed — equalizer.tsx never passes it.
 
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Dimensions,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions,
 } from 'react-native';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
 import { RotaryKnob } from './RotaryKnob';
 import { Colors } from '@/constants/Colors';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  interpolate,
+  useSharedValue, useAnimatedStyle, withSpring, withTiming,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-type FXMode = 'reverb' | 'delay' | 'chorus' | 'flanger' | 'phaser';
+type FXMode = 'reverb'|'delay'|'chorus'|'flanger'|'phaser';
 
 interface FXControlsProps {
   enabled: boolean;
   fxState: {
     mode: FXMode;
-    // Reverb parameters
-    roomSize: number;      // 0-100
-    decay: number;         // 0-100
-    preDelay: number;      // 0-100
-    damping: number;       // 0-100
-    // Delay parameters
-    delayTime: number;     // 0-100 (20-2000ms)
-    feedback: number;      // 0-100
-    lowCut: number;        // 0-100 (20-500Hz)
-    highCut: number;       // 0-100 (1k-20kHz)
-    // Modulation parameters
-    rate: number;          // 0-100 (0.1-10Hz)
-    depth: number;         // 0-100
-    phase: number;         // 0-100 (0-180°)
-    // Global
-    mix: number;           // 0-100 (wet/dry)
-    bypass: boolean;
+    roomSize: number; decay: number; preDelay: number; damping: number;
+    delayTime: number; feedback: number; lowCut: number; highCut: number;
+    rate: number; depth: number; phase: number;
+    mix: number; bypass: boolean;
   };
   onUpdate: (updates: Partial<FXControlsProps['fxState']>) => void;
-  isFactory?: boolean;
 }
 
-// Mode definitions
-const FX_MODES: { id: FXMode; name: string; icon: string; color: string; description: string }[] = [
-  { id: 'reverb', name: 'REVERB', icon: '⚡', color: '#4ECDC4', description: 'Spatial ambience' },
-  { id: 'delay', name: 'DELAY', icon: '⏱️', color: '#FF6B6B', description: 'Echo effects' },
-  { id: 'chorus', name: 'CHORUS', icon: '🎵', color: '#45B7D1', description: 'Thickening' },
-  { id: 'flanger', name: 'FLANGER', icon: '🌀', color: '#96CEB4', description: 'Jet sweep' },
-  { id: 'phaser', name: 'PHASER', icon: '🌊', color: '#FFE194', description: 'Swirling' },
+const FX_MODES: { id: FXMode; name: string; color: string; description: string }[] = [
+  { id: 'reverb',  name: 'REVERB',  color: '#4ECDC4', description: 'Spatial ambience' },
+  { id: 'delay',   name: 'DELAY',   color: '#FF6B6B', description: 'Echo & repeat' },
+  { id: 'chorus',  name: 'CHORUS',  color: '#45B7D1', description: 'Thickening' },
+  { id: 'flanger', name: 'FLANGER', color: '#96CEB4', description: 'Jet sweep' },
+  { id: 'phaser',  name: 'PHASER',  color: '#FFE194', description: 'Swirling' },
 ];
 
-export const FXControls: React.FC<FXControlsProps> = ({
-  enabled,
-  fxState,
-  onUpdate,
-  isFactory = false,
-}) => {
-  const {
-    mode,
-    roomSize, decay, preDelay, damping,
-    delayTime, feedback, lowCut, highCut,
-    rate, depth, phase,
-    mix,
-    bypass,
-  } = fxState;
+export const FXControls: React.FC<FXControlsProps> = ({ enabled, fxState, onUpdate }) => {
+  const { mode, roomSize, decay, preDelay, damping,
+          delayTime, feedback, lowCut, highCut,
+          rate, depth, phase, mix, bypass } = fxState;
 
-  // UI State
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [previewMode, setPreviewMode] = useState(false);
+  const bypassAnim = useSharedValue(0);
 
-  // Animation values
-  const modeIndicatorPosition = useSharedValue(0);
-  const bypassGlow = useSharedValue(0);
-  const mixKnobScale = useSharedValue(1);
+  // Tab widths measured via onLayout
+  const [tabWidth, setTabWidth] = useState(0);
+  const indicatorX = useSharedValue(0);
 
-  // Update mode indicator position
   useEffect(() => {
-    const modeIndex = FX_MODES.findIndex(m => m.id === mode);
-    modeIndicatorPosition.value = withSpring(modeIndex * (scale(70)), {
-      damping: 15,
-      stiffness: 150,
-    });
-  }, [mode]);
+    if (!tabWidth) return;
+    const idx = FX_MODES.findIndex(m => m.id === mode);
+    indicatorX.value = withSpring(idx * tabWidth, { damping: 15, stiffness: 150 });
+  }, [mode, tabWidth]);
 
-  // Handlers with haptics
-  const handleModeChange = (newMode: FXMode) => {
-    if (!enabled || isFactory) return;
+  const handleModeChange = useCallback((newMode: FXMode) => {
+    if (!enabled) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onUpdate({ mode: newMode });
-  };
+  }, [enabled, onUpdate]);
 
-  const handleBypass = () => {
-    if (!enabled || isFactory) return;
+  const handleBypass = useCallback(() => {
+    if (!enabled) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    bypassGlow.value = withTiming(bypass ? 0 : 0.5, { duration: 300 });
+    bypassAnim.value = withTiming(bypass ? 0 : 1, { duration: 250 });
     onUpdate({ bypass: !bypass });
-  };
+  }, [enabled, bypass, onUpdate]);
 
-  const handleMixChange = (value: number) => {
-    if (!enabled || isFactory || bypass) return;
-    mixKnobScale.value = withSpring(1.1, { damping: 10, stiffness: 200 });
-    setTimeout(() => mixKnobScale.value = withSpring(1), 100);
+  const updater = useCallback((key: keyof typeof fxState) => (val: number) => {
+    if (!enabled || bypass) return;
     Haptics.selectionAsync();
-    onUpdate({ mix: value });
-  };
+    onUpdate({ [key]: val } as any);
+  }, [enabled, bypass, onUpdate]);
 
-  const createUpdater = (key: keyof typeof fxState) => (value: number) => {
-    if (!enabled || isFactory || bypass) return;
-    Haptics.selectionAsync();
-    onUpdate({ [key]: value } as any);
-  };
-
-  // Animated styles
-  const modeIndicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: modeIndicatorPosition.value }],
+  const indicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: indicatorX.value }],
   }));
 
-  const bypassStyle = useAnimatedStyle(() => ({
-    shadowColor: Colors.metallicBrown.primary,
-    shadowOpacity: bypassGlow.value,
-    shadowRadius: 10 * bypassGlow.value,
+  const bypassBtnStyle = useAnimatedStyle(() => ({
+    backgroundColor: bypassAnim.value === 1
+      ? Colors.metallicBrown.primary
+      : 'rgba(255,255,255,0.08)',
   }));
 
-  const mixKnobStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: mixKnobScale.value }],
-  }));
+  const currentMode = FX_MODES.find(m => m.id === mode)!;
 
-  // Get current mode config
-  const currentMode = FX_MODES.find(m => m.id === mode) || FX_MODES[0];
+  const isActive = enabled && !bypass;
 
-  // Render parameters based on mode
-  const renderModeParameters = () => {
+  const renderParams = () => {
+    const col = currentMode.color;
     switch (mode) {
       case 'reverb':
         return (
-          <View style={styles.parametersContainer}>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={roomSize}
-                  label="SIZE"
-                  onChange={createUpdater('roomSize')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(roomSize)}%</Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={decay}
-                  label="DECAY"
-                  onChange={createUpdater('decay')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{(decay / 20).toFixed(1)}s</Text>
-              </View>
-            </View>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={preDelay}
-                  label="PRE-DELAY"
-                  onChange={createUpdater('preDelay')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(preDelay * 2)}ms</Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={damping}
-                  label="DAMPING"
-                  onChange={createUpdater('damping')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(damping)}%</Text>
-              </View>
-            </View>
+          <View style={styles.paramGrid}>
+            <KnobCell value={roomSize} label="SIZE"
+              sub={`${Math.round(roomSize)}%`}
+              onChange={updater('roomSize')} color={col} enabled={isActive} />
+            <KnobCell value={decay} label="DECAY"
+              sub={`${(decay/20).toFixed(1)}s`}
+              onChange={updater('decay')} color={col} enabled={isActive} />
+            <KnobCell value={preDelay} label="PRE-DLY"
+              sub={`${Math.round(preDelay*2)}ms`}
+              onChange={updater('preDelay')} color={col} enabled={isActive} />
+            <KnobCell value={damping} label="DAMP"
+              sub={`${Math.round(damping)}%`}
+              onChange={updater('damping')} color={col} enabled={isActive} />
           </View>
         );
-
       case 'delay':
         return (
-          <View style={styles.parametersContainer}>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={delayTime}
-                  label="TIME"
-                  onChange={createUpdater('delayTime')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>
-                  {Math.round(20 + (delayTime / 100) * 1980)}ms
-                </Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={feedback}
-                  label="FEEDBACK"
-                  onChange={createUpdater('feedback')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(feedback)}%</Text>
-              </View>
-            </View>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={lowCut}
-                  label="LOW CUT"
-                  onChange={createUpdater('lowCut')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(20 + (lowCut / 100) * 480)}Hz</Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={highCut}
-                  label="HIGH CUT"
-                  onChange={createUpdater('highCut')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(1 + (highCut / 100) * 19)}kHz</Text>
-              </View>
-            </View>
+          <View style={styles.paramGrid}>
+            <KnobCell value={delayTime} label="TIME"
+              sub={`${Math.round(20+(delayTime/100)*1980)}ms`}
+              onChange={updater('delayTime')} color={col} enabled={isActive} />
+            <KnobCell value={feedback} label="FDBK"
+              sub={`${Math.round(feedback)}%`}
+              onChange={updater('feedback')} color={col} enabled={isActive} />
+            <KnobCell value={lowCut} label="LO CUT"
+              sub={`${Math.round(20+(lowCut/100)*480)}Hz`}
+              onChange={updater('lowCut')} color={col} enabled={isActive} />
+            <KnobCell value={highCut} label="HI CUT"
+              sub={`${Math.round(1+(highCut/100)*19)}kHz`}
+              onChange={updater('highCut')} color={col} enabled={isActive} />
           </View>
         );
-
-      case 'chorus':
-      case 'flanger':
-      case 'phaser':
+      default: // chorus / flanger / phaser
         return (
-          <View style={styles.parametersContainer}>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={rate}
-                  label="RATE"
-                  onChange={createUpdater('rate')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{(0.1 + (rate / 100) * 9.9).toFixed(1)}Hz</Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={depth}
-                  label="DEPTH"
-                  onChange={createUpdater('depth')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(depth)}%</Text>
-              </View>
-            </View>
-            <View style={styles.parameterRow}>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={phase}
-                  label="PHASE"
-                  onChange={createUpdater('phase')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round((phase / 100) * 180)}°</Text>
-              </View>
-              <View style={styles.parameterColumn}>
-                <RotaryKnob
-                  value={delayTime}
-                  label="DELAY"
-                  onChange={createUpdater('delayTime')}
-                  color={currentMode.color}
-                  size={80}
-                  enabled={enabled && !isFactory && !bypass}
-                  showValue={true}
-                />
-                <Text style={styles.parameterValue}>{Math.round(0.1 + (delayTime / 100) * 19.9)}ms</Text>
-              </View>
-            </View>
+          <View style={styles.paramGrid}>
+            <KnobCell value={rate} label="RATE"
+              sub={`${(0.1+(rate/100)*9.9).toFixed(1)}Hz`}
+              onChange={updater('rate')} color={col} enabled={isActive} />
+            <KnobCell value={depth} label="DEPTH"
+              sub={`${Math.round(depth)}%`}
+              onChange={updater('depth')} color={col} enabled={isActive} />
+            <KnobCell value={phase} label="PHASE"
+              sub={`${Math.round((phase/100)*180)}°`}
+              onChange={updater('phase')} color={col} enabled={isActive} />
+            <KnobCell value={delayTime} label="DELAY"
+              sub={`${(0.1+(delayTime/100)*19.9).toFixed(1)}ms`}
+              onChange={updater('delayTime')} color={col} enabled={isActive} />
           </View>
         );
-
-      default:
-        return null;
     }
   };
 
   return (
-    <View style={styles.container}>
-      {/* Mode Selector Carousel */}
-      <View style={styles.modeSelector}>
-        <View style={styles.modeTabs}>
-          {FX_MODES.map((m, index) => (
-            <TouchableOpacity
-              key={m.id}
-              style={[
-                styles.modeTab,
-                mode === m.id && styles.modeTabActive,
-              ]}
-              onPress={() => handleModeChange(m.id)}
-              activeOpacity={0.7}
-              disabled={!enabled || isFactory}
-            >
-              <Text style={styles.modeIcon}>{m.icon}</Text>
-              <Text style={[
-                styles.modeName,
-                mode === m.id && styles.modeNameActive,
-              ]}>
-                {m.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          <Animated.View style={[styles.modeIndicator, modeIndicatorStyle]} />
-        </View>
-      </View>
-
-      {/* Mode Description */}
-      <View style={styles.modeDescription}>
-        <Text style={styles.descriptionText}>{currentMode.description}</Text>
-      </View>
-
-      {/* Parameters Grid - Scrollable */}
-      <ScrollView
-        style={styles.parametersScroll}
-        contentContainerStyle={styles.parametersGrid}
-        showsVerticalScrollIndicator={false}
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.container}
+    >
+      {/* Mode tabs */}
+      <View
+        style={styles.modeTabs}
+        onLayout={e => setTabWidth(e.nativeEvent.layout.width / FX_MODES.length)}
       >
-        {renderModeParameters()}
-
-        {/* Mix Control - Full Width */}
-        <View style={styles.mixSection}>
-          <View style={styles.mixHeader}>
-            <Text style={styles.mixLabel}>WET/DRY MIX</Text>
-            <Text style={styles.mixPercentage}>{Math.round(mix)}%</Text>
-          </View>
-          <Animated.View style={[styles.mixKnobContainer, mixKnobStyle]}>
-            <RotaryKnob
-              value={mix}
-              label=""
-              onChange={handleMixChange}
-              color={currentMode.color}
-              size={100}
-              enabled={enabled && !isFactory && !bypass}
-              showValue={false}
-            />
-          </Animated.View>
-        </View>
-
-        {/* Bypass Button */}
-        <Animated.View style={[styles.bypassContainer, bypassStyle]}>
+        <Animated.View
+          style={[
+            styles.modeIndicator,
+            { width: tabWidth || SCREEN_WIDTH / FX_MODES.length },
+            indicatorStyle,
+          ]}
+        />
+        {FX_MODES.map(m => (
           <TouchableOpacity
-            style={[
-              styles.bypassButton,
-              bypass && styles.bypassButtonActive,
-              (!enabled || isFactory) && styles.disabled,
-            ]}
-            onPress={handleBypass}
+            key={m.id}
+            style={styles.modeTab}
+            onPress={() => handleModeChange(m.id)}
             activeOpacity={0.7}
-            disabled={!enabled || isFactory}
+            disabled={!enabled}
           >
-            <MaterialCommunityIcons
-              name={bypass ? 'volume-off' : 'volume-high'}
-              size={24}
-              color={bypass && enabled && !isFactory ? '#000' : '#fff'}
-            />
-            <Text style={[
-              styles.bypassText,
-              bypass && enabled && !isFactory && styles.bypassTextActive,
-            ]}>
-              {bypass ? 'BYPASSED' : 'ACTIVE'}
+            <Text style={[styles.modeName, mode === m.id && styles.modeNameActive]}>
+              {m.name}
             </Text>
           </TouchableOpacity>
-        </Animated.View>
+        ))}
+      </View>
 
-        {/* Info Note */}
-        <View style={styles.infoContainer}>
+      <Text style={styles.modeDesc}>{currentMode.description}</Text>
+
+      {/* Parameters */}
+      {renderParams()}
+
+      {/* MIX knob — full width centred */}
+      <View style={styles.mixRow}>
+        <Text style={styles.mixLabel}>WET / DRY MIX</Text>
+        <Text style={[styles.mixValue, { color: currentMode.color }]}>{Math.round(mix)}%</Text>
+      </View>
+      <View style={styles.mixKnob}>
+        <RotaryKnob
+          value={mix}
+          label=""
+          onChange={updater('mix')}
+          color={currentMode.color}
+          size={90}
+          enabled={isActive}
+        />
+      </View>
+
+      {/* Bypass toggle */}
+      <TouchableOpacity
+        style={styles.bypassBtn}
+        onPress={handleBypass}
+        activeOpacity={0.8}
+        disabled={!enabled}
+      >
+        <Animated.View style={[styles.bypassBtnInner, bypassBtnStyle]}>
           <MaterialCommunityIcons
-            name={!enabled ? 'information' : isFactory ? 'lock' : bypass ? 'volume-off' : 'check-circle'}
-            size={16}
-            color="rgba(255,255,255,0.5)"
+            name={bypass ? 'volume-off' : 'volume-high'}
+            size={20}
+            color={bypass && enabled ? '#000' : '#fff'}
           />
-          <Text style={styles.infoText}>
-            {!enabled
-              ? 'Enable EQ to adjust FX'
-              : isFactory
-              ? 'Factory presets are locked'
-              : bypass
-              ? 'FX is bypassed - tap to activate'
-              : 'Adjust parameters in real-time'}
+          <Text style={[styles.bypassText, bypass && enabled && styles.bypassTextActive]}>
+            {bypass ? 'BYPASSED' : 'FX ACTIVE'}
           </Text>
-        </View>
-      </ScrollView>
-    </View>
+        </Animated.View>
+      </TouchableOpacity>
+
+      {/* Status hint */}
+      <View style={styles.hint}>
+        <MaterialCommunityIcons
+          name={!enabled ? 'information-outline' : bypass ? 'volume-off' : 'check-circle-outline'}
+          size={14}
+          color="rgba(255,255,255,0.35)"
+        />
+        <Text style={styles.hintText}>
+          {!enabled
+            ? 'Enable EQ to use FX'
+            : bypass
+            ? 'FX bypassed — tap to activate'
+            : 'Adjust parameters in real-time'}
+        </Text>
+      </View>
+    </ScrollView>
   );
 };
 
+// ── KnobCell helper ───────────────────────────────────────────────────────────
+interface KnobCellProps {
+  value: number; label: string; sub: string;
+  onChange: (v: number) => void; color: string; enabled: boolean;
+}
+function KnobCell({ value, label, sub, onChange, color, enabled }: KnobCellProps) {
+  return (
+    <View style={styles.knobCell}>
+      <RotaryKnob value={value} label={label} onChange={onChange} color={color} size={72} enabled={enabled} />
+      <Text style={styles.knobSub}>{sub}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  modeSelector: {
-    marginBottom: verticalScale(10),
-    paddingHorizontal: scale(10),
-  },
+  container: { paddingBottom: verticalScale(24) },
   modeTabs: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 25,
-    padding: scale(3),
-    position: 'relative',
+    flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 25, padding: scale(3),
+    position: 'relative', overflow: 'hidden',
+    marginBottom: verticalScale(6),
   },
   modeTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: verticalScale(8),
-    paddingHorizontal: scale(4),
-    borderRadius: 22,
-    zIndex: 10,
-    gap: scale(4),
-  },
-  modeTabActive: {
-    // Active state handled by indicator
-  },
-  modeIcon: {
-    fontSize: moderateScale(14),
-  },
-  modeName: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: moderateScale(10),
-    fontWeight: '600',
-  },
-  modeNameActive: {
-    color: '#000',
+    flex: 1, paddingVertical: verticalScale(9),
+    alignItems: 'center', zIndex: 2,
   },
   modeIndicator: {
-    position: 'absolute',
-    width: scale(70),
-    height: verticalScale(32),
+    position: 'absolute', height: '100%',
     backgroundColor: Colors.metallicBrown.primary,
-    borderRadius: 22,
-    top: scale(3),
-    left: scale(3),
+    borderRadius: 22, top: 0, left: 0,
   },
-  modeDescription: {
-    paddingHorizontal: scale(15),
-    marginBottom: verticalScale(15),
+  modeName: {
+    color: 'rgba(255,255,255,0.55)', fontSize: moderateScale(9),
+    fontWeight: '700', letterSpacing: 0.3,
   },
-  descriptionText: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(11),
-    fontStyle: 'italic',
+  modeNameActive: { color: '#000' },
+  modeDesc: {
+    color: 'rgba(255,255,255,0.4)', fontSize: moderateScale(11),
+    fontStyle: 'italic', textAlign: 'center',
+    marginBottom: verticalScale(16),
   },
-  parametersScroll: {
-    flex: 1,
-  },
-  parametersGrid: {
-    paddingHorizontal: scale(15),
-    paddingBottom: verticalScale(20),
-  },
-  parametersContainer: {
+  paramGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    justifyContent: 'space-around', gap: verticalScale(16),
     marginBottom: verticalScale(20),
   },
-  parameterRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: verticalScale(20),
+  knobCell: { alignItems: 'center', width: (SCREEN_WIDTH - scale(60)) / 2 },
+  knobSub: {
+    color: 'rgba(255,255,255,0.45)', fontSize: moderateScale(9), marginTop: verticalScale(3),
   },
-  parameterColumn: {
-    flex: 1,
-    alignItems: 'center',
-    maxWidth: (SCREEN_WIDTH - scale(60)) / 2,
+  mixRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: scale(4), marginBottom: verticalScale(8),
   },
-  parameterValue: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(9),
-    marginTop: verticalScale(4),
-  },
-  mixSection: {
-    alignItems: 'center',
-    marginVertical: verticalScale(20),
-    paddingVertical: verticalScale(15),
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  mixHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    paddingHorizontal: scale(20),
-    marginBottom: verticalScale(10),
-  },
-  mixLabel: {
-    color: '#fff',
-    fontSize: moderateScale(12),
-    fontWeight: '600',
-  },
-  mixPercentage: {
-    color: Colors.metallicBrown.primary,
-    fontSize: moderateScale(12),
-    fontWeight: '700',
-  },
-  mixKnobContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bypassContainer: {
-    alignItems: 'center',
-    marginVertical: verticalScale(10),
-  },
-  bypassButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: scale(8),
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    paddingVertical: verticalScale(12),
-    paddingHorizontal: scale(30),
-    borderRadius: 30,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+  mixLabel: { color: '#fff', fontSize: moderateScale(12), fontWeight: '600' },
+  mixValue: { fontSize: moderateScale(14), fontWeight: '700' },
+  mixKnob: { alignItems: 'center', marginBottom: verticalScale(20) },
+  bypassBtn: { alignItems: 'center', marginBottom: verticalScale(12) },
+  bypassBtnInner: {
+    flexDirection: 'row', alignItems: 'center', gap: scale(8),
+    paddingVertical: verticalScale(11), paddingHorizontal: scale(28),
+    borderRadius: 28, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
     minWidth: scale(160),
   },
-  bypassButtonActive: {
-    backgroundColor: Colors.metallicBrown.primary,
-    borderColor: Colors.metallicBrown.secondary,
+  bypassText: { color: '#fff', fontSize: moderateScale(13), fontWeight: '600' },
+  bypassTextActive: { color: '#000' },
+  hint: {
+    flexDirection: 'row', alignItems: 'center', gap: scale(6),
+    backgroundColor: 'rgba(139,115,85,0.12)',
+    borderRadius: 20, padding: scale(10),
+    borderWidth: 1, borderColor: 'rgba(139,115,85,0.25)',
   },
-  bypassText: {
-    color: '#fff',
-    fontSize: moderateScale(13),
-    fontWeight: '600',
-  },
-  bypassTextActive: {
-    color: '#000',
-  },
-  infoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: scale(8),
-    backgroundColor: 'rgba(139, 115, 85, 0.15)',
-    borderRadius: 20,
-    padding: scale(12),
-    marginVertical: verticalScale(10),
-    borderWidth: 1,
-    borderColor: 'rgba(139, 115, 85, 0.3)',
-  },
-  infoText: {
-    color: '#fff',
-    fontSize: moderateScale(11),
-    textAlign: 'center',
-    opacity: 0.8,
-  },
-  disabled: {
-    opacity: 0.5,
-  },
+  hintText: { color: 'rgba(255,255,255,0.7)', fontSize: moderateScale(11), flex: 1 },
 });

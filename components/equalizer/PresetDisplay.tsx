@@ -1,510 +1,361 @@
-// components/equalizer/PresetModal.tsx - COMPLETE REDESIGN WITH FUTURISTIC UI
+// components/equalizer/PresetModal.tsx
+//
+// Reads presets from Supabase:
+//   - autoeq_headphones (factory/community presets — from our seeded data)
+//   - eq_presets (user-saved presets for the current auth user)
+//   - Offline fallback: AsyncStorage cache from SavePresetModal
+//
+// No BlurView (Android unreliable). No hardcoded dummy data.
+// Categories: All / Factory / My Presets — searchable by display_name or name.
+// Mini bar curve rendered from bands array.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Modal,
-  TouchableOpacity,
-  FlatList,
-  TextInput,
-  Dimensions,
+  View, Text, StyleSheet, Modal, TouchableOpacity,
+  FlatList, TextInput, ActivityIndicator, Dimensions,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { scale, verticalScale, moderateScale } from 'react-native-size-matters/extend';
 import { Colors } from '@/constants/Colors';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Animated, {
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  interpolate,
-  Extrapolate,
-} from 'react-native-reanimated';
+import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { supabase } from '@/libs/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const CUSTOM_PRESETS_KEY = 'eqCustomPresets_v4';
+
+export interface PresetItem {
+  id: string;
+  name: string;
+  bands: number[];        // 9-band gains
+  preamp: number;
+  category: string;
+  is_factory: boolean;
+  display_order?: number;
+}
 
 interface PresetModalProps {
   visible: boolean;
   onClose: () => void;
   selectedPreset: string;
-  onSelectPreset: (preset: any) => void;
-  insets: any;
+  onSelectPreset: (preset: PresetItem) => void;
+  insets: { bottom: number };
 }
 
-// Sample preset data structure
-const PRESET_DATA = {
-  builtIn: [
-    { id: '1', name: 'Flat', values: [0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, category: 'builtIn' },
-    { id: '2', name: 'Rock', values: [4, 3, 2, 1, 0, -1, -2, -3, -4], preamp: 2, category: 'builtIn' },
-    { id: '3', name: 'Pop', values: [2, 2, 1, 0, -1, -1, 0, 1, 2], preamp: 1, category: 'builtIn' },
-    { id: '4', name: 'Jazz', values: [3, 2, 1, 0, 1, 2, 3, 2, 1], preamp: 1.5, category: 'builtIn' },
-    { id: '5', name: 'Classical', values: [2, 1, 0, 0, 0, 0, 1, 2, 3], preamp: 0.5, category: 'builtIn' },
-  ],
-  user: [
-    { id: 'u1', name: 'My Voice', values: [2, 1, 0, -1, 0, 1, 2, 3, 2], preamp: 1, category: 'user' },
-    { id: 'u2', name: 'Night Mode', values: [-2, -1, 0, 1, 2, 1, 0, -1, -2], preamp: -1, category: 'user' },
-    { id: 'u3', name: 'Morning', values: [1, 1, 2, 3, 2, 1, 0, -1, -2], preamp: 0.5, category: 'user' },
-  ],
-  premium: [
-    { id: 'p1', name: 'Studio Reference', values: [1, 1, 0, 0, 0, 0, 0, 1, 1], preamp: 0, category: 'premium', locked: true },
-    { id: 'p2', name: 'Bass Cannon', values: [8, 7, 5, 2, 0, -2, -4, -6, -8], preamp: 4, category: 'premium', locked: true },
-    { id: 'p3', name: 'Vocal Clarity', values: [2, 1, -1, -2, 0, 2, 4, 5, 4], preamp: 1, category: 'premium', locked: true },
-  ],
-  headphones: [
-    { id: 'h1', name: 'AirPods Pro', values: [2, 2, 1, 0, -1, 0, 1, 2, 2], preamp: 1, category: 'headphones' },
-    { id: 'h2', name: 'Sony XM4', values: [3, 2, 1, 0, -1, 0, 1, 2, 3], preamp: 1.5, category: 'headphones' },
-    { id: 'h3', name: 'Bose QC', values: [2, 2, 2, 1, 0, 0, 1, 2, 2], preamp: 1, category: 'headphones' },
-  ],
-};
+type FilterTab = 'all' | 'factory' | 'mine';
 
 export const PresetModal: React.FC<PresetModalProps> = ({
-  visible,
-  onClose,
-  selectedPreset,
-  onSelectPreset,
-  insets,
+  visible, onClose, selectedPreset, onSelectPreset, insets,
 }) => {
-  const [activeCategory, setActiveCategory] = useState<'builtIn' | 'user' | 'premium' | 'headphones'>('builtIn');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [factoryPresets, setFactoryPresets] = useState<PresetItem[]>([]);
+  const [userPresets,    setUserPresets]    = useState<PresetItem[]>([]);
+  const [loading,        setLoading]        = useState(false);
+  const [tab,            setTab]            = useState<FilterTab>('all');
+  const [search,         setSearch]         = useState('');
 
-  // Filter presets based on search
-  const filteredPresets = useMemo(() => {
-    const presets = PRESET_DATA[activeCategory];
-    if (!searchQuery.trim()) return presets;
-    
-    return presets.filter(preset => 
-      preset.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [activeCategory, searchQuery]);
+  // ── Load presets when modal opens ────────────────────────────────────────
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    const load = async () => {
+      try {
+        // 1. Factory presets from autoeq_headphones (seeded data)
+        //    We fetch the view autoeq_headphone_with_filters which includes
+        //    the filters jsonb array. We map each to a 9-band array by
+        //    finding the 9 ISO bands nearest to our graphic EQ centers.
+        const { data: hpData, error: hpErr } = await supabase
+          .from('autoeq_headphone_with_filters')
+          .select('id, display_name, technical_name, preamp_db, category, filters, source')
+          .in('category', ['headphone', 'celebrity', 'genre', 'mood'])
+          .limit(200);
 
-  // Futuristic graph line visualization
-  const renderPresetCurve = (values: number[]) => {
-    // Create points for the graph (normalized to 0-1)
-    const points = values.map((val, index) => {
-      const x = (index / (values.length - 1)) * 100;
-      // Normalize -15..+15 to 0..1, then invert so top is +15
-      const y = 50 - (val / 30) * 50;
-      return `${x}%,${y}%`;
-    }).join(', ');
+        if (!hpErr && hpData) {
+          const EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000];
+          const mapped: PresetItem[] = hpData.map((hp: any) => {
+            const filters: any[] = hp.filters ?? [];
+            // For each of our 9 EQ bands, find the nearest filter gain
+            const bands = EQ_FREQS.map(targetHz => {
+              let best = 0;
+              let bestDist = Infinity;
+              for (const f of filters) {
+                if (!['PK','LS','HS'].includes((f.filter_type ?? '').toUpperCase())) continue;
+                const dist = Math.abs(Math.log10(f.fc / targetHz));
+                if (dist < bestDist) { bestDist = dist; best = f.gain_db ?? 0; }
+              }
+              return Math.max(-12, Math.min(12, parseFloat(best.toFixed(1))));
+            });
+            return {
+              id:           hp.id,
+              name:         hp.display_name ?? hp.technical_name,
+              bands,
+              preamp:       parseFloat((hp.preamp_db ?? 0).toFixed(1)),
+              category:     hp.category ?? 'headphone',
+              is_factory:   true,
+              display_order: 0,
+            };
+          });
+          setFactoryPresets(mapped);
+        }
 
-    // Create connecting lines with nodes
-    const linePoints = values.map((val, index) => {
-      const x = (index / (values.length - 1)) * 100;
-      const y = 50 - (val / 30) * 50;
-      return { x, y };
-    });
+        // 2. User presets from eq_presets table
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData.user) {
+          const { data: upData } = await supabase
+            .from('eq_presets')
+            .select('id, name, gains_31, preamp_db, type, created_at')
+            .eq('user_id', authData.user.id)
+            .eq('type', 'graphic_31band')
+            .order('created_at', { ascending: false });
 
+          if (upData) {
+            // gains_31 is 31 bands; we pick 9 of them at our ISO centers
+            // indices into 31-band array for our 9 bands:
+            const IDX_MAP = [2, 5, 7, 10, 13, 17, 20, 23, 26]; // 31.5→idx2, 63→idx5, etc.
+            const userMapped: PresetItem[] = upData.map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              bands: IDX_MAP.map(i => {
+                const g = r.gains_31?.[i];
+                return g !== undefined ? g : 0;
+              }),
+              preamp: r.preamp_db ?? 0,
+              category: 'user',
+              is_factory: false,
+            }));
+            setUserPresets(userMapped);
+            return;
+          }
+        }
+
+        // 3. Offline fallback — custom presets from AsyncStorage
+        const local = await AsyncStorage.getItem(CUSTOM_PRESETS_KEY);
+        if (local) setUserPresets(JSON.parse(local));
+
+      } catch (e) {
+        console.warn('[PresetModal] load:', e);
+        // Offline fallback
+        const local = await AsyncStorage.getItem(CUSTOM_PRESETS_KEY);
+        if (local) setUserPresets(JSON.parse(local));
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [visible]);
+
+  const displayed = useMemo(() => {
+    let list: PresetItem[] = tab === 'factory'
+      ? factoryPresets
+      : tab === 'mine'
+      ? userPresets
+      : [...factoryPresets, ...userPresets];
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q));
+    }
+    return list;
+  }, [tab, search, factoryPresets, userPresets]);
+
+  const handleSelect = useCallback((item: PresetItem) => {
+    Haptics.selectionAsync();
+    onSelectPreset(item);
+  }, [onSelectPreset]);
+
+  const renderItem = ({ item }: { item: PresetItem }) => {
+    const isActive = item.name === selectedPreset;
     return (
-      <View style={styles.presetGraph}>
-        {/* Grid lines */}
-        <View style={styles.graphGrid}>
-          {[0, 25, 50, 75, 100].map((pos) => (
-            <View key={pos} style={[styles.gridLine, { left: `${pos}%` }]} />
-          ))}
-          {[0, 25, 50, 75, 100].map((pos) => (
-            <View key={pos} style={[styles.gridLineHorizontal, { top: `${pos}%` }]} />
+      <TouchableOpacity
+        style={[styles.item, isActive && styles.itemActive]}
+        onPress={() => handleSelect(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.itemLeft}>
+          <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.itemCat}>{item.category}</Text>
+        </View>
+
+        {/* Mini bar curve */}
+        <View style={styles.curve}>
+          {item.bands.map((v, i) => (
+            <View
+              key={i}
+              style={[
+                styles.curveBar,
+                {
+                  height: Math.abs(v * 2.8) + 2,
+                  backgroundColor: v > 0 ? Colors.metallicBrown.primary : Colors.metallicBrown.secondary,
+                  alignSelf: 'flex-end',
+                },
+              ]}
+            />
           ))}
         </View>
 
-        {/* Glow effect behind line */}
-        <View style={[styles.graphGlow, { clipPath: `polygon(${points})` }]} />
-
-        {/* Main line */}
-        <View style={[styles.graphLine, { clipPath: `polygon(${points})` }]} />
-
-        {/* Nodes at each frequency */}
-        {linePoints.map((point, index) => (
-          <Animated.View
-            key={index}
-            style={[
-              styles.graphNode,
-              {
-                left: point.x,
-                top: point.y,
-                backgroundColor: values[index] > 0 
-                  ? Colors.metallicBrown.primary 
-                  : values[index] < 0 
-                  ? Colors.metallicBrown.secondary 
-                  : '#fff',
-              },
-            ]}
-          >
-            <View style={styles.nodePulse} />
-          </Animated.View>
-        ))}
-
-        {/* Frequency labels */}
-        <Text style={[styles.freqLabel, { left: '0%' }]}>31</Text>
-        <Text style={[styles.freqLabel, { left: '25%' }]}>100</Text>
-        <Text style={[styles.freqLabel, { left: '50%' }]}>800</Text>
-        <Text style={[styles.freqLabel, { left: '75%' }]}>3.2k</Text>
-        <Text style={[styles.freqLabel, { left: '100%' }]}>6.4k</Text>
-      </View>
+        <View style={styles.itemRight}>
+          <Text style={styles.itemPreamp}>
+            {item.preamp > 0 ? '+' : ''}{item.preamp}dB
+          </Text>
+          {item.is_factory
+            ? <Text style={styles.lockIcon}>🔒</Text>
+            : isActive
+            ? <Ionicons name="checkmark-circle" size={16} color={Colors.metallicBrown.primary} />
+            : null
+          }
+        </View>
+      </TouchableOpacity>
     );
   };
-
-  const renderEmptyState = (category: string) => (
-    <View style={styles.emptyContainer}>
-      <View style={styles.lockIconContainer}>
-        <MaterialCommunityIcons name="lock-outline" size={40} color="rgba(255,255,255,0.2)" />
-      </View>
-      <Text style={styles.emptyTitle}>No {category} presets</Text>
-      <Text style={styles.emptySubtext}>
-        {category === 'premium' 
-          ? 'Unlock premium presets for professional sound'
-          : category === 'user'
-          ? 'Create and save your own custom presets'
-          : category === 'headphones'
-          ? 'Connect headphones to see optimized presets'
-          : 'Check back later for new presets'}
-      </Text>
-    </View>
-  );
 
   return (
     <Modal
       animationType="slide"
-      transparent={true}
+      transparent
       visible={visible}
       onRequestClose={onClose}
     >
-      <BlurView intensity={90} style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { paddingBottom: insets.bottom + 20 }]}>
-          
+      <View style={styles.backdrop}>
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + scale(8) }]}>
+          {/* Handle */}
+          <View style={styles.handle} />
+
           {/* Header */}
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>PRESET BROWSER</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <MaterialCommunityIcons name="close" size={24} color="#fff" />
+          <View style={styles.header}>
+            <Text style={styles.title}>PRESET BROWSER</Text>
+            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+              <Ionicons name="close" size={18} color="#888" />
             </TouchableOpacity>
           </View>
 
-          {/* Search Bar */}
-          <View style={styles.searchContainer}>
-            <MaterialCommunityIcons name="magnify" size={20} color="rgba(255,255,255,0.4)" />
+          {/* Search */}
+          <View style={styles.searchRow}>
+            <MaterialCommunityIcons name="magnify" size={16} color="#666" />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search presets..."
-              placeholderTextColor="rgba(255,255,255,0.3)"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
+              placeholder="Search presets…"
+              placeholderTextColor="#555"
+              value={search}
+              onChangeText={setSearch}
+              returnKeyType="search"
             />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <MaterialCommunityIcons name="close-circle" size={16} color="rgba(255,255,255,0.4)" />
+            {search.length > 0 && (
+              <TouchableOpacity onPress={() => setSearch('')}>
+                <MaterialCommunityIcons name="close-circle" size={14} color="#555" />
               </TouchableOpacity>
             )}
           </View>
 
-          {/* Category Tabs */}
-          <View style={styles.categoryTabs}>
-            <TouchableOpacity
-              style={[styles.categoryTab, activeCategory === 'builtIn' && styles.categoryTabActive]}
-              onPress={() => setActiveCategory('builtIn')}
-            >
-              <Text style={[styles.categoryText, activeCategory === 'builtIn' && styles.categoryTextActive]}>
-                BUILT-IN
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.categoryTab, activeCategory === 'user' && styles.categoryTabActive]}
-              onPress={() => setActiveCategory('user')}
-            >
-              <Text style={[styles.categoryText, activeCategory === 'user' && styles.categoryTextActive]}>
-                USER
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.categoryTab, activeCategory === 'premium' && styles.categoryTabActive]}
-              onPress={() => setActiveCategory('premium')}
-            >
-              <Text style={[styles.categoryText, activeCategory === 'premium' && styles.categoryTextActive]}>
-                PREMIUM
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.categoryTab, activeCategory === 'headphones' && styles.categoryTabActive]}
-              onPress={() => setActiveCategory('headphones')}
-            >
-              <Text style={[styles.categoryText, activeCategory === 'headphones' && styles.categoryTextActive]}>
-                HEADPHONES
-              </Text>
-            </TouchableOpacity>
+          {/* Category tabs */}
+          <View style={styles.tabs}>
+            {(['all','factory','mine'] as FilterTab[]).map(t => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tab, tab === t && styles.tabActive]}
+                onPress={() => setTab(t)}
+              >
+                <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                  {t === 'all' ? 'ALL' : t === 'factory' ? 'FACTORY' : 'MY PRESETS'}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
-          {/* Preset List */}
-          {filteredPresets.length === 0 ? (
-            renderEmptyState(activeCategory)
+          {/* Count */}
+          {!loading && (
+            <Text style={styles.count}>
+              {displayed.length} preset{displayed.length !== 1 ? 's' : ''}
+            </Text>
+          )}
+
+          {/* List */}
+          {loading ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator color={Colors.metallicBrown.primary} />
+              <Text style={styles.loadingText}>Loading presets…</Text>
+            </View>
           ) : (
             <FlatList
-              data={filteredPresets}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.presetItem,
-                    selectedPreset === item.name && styles.presetItemSelected,
-                    item.locked && styles.presetItemLocked,
-                  ]}
-                  onPress={() => !item.locked && onSelectPreset(item)}
-                  activeOpacity={item.locked ? 1 : 0.7}
-                >
-                  <View style={styles.presetItemLeft}>
-                    <View>
-                      <Text style={styles.presetItemName}>{item.name}</Text>
-                      {item.category && (
-                        <Text style={styles.presetCategory}>
-                          {item.category === 'builtIn' ? '📦 Built-in' : 
-                           item.category === 'user' ? '👤 User' : 
-                           item.category === 'premium' ? '⭐ Premium' : '🎧 Headphones'}
-                        </Text>
-                      )}
-                    </View>
-                    
-                    {/* Futuristic graph preview */}
-                    {renderPresetCurve(item.values)}
-                  </View>
-
-                  <View style={styles.presetItemRight}>
-                    <Text style={styles.presetItemPreamp}>
-                      {item.preamp > 0 ? '+' : ''}{item.preamp}dB
-                    </Text>
-                    {item.locked && (
-                      <MaterialCommunityIcons name="lock" size={14} color="rgba(255,255,255,0.3)" />
-                    )}
-                  </View>
-                </TouchableOpacity>
-              )}
+              data={displayed}
+              keyExtractor={p => p.id}
+              renderItem={renderItem}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.listContent}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>
+                  {tab === 'mine'
+                    ? 'No saved presets yet. Adjust the EQ and tap SAVE.'
+                    : 'No presets found.'}
+                </Text>
+              }
+              ItemSeparatorComponent={() => <View style={styles.sep} />}
+              contentContainerStyle={{ paddingBottom: verticalScale(16) }}
             />
           )}
         </View>
-      </BlurView>
+      </View>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: '#111',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: scale(16), paddingTop: verticalScale(8),
+    maxHeight: SCREEN_HEIGHT * 0.88,
   },
-  modalContent: {
-    backgroundColor: '#0a0a0a',
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    paddingHorizontal: scale(20),
-    paddingTop: verticalScale(20),
-    maxHeight: SCREEN_HEIGHT * 0.85,
-    borderWidth: 1,
-    borderColor: 'rgba(139, 115, 85, 0.3)',
-    borderBottomWidth: 0,
+  handle: {
+    alignSelf: 'center', width: scale(36), height: 4,
+    borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.15)',
+    marginBottom: verticalScale(12),
   },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: verticalScale(15),
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginBottom: verticalScale(12),
   },
-  modalTitle: {
-    color: '#fff',
-    fontSize: moderateScale(18),
-    fontWeight: '700',
-    letterSpacing: 2,
+  title: { color: '#fff', fontSize: moderateScale(16), fontWeight: '700', letterSpacing: 1 },
+  closeBtn: {
+    width: scale(32), height: scale(32), borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  closeButton: {
-    width: scale(36),
-    height: scale(36),
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: scale(8),
     backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 20,
-    paddingHorizontal: scale(15),
-    marginBottom: verticalScale(15),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  searchInput: {
-    flex: 1,
-    color: '#fff',
-    fontSize: moderateScale(14),
-    paddingVertical: verticalScale(10),
-    marginLeft: scale(8),
-    fontFamily: 'monospace',
-  },
-  categoryTabs: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 25,
-    padding: scale(3),
-    marginBottom: verticalScale(15),
-    borderWidth: 1,
-    borderColor: 'rgba(139, 115, 85, 0.3)',
-  },
-  categoryTab: {
-    flex: 1,
+    borderRadius: 20, paddingHorizontal: scale(12),
     paddingVertical: verticalScale(8),
-    alignItems: 'center',
-    borderRadius: 22,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: verticalScale(12),
   },
-  categoryTabActive: {
-    backgroundColor: Colors.metallicBrown.primary,
+  searchInput: { flex: 1, color: '#fff', fontSize: moderateScale(13) },
+  tabs: {
+    flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 20, padding: scale(2), marginBottom: verticalScale(8),
   },
-  categoryText: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: moderateScale(10),
-    fontWeight: '700',
-    letterSpacing: 0.5,
+  tab: { flex: 1, paddingVertical: verticalScale(7), alignItems: 'center', borderRadius: 18 },
+  tabActive: { backgroundColor: Colors.metallicBrown.primary },
+  tabText: { color: 'rgba(255,255,255,0.5)', fontSize: moderateScale(10), fontWeight: '700' },
+  tabTextActive: { color: '#000' },
+  count: { color: 'rgba(255,255,255,0.3)', fontSize: moderateScale(10), marginBottom: verticalScale(8) },
+  item: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: verticalScale(11), paddingHorizontal: scale(6),
+    borderRadius: 10,
   },
-  categoryTextActive: {
-    color: '#000',
+  itemActive: { backgroundColor: 'rgba(139,115,85,0.18)' },
+  itemLeft: { flex: 1 },
+  itemName: { color: '#fff', fontSize: moderateScale(13), fontWeight: '600' },
+  itemCat: { color: 'rgba(255,255,255,0.35)', fontSize: moderateScale(9), marginTop: 2, textTransform: 'capitalize' },
+  curve: {
+    flexDirection: 'row', alignItems: 'flex-end',
+    height: verticalScale(24), gap: 2, marginHorizontal: scale(12),
   },
-  listContent: {
-    paddingBottom: verticalScale(20),
-  },
-  presetItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: verticalScale(15),
-    paddingHorizontal: scale(12),
-    borderRadius: 16,
-    marginBottom: verticalScale(8),
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.03)',
-  },
-  presetItemSelected: {
-    backgroundColor: 'rgba(139, 115, 85, 0.15)',
-    borderColor: Colors.metallicBrown.primary,
-  },
-  presetItemLocked: {
-    opacity: 0.6,
-  },
-  presetItemLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(12),
-  },
-  presetItemName: {
-    color: '#fff',
-    fontSize: moderateScale(14),
-    fontWeight: '600',
-    marginBottom: verticalScale(2),
-  },
-  presetCategory: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(9),
-    letterSpacing: 0.3,
-  },
-  presetItemRight: {
-    alignItems: 'flex-end',
-    gap: verticalScale(4),
-  },
-  presetItemPreamp: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(11),
-    fontWeight: '600',
-  },
-  presetGraph: {
-    width: scale(100),
-    height: verticalScale(40),
-    position: 'relative',
-    marginLeft: scale(8),
-  },
-  graphGrid: {
-    ...StyleSheet.absoluteFillObject,
-    flexDirection: 'row',
-  },
-  gridLine: {
-    position: 'absolute',
-    width: 1,
-    height: '100%',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  gridLineHorizontal: {
-    position: 'absolute',
-    width: '100%',
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  graphGlow: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(139, 115, 85, 0.15)',
-    shadowColor: Colors.metallicBrown.primary,
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-  },
-  graphLine: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: 'rgba(139, 115, 85, 0.5)',
-  },
-  graphNode: {
-    position: 'absolute',
-    width: scale(6),
-    height: scale(6),
-    borderRadius: 3,
-    marginLeft: -scale(3),
-    marginTop: -scale(3),
-  },
-  nodePulse: {
-    position: 'absolute',
-    width: scale(12),
-    height: scale(12),
-    borderRadius: 6,
-    backgroundColor: 'rgba(139, 115, 85, 0.3)',
-    marginLeft: -scale(3),
-    marginTop: -scale(3),
-  },
-  freqLabel: {
-    position: 'absolute',
-    bottom: -verticalScale(12),
-    color: 'rgba(255,255,255,0.2)',
-    fontSize: moderateScale(7),
-    transform: [{ translateX: -scale(6) }],
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: verticalScale(40),
-    paddingHorizontal: scale(30),
-  },
-  lockIconContainer: {
-    width: scale(80),
-    height: scale(80),
-    borderRadius: 40,
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: verticalScale(15),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  emptyTitle: {
-    color: '#fff',
-    fontSize: moderateScale(16),
-    fontWeight: '600',
-    marginBottom: verticalScale(8),
-  },
-  emptySubtext: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(12),
-    textAlign: 'center',
-    lineHeight: moderateScale(18),
-  },
+  curveBar: { width: scale(5), borderRadius: 2 },
+  itemRight: { alignItems: 'flex-end', gap: 4, minWidth: scale(36) },
+  itemPreamp: { color: 'rgba(255,255,255,0.5)', fontSize: moderateScale(10), fontWeight: '600' },
+  lockIcon: { fontSize: 11 },
+  sep: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.06)' },
+  loadingWrap: { paddingVertical: verticalScale(30), alignItems: 'center', gap: verticalScale(8) },
+  loadingText: { color: '#555', fontSize: moderateScale(12) },
+  emptyText: { color: '#555', fontSize: moderateScale(13), textAlign: 'center', paddingVertical: verticalScale(30) },
 });

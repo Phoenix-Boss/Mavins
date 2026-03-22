@@ -3,7 +3,6 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
   owner: "mexexiy-1",
@@ -112,5 +111,12 @@ module.exports = {
   ],
   experiments: {
     typedRoutes: true,
+  },
+  // ── Local native modules ───────────────────────────────────────────────────
+  // Tells expo-modules-autolinking to scan ./modules/ directly.
+  // This is how mavin-engine and mavin-eq (expo-autoeq-engine) are discovered
+  // without relying on node_modules symlinks, which fail on Windows.
+  autolinking: {
+    nativeModulesDir: "./modules",
   },
 };

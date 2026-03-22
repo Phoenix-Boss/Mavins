@@ -1,23 +1,24 @@
-import React, { useEffect, useState, useCallback } from "react";
 // app/_layout.tsx
 
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack, useSegments, useRootNavigationState } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { StyleSheet } from "react-native";
 import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
 import TrackPlayer from "react-native-track-player";
-import { StatusBar, View, ActivityIndicator } from "react-native";
+import { StatusBar, View, ActivityIndicator, Linking } from "react-native";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 // ── Internal ──────────────────────────────────────────────────────────────────
-import { Linking } from "react-native";
 import { initializeLibrary } from "@/store/library";
-import { usePlayerOverlay } from "@/components/player/playerProvider";
+import {
+  PlayerProvider,
+  usePlayerOverlay,
+} from "@/components/player/playerProvider";
 import { MusicPlayerProvider } from "@/components/MusicPlayerContext";
 import { LyricsProvider, LyricsFetcher } from "@/hooks/useLyricsContext";
 import { GlobalUIStateProvider } from "@/contexts/GlobalUIStateContext";
@@ -53,22 +54,22 @@ const PREMIUM_BANNER_DELAY_MS = 2200;
 // ─────────────────────────────────────────────────────────────────────────────
 // NotificationPlayerExpander
 //
-// Sits inside the PlayerProvider tree. Watches pendingExpandRef and calls
-// expandPlayer() as soon as the context is available and a track is active.
+// Must live INSIDE <PlayerProvider> so usePlayerOverlay() resolves.
+// Watches pendingExpandRef and calls expandPlayer() as soon as the context
+// is available and a track is loaded.
 // ─────────────────────────────────────────────────────────────────────────────
 function NotificationPlayerExpander({
   pendingRef,
 }: {
   pendingRef: React.MutableRefObject<boolean>;
 }) {
-  const { expandPlayer } = usePlayerOverlay();
+  const { expandPlayer } = usePlayerOverlay(); // safe: inside <PlayerProvider>
   const activeTrack = require("react-native-track-player").useActiveTrack();
 
   useEffect(() => {
     if (!pendingRef.current) return;
-    if (!activeTrack) return;          // wait until a track is loaded
+    if (!activeTrack) return; // wait until a track is loaded
     pendingRef.current = false;
-    // Small delay so the app finishes mounting before the overlay animates in
     const t = setTimeout(() => expandPlayer(), 300);
     return () => clearTimeout(t);
   }, [activeTrack, expandPlayer, pendingRef]);
@@ -88,24 +89,117 @@ function LoadingScreen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AppShell
+//
+// The inner tree that sits inside <PlayerProvider>. Extracted into its own
+// component so that usePlayerOverlay() (called by NotificationPlayerExpander)
+// is always guaranteed to be inside the provider boundary.
+// ─────────────────────────────────────────────────────────────────────────────
+function AppShell({
+  fontsLoaded,
+  libraryReady,
+  navReady,
+  premiumBannerVisible,
+  setPremiumBannerVisible,
+  pendingExpandRef,
+}: {
+  fontsLoaded: boolean;
+  libraryReady: boolean;
+  navReady: boolean;
+  premiumBannerVisible: boolean;
+  setPremiumBannerVisible: (v: boolean) => void;
+  pendingExpandRef: React.MutableRefObject<boolean>;
+}) {
+  const segments       = useSegments();
+  const isPlayerScreen = segments.includes("(player)");
+
+  return (
+    <LyricsProvider>
+      <GlobalUIStateProvider>
+        <View style={{ flex: 1, backgroundColor: "#000" }}>
+
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: "#000" },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="(player)"
+              options={{
+                presentation: "transparentModal",
+                animation: "slide_from_bottom",
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+            {/*
+             * (modals) group has its own _layout.tsx.
+             * Register the group here — individual screens are
+             * declared inside app/(modals)/_layout.tsx.
+             */}
+            <Stack.Screen
+              name="(modals)"
+              options={{
+                presentation: "transparentModal",
+                animation: "slide_from_bottom",
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+
+          {(!fontsLoaded || !libraryReady) && <LoadingScreen />}
+
+        </View>
+
+        <LyricsFetcher />
+
+        {/*
+         * NotificationPlayerExpander is inside <PlayerProvider> (via AppShell)
+         * so usePlayerOverlay() resolves without crashing.
+         */}
+        <NotificationPlayerExpander pendingRef={pendingExpandRef} />
+
+        {navReady && !isPlayerScreen && (
+          <View style={styles.floatingPlayerWrapper}>
+            <FloatingPlayer />
+          </View>
+        )}
+
+        <UpdateModal />
+        <MessageModal />
+
+        {/* Premium banner — rendered last so it sits above everything */}
+        <PremiumBanner
+          visible={premiumBannerVisible}
+          onDismiss={() => setPremiumBannerVisible(false)}
+        />
+
+      </GlobalUIStateProvider>
+    </LyricsProvider>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RootLayout
 // ─────────────────────────────────────────────────────────────────────────────
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
-    Meriva: require("../assets/fonts/Meriva.ttf"),
+    Meriva:    require("../assets/fonts/Meriva.ttf"),
   });
 
-  const [playerReady, setPlayerReady] = useState(false);
-  const [libraryReady, setLibraryReady] = useState(false);
-  const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
+  const [playerReady,           setPlayerReady          ] = useState(false);
+  const [libraryReady,          setLibraryReady         ] = useState(false);
+  const [premiumBannerVisible,  setPremiumBannerVisible ] = useState(false);
 
   const navigationState = useRootNavigationState();
-  const segments = useSegments();
-  const isPlayerScreen = segments.includes("(player)");
-  const navReady = !!navigationState?.key;
+  const navReady        = !!navigationState?.key;
+  const appReady        = fontsLoaded && libraryReady && navReady;
 
-  const appReady = fontsLoaded && libraryReady && navReady;
+  // Stable ref — declared before any effects
+  const pendingExpandRef = React.useRef(false);
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -133,44 +227,25 @@ export default function RootLayout() {
     if (appReady) SplashScreen.hideAsync();
   }, [appReady]);
 
-  // ── Show premium banner after app is ready ────────────────────────────────
+  // ── Show premium banner ───────────────────────────────────────────────────
   useEffect(() => {
     if (!appReady) return;
     const timer = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
     return () => clearTimeout(timer);
   }, [appReady]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Deep link / notification tap handler
-  //
-  // When the user taps the lock screen card or notification media card while
-  // the app is backgrounded or closed, Android re-launches/resumes the app.
-  // We listen for the initial URL (cold start) and subsequent URL events
-  // (warm resume) and expand the player overlay in both cases.
-  //
-  // The PlayerOverlayContext is only available after playerReady + providers
-  // mount, so we use a ref to queue the expand if it arrives before that.
-  // ─────────────────────────────────────────────────────────────────────────
-  const pendingExpandRef = React.useRef(false);
-
-  // Called whenever the app is opened from the notification/lock screen card.
-  // The OS either sends no URL (plain app resume) or our custom scheme URL.
-  // In both cases, if a track is active we want to show the player.
-  const handleOpenFromNotification = React.useCallback(() => {
+  // ── Deep link / notification tap ──────────────────────────────────────────
+  const handleOpenFromNotification = useCallback(() => {
     pendingExpandRef.current = true;
   }, []);
 
-  // Cold start: check if the app was launched by tapping the notification
   useEffect(() => {
     Linking.getInitialURL().then((url) => {
-      // Any launch from our scheme or a null URL while a track exists means
-      // the user tapped the notification card.
       if (url === null || url?.startsWith("mavins-player")) {
         handleOpenFromNotification();
       }
     });
 
-    // Warm resume: app was backgrounded and notification card was tapped
     const sub = Linking.addEventListener("url", ({ url }) => {
       if (url?.startsWith("mavins-player") || url === "") {
         handleOpenFromNotification();
@@ -182,11 +257,15 @@ export default function RootLayout() {
 
   // ─────────────────────────────────────────────────────────────────────────
   // Provider tree
+  //
+  //   QueryClientProvider
+  //     SafeAreaProvider
+  //       GestureHandlerRootView
+  //         ThemeProvider
+  //           MusicPlayerProvider   — audio engine (no TrackPlayer UI)
+  //             PlayerProvider      — player UI + PlayerOverlayContext
+  //               AppShell          — screens, overlays, NotificationExpander
   // ─────────────────────────────────────────────────────────────────────────
-  // SafeAreaProvider and QueryClientProvider are pure-UI / data providers —
-  // safe to render immediately.
-  // MusicPlayerProvider is gated behind playerReady so it never calls any
-  // TrackPlayer API before setupPlayer() has resolved.
   return (
     <HoneygainConsentGate>
       <QueryClientProvider client={queryClient}>
@@ -194,73 +273,31 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <ThemeProvider value={DarkTheme}>
 
-              {/* ── Device status bar — completely hidden ── */}
               <StatusBar hidden />
 
-              {/* Block everything that touches TrackPlayer until player is ready */}
               {!playerReady ? (
                 <LoadingScreen />
               ) : (
                 <MusicPlayerProvider>
-                  <LyricsProvider>
-                    <GlobalUIStateProvider>
-                      <View style={{ flex: 1, backgroundColor: "#000" }}>
-
-                        <Stack
-                          screenOptions={{
-                            headerShown: false,
-                            contentStyle: { backgroundColor: "#000" },
-                          }}
-                        >
-                          <Stack.Screen name="(tabs)" />
-                          <Stack.Screen
-                            name="(player)"
-                            options={{
-                              presentation: "transparentModal",
-                              animation: "slide_from_bottom",
-                              contentStyle: { backgroundColor: "transparent" },
-                            }}
-                          />
-                          {/*
-                           * (modals) group has its own _layout.tsx.
-                           * Register the group here — individual screens are
-                           * declared inside app/(modals)/_layout.tsx.
-                           */}
-                          <Stack.Screen
-                            name="(modals)"
-                            options={{
-                              presentation: "transparentModal",
-                              animation: "slide_from_bottom",
-                              contentStyle: { backgroundColor: "transparent" },
-                            }}
-                          />
-                          <Stack.Screen name="+not-found" />
-                        </Stack>
-
-                        {(!fontsLoaded || !libraryReady) && <LoadingScreen />}
-
-                      </View>
-
-                      <LyricsFetcher />
-                      <NotificationPlayerExpander pendingRef={pendingExpandRef} />
-
-                      {navReady && !isPlayerScreen && (
-                        <View style={styles.floatingPlayerWrapper}>
-                          <FloatingPlayer />
-                        </View>
-                      )}
-
-                      <UpdateModal />
-                      <MessageModal />
-
-                      {/* ── Premium banner — rendered last so it sits above everything ── */}
-                      <PremiumBanner
-                        visible={premiumBannerVisible}
-                        onDismiss={() => setPremiumBannerVisible(false)}
-                      />
-
-                    </GlobalUIStateProvider>
-                  </LyricsProvider>
+                  {/*
+                   * PlayerProvider owns the player UI AND exposes
+                   * PlayerOverlayContext (expandPlayer / minimizePlayer /
+                   * hidePlayer) to the entire subtree.
+                   *
+                   * AppShell (below) renders NotificationPlayerExpander which
+                   * calls usePlayerOverlay() — it is safe here because it is
+                   * a descendant of PlayerProvider.
+                   */}
+                  <PlayerProvider>
+                    <AppShell
+                      fontsLoaded={fontsLoaded}
+                      libraryReady={libraryReady}
+                      navReady={navReady}
+                      premiumBannerVisible={premiumBannerVisible}
+                      setPremiumBannerVisible={setPremiumBannerVisible}
+                      pendingExpandRef={pendingExpandRef}
+                    />
+                  </PlayerProvider>
                 </MusicPlayerProvider>
               )}
 
