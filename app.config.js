@@ -113,10 +113,10 @@ module.exports = {
     typedRoutes: true,
   },
   // ── Local native modules ───────────────────────────────────────────────────
-  // Tells expo-modules-autolinking to scan ./modules/ directly.
-  // This is how mavin-engine and mavin-eq (expo-autoeq-engine) are discovered
-  // without relying on node_modules symlinks, which fail on Windows.
+  // expo-modules-autolinking v3.x uses "modulesPaths" (array), not
+  // "nativeModulesDir". Scans ./modules/ directly so mavin-engine, mavin-eq,
+  // and honeygain are all discovered without node_modules symlinks.
   autolinking: {
-    nativeModulesDir: "./modules",
+    modulesPaths: ["./modules"],
   },
 };

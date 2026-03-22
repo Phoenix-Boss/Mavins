@@ -185,6 +185,9 @@
   },
   "private": true,
   "expo": {
+    "autolinking": {
+      "searchPaths": ["./modules"]
+    },
     "doctor": {
       "reactNativeDirectoryCheck": {
         "exclude": [
@@ -238,6 +241,3 @@
     }
   }
 }
-
-
-
