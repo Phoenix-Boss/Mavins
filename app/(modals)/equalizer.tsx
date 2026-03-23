@@ -3,18 +3,22 @@
 // Architecture:
 //  - EQ page: 9-band graphic sliders + graph + preset row + bass/treble knobs
 //  - FX, Mastering, Parametric, Presets → all in bottom-sheet Modals
-//  - mavin-eq native DynamicsProcessing wired via TrackPlayer.getAudioSessionId()
+//  - mavin-eq native DynamicsProcessing wired via NativeModules.AutoEQModule
 //  - Supabase preset browser reads autoeq_headphones + autoeq_filters tables
 //  - Custom presets saved to Supabase eq_presets table AND AsyncStorage
 //  - No BlurView anywhere (Android unreliable)
 //  - HeaderNavigation component used (not duplicated inline)
-
+//
+// FIXES:
+//  1. Audio session ID comes from TrackPlayer's native module, NOT AutoEQModule
+//  2. AutoEQModule.getAudioSessionId() only returns value AFTER setupEQ() is called
+//  3. graphic.bands[index] can be null after AsyncStorage restore — all values coerced
 import React, {
   useMemo, useState, useEffect, useCallback, useRef,
 } from 'react';
 import {
   Text, TouchableOpacity, View, StyleSheet,
-  Dimensions, Modal, Alert, ScrollView,
+  Dimensions, Modal, Alert, ScrollView, NativeModules, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -24,15 +28,12 @@ import { Colors } from '@/constants/Colors';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useGlobalUIState } from '@/contexts/GlobalUIStateContext';
 import { useActiveTrack } from 'react-native-track-player';
-import TrackPlayer from 'react-native-track-player';
 import { supabase } from '@/libs/supabase';
 import { screenPadding } from '@/constants/tokens';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-
 // ── mavin-eq native module ─────────────────────────────────────────────────
-import MyEQ from '@/modules/expo-autoeq-engine';
-
+import MyEQ from '@/modules/mavin-eq';
 // ── Sub-components ─────────────────────────────────────────────────────────
 import { VerticalEQSlider }  from '@/components/equalizer/VerticalEQSlider';
 import { RotaryKnob }        from '@/components/equalizer/RotaryKnob';
@@ -44,11 +45,69 @@ import { FXControls }        from '@/components/equalizer/FXControls';
 import { MasteringControls } from '@/components/equalizer/MasteringControls';
 import { ParametricEQ }      from '@/components/equalizer/parametricEq';
 import { PresetModal }       from '@/components/equalizer/PresetDisplay';
-
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-
 const STORAGE_KEY = 'eqState_v4';
 const DEBOUNCE_MS = 600;
+
+// ── getAudioSessionId — TrackPlayer Native Module (FIXED) ──────────────────
+//
+// CRITICAL: AutoEQModule.getAudioSessionId() returns lastSessionId which is
+// only set AFTER setupEQ(sessionId) is called. This creates a chicken-egg problem.
+//
+// The ACTUAL audio session ID comes from react-native-track-player's native
+// module (TrackPlayerModule), which has access to the Android AudioManager
+// audio session ID from the ExoPlayer instance.
+//
+// Flow:
+//   1. Get session ID from TrackPlayerModule (native RNTP module)
+//   2. Pass it to AutoEQModule.setupEQ(sessionId)
+//   3. AutoEQModule stores it in lastSessionId for later reference
+//
+// Platform Notes:
+//   - Android: Session ID available on physical devices (AudioManager.AUDIO_SESSION_ID)
+//   - iOS: Not supported (DynamicsProcessing is Android-only)
+//   - Simulators: May return 0 or null — test on physical device
+//
+async function getNativeAudioSessionId(): Promise<number | null> {
+  try {
+    // iOS: DynamicsProcessing not available
+    if (Platform.OS === 'ios') {
+      console.warn('[EQ] Native EQ not available on iOS (Android-only)');
+      return null;
+    }
+
+    // Android: Get session ID from TrackPlayer's native module
+    // This is the ACTUAL audio session from ExoPlayer/AudioManager
+    const tpMod = NativeModules.TrackPlayerModule ?? NativeModules.TrackPlayer;
+    
+    if (tpMod && typeof tpMod.getAudioSessionId === 'function') {
+      const id: number = await tpMod.getAudioSessionId();
+      if (id > 0) {
+        console.log('[EQ] Got session ID from TrackPlayerModule:', id);
+        return id;
+      }
+    }
+
+    // Fallback: Try alternative method names (some RNTP versions)
+    if (tpMod && typeof tpMod.getAudioSession === 'function') {
+      const id: number = await tpMod.getAudioSession();
+      if (id > 0) {
+        console.log('[EQ] Got session ID from getAudioSession:', id);
+        return id;
+      }
+    }
+
+    // Module or method not available
+    console.warn('[EQ] getAudioSessionId not available on this platform');
+    console.warn('[EQ] NativeModules.TrackPlayerModule:', !!NativeModules.TrackPlayerModule);
+    console.warn('[EQ] NativeModules.TrackPlayer:', !!NativeModules.TrackPlayer);
+    console.warn('[EQ] Available methods:', Object.keys(tpMod || {}));
+    return null;
+  } catch (e) {
+    console.warn('[EQ] getAudioSessionId error:', e);
+    return null;
+  }
+}
 
 const FREQUENCY_BANDS = [
   { label: '31',  frequency: 31   },
@@ -65,27 +124,22 @@ const FREQUENCY_BANDS = [
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
-
 interface BandBypass { bypassed: boolean; soloed: boolean; muted: boolean }
-
 interface FXState {
   mode: 'reverb'|'delay'|'chorus'|'flanger'|'phaser';
   roomSize: number; decay: number; preDelay: number; damping: number;
   delayTime: number; feedback: number; lowCut: number; highCut: number;
   rate: number; depth: number; phase: number; mix: number; bypass: boolean;
 }
-
 interface MasteringState {
   balance: number; stereoWidth: number; loudness: number;
   limiter: boolean; mono: boolean;
   limiterThreshold: number; truePeak: number; gainReduction: number;
 }
-
 interface ParametricState {
   selectedFilter: 'lowpass'|'highpass'|'bandpass'|'lowshelf'|'highshelf'|'peaking'|'notch';
   filterEnabled: boolean; gain: number; frequency: number; q: number;
 }
-
 interface EQState {
   enabled: boolean;
   graphic: { preamp: number; bands: number[]; bass: number; treble: number };
@@ -120,9 +174,21 @@ const DEFAULT_STATE: EQState = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// sanitiseBands — coerce any null/undefined entries to 0
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitiseBands(raw: any[]): number[] {
+  const out = Array(9).fill(0);
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < 9; i++) {
+    const v = raw[i];
+    out[i] = typeof v === 'number' && isFinite(v) ? v : 0;
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
-
 export default function EqualizerScreen() {
   const router             = useRouter();
   const insets             = useSafeAreaInsets();
@@ -130,38 +196,59 @@ export default function EqualizerScreen() {
   const activeTrack        = useActiveTrack();
 
   // ── EQ state ──────────────────────────────────────────────────────────────
-  const [eqState,   setEqState]   = useState<EQState>(DEFAULT_STATE);
+  const [eqState,   setEqState]   = useState(DEFAULT_STATE);
   const [isLoading, setIsLoading] = useState(true);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimer = useRef<ReturnType<any> | null>(null);
 
   // ── Native EQ session ─────────────────────────────────────────────────────
-  // Attach DynamicsProcessing when EQ is enabled and a track is playing.
   const eqSetupRef = useRef(false);
+  const sessionIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!eqState.enabled) {
       MyEQ.setEnabled(false).catch(() => {});
       return;
     }
+
     const attachEQ = async () => {
       try {
-        const sessionId = await TrackPlayer.getAudioSessionId();
-        if (!sessionId || sessionId <= 0) return;
+        // Get session ID from TrackPlayer (NOT AutoEQModule)
+        let sessionId = sessionIdRef.current;
+        
+        if (!sessionId) {
+          sessionId = await getNativeAudioSessionId();
+          if (!sessionId) {
+            console.warn('[EQ] No session ID — native EQ will not process audio');
+            console.warn('[EQ] Make sure:');
+            console.warn('[EQ]   1. Track is playing (not paused)');
+            console.warn('[EQ]   2. Running on physical Android device');
+            console.warn('[EQ]   3. TrackPlayerModule is properly linked');
+            return;
+          }
+          sessionIdRef.current = sessionId;
+        }
+
+        // Setup EQ with session ID
         if (!eqSetupRef.current) {
           await MyEQ.setupEQ(sessionId);
           eqSetupRef.current = true;
+          console.log('[EQ] Native EQ attached to session', sessionId);
         }
+
         await MyEQ.setEnabled(true);
+
         // Apply current bands
         const { preamp, bands } = eqState.graphic;
-        const gains = bands.map((b, i) =>
-          (eqState.bandBypass[i]?.bypassed ? 0 : b) + (i === 0 ? preamp : 0)
+        const safeBands = sanitiseBands(bands);
+        const gains = safeBands.map((b, i) =>
+          (eqState.bandBypass[i]?.bypassed ? 0 : b) + (i === 0 ? (preamp ?? 0) : 0)
         );
         await MyEQ.applyBands(gains);
       } catch (e) {
         console.warn('[EQ] native attach:', e);
       }
     };
+
     attachEQ();
   }, [eqState.enabled]);
 
@@ -169,13 +256,11 @@ export default function EqualizerScreen() {
   useEffect(() => {
     if (!eqState.enabled || !eqSetupRef.current) return;
     const { preamp, bands } = eqState.graphic;
-    const gains = bands.map((b, i) =>
+    const safeBands = sanitiseBands(bands);
+    const gains = safeBands.map((b, i) =>
       eqState.bandBypass[i]?.bypassed ? 0 : b
     );
-    // Preamp applied to all bands via offset on first band is wrong —
-    // DynamicsProcessing doesn't have a preamp gain. Instead we normalise:
-    // If any gain+preamp would exceed ±12dB, scale down.
-    const withPreamp = gains.map(g => Math.max(-12, Math.min(12, g + preamp)));
+    const withPreamp = gains.map(g => Math.max(-12, Math.min(12, g + (preamp ?? 0))));
     MyEQ.applyBands(withPreamp).catch(() => {});
   }, [eqState.graphic, eqState.bandBypass, eqState.enabled]);
 
@@ -184,6 +269,7 @@ export default function EqualizerScreen() {
     return () => {
       MyEQ.release().catch(() => {});
       eqSetupRef.current = false;
+      sessionIdRef.current = null;
     };
   }, []);
 
@@ -200,7 +286,6 @@ export default function EqualizerScreen() {
   // ─────────────────────────────────────────────────────────────────────────
   // Persistence
   // ─────────────────────────────────────────────────────────────────────────
-
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then(json => {
       if (json) {
@@ -210,7 +295,14 @@ export default function EqualizerScreen() {
             ...prev, ...parsed,
             fx:        { ...DEFAULT_STATE.fx,        ...(parsed.fx        ?? {}) },
             mastering: { ...DEFAULT_STATE.mastering,  ...(parsed.mastering ?? {}) },
-            graphic:   { ...DEFAULT_STATE.graphic,    ...(parsed.graphic   ?? {}) },
+            graphic: {
+              ...DEFAULT_STATE.graphic,
+              ...(parsed.graphic ?? {}),
+              preamp: parsed.graphic?.preamp ?? 0,
+              bands:  sanitiseBands(parsed.graphic?.bands ?? []),
+              bass:   parsed.graphic?.bass   ?? 50,
+              treble: parsed.graphic?.treble ?? 50,
+            },
             bandBypass: parsed.bandBypass ?? defaultBandBypass(),
           }));
         } catch {}
@@ -230,7 +322,6 @@ export default function EqualizerScreen() {
   // ─────────────────────────────────────────────────────────────────────────
   // Handlers
   // ─────────────────────────────────────────────────────────────────────────
-
   const detach = (prev: EQState) =>
     prev.presetType === 'factory'
       ? { selectedPreset: 'Custom', presetType: 'custom' as const }
@@ -276,13 +367,18 @@ export default function EqualizerScreen() {
   const handleBandMute = useCallback((i: number) =>
     setEqState(p => { const bb=[...p.bandBypass]; bb[i]={...bb[i],muted:!bb[i].muted}; return {...p,bandBypass:bb}; }), []);
 
-  // Called by PresetModal when user taps a preset
   const handleSelectPreset = useCallback((preset: { name: string; bands: number[]; preamp: number; is_factory: boolean }) => {
     Haptics.selectionAsync();
     setEqState(prev => ({
       ...prev,
       enabled: true,
-      graphic: { ...prev.graphic, preamp: preset.preamp, bands: preset.bands, bass: 50, treble: 50 },
+      graphic: {
+        ...prev.graphic,
+        preamp: preset.preamp ?? 0,
+        bands:  sanitiseBands(preset.bands),
+        bass:   50,
+        treble: 50,
+      },
       selectedPreset: preset.name,
       presetType: preset.is_factory ? 'factory' : 'custom',
     }));
@@ -291,8 +387,9 @@ export default function EqualizerScreen() {
 
   const gradientColors = useMemo<[string,string,string]>(() => ['#1a0f05','#0b0b0b','#050505'], []);
   const bottomPad = insets.bottom + verticalScale(70);
-
   const { enabled, graphic, parametric, fx, mastering, selectedPreset, presetType, bandBypass } = eqState;
+  const safeBands  = sanitiseBands(graphic.bands);
+  const safePreamp = typeof graphic.preamp === 'number' && isFinite(graphic.preamp) ? graphic.preamp : 0;
 
   if (isLoading) {
     return (
@@ -306,7 +403,7 @@ export default function EqualizerScreen() {
     <View style={styles.root}>
       <LinearGradient style={styles.root} colors={gradientColors}>
         <Watermark source={require('@/assets/images/mavins.png')} />
-
+        
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <View
           style={[styles.header, { paddingTop: insets.top + verticalScale(8) }]}
@@ -315,10 +412,7 @@ export default function EqualizerScreen() {
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} hitSlop={12}>
             <Ionicons name="chevron-down" size={moderateScale(24)} color="#fff" />
           </TouchableOpacity>
-
           <Text style={styles.headerTitle}>Equalizer</Text>
-
-          {/* EQ on/off */}
           <TouchableOpacity
             style={[styles.eqToggle, enabled && styles.eqToggleOn]}
             onPress={toggleEQ}
@@ -326,10 +420,7 @@ export default function EqualizerScreen() {
           >
             <Text style={[styles.eqToggleText, enabled && styles.eqToggleTextOn]}>EQ</Text>
           </TouchableOpacity>
-
-          {/* EQ / Graphic|Parametric switch row */}
           <View style={styles.tabRow}>
-            {/* Graphic / Parametric */}
             <View style={styles.modePill}>
               {(['graphic','parametric'] as const).map(m => (
                 <TouchableOpacity
@@ -344,8 +435,6 @@ export default function EqualizerScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-
-            {/* FX and MASTER open modals */}
             <TouchableOpacity
               style={styles.pageBtn}
               onPress={() => { Haptics.selectionAsync(); setFxModalVisible(true); }}
@@ -370,15 +459,13 @@ export default function EqualizerScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* FloatingPlayer in EQ bar mode — shows track info inline */}
           <FloatingPlayer eqBarMode />
-
-          {/* ── Graphic EQ ──────────────────────────────────────────────── */}
+          
           {eqMode === 'graphic' ? (
             <>
               <View style={styles.slidersRow}>
                 <VerticalEQSlider
-                  value={graphic.preamp}
+                  value={safePreamp}
                   onChange={handlePreampChange}
                   isPreamp
                   label="PRE"
@@ -387,7 +474,7 @@ export default function EqualizerScreen() {
                 {FREQUENCY_BANDS.map((band, index) => (
                   <VerticalEQSlider
                     key={band.label}
-                    value={graphic.bands[index]}
+                    value={safeBands[index]}
                     onChange={val => handleBandChange(index, val)}
                     label={band.label}
                     enabled={enabled}
@@ -401,10 +488,7 @@ export default function EqualizerScreen() {
                   />
                 ))}
               </View>
-
-              <EQGraph values={graphic.bands} enabled={enabled} />
-
-              {/* Preset row */}
+              <EQGraph values={safeBands} enabled={enabled} />
               <View style={styles.presetRow}>
                 <TouchableOpacity
                   style={styles.presetBtn}
@@ -423,11 +507,9 @@ export default function EqualizerScreen() {
                   <Text style={styles.saveBtnText}>SAVE</Text>
                 </TouchableOpacity>
               </View>
-
-              {/* Bass + Treble */}
               <View style={styles.knobsRow}>
                 <RotaryKnob
-                  value={graphic.bass}
+                  value={graphic.bass ?? 50}
                   label="BASS"
                   onChange={handleBassChange}
                   color={Colors.metallicBrown.primary}
@@ -435,7 +517,7 @@ export default function EqualizerScreen() {
                   enabled={enabled}
                 />
                 <RotaryKnob
-                  value={graphic.treble}
+                  value={graphic.treble ?? 50}
                   label="TREBLE"
                   onChange={handleTrebleChange}
                   color={Colors.metallicBrown.secondary}
@@ -445,7 +527,6 @@ export default function EqualizerScreen() {
               </View>
             </>
           ) : (
-            /* ── Parametric EQ ─────────────────────────────────────────── */
             <ParametricEQ
               enabled={enabled}
               parametricState={parametric}
@@ -454,9 +535,7 @@ export default function EqualizerScreen() {
           )}
         </ScrollView>
 
-        {/* ════════════════════════════════════════════════════════════════ */}
-        {/* FX BOTTOM SHEET MODAL                                           */}
-        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* FX BOTTOM SHEET MODAL */}
         <Modal
           animationType="slide"
           transparent
@@ -468,25 +547,16 @@ export default function EqualizerScreen() {
               <View style={styles.sheetHandle} />
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>FX PROCESSOR</Text>
-                <TouchableOpacity
-                  style={styles.sheetClose}
-                  onPress={() => setFxModalVisible(false)}
-                >
+                <TouchableOpacity style={styles.sheetClose} onPress={() => setFxModalVisible(false)}>
                   <Ionicons name="close" size={18} color="#888" />
                 </TouchableOpacity>
               </View>
-              <FXControls
-                enabled={enabled}
-                fxState={fx}
-                onUpdate={handleFXUpdate}
-              />
+              <FXControls enabled={enabled} fxState={fx} onUpdate={handleFXUpdate} />
             </View>
           </View>
         </Modal>
 
-        {/* ════════════════════════════════════════════════════════════════ */}
-        {/* MASTERING BOTTOM SHEET MODAL                                    */}
-        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* MASTERING BOTTOM SHEET MODAL */}
         <Modal
           animationType="slide"
           transparent
@@ -498,25 +568,16 @@ export default function EqualizerScreen() {
               <View style={styles.sheetHandle} />
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>MASTERING SUITE</Text>
-                <TouchableOpacity
-                  style={styles.sheetClose}
-                  onPress={() => setMasteringModalVisible(false)}
-                >
+                <TouchableOpacity style={styles.sheetClose} onPress={() => setMasteringModalVisible(false)}>
                   <Ionicons name="close" size={18} color="#888" />
                 </TouchableOpacity>
               </View>
-              <MasteringControls
-                enabled={enabled}
-                masteringState={mastering}
-                onUpdate={handleMasteringUpdate}
-              />
+              <MasteringControls enabled={enabled} masteringState={mastering} onUpdate={handleMasteringUpdate} />
             </View>
           </View>
         </Modal>
 
-        {/* ════════════════════════════════════════════════════════════════ */}
-        {/* PRESET BROWSER MODAL — reads from Supabase                     */}
-        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* PRESET BROWSER MODAL */}
         <PresetModal
           visible={presetModalVisible}
           onClose={() => setPresetModalVisible(false)}
@@ -525,31 +586,26 @@ export default function EqualizerScreen() {
           insets={insets}
         />
 
-        {/* ════════════════════════════════════════════════════════════════ */}
-        {/* SAVE PRESET MODAL                                               */}
-        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* SAVE PRESET MODAL */}
         <SavePresetModal
           visible={saveModalVisible}
           onClose={() => setSaveModalVisible(false)}
-          bands={graphic.bands}
-          preamp={graphic.preamp}
+          bands={safeBands}
+          preamp={safePreamp}
           onSaved={(name) => {
             setEqState(p => ({ ...p, selectedPreset: name, presetType: 'custom' }));
             setSaveModalVisible(false);
           }}
           insets={insets}
         />
-
       </LinearGradient>
     </View>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SavePresetModal — inline sub-component (no separate file needed)
-// Saves to Supabase eq_presets AND AsyncStorage
+// SavePresetModal
 // ─────────────────────────────────────────────────────────────────────────────
-
 interface SavePresetModalProps {
   visible: boolean;
   onClose: () => void;
@@ -570,7 +626,6 @@ function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: S
     if (!trimmed) { Alert.alert('Name required', 'Enter a preset name.'); return; }
     setSaving(true);
     try {
-      // 1. Save to Supabase
       const { data: authData } = await supabase.auth.getUser();
       if (authData.user) {
         await supabase.from('eq_presets').upsert({
@@ -581,7 +636,6 @@ function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: S
           preamp_db: preamp,
         }, { onConflict: 'user_id,name' });
       }
-      // 2. Also persist locally for offline
       const existing = await AsyncStorage.getItem(CUSTOM_PRESETS_KEY);
       const list = existing ? JSON.parse(existing) : [];
       const updated = [
@@ -607,15 +661,9 @@ function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: S
           <View style={saveStyles.inputWrap}>
             <Text style={saveStyles.inputLabel}>PRESET NAME</Text>
             <View style={saveStyles.input}>
-              <Text
-                style={saveStyles.inputText}
-                onPress={() => {}}
-              />
+              <SaveInput value={name} onChange={setName} onSubmit={handleSave} />
             </View>
-            {/* React Native TextInput */}
-            <SaveInput value={name} onChange={setName} onSubmit={handleSave} />
           </View>
-          {/* Band preview */}
           <View style={saveStyles.preview}>
             {bands.map((v, i) => (
               <View
@@ -623,8 +671,8 @@ function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: S
                 style={[
                   saveStyles.previewBar,
                   {
-                    height: Math.abs(v * 3.5) + 2,
-                    backgroundColor: v > 0 ? Colors.metallicBrown.primary : Colors.metallicBrown.secondary,
+                    height: Math.abs((v ?? 0) * 3.5) + 2,
+                    backgroundColor: (v ?? 0) > 0 ? Colors.metallicBrown.primary : Colors.metallicBrown.secondary,
                     alignSelf: 'flex-end',
                   },
                 ]}
@@ -650,7 +698,6 @@ function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: S
   );
 }
 
-// Minimal TextInput wrapper to avoid JSX inside non-JSX component above
 import { TextInput } from 'react-native';
 function SaveInput({ value, onChange, onSubmit }: { value: string; onChange: (s: string) => void; onSubmit: () => void }) {
   return (
@@ -671,12 +718,10 @@ function SaveInput({ value, onChange, onSubmit }: { value: string; onChange: (s:
 // ─────────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   root: { flex: 1 },
   loadingScreen: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   loadingText: { color: '#888', fontSize: moderateScale(13) },
-
   header: {
     position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100,
     backgroundColor: 'rgba(0,0,0,0.65)',
@@ -703,7 +748,6 @@ const styles = StyleSheet.create({
   eqToggleOn: { backgroundColor: Colors.metallicBrown.primary, borderColor: Colors.metallicBrown.primary },
   eqToggleText: { color: '#fff', fontSize: moderateScale(13), fontWeight: '700' },
   eqToggleTextOn: { color: '#000' },
-
   tabRow: {
     flexDirection: 'row', alignItems: 'center', gap: scale(8),
     marginTop: verticalScale(36),
@@ -727,14 +771,11 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
   pageBtnText: { color: '#fff', fontSize: moderateScale(11), fontWeight: '700' },
-
   content: { paddingHorizontal: screenPadding.horizontal },
-
   slidersRow: {
     flexDirection: 'row', justifyContent: 'space-between',
     paddingHorizontal: scale(2), marginTop: verticalScale(8),
   },
-
   presetRow: {
     flexDirection: 'row', alignItems: 'center',
     marginTop: verticalScale(12), gap: scale(10),
@@ -752,14 +793,11 @@ const styles = StyleSheet.create({
     borderRadius: 20, paddingVertical: verticalScale(8), paddingHorizontal: scale(20),
   },
   saveBtnText: { color: '#000', fontSize: moderateScale(12), fontWeight: '700' },
-
   knobsRow: {
     flexDirection: 'row', justifyContent: 'center',
     alignItems: 'center', gap: scale(40),
     marginTop: verticalScale(16), marginBottom: verticalScale(8),
   },
-
-  // ── Bottom sheet shared styles ─────────────────────────────────────────
   sheetBackdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end',
   },

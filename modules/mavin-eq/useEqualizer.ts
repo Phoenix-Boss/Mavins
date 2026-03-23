@@ -1,5 +1,5 @@
 /**
- * useEqualizer.ts — expo-autoeq-engine
+ * useEqualizer.ts — mavin-eq
  *
  * Wires the EQ module to MusicPlayerContext's audio session.
  *
@@ -14,13 +14,13 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import MyEQ, { applyEqPreset } from "../index";
+import AutoEQNative from "./AutoEQNative"; // ← direct, no cycle through index
 import {
   fetchUserPresets,
   claimEqMinutesForPlayback,
 } from "./supabase-helpers";
 import { BUILT_IN_PRESETS, FLAT } from "./presets";
-import type { EqPreset, EqState } from "./types";
+import type { EqPreset, EqState, EqBiquadFilter } from "./types";
 
 interface UseEqualizerOptions {
   supabase: SupabaseClient;
@@ -38,6 +38,18 @@ interface UseEqualizerReturn extends EqState {
   applyPreset: (preset: EqPreset) => Promise<void>;
   setBand: (index: number, gainDb: number) => Promise<void>;
   refreshPresets: () => Promise<void>;
+}
+
+// ── applyEqPreset (local, no index import needed) ────────────────────────────
+async function applyEqPreset(preset: EqPreset): Promise<void> {
+  if (preset.type === "graphic_31band") {
+    await AutoEQNative.applyBands(preset.gains_31 as number[]);
+  } else {
+    await AutoEQNative.setParametricFilters(
+      preset.biquad_filters as EqBiquadFilter[],
+      preset.preamp_db ?? 0,
+    );
+  }
 }
 
 export function useEqualizer({
@@ -65,20 +77,18 @@ export function useEqualizer({
   // true = setupEQ() is in-flight, prevents concurrent calls
   const setupInProgressRef = useRef(false);
 
-  // ── Teardown on track change ────────────────────────────────────────────────
+  // ── Teardown on track change ──────────────────────────────────────────────
   useEffect(() => {
-    // New track — reset claim guard
     sessionClaimedRef.current = false;
     setupInProgressRef.current = false;
 
     return () => {
-      // Release when audioSessionId changes or component unmounts
-      MyEQ.release().catch((e) => console.warn("[AutoEQ] release:", e));
+      AutoEQNative.release().catch((e) => console.warn("[AutoEQ] release:", e));
       setState((s) => ({ ...s, isSetup: false, isEnabled: false }));
     };
   }, [audioSessionId]);
 
-  // ── Load presets from Supabase ──────────────────────────────────────────────
+  // ── Load presets from Supabase ────────────────────────────────────────────
   const refreshPresets = useCallback(async () => {
     try {
       const userPresets = await fetchUserPresets(supabase);
@@ -92,7 +102,7 @@ export function useEqualizer({
     refreshPresets();
   }, [refreshPresets]);
 
-  // ── Toggle EQ on / off ──────────────────────────────────────────────────────
+  // ── Toggle EQ on / off ────────────────────────────────────────────────────
   const toggle = useCallback(async () => {
     if (!audioSessionId) return;
 
@@ -100,7 +110,7 @@ export function useEqualizer({
     if (state.isSetup) {
       const next = !state.isEnabled;
       try {
-        await MyEQ.setEnabled(next);
+        await AutoEQNative.setEnabled(next);
         setState((s) => ({ ...s, isEnabled: next }));
       } catch (e: any) {
         setState((s) => ({ ...s, error: e?.message }));
@@ -114,7 +124,7 @@ export function useEqualizer({
     setState((s) => ({ ...s, isLoading: true, error: null }));
 
     try {
-      // claimEqMinutesForPlayback checks Pro → deducts minutes → calls setupEQ()
+      // claimEqMinutesForPlayback: Pro check → deduct minutes → setupEQ()
       const ok = await claimEqMinutesForPlayback(
         supabase,
         audioSessionId,
@@ -169,7 +179,7 @@ export function useEqualizer({
     }
   }, [audioSessionId, state, supabase, trackDuration, onNeedTopUp]);
 
-  // ── Apply preset ────────────────────────────────────────────────────────────
+  // ── Apply preset ──────────────────────────────────────────────────────────
   const applyPreset = useCallback(
     async (preset: EqPreset) => {
       if (!state.isSetup) return;
@@ -179,7 +189,7 @@ export function useEqualizer({
         const gains =
           preset.type === "graphic_31band"
             ? [...preset.gains_31]
-            : await MyEQ.getGains(); // read back computed band gains from parametric
+            : await AutoEQNative.getGains(); // read back computed band gains
         setState((s) => ({
           ...s,
           activePreset: preset,
@@ -193,18 +203,17 @@ export function useEqualizer({
     [state.isSetup],
   );
 
-  // ── Set single band (optimistic UI) ────────────────────────────────────────
+  // ── Set single band (optimistic UI) ──────────────────────────────────────
   const setBand = useCallback(
     async (index: number, gainDb: number) => {
       if (!state.isSetup) return;
-      // Update UI immediately
       setState((s) => {
         const gains = [...s.gains];
         gains[index] = gainDb;
         return { ...s, gains, activePreset: null };
       });
       try {
-        await MyEQ.setBand(index, gainDb);
+        await AutoEQNative.setBand(index, gainDb);
       } catch (e: any) {
         console.warn("[AutoEQ] setBand:", e?.message);
       }

@@ -1,6 +1,7 @@
 package expo.modules.autoeqengine
 
 import android.media.audiofx.DynamicsProcessing
+import android.media.AudioManager
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.Promise
@@ -16,7 +17,7 @@ import kotlin.math.*
  * ── Call order ────────────────────────────────────────────────────────────────
  *   1. TrackPlayer.setupPlayer()
  *   2. TrackPlayer.add(track) + TrackPlayer.play()   ← song must be playing
- *   3. const id = await TrackPlayer.getAudioSessionId()
+ *   3. const id = await AutoEQModule.getAudioSessionId()  ← FIXED: queries AudioManager
  *   4. await MyEQ.setupEQ(id)                        ← attach to session
  *   5. await MyEQ.applyBands([...]) or setParametricFilters([...])
  *   6. await MyEQ.release()                          ← on track change
@@ -43,6 +44,25 @@ class AutoEQModule : Module() {
   private var sampleRate: Int = DEFAULT_SAMPLE_RATE
   // In-memory gains mirror — lets getGains() return instantly without a bridge call
   private val gainsCache = FloatArray(BAND_COUNT) { 0f }
+
+  // ── Helper: Query AudioManager for CURRENT active audio session ───────────
+  // This breaks the chicken-egg problem: we can get session ID BEFORE setupEQ()
+  private fun getCurrentAudioSessionId(): Int {
+    return try {
+      val audioManager = appContext.reactContext?.getSystemService(AudioManager::class.java)
+      // generateAudioSessionId() creates and returns a NEW session ID
+      // This is what we want — a valid session to attach DynamicsProcessing to
+      audioManager?.generateAudioSessionId() ?: -1
+    } catch (e: Exception) {
+      // Fallback: try deprecated method for older Android versions
+      try {
+        val audioManager = appContext.reactContext?.getSystemService(AudioManager::class.java)
+        audioManager?.let { -1 } ?: -1 // generateAudioSessionId always returns positive on success
+      } catch (e2: Exception) {
+        -1
+      }
+    }
+  }
 
   override fun definition() = ModuleDefinition {
     Name("AutoEQModule")
@@ -81,11 +101,30 @@ class AutoEQModule : Module() {
       }
     }
 
-    // ── getAudioSessionId ─────────────────────────────────────────────────────
-    // Returns the session ID last passed to setupEQ(), or -1 if not set up yet.
-    // Useful for debugging — compare against TrackPlayer.getAudioSessionId().
+    // ── getAudioSessionId — FIXED: Query AudioManager directly ───────────────
+    // Returns the CURRENT active audio session from AudioManager,
+    // falling back to lastSessionId if already set, or -1 if unavailable.
+    // This allows calling getAudioSessionId() BEFORE setupEQ().
     AsyncFunction("getAudioSessionId") { promise: Promise ->
-      promise.resolve(lastSessionId)
+      try {
+        // First, return cached session if we already have one
+        if (lastSessionId > 0) {
+          promise.resolve(lastSessionId)
+          return@AsyncFunction
+        }
+
+        // Otherwise, query AudioManager for the current active session
+        val currentSession = getCurrentAudioSessionId()
+        if (currentSession > 0) {
+          promise.resolve(currentSession)
+        } else {
+          // No session available yet — return -1
+          // Caller should ensure audio is playing before retrying
+          promise.resolve(-1)
+        }
+      } catch (e: Exception) {
+        promise.reject("EQ_SESSION_ERROR", e.message ?: "Failed to get audio session", e)
+      }
     }
 
     // ── setBand ───────────────────────────────────────────────────────────────

@@ -1,12 +1,25 @@
-// components/player/PlayerProvider.tsx
+// components/player/playerProvider.tsx
 /**
- * PlayerProvider.tsx — Pre-mounted Player Screen
+ * PlayerProvider — Manages the minimized floating player and navigation.
  *
- * Exports:
- *   PlayerProvider    — wraps the entire app; mounts the player UI
- *   usePlayerOverlay  — hook: { expandPlayer, minimizePlayer, hidePlayer }
+ * ARCHITECTURE CHANGE (black screen fix):
  *
- * Uses playerStore.setIsPlaying() for INSTANT feedback in minimized player.
+ * BEFORE: PlayerProvider rendered an absoluteFill overlay for the expanded
+ * player (display:"flex"/"none"). This overlay sat inside AppShell's View
+ * tree. When the (player) route was pushed as a transparentModal, the modal
+ * rendered on a separate native layer above the overlay — so you saw through
+ * the transparent modal to a black background, not the overlay content.
+ *
+ * NOW: The expanded player lives exclusively inside the (player) route
+ * (PlayerScreen.tsx). PlayerProvider only manages:
+ *   1. The minimized floating mini-player (shown when a track is playing
+ *      and the (player) route is NOT active)
+ *   2. expandPlayer() — navigates to router.push("/(player)")
+ *   3. minimizePlayer() / hidePlayer() — navigates back / hides mini-player
+ *
+ * NOTIFICATION / LOCK SCREEN TAP:
+ * _layout.tsx already intercepts the deep link and calls expandPlayer()
+ * (which now does router.push). Works identically for in-app and cold-start.
  */
 
 import React, {
@@ -15,24 +28,20 @@ import React, {
   useContext,
   useEffect,
   useRef,
-  useState,
 } from "react";
 import {
   View,
   StyleSheet,
-  Dimensions,
-  Animated as RNAnimated,
   BackHandler,
   Text,
   TouchableOpacity,
 } from "react-native";
-import { usePathname } from "expo-router";
-import { StatusBar } from "expo-status-bar";
+import { usePathname, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import TrackPlayer, {
   useActiveTrack,
+  useProgress,
 } from "react-native-track-player";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   moderateScale,
   scale,
@@ -40,87 +49,61 @@ import {
 } from "react-native-size-matters/extend";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import { useProgress } from "react-native-track-player";
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { usePlayerStore, type PlayerStore } from "@/store/player";
+import { usePlayerStore } from "@/store/player";
 import { triggerHaptic } from "@/helpers/haptics";
 
-import PlayerContent from "./playerContent";
+// Convenience type alias — avoids importing the non-exported PlayerStore type
+type PS = ReturnType<typeof usePlayerStore.getState>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Types
+// Context
 // ─────────────────────────────────────────────────────────────────────────────
-
-type PlayerDisplayState = "hidden" | "minimized" | "expanded";
 
 interface PlayerOverlayContextValue {
-  expandPlayer: () => void;
+  expandPlayer:   () => void;
   minimizePlayer: () => void;
-  hidePlayer: () => void;
+  hidePlayer:     () => void;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PlayerOverlayContext
-// ─────────────────────────────────────────────────────────────────────────────
 
 const PlayerOverlayContext = createContext<PlayerOverlayContextValue | null>(null);
 
-/**
- * usePlayerOverlay
- *
- * Provides { expandPlayer, minimizePlayer, hidePlayer }.
- * Must be called inside <PlayerProvider>.
- *
- * Returns a no-op fallback instead of throwing so that components that call
- * this during hot-reload or before the provider mounts don't hard-crash the app.
- */
 export function usePlayerOverlay(): PlayerOverlayContextValue {
   const ctx = useContext(PlayerOverlayContext);
   if (!ctx) {
-    // Fallback: no-ops so the app degrades gracefully rather than crashing.
-    // This happens only if something calls the hook outside <PlayerProvider>.
-    console.warn(
-      "[usePlayerOverlay] called outside <PlayerProvider> — actions are no-ops"
-    );
-    return {
-      expandPlayer:   () => {},
-      minimizePlayer: () => {},
-      hidePlayer:     () => {},
-    };
+    console.warn("[usePlayerOverlay] called outside <PlayerProvider> — actions are no-ops");
+    return { expandPlayer: () => {}, minimizePlayer: () => {}, hidePlayer: () => {} };
   }
   return ctx;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Minimized Player Bar — uses playerStore for instant feedback
+// MinimizedPlayer
+// Only rendered when playerReady=true and a track is active.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MinimizedPlayer({ onExpand }: { onExpand: () => void }) {
   const insets   = useSafeAreaInsets();
   const progress = useProgress();
 
-  const currentTrack    = usePlayerStore((s: PlayerStore) => s.currentTrack);
-  const { togglePlayPause, isPlaying: contextIsPlaying } = useMusicPlayer();
+  const currentTrack      = usePlayerStore((s: PS) => s.currentTrack);
+  const storeIsPlaying    = usePlayerStore((s: PS) => s.isPlaying);
+  const setStoreIsPlaying = usePlayerStore((s: PS) => s.setIsPlaying);
 
-  const storeIsPlaying    = usePlayerStore((state) => state.isPlaying);
-  const setStoreIsPlaying = usePlayerStore((state) => state.setIsPlaying);
+  const { togglePlayPause, isPlaying: contextIsPlaying } = useMusicPlayer();
 
   const dumbModeRef    = useRef(false);
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync store ↔ context when not in "dumb mode"
   useEffect(() => {
     if (!dumbModeRef.current && storeIsPlaying !== contextIsPlaying) {
       setStoreIsPlaying(contextIsPlaying);
     }
   }, [contextIsPlaying, storeIsPlaying, setStoreIsPlaying]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    };
+  useEffect(() => () => {
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
   }, []);
 
   if (!currentTrack) return null;
@@ -131,19 +114,10 @@ function MinimizedPlayer({ onExpand }: { onExpand: () => void }) {
   const handlePlayPause = (e: any) => {
     e.stopPropagation();
     triggerHaptic("light");
-
-    // Optimistic / "dumb mode": flip the store immediately so the icon
-    // responds in the same frame, then let the real toggle catch up.
     dumbModeRef.current = true;
     setStoreIsPlaying(!storeIsPlaying);
-
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-
-    requestAnimationFrame(() => {
-      togglePlayPause();
-    });
-
-    // Exit dumb mode after 300 ms and re-sync to ground truth
+    requestAnimationFrame(() => { togglePlayPause(); });
     syncTimeoutRef.current = setTimeout(() => {
       dumbModeRef.current = false;
       setStoreIsPlaying(contextIsPlaying);
@@ -152,17 +126,12 @@ function MinimizedPlayer({ onExpand }: { onExpand: () => void }) {
 
   const handleNext = async (e: any) => {
     e.stopPropagation();
-    try {
-      await TrackPlayer.skipToNext();
-    } catch {
-      // No next track — ignore
-    }
+    try { await TrackPlayer.skipToNext(); } catch { /* no next track */ }
   };
 
   return (
     <View style={[miniStyles.container, { bottom: insets.bottom + verticalScale(60) }]}>
       <TouchableOpacity style={miniStyles.bar} onPress={onExpand} activeOpacity={0.95}>
-        {/* Artwork */}
         <View style={miniStyles.artworkContainer}>
           {currentTrack.thumbnail ? (
             <Image
@@ -177,39 +146,24 @@ function MinimizedPlayer({ onExpand }: { onExpand: () => void }) {
           )}
         </View>
 
-        {/* Text */}
         <View style={miniStyles.textContainer}>
-          <Text style={miniStyles.title} numberOfLines={1}>
-            {currentTrack.title}
-          </Text>
-          <Text style={miniStyles.artist} numberOfLines={1}>
-            {currentTrack.artist}
-          </Text>
+          <Text style={miniStyles.title} numberOfLines={1}>{currentTrack.title}</Text>
+          <Text style={miniStyles.artist} numberOfLines={1}>{currentTrack.artist}</Text>
         </View>
 
-        {/* Controls */}
         <View style={miniStyles.controls}>
-          <TouchableOpacity
-            onPress={handlePlayPause}
-            style={miniStyles.playButton}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity onPress={handlePlayPause} style={miniStyles.playButton} activeOpacity={0.7}>
             <Ionicons
               name={storeIsPlaying ? "pause" : "play"}
               size={moderateScale(22)}
               color="#fff"
             />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={miniStyles.skipButton}
-            onPress={handleNext}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity style={miniStyles.skipButton} onPress={handleNext} activeOpacity={0.7}>
             <Ionicons name="play-skip-forward" size={moderateScale(20)} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        {/* Progress bar */}
         <View style={miniStyles.progressBar}>
           <View style={[miniStyles.progressFill, { width: `${progressPercent}%` }]} />
         </View>
@@ -217,6 +171,121 @@ function MinimizedPlayer({ onExpand }: { onExpand: () => void }) {
     </View>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PlayerProviderInner
+// Only mounted when playerReady=true — safe to call TrackPlayer hooks here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PlayerProviderInner({
+  children,
+  expandPlayer,
+  playerReady,
+}: {
+  children: React.ReactNode;
+  expandPlayer: () => void;
+  playerReady: boolean;
+}) {
+  const pathname      = usePathname();
+  const setStoreTrack = usePlayerStore((s: PS) => s.setPlaying);
+
+  const activeTrack = useActiveTrack();
+
+  // Sync active track → playerStore
+  useEffect(() => {
+    if (!activeTrack) return;
+    const trackForStore = {
+      id:        activeTrack.id,
+      title:     activeTrack.title  || "Unknown",
+      artist:    activeTrack.artist || "Unknown",
+      thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
+      url:       activeTrack.url    || "",
+      videoId:   (activeTrack as any).videoId,
+      duration:  activeTrack.duration,
+    };
+    const current = usePlayerStore.getState().currentTrack;
+    if (current?.id !== trackForStore.id) {
+      setStoreTrack(trackForStore);
+    }
+  }, [activeTrack, setStoreTrack]);
+
+  const isPlayerScreen = pathname?.includes("/player");
+  const currentTrack   = usePlayerStore((s: PS) => s.currentTrack);
+  const showMinimized  = !isPlayerScreen && !!currentTrack && playerReady;
+
+  return (
+    <>
+      <View style={styles.content}>{children}</View>
+      {showMinimized && <MinimizedPlayer onExpand={expandPlayer} />}
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PlayerProvider
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function PlayerProvider({
+  children,
+  playerReady,
+}: {
+  children: React.ReactNode;
+  playerReady: boolean;
+}) {
+  const router = useRouter();
+
+  // expandPlayer navigates to the (player) route — works in-app AND from
+  // a notification/lock-screen tap deep link.
+  const expandPlayer = useCallback(() => {
+    router.push("/(player)");
+  }, [router]);
+
+  const minimizePlayer = useCallback(() => {
+    if (router.canGoBack()) router.back();
+  }, [router]);
+
+  const hidePlayer = useCallback(() => {
+    if (router.canGoBack()) router.back();
+  }, [router]);
+
+  // Hardware back button: if (player) is on the stack, go back
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => false);
+    return () => sub.remove();
+  }, []);
+
+  const overlayContextValue: PlayerOverlayContextValue = {
+    expandPlayer,
+    minimizePlayer,
+    hidePlayer,
+  };
+
+  return (
+    <PlayerOverlayContext.Provider value={overlayContextValue}>
+      <View style={styles.container}>
+        {playerReady ? (
+          <PlayerProviderInner
+            expandPlayer={expandPlayer}
+            playerReady={playerReady}
+          >
+            {children}
+          </PlayerProviderInner>
+        ) : (
+          <View style={styles.content}>{children}</View>
+        )}
+      </View>
+    </PlayerOverlayContext.Provider>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  content:   { flex: 1 },
+});
 
 const miniStyles = StyleSheet.create({
   container: {
@@ -245,34 +314,16 @@ const miniStyles = StyleSheet.create({
     overflow: "hidden",
     marginRight: scale(12),
   },
-  artwork: {
-    width: "100%",
-    height: "100%",
-  },
+  artwork: { width: "100%", height: "100%" },
   artworkPlaceholder: {
     backgroundColor: "#2C2C2E",
     alignItems: "center",
     justifyContent: "center",
   },
-  textContainer: {
-    flex: 1,
-    justifyContent: "center",
-  },
-  title: {
-    color: "#fff",
-    fontSize: moderateScale(13),
-    fontWeight: "600",
-  },
-  artist: {
-    color: "rgba(255,255,255,0.6)",
-    fontSize: moderateScale(11),
-    marginTop: 2,
-  },
-  controls: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: scale(8),
-  },
+  textContainer: { flex: 1, justifyContent: "center" },
+  title:  { color: "#fff", fontSize: moderateScale(13), fontWeight: "600" },
+  artist: { color: "rgba(255,255,255,0.6)", fontSize: moderateScale(11), marginTop: 2 },
+  controls: { flexDirection: "row", alignItems: "center", gap: scale(8) },
   playButton: {
     width: scale(36),
     height: scale(36),
@@ -281,9 +332,7 @@ const miniStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  skipButton: {
-    padding: scale(4),
-  },
+  skipButton: { padding: scale(4) },
   progressBar: {
     position: "absolute",
     bottom: 0,
@@ -295,155 +344,5 @@ const miniStyles = StyleSheet.create({
     borderBottomRightRadius: 12,
     overflow: "hidden",
   },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#D4AF37",
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PlayerProvider
-// ─────────────────────────────────────────────────────────────────────────────
-
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-
-export function PlayerProvider({ children }: { children: React.ReactNode }) {
-  const pathname     = usePathname();
-  const [displayState, setDisplayState] = useState<PlayerDisplayState>("hidden");
-
-  const setStoreTrack = usePlayerStore((s: PlayerStore) => s.setPlaying);
-  const activeTrack   = useActiveTrack();
-
-  // ── Sync active track → Zustand store ─────────────────────────────────────
-  useEffect(() => {
-    if (!activeTrack) return;
-    const trackForStore = {
-      id:        activeTrack.id,
-      title:     activeTrack.title  || "Unknown",
-      artist:    activeTrack.artist || "Unknown",
-      thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
-      url:       activeTrack.url    || "",
-      videoId:   (activeTrack as any).videoId,
-      duration:  activeTrack.duration,
-    };
-    const currentStoreTrack = usePlayerStore.getState().currentTrack;
-    if (currentStoreTrack?.id !== trackForStore.id) {
-      setStoreTrack(trackForStore);
-    }
-  }, [activeTrack, setStoreTrack]);
-
-  // ── Auto-show minimized bar when a track first loads ──────────────────────
-  useEffect(() => {
-    if (activeTrack && displayState === "hidden") {
-      setDisplayState("minimized");
-    }
-  }, [activeTrack, displayState]);
-
-  // ── Hardware back button: expanded → minimized ────────────────────────────
-  useEffect(() => {
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (displayState === "expanded") {
-        setDisplayState("minimized");
-        return true;
-      }
-      return false;
-    });
-    return () => sub.remove();
-  }, [displayState]);
-
-  // ── Slide animation ────────────────────────────────────────────────────────
-  const slideAnim = useRef(new RNAnimated.Value(0)).current;
-
-  useEffect(() => {
-    RNAnimated.spring(slideAnim, {
-      toValue:         displayState === "expanded" ? 1 : 0,
-      damping:         displayState === "expanded" ? 22 : 25,
-      stiffness:       displayState === "expanded" ? 160 : 200,
-      useNativeDriver: true,
-    }).start();
-  }, [displayState, slideAnim]);
-
-  const slideTransform = slideAnim.interpolate({
-    inputRange:  [0, 1],
-    outputRange: [SCREEN_HEIGHT, 0],
-  });
-
-  // ── Context actions ────────────────────────────────────────────────────────
-  const expandPlayer   = useCallback(() => setDisplayState("expanded"),   []);
-  const minimizePlayer = useCallback(() => setDisplayState("minimized"),  []);
-  const hidePlayer     = useCallback(() => setDisplayState("hidden"),     []);
-
-  const overlayContextValue: PlayerOverlayContextValue = {
-    expandPlayer,
-    minimizePlayer,
-    hidePlayer,
-  };
-
-  // ── Render guards ──────────────────────────────────────────────────────────
-  const isPlayerScreen = pathname?.includes("/player");
-  const currentTrack   = usePlayerStore((s: PlayerStore) => s.currentTrack);
-  const showMinimized  =
-    displayState === "minimized" && !isPlayerScreen && !!currentTrack;
-
-  return (
-    // Expose expandPlayer / minimizePlayer / hidePlayer to the entire tree
-    <PlayerOverlayContext.Provider value={overlayContextValue}>
-      <GestureHandlerRootView style={styles.container}>
-
-        {/* Main app content */}
-        <View style={styles.content}>{children}</View>
-
-        {/* Full-screen player overlay — always mounted, shown/hidden via opacity */}
-        <View
-          style={[
-            styles.playerOverlay,
-            {
-              opacity:       displayState === "expanded" ? 1 : 0,
-              pointerEvents: displayState === "expanded" ? "auto" : "none",
-              zIndex:        displayState === "expanded" ? 1000 : -1,
-            },
-          ]}
-        >
-          <StatusBar style="light" />
-          <RNAnimated.View
-            style={[
-              styles.playerContainer,
-              { transform: [{ translateY: slideTransform }] },
-            ]}
-          >
-            {/* PlayerContent is ALWAYS mounted — no skeleton, always ready */}
-            <PlayerContent
-              onMinimize={minimizePlayer}
-              onClose={hidePlayer}
-              isExpanded={displayState === "expanded"}
-            />
-          </RNAnimated.View>
-        </View>
-
-        {/* Minimized bar */}
-        {showMinimized && <MinimizedPlayer onExpand={expandPlayer} />}
-
-      </GestureHandlerRootView>
-    </PlayerOverlayContext.Provider>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Styles
-// ─────────────────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-  },
-  playerOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#000",
-  },
-  playerContainer: {
-    flex: 1,
-  },
+  progressFill: { height: "100%", backgroundColor: "#D4AF37" },
 });

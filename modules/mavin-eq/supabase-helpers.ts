@@ -1,5 +1,5 @@
 /**
- * supabase-helpers.ts — expo-autoeq-engine
+ * supabase-helpers.ts — mavin-eq
  *
  * All Supabase interactions. Receives your Supabase client as a parameter
  * so it works with your existing auth session from MusicPlayerContext.
@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { EqPreset, EqBiquadFilter, EqBandGains } from "./types";
-import MyEQ from "../index";
+import AutoEQNative from "./AutoEQNative"; // ← direct, no cycle through index
 
 interface ProfileRow {
   id: string;
@@ -98,7 +98,7 @@ export async function claimEqMinutesForPlayback(
     return false;
   }
 
-  await MyEQ.setupEQ(audioSessionId);
+  await AutoEQNative.setupEQ(audioSessionId); // ← direct native call, no index
   return true;
 }
 
@@ -132,7 +132,6 @@ export async function fetchUserPresets(
       id: row.id,
       name: row.name,
       type: "biquad",
-      // Supabase stores filters as jsonb — field names match EqBiquadFilter
       biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
       preamp_db: row.preamp_db ?? 0,
     } as EqPreset;

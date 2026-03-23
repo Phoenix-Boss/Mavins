@@ -99,62 +99,86 @@ export default function HoneygainConsentGate({ children }: Props) {
     }
   }, []);
 
+  // ── Decline ───────────────────────────────────────────────────────────────
+  const handleDecline = useCallback(async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, 'declined');
+    setShowModal(false);
+  }, []);
+
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <>
+    <View style={styles.container}>
+      {/* Children render first, underneath everything */}
       {children}
 
-      <Modal visible={showModal} transparent animationType="none" statusBarTranslucent onRequestClose={() => {}}>
-        {/* Dimmed backdrop */}
-        <Animated.View style={[s.backdrop, { opacity: fadeAnim }]} />
+      {/* Modal overlays on top with transparent background */}
+      <Modal 
+        visible={showModal} 
+        transparent 
+        animationType="none" 
+        statusBarTranslucent
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalRoot}>
+          {/* Backdrop - semi-transparent overlay */}
+          <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} />
+          
+          {/* Sheet slides up from bottom */}
+          <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
+            {/* Handle pill */}
+            <View style={styles.handle} />
 
-        {/* Sheet */}
-        <Animated.View style={[s.sheet, { transform: [{ translateY: slideAnim }] }]}>
-
-          {/* Handle pill */}
-          <View style={s.handle} />
-
-          {/* Agreement text */}
-          <Text style={s.agreement}>
-            By tapping <Text style={s.gold}>Allow</Text>, you
-            agree to our{' '}
-            <Text style={s.link} onPress={() => router.push('/(modals)/privacy')}>
-              Privacy Policy
+            {/* Agreement text */}
+            <Text style={styles.agreement}>
+              By tapping <Text style={styles.gold}>Allow</Text>, you
+              agree to our{' '}
+              <Text style={styles.link} onPress={() => router.push('/(modals)/privacy')}>
+                Privacy Policy
+              </Text>
+              ,{' '}
+              <Text style={styles.link} onPress={() => router.push('/(modals)/terms')}>
+                Terms &amp; Conditions
+              </Text>
+              {' '}and{' '}
+              <Text style={styles.link} onPress={() => router.push('/(modals)/legal')}>
+                Legal Notice
+              </Text>
+              .
             </Text>
-            ,{' '}
-            <Text style={s.link} onPress={() => router.push('/(modals)/terms')}>
-              Terms &amp; Conditions
-            </Text>
-            {' '}and{' '}
-            <Text style={s.link} onPress={() => router.push('/(modals)/legal')}>
-              Legal Notice
-            </Text>
-            .
-          </Text>
 
-          {/* Allow button */}
-          <Animated.View style={[s.btnWrap, { transform: [{ scale: pulseAnim }] }]}>
-            <Pressable
-              onPress={handleAllow}
-              disabled={busy}
-              style={({ pressed }) => [pressed && s.pressed, busy && s.disabled, { width: '100%' }]}
-            >
-              <LinearGradient
-                colors={['rgba(245,166,35,0.15)', 'rgba(245,166,35,0.05)', 'rgba(255,255,255,0.08)']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={s.primaryBtn}
+            {/* Allow button */}
+            <Animated.View style={[styles.btnWrap, { transform: [{ scale: pulseAnim }] }]}>
+              <Pressable
+                onPress={handleAllow}
+                disabled={busy}
+                style={({ pressed }) => [
+                  pressed && styles.pressed, 
+                  busy && styles.disabled, 
+                  { width: '100%' }
+                ]}
               >
-                {busy
-                  ? <ActivityIndicator color={GOLD} size="small" />
-                  : <Text style={s.primaryBtnTxt}>Allow</Text>}
-              </LinearGradient>
-            </Pressable>
-          </Animated.View>
+                <LinearGradient
+                  colors={['rgba(245,166,35,0.15)', 'rgba(245,166,35,0.05)', 'rgba(255,255,255,0.08)']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.primaryBtn}
+                >
+                  {busy
+                    ? <ActivityIndicator color={GOLD} size="small" />
+                    : <Text style={styles.primaryBtnTxt}>Allow</Text>}
+                </LinearGradient>
+              </Pressable>
+            </Animated.View>
 
-        </Animated.View>
+            {/* Decline button */}
+            <Pressable onPress={handleDecline} style={styles.declineBtn}>
+              <Text style={styles.declineTxt}>Not Now</Text>
+            </Pressable>
+
+          </Animated.View>
+        </View>
       </Modal>
-    </>
+    </View>
   );
 }
 
@@ -163,14 +187,19 @@ export default function HoneygainConsentGate({ children }: Props) {
 // ─────────────────────────────────────────────────────────────────────────────
 const GOLD = '#F5A623';
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  modalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end', // Sheet at bottom
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.82)',
   },
   sheet: {
-    position: 'absolute',
-    bottom: 0, left: 0, right: 0,
     backgroundColor: '#0f0f0f',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
@@ -178,6 +207,12 @@ const s = StyleSheet.create({
     paddingBottom: 40,
     paddingTop: 12,
     alignItems: 'center',
+    // Add shadow for depth
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 24,
   },
   handle: {
     width: 36,
@@ -187,8 +222,8 @@ const s = StyleSheet.create({
     marginBottom: 24,
   },
   agreement: {
-    color: '#444',
-    fontSize: 12,
+    color: '#aaa',
+    fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
     marginBottom: 28,
@@ -207,13 +242,21 @@ const s = StyleSheet.create({
     paddingVertical: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
   },
   primaryBtnTxt: {
     color: '#B8F400',
     fontWeight: '800',
     fontSize: 16,
     letterSpacing: 1.2,
+  },
+  declineBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  declineTxt: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
   },
   // Utilities
   gold:    { color: GOLD, fontWeight: '600' },

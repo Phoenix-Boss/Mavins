@@ -6,8 +6,12 @@ import {
   View,
   StyleSheet,
   Animated,
+  // FIX: Easing must come from react-native, NOT react-native-reanimated.
+  // The Animated API used here is the legacy react-native Animated — mixing
+  // it with reanimated's Easing causes a silent runtime mismatch that breaks
+  // the pulse animation entirely.
+  Easing,
 } from "react-native";
-import { Easing } from "react-native-reanimated";
 
 const COLORS = {
   surface: '#121212',
@@ -30,13 +34,16 @@ export const SkeletonLoader = ({ type }: SkeletonLoaderProps) => {
           toValue: 1,
           duration: 1000,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          // FIX: Must be false — backgroundColor cannot be animated by the
+          // native driver. Previously true, which silently killed the
+          // animation on many RN versions and threw a yellow box warning.
+          useNativeDriver: false,
         }),
         Animated.timing(pulseAnim, {
           toValue: 0,
           duration: 1000,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ])
     ).start();
@@ -149,7 +156,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  
+
   // Card skeletons
   albumCard: {
     width: 130,
@@ -171,7 +178,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     gap: 4,
   },
-  
+
   // Channel card skeletons
   channelCard: {
     width: 210,
@@ -204,7 +211,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  
+
   // Text skeleton sizes
   titleSkeleton: {
     height: 14,

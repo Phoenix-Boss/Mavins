@@ -1,8 +1,26 @@
 // components/player/PlayerContent.tsx
 /**
- * PlayerContent — The actual player UI (extracted from PlayerScreen)
- * 
- * Uses playerStore.setIsPlaying() for INSTANT UI feedback (0ms delay)
+ * PlayerContent — The actual player UI
+ *
+ * CHANGES in this version:
+ *
+ * 1. No-track state renders the full UI, not a spinner or error.
+ *    `displayTrack` = useActiveTrack() ?? usePlayerStore().currentTrack
+ *    - If a track was ever played, the last-known metadata shows instantly.
+ *    - If nothing was ever played, "—" placeholders fill the title/artist.
+ *    - The artwork area uses a SkeletonLoader pulse while there is no real track.
+ *    - All nav buttons (lyrics, queue, related, equalizer, etc.) remain tappable.
+ *
+ * 2. PlayerScreen no longer waits for a track before rendering — it just waits
+ *    for the native module. This eliminates the "No track loaded" error screen.
+ *
+ * 3. artworkForColors derived from displayTrack so gradient appears immediately
+ *    when the last-played track is in the store.
+ *
+ * 4. SkeletonLoader replaces the ActivityIndicator for the loading state.
+ *
+ * All other logic (instant play/pause, video segments, pan-to-dismiss,
+ * repeat / shuffle / favourite, animated view counter, etc.) is preserved.
  */
 
 import React, {
@@ -65,15 +83,16 @@ import { useTrackPlayerRepeatMode } from "@/hooks/useTrackPlayerRepeatMode";
 import { useTrackPlayerFavorite } from "@/hooks/useTrackPlayerFavorite";
 import { useTrackPlayerShuffle } from "@/hooks/useTrackPlayerShuffle";
 import { usePlayerStore } from "@/store/player";
+import { SkeletonLoader } from "@/components/common/SkeletonLoader";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-// ─── Constants ──────────────────────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const LYRICS_LEAD_IN_S = 0.25;
 const SK = { base: "#1A1A1A", highlight: "#2A2A2A" };
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const formatTime = (s: number): string => {
   if (!s || isNaN(s) || s < 0) return "0:00";
@@ -96,7 +115,7 @@ const formatCount = (n: number): string => {
 };
 
 const getImageSource = (artwork: string | number | undefined) => {
-  if (!artwork) return require("@/assets/images/icon.png");
+  if (!artwork) return require("@/assets/images/mavins.png");
   if (typeof artwork === "number") return artwork;
   return { uri: artwork as string };
 };
@@ -112,7 +131,7 @@ const parseArtists = (raw: string | undefined): string[] => {
 const formatArtistName = (name: string): string =>
   name.replace(/([a-z])([A-Z])/g, "$1 $2");
 
-// ─── Skeleton Components ────────────────────────────────────────────────────
+// ─── Skeleton Components ─────────────────────────────────────────────────────
 
 function SkeletonPulse({
   width,
@@ -138,7 +157,7 @@ function SkeletonPulse({
   return <RNAnimated.View style={[{ width, height, borderRadius, backgroundColor: bg }, style]} />;
 }
 
-// ─── AnimatedCounter ─────────────────────────────────────────────────────────
+// ─── AnimatedCounter ──────────────────────────────────────────────────────────
 
 function AnimatedCounter({ target }: { target: number }) {
   const [display, setDisplay] = useState(1);
@@ -176,7 +195,7 @@ const ctrStyles = StyleSheet.create({
   },
 });
 
-// ─── ArtistLine ─────────────────────────────────────────────────────────────
+// ─── ArtistLine ──────────────────────────────────────────────────────────────
 
 interface ArtistLineProps {
   rawArtist: string | undefined;
@@ -212,69 +231,93 @@ function ArtistLine({ rawArtist, uploaderUrl, onArtistPress }: ArtistLineProps) 
   );
 }
 
-// ─── Main PlayerContent Component ────────────────────────────────────────────
+// ─── Props ───────────────────────────────────────────────────────────────────
 
 interface PlayerContentProps {
   onMinimize: () => void;
   onClose: () => void;
   isExpanded: boolean;
+  playerReady: boolean;
 }
 
-export default function PlayerContent({ onMinimize, onClose, isExpanded }: PlayerContentProps) {
+// ─── PlayerContentInner ──────────────────────────────────────────────────────
+
+function PlayerContentInner({
+  onMinimize,
+  onClose,
+  isExpanded,
+}: Omit<PlayerContentProps, "playerReady">) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
+  // TrackPlayer hooks — safe: only called when playerReady=true
   const activeTrack = useActiveTrack();
-  const progress = useProgress(250);
+  const progress    = useProgress(250);
+
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // INSTANT UI: Use playerStore for immediate state updates
-  // ═══════════════════════════════════════════════════════════════════════════
-  
-  // Get store actions
-  const setStoreIsPlaying = usePlayerStore((state) => state.setIsPlaying);
-  const storeIsPlaying = usePlayerStore((state) => state.isPlaying);
-  
-  // Track if we're in "dumb mode" (ignoring context updates)
-  const dumbModeRef = useRef(false);
+  // ── Display track: real track or last-known from store ───────────────────
+  // This is what the UI renders. It means:
+  //   - On first open with no track ever played → all fields are undefined → "—"
+  //   - On open with a track in the store → last track metadata shown instantly
+  //   - Once useActiveTrack() fires → switches to live track seamlessly
+  type PS = ReturnType<typeof usePlayerStore.getState>;
+  const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
+
+  const setStoreIsPlaying  = usePlayerStore((s: PS) => s.setIsPlaying);
+  const storeIsPlaying     = usePlayerStore((s: PS) => s.isPlaying);
+  // Build a displayTrack that has the same shape as activeTrack.
+  // When activeTrack exists, use it directly. Otherwise construct a fake
+  // Track-shaped object from the store so field access is uniform.
+  const displayTrack = useMemo(() => {
+    if (activeTrack) return activeTrack as any;
+    if (storeCurrentTrack) {
+      return {
+        id:       storeCurrentTrack.id,
+        title:    storeCurrentTrack.title,
+        artist:   storeCurrentTrack.artist,
+        artwork:  storeCurrentTrack.thumbnail,
+        url:      storeCurrentTrack.url,
+        duration: storeCurrentTrack.duration,
+        videoId:  storeCurrentTrack.videoId,
+      } as any;
+    }
+    return null;
+  }, [activeTrack, storeCurrentTrack]);
+
+
+  const dumbModeRef    = useRef(false);
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Sync store with context when not in dumb mode
+
   useEffect(() => {
     if (!dumbModeRef.current && storeIsPlaying !== contextIsPlaying) {
       setStoreIsPlaying(contextIsPlaying);
     }
   }, [contextIsPlaying, storeIsPlaying, setStoreIsPlaying]);
-  
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    };
+
+  useEffect(() => () => {
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
   }, []);
-  
-  // Track change: reset dumb mode and sync
+
   useEffect(() => {
     dumbModeRef.current = false;
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     setStoreIsPlaying(contextIsPlaying);
   }, [activeTrack?.id, contextIsPlaying, setStoreIsPlaying]);
 
-  // ═══════════════════════════════════════════════════════════════════════════
-
+  // ── Hooks ────────────────────────────────────────────────────────────────
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
   const { shuffleMode, toggleShuffle, getDotCount } = useTrackPlayerShuffle();
 
-  const track = activeTrack as any;
-  const likeCount = typeof track?.likeCount === "number" ? track.likeCount : -1;
-  const dislikeCount = typeof track?.dislikeCount === "number" ? track.dislikeCount : -1;
+  const track         = displayTrack as any;
+  const likeCount     = typeof track?.likeCount     === "number" ? track.likeCount     : -1;
+  const dislikeCount  = typeof track?.dislikeCount  === "number" ? track.dislikeCount  : -1;
   const commentsCount = typeof track?.commentsCount === "number" ? track.commentsCount : -1;
-  const viewCount = typeof track?.viewCount === "number" ? track.viewCount : -1;
+  const viewCount     = typeof track?.viewCount     === "number" ? track.viewCount     : -1;
 
   const uploaderUrl: string | undefined = track?.uploaderUrl as string | undefined;
-  const videoId: string | undefined = track?.videoId as string | undefined;
+  const videoId:     string | undefined = track?.videoId     as string | undefined;
 
   // Counter animation
   const [counterTarget, setCounterTarget] = useState(0);
@@ -286,17 +329,17 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
 
   // Video handling
   const muxedVideoUrl: string | undefined = track?.muxedVideoUrl as string | undefined;
-  const videoUrl: string | undefined      = track?.videoUrl as string | undefined;
+  const videoUrl:      string | undefined = track?.videoUrl      as string | undefined;
   const activeVideoUrl                    = muxedVideoUrl ?? videoUrl ?? undefined;
   const hasVideo = !!activeVideoUrl;
   const [activeSegment, setActiveSegment] = useState<"song" | "video">("song");
-  const videoPlayerReady = useRef(false);
-  const pendingSeek = useRef<number | null>(null);
-  const videoOwnsAudio = useRef(false);
+  const videoPlayerReady  = useRef(false);
+  const pendingSeek       = useRef<number | null>(null);
+  const videoOwnsAudio    = useRef(false);
 
   const videoPlayer = useVideoPlayer(activeVideoUrl ?? null, (p) => {
-    p.muted = !muxedVideoUrl;
-    p.loop = false;
+    p.muted  = !muxedVideoUrl;
+    p.loop   = false;
     p.pause();
   });
 
@@ -334,7 +377,7 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
     return () => sub.remove();
   }, [videoPlayer, activeSegment, contextIsPlaying, muxedVideoUrl]);
 
-  const videoProgress = useSharedValue(0);
+  const videoProgress    = useSharedValue(0);
   const artworkAnimStyle = useAnimatedStyle(() => ({
     opacity: withTiming(interpolate(videoProgress.value, [0, 1], [1, 0]), { duration: 300 }),
   }));
@@ -390,10 +433,10 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
       TrackPlayer.play().catch(() => {});
     }
     setActiveSegment("song");
-    videoProgress.value = 0;
+    videoProgress.value      = 0;
     videoPlayerReady.current = false;
-    pendingSeek.current = null;
-    dumbModeRef.current = false;
+    pendingSeek.current      = null;
+    dumbModeRef.current      = false;
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
   }, [activeTrack?.id, videoPlayer]);
 
@@ -401,20 +444,20 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
   const [activeBottomTab, setActiveBottomTab] = useState<"upnext" | "lyrics" | "related">("upnext");
   useEffect(() => { setActiveBottomTab("upnext"); }, [activeTrack?.id]);
 
-  // Gradient colors
-  const artworkForColors = typeof activeTrack?.artwork === "string" ? activeTrack.artwork : null;
-  const { imageColors } = useImageColors(artworkForColors);
-  const gradientColors = useMemo(() => {
+  // Gradient colors — use displayTrack artwork so store-cached track shows gradient
+  const artworkForColors = typeof displayTrack?.artwork === "string" ? displayTrack.artwork : null;
+  const { imageColors }  = useImageColors(artworkForColors);
+  const gradientColors   = useMemo(() => {
     if (imageColors?.dominant) return [imageColors.dominant, "#000", "#000"];
     return ["#1a0f05", "#0b0b0b", "#050505"];
   }, [imageColors]);
 
-  // Progress bar
-  const isSliding = useSharedValue(false);
+  // Progress bar shared values
+  const isSliding      = useSharedValue(false);
   const sliderProgress = useSharedValue(0);
-  const sliderMin = useSharedValue(0);
-  const sliderMax = useSharedValue(1);
-  const slidingValue = useSharedValue(0);
+  const sliderMin      = useSharedValue(0);
+  const sliderMax      = useSharedValue(1);
+  const slidingValue   = useSharedValue(0);
 
   if (!isSliding.value) {
     sliderProgress.value = progress.duration > 0 ? progress.position / progress.duration : 0;
@@ -434,7 +477,7 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
   );
 
   // Dismiss gesture
-  const translateY = useSharedValue(0);
+  const translateY        = useSharedValue(0);
   const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.25;
 
   const dismiss = useCallback(() => {
@@ -468,49 +511,28 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
 
   const toggleRepeat = () => {
     triggerHaptic();
-    if (repeatMode === RepeatMode.Off) changeRepeatMode(RepeatMode.Queue);
+    if (repeatMode === RepeatMode.Off)        changeRepeatMode(RepeatMode.Queue);
     else if (repeatMode === RepeatMode.Queue) changeRepeatMode(RepeatMode.Track);
-    else changeRepeatMode(RepeatMode.Off);
+    else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // INSTANT PLAY/PAUSE HANDLER - Uses playerStore for immediate update
-  // ═══════════════════════════════════════════════════════════════════════════
-  
+  // ── Instant play/pause ───────────────────────────────────────────────────
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
-    
-    // Enter dumb mode
     dumbModeRef.current = true;
-    
-    // INSTANT: Update store immediately (0ms delay)
     const nextState = !storeIsPlaying;
     setStoreIsPlaying(nextState);
-    
-    // Clear existing timeout
-    if (syncTimeoutRef.current) {
-      clearTimeout(syncTimeoutRef.current);
-    }
-    
-    // Handle video mode directly
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     if (activeSegment === "video" && muxedVideoUrl && videoOwnsAudio.current && videoPlayer) {
       if (nextState) videoPlayer.play();
       else videoPlayer.pause();
     }
-    
-    // Fire actual command in background
-    requestAnimationFrame(() => {
-      togglePlayPause();
-    });
-    
-    // Exit dumb mode after 300ms
+    requestAnimationFrame(() => { togglePlayPause(); });
     syncTimeoutRef.current = setTimeout(() => {
       dumbModeRef.current = false;
       setStoreIsPlaying(contextIsPlaying);
     }, 300);
   }, [storeIsPlaying, activeSegment, muxedVideoUrl, videoPlayer, togglePlayPause, contextIsPlaying, setStoreIsPlaying]);
-
-  // ═══════════════════════════════════════════════════════════════════════════
 
   // Navigation
   const handleArtistPress = useCallback(
@@ -530,37 +552,37 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
     [uploaderUrl, router]
   );
 
-  const handleEqualizer = () => { triggerHaptic(); router.push("/(modals)/equalizer"); };
-  const handleCast = () => { triggerHaptic(); router.push("/(player)/cast-devices"); };
-  const handleComments = () => { triggerHaptic(); router.push("/(modals)/comments"); };
-  const handlePlaylist = () => { triggerHaptic(); router.push("/(modals)/add-to-playlist"); };
+  const handleEqualizer  = () => { triggerHaptic(); router.push("/(modals)/equalizer"); };
+  const handleCast       = () => { triggerHaptic(); router.push("/(player)/cast-devices"); };
+  const handleComments   = () => { triggerHaptic(); router.push("/(modals)/comments"); };
+  const handlePlaylist   = () => { triggerHaptic(); router.push("/(modals)/add-to-playlist"); };
   const handleSleepTimer = () => { triggerHaptic(); router.push("/(player)/sleep-timer"); };
-  const handleSeeAll = () => { triggerHaptic(); router.push("/(modals)/queue"); };
+  const handleSeeAll     = () => { triggerHaptic(); router.push("/(modals)/queue"); };
 
   const handleLyrics = () => {
     triggerHaptic();
     router.push({
       pathname: "/(modals)/lyrics",
       params: {
-        title: (activeTrack?.title ?? "") as string,
-        artist: (activeTrack?.artist ?? "") as string,
-        duration: String(activeTrack?.duration ?? 0),
-        videoId: (videoId ?? activeTrack?.id ?? "") as string,
-        leadIn: String(LYRICS_LEAD_IN_S),
+        title:    (displayTrack?.title    ?? "") as string,
+        artist:   (displayTrack?.artist   ?? "") as string,
+        duration: String(displayTrack?.duration ?? 0),
+        videoId:  (videoId ?? displayTrack?.id  ?? "") as string,
+        leadIn:   String(LYRICS_LEAD_IN_S),
       },
     });
   };
 
   const handleRelated = () => {
-    const vid = videoId ?? activeTrack?.id;
+    const vid = videoId ?? displayTrack?.id;
     if (!vid) return;
     triggerHaptic();
     router.push({
       pathname: "/(modals)/related",
       params: {
         songUrl: `https://www.youtube.com/watch?v=${vid}`,
-        title: (activeTrack?.title ?? "") as string,
-        artist: (activeTrack?.artist ?? "") as string,
+        title:   (displayTrack?.title  ?? "") as string,
+        artist:  (displayTrack?.artist ?? "") as string,
       },
     });
   };
@@ -572,22 +594,23 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
       params: {
         type: "song",
         songData: JSON.stringify({
-          id: activeTrack?.id,
-          title: activeTrack?.title,
-          artist: activeTrack?.artist,
-          thumbnail: activeTrack?.artwork,
-          url: track?.url,
-          duration: activeTrack?.duration,
+          id:          displayTrack?.id,
+          title:       displayTrack?.title,
+          artist:      displayTrack?.artist,
+          thumbnail:   displayTrack?.artwork,
+          url:         track?.url,
+          duration:    displayTrack?.duration,
           uploaderUrl: uploaderUrl,
-          albumId: track?.albumId,
-          albumName: track?.albumName,
-          videoId: videoId,
+          albumId:     track?.albumId,
+          albumName:   track?.albumName,
+          videoId:     videoId,
         }),
       },
     });
-  }, [router, activeTrack, track, uploaderUrl, videoId]);
+  }, [router, displayTrack, track, uploaderUrl, videoId]);
 
-  if (!activeTrack) return null;
+  // ── Artwork area: if no displayTrack yet, show a skeleton pulse ──────────
+  const artworkSize = SCREEN_WIDTH * 0.85;
 
   return (
     <GestureDetector gesture={panGesture}>
@@ -640,9 +663,10 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
 
             {/* ARTWORK / VIDEO */}
             <View style={styles.artworkContainer}>
+              {/* Always show artwork — falls back to mavins.png when no track */}
               <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
                 <Image
-                  source={getImageSource(activeTrack?.artwork)}
+                  source={getImageSource(displayTrack?.artwork)}
                   style={styles.artworkImage}
                   contentFit="cover"
                   transition={300}
@@ -664,16 +688,30 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
 
             {/* SONG INFO */}
             <View style={styles.infoContainer}>
-              <MovingText
-                text={activeTrack?.title ?? "—"}
-                animationThreshold={20}
-                style={styles.title}
-              />
-              <ArtistLine
-                rawArtist={activeTrack?.artist}
-                uploaderUrl={uploaderUrl}
-                onArtistPress={handleArtistPress}
-              />
+              {displayTrack?.title ? (
+                <MovingText
+                  text={displayTrack.title}
+                  animationThreshold={20}
+                  style={styles.title}
+                />
+              ) : (
+                // No title yet — skeleton pill
+                <View style={{ alignItems: "center", marginBottom: 4 }}>
+                  <SkeletonPulse width={180} height={20} borderRadius={6} />
+                </View>
+              )}
+
+              {displayTrack?.artist ? (
+                <ArtistLine
+                  rawArtist={displayTrack.artist}
+                  uploaderUrl={uploaderUrl}
+                  onArtistPress={handleArtistPress}
+                />
+              ) : (
+                <View style={{ alignItems: "center", marginTop: 6 }}>
+                  <SkeletonPulse width={120} height={14} borderRadius={4} />
+                </View>
+              )}
             </View>
 
             {/* ACTION ROW */}
@@ -795,9 +833,6 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
                 <Ionicons name="play-skip-back" size={32} color="#fff" />
               </TouchableOpacity>
 
-              {/* ═════════════════════════════════════════════════════════════════ */}
-              {/* INSTANT PLAY BUTTON - Uses storeIsPlaying from playerStore */}
-              {/* ═════════════════════════════════════════════════════════════════ */}
               <TouchableOpacity
                 onPress={handlePlayPause}
                 style={styles.bigPlay}
@@ -856,10 +891,30 @@ export default function PlayerContent({ onMinimize, onClose, isExpanded }: Playe
                 </Text>
               </TouchableOpacity>
             </View>
+
           </View>
         </LinearGradient>
       </Animated.View>
     </GestureDetector>
+  );
+}
+
+// ─── PlayerContent — public export with playerReady gate ─────────────────────
+
+export default function PlayerContent({
+  onMinimize,
+  onClose,
+  isExpanded,
+  playerReady,
+}: PlayerContentProps) {
+  if (!playerReady) return null;
+
+  return (
+    <PlayerContentInner
+      onMinimize={onMinimize}
+      onClose={onClose}
+      isExpanded={isExpanded}
+    />
   );
 }
 

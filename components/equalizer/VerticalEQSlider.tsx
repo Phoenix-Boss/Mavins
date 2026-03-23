@@ -1,16 +1,21 @@
 // components/equalizer/VerticalEQSlider.tsx
 //
 // Fixes vs original:
-//  1. Initial thumb position is computed inside onLayout — never wrong on first render
-//  2. dB markers moved INSIDE the track (right-aligned inside, not negative-left overflow)
-//  3. Bypass/Solo/Mute callbacks are no-ops when not provided — no crash
-//  4. Haptic only fires when drag delta > 3px — prevents haptic spam
-//  5. Removed useAnimatedRef / measure (not needed, caused warnings)
-//  6. activeBarStyle uses sliderHeight from state (safe, layout-driven)
+//  1. valueToY / yToValue moved OUTSIDE the component — they were defined as
+//     nested functions after useSharedValue() called them, which means at the
+//     point useSharedValue(valueToY(value, trackH)) runs they are still
+//     undefined (no hoisting for nested function expressions/declarations
+//     inside another function body in strict mode). Moving them to module
+//     scope fixes "valueToY is not a function".
+//  2. Initial thumb position is computed from module-level helper — correct
+//     on first render without any layout race.
+//  3. dB markers inside the track (right-aligned, no negative-left overflow).
+//  4. Bypass/Solo/Mute callbacks are no-ops when not provided — no crash.
+//  5. Haptic only fires when drag delta > 3px — prevents haptic spam.
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, LayoutChangeEvent,
+  View, Text, StyleSheet, TouchableOpacity,
 } from 'react-native';
 import Animated, {
   useSharedValue, useAnimatedStyle, withSpring, clamp, runOnJS,
@@ -21,12 +26,37 @@ import { Colors } from '@/constants/Colors';
 import * as Haptics from 'expo-haptics';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
+// ─── Slider physical height ───────────────────────────────────────────────────
+const SLIDER_TRACK_H = verticalScale(150);
+
+// ─── Module-level helpers (must be outside the component) ────────────────────
+// These are called during component initialisation (inside useSharedValue),
+// so they MUST exist before the component function runs. Nested function
+// declarations inside a React component are not hoisted to the component's
+// own call-time — they're created top-to-bottom as the body executes, meaning
+// the first time useSharedValue(valueToY(...)) runs, valueToY is still
+// undefined if it's declared further down in the same function body.
+
+function valueToY(val: number, h: number): number {
+  'worklet';
+  // +15 dB → y = 0 (top),  -15 dB → y = h (bottom)
+  return h * ((15 - clamp(val, -15, 15)) / 30);
+}
+
+function yToValue(y: number, h: number): number {
+  'worklet';
+  const raw = 15 - (clamp(y, 0, h) / h) * 30;
+  return Math.round(raw * 2) / 2; // snap to 0.5 dB steps
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 interface VerticalEQSliderProps {
-  value:     number;   // -15 to +15 dB
-  onChange:  (value: number) => void;
-  label:     string;
-  enabled?:  boolean;
-  isPreamp?: boolean;
+  value:      number;   // -15 to +15 dB
+  onChange:   (value: number) => void;
+  label:      string;
+  enabled?:   boolean;
+  isPreamp?:  boolean;
   frequency?: number;
   bypassed?:  boolean;
   onBypass?:  () => void;
@@ -36,44 +66,29 @@ interface VerticalEQSliderProps {
   isMuted?:   boolean;
 }
 
-// Slider physical height — set once, consistent with layout
-const SLIDER_TRACK_H = verticalScale(150);
-
 export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
   value,
   onChange,
   label,
-  enabled    = true,
-  isPreamp   = false,
+  enabled   = true,
+  isPreamp  = false,
   frequency,
-  bypassed   = false,
+  bypassed  = false,
   onBypass,
   onSolo,
   onMute,
-  isSoloed   = false,
-  isMuted    = false,
+  isSoloed  = false,
+  isMuted   = false,
 }) => {
-  // Use fixed height so thumb is immediately correct — no layout race
   const trackH = SLIDER_TRACK_H;
 
   const [displayValue, setDisplayValue] = useState(value);
-  const translateY  = useSharedValue(valueToY(value, trackH));
-  const isDragging  = useSharedValue(false);
 
-  // ── Conversions ────────────────────────────────────────────────────────
-  function valueToY(val: number, h: number): number {
-    'worklet';
-    // +15dB → y=0 (top),  -15dB → y=h (bottom)
-    return h * ((15 - clamp(val, -15, 15)) / 30);
-  }
+  // valueToY is now defined at module scope — safe to call here
+  const translateY = useSharedValue(valueToY(value, trackH));
+  const isDragging = useSharedValue(false);
 
-  function yToValue(y: number, h: number): number {
-    'worklet';
-    const raw = 15 - (clamp(y, 0, h) / h) * 30;
-    return Math.round(raw * 2) / 2;   // snap to 0.5 dB steps
-  }
-
-  // Sync when external value changes (preset load, reset)
+  // ── Sync when external value changes (preset load, reset) ────────────────
   React.useEffect(() => {
     if (isDragging.value) return;
     const target = bypassed ? 0 : value;
@@ -81,12 +96,12 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
     setDisplayValue(target);
   }, [value, bypassed]);
 
-  // ── Haptic helpers ─────────────────────────────────────────────────────
+  // ── Haptic helpers ────────────────────────────────────────────────────────
   const hapticLight     = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   const hapticMedium    = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   const hapticSelection = () => Haptics.selectionAsync();
 
-  // ── Gesture ────────────────────────────────────────────────────────────
+  // ── Gesture ───────────────────────────────────────────────────────────────
   const gesture = Gesture.Pan()
     .enabled(enabled && !bypassed)
     .hitSlop({ top: 20, bottom: 20, left: scale(20), right: scale(20) })
@@ -104,7 +119,6 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
     .onEnd(() => {
       isDragging.value = false;
       const db = yToValue(translateY.value, trackH);
-      // Snap to 0 if within 0.5dB
       if (Math.abs(db) < 0.5) {
         translateY.value = withSpring(valueToY(0, trackH), { damping: 18, stiffness: 260 });
         runOnJS(setDisplayValue)(0);
@@ -117,9 +131,9 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
       }
     });
 
-  // ── Animated styles ────────────────────────────────────────────────────
+  // ── Animated styles ───────────────────────────────────────────────────────
   const thumbStyle = useAnimatedStyle(() => ({
-    transform:    [{ translateY: translateY.value }],
+    transform:     [{ translateY: translateY.value }],
     shadowOpacity: isDragging.value ? 0.6 : 0.3,
     shadowRadius:  isDragging.value ? 8   : 4,
     opacity:       bypassed ? 0.4 : 1,
@@ -143,7 +157,7 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
     };
   });
 
-  // ── Display ────────────────────────────────────────────────────────────
+  // ── Display ───────────────────────────────────────────────────────────────
   const isActive       = enabled && !bypassed;
   const formattedValue = displayValue > 0
     ? `+${displayValue.toFixed(1)}`
@@ -156,7 +170,7 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
         styles.valueBadge,
         displayValue > 0 && styles.valuePos,
         displayValue < 0 && styles.valueNeg,
-        !isActive       && styles.valueDim,
+        !isActive        && styles.valueDim,
       ]}>
         <Text style={[styles.valueText, !isActive && styles.textDim]}>
           {bypassed ? 'BYP' : formattedValue}
@@ -168,16 +182,16 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
         <View style={styles.trackContainer}>
           <View style={styles.track}>
             {/* dB labels inside track right edge */}
-            <Text style={[styles.dbLabel, { top: 0            }]}>+15</Text>
-            <Text style={[styles.dbLabel, { top: '25%'        }]}>+7</Text>
+            <Text style={[styles.dbLabel, { top: 0 }]}>+15</Text>
+            <Text style={[styles.dbLabel, { top: '25%' }]}>+7</Text>
             <Text style={[styles.dbLabel, { top: '50%', marginTop: -verticalScale(5) }]}>0</Text>
-            <Text style={[styles.dbLabel, { top: '75%'        }]}>-7</Text>
-            <Text style={[styles.dbLabel, { bottom: 0         }]}>-15</Text>
+            <Text style={[styles.dbLabel, { top: '75%' }]}>-7</Text>
+            <Text style={[styles.dbLabel, { bottom: 0 }]}>-15</Text>
 
             {/* Active fill bar */}
             {!bypassed && <Animated.View style={[styles.activeBar, activeBarStyle]} />}
 
-            {/* Center line (0 dB) */}
+            {/* Centre line (0 dB) */}
             <View style={styles.centerLine} />
 
             {/* Thumb */}
@@ -197,13 +211,13 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
         </View>
       </GestureDetector>
 
-      {/* Bypass / Solo / Mute buttons — only rendered when at least one handler is provided */}
+      {/* Bypass / Solo / Mute — only when at least one handler is provided */}
       {(onBypass || onSolo || onMute) && (
         <View style={styles.ctrlRow}>
           {onBypass && (
             <TouchableOpacity
               onPress={onBypass}
-              style={[styles.ctrlBtn, bypassed  && styles.ctrlBtnOn]}
+              style={[styles.ctrlBtn, bypassed && styles.ctrlBtnOn]}
               disabled={!enabled}
             >
               <MaterialCommunityIcons
@@ -216,7 +230,7 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
           {onSolo && (
             <TouchableOpacity
               onPress={onSolo}
-              style={[styles.ctrlBtn, isSoloed  && styles.ctrlBtnSolo]}
+              style={[styles.ctrlBtn, isSoloed && styles.ctrlBtnSolo]}
               disabled={!enabled}
             >
               <Text style={[styles.ctrlText, isSoloed && styles.ctrlTextSolo]}>S</Text>
@@ -225,7 +239,7 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
           {onMute && (
             <TouchableOpacity
               onPress={onMute}
-              style={[styles.ctrlBtn, isMuted   && styles.ctrlBtnMute]}
+              style={[styles.ctrlBtn, isMuted && styles.ctrlBtnMute]}
               disabled={!enabled}
             >
               <Text style={[styles.ctrlText, isMuted && styles.ctrlTextMute]}>M</Text>
@@ -245,11 +259,13 @@ export const VerticalEQSlider: React.FC<VerticalEQSliderProps> = ({
   );
 };
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   column: {
     alignItems: 'center',
-    flex: 1,
-    maxWidth: scale(46),
+    flex:       1,
+    maxWidth:   scale(46),
   },
   valueBadge: {
     paddingHorizontal: scale(3),
@@ -281,7 +297,7 @@ const styles = StyleSheet.create({
     height:          '100%',
     borderRadius:    5,
     backgroundColor: 'rgba(255,255,255,0.05)',
-    overflow:        'visible',   // let dB labels show
+    overflow:        'visible',
     position:        'relative',
   },
 
@@ -296,8 +312,8 @@ const styles = StyleSheet.create({
   },
 
   activeBar: {
-    position:    'absolute',
-    width:       '100%',
+    position:     'absolute',
+    width:        '100%',
     borderRadius: 5,
   },
   centerLine: {
@@ -336,7 +352,6 @@ const styles = StyleSheet.create({
   },
   gripDim: { backgroundColor: '#444' },
 
-  // Bypass / Solo / Mute
   ctrlRow: {
     flexDirection:  'row',
     justifyContent: 'center',
@@ -353,10 +368,10 @@ const styles = StyleSheet.create({
     borderWidth:     1,
     borderColor:     'transparent',
   },
-  ctrlBtnOn:   { borderColor: Colors.metallicBrown.primary },
-  ctrlBtnSolo: { borderColor: '#FFD700' },
-  ctrlBtnMute: { borderColor: '#FF4444' },
-  ctrlText:    { color: '#777', fontSize: moderateScale(9), fontWeight: 'bold' },
+  ctrlBtnOn:    { borderColor: Colors.metallicBrown.primary },
+  ctrlBtnSolo:  { borderColor: '#FFD700' },
+  ctrlBtnMute:  { borderColor: '#FF4444' },
+  ctrlText:     { color: '#777', fontSize: moderateScale(9), fontWeight: 'bold' },
   ctrlTextSolo: { color: '#FFD700' },
   ctrlTextMute: { color: '#FF4444' },
 
@@ -367,8 +382,8 @@ const styles = StyleSheet.create({
     marginTop:  verticalScale(3),
   },
   freq: {
-    color:    'rgba(255,255,255,0.35)',
-    fontSize: moderateScale(7),
+    color:     'rgba(255,255,255,0.35)',
+    fontSize:  moderateScale(7),
     marginTop: 1,
   },
 });
