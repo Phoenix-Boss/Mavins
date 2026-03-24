@@ -1,7 +1,6 @@
 package expo.modules.autoeqengine
 
 import android.media.audiofx.DynamicsProcessing
-import android.media.AudioManager
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.Promise
@@ -17,13 +16,21 @@ import kotlin.math.*
  * ── Call order ────────────────────────────────────────────────────────────────
  *   1. TrackPlayer.setupPlayer()
  *   2. TrackPlayer.add(track) + TrackPlayer.play()   ← song must be playing
- *   3. const id = await AutoEQModule.getAudioSessionId()  ← FIXED: queries AudioManager
+ *   3. const id = await AutoEQModule.getAudioSessionId()
+ *        └─ bridges to RNTP's MusicModule.getAudioSessionId()
+ *           which returns exoPlayer.audioSessionId (the real session)
  *   4. await MyEQ.setupEQ(id)                        ← attach to session
  *   5. await MyEQ.applyBands([...]) or setParametricFilters([...])
  *   6. await MyEQ.release()                          ← on track change
  *
  * DynamicsProcessing must attach while audio is actively playing.
  * Attaching to a silent/idle session returns no error but has no effect.
+ *
+ * ── Why we bridge to RNTP instead of AudioManager ────────────────────────────
+ * AudioManager.generateAudioSessionId() creates a BRAND NEW session that is
+ * not connected to any audio output — attaching DynamicsProcessing to it does
+ * nothing. We need the session ID that ExoPlayer is *actually* rendering into,
+ * which is only available via exoPlayer.audioSessionId on the RNTP MusicModule.
  */
 class AutoEQModule : Module() {
 
@@ -45,22 +52,52 @@ class AutoEQModule : Module() {
   // In-memory gains mirror — lets getGains() return instantly without a bridge call
   private val gainsCache = FloatArray(BAND_COUNT) { 0f }
 
-  // ── Helper: Query AudioManager for CURRENT active audio session ───────────
-  // This breaks the chicken-egg problem: we can get session ID BEFORE setupEQ()
-  private fun getCurrentAudioSessionId(): Int {
+  // ── Helper: Retrieve session ID from RNTP's patched MusicModule ──────────
+  // We call the @ReactMethod getAudioSessionId() we added to MusicModule.kt,
+  // which returns exoPlayer.audioSessionId — the real active audio session.
+  // This must be called after TrackPlayer.play() has started audio rendering.
+  private fun getRNTPAudioSessionId(): Int {
     return try {
-      val audioManager = appContext.reactContext?.getSystemService(AudioManager::class.java)
-      // generateAudioSessionId() creates and returns a NEW session ID
-      // This is what we want — a valid session to attach DynamicsProcessing to
-      audioManager?.generateAudioSessionId() ?: -1
-    } catch (e: Exception) {
-      // Fallback: try deprecated method for older Android versions
-      try {
-        val audioManager = appContext.reactContext?.getSystemService(AudioManager::class.java)
-        audioManager?.let { -1 } ?: -1 // generateAudioSessionId always returns positive on success
-      } catch (e2: Exception) {
-        -1
+      val catalystInstance = appContext.reactContext?.catalystInstance ?: return -1
+      // MusicModule registers as "TrackPlayer" in NativeModules on the JS bridge.
+      // We call the same method synchronously via the catalyst bridge.
+      // Note: this is a sync call on the native side — safe from any thread.
+      val nativeModule = appContext.reactContext
+        ?.getNativeModule(
+          Class.forName("com.doublesymmetry.trackplayer.module.MusicModule")
+        )
+      if (nativeModule == null) return -1
+
+      // Reflect to call getAudioSessionId which returns the exoPlayer session
+      val method = nativeModule.javaClass.getDeclaredMethod(
+        "getAudioSessionId",
+        com.facebook.react.bridge.Promise::class.java
+      )
+      method.isAccessible = true
+
+      var result = -1
+      val latch = java.util.concurrent.CountDownLatch(1)
+
+      // Provide a simple Promise impl to capture the resolved value
+      val promise = object : com.facebook.react.bridge.Promise {
+        override fun resolve(value: Any?) {
+          result = (value as? Number)?.toInt() ?: -1
+          latch.countDown()
+        }
+        override fun reject(code: String, message: String) { latch.countDown() }
+        override fun reject(code: String, throwable: Throwable) { latch.countDown() }
+        override fun reject(code: String, message: String, throwable: Throwable) { latch.countDown() }
+        override fun reject(throwable: Throwable) { latch.countDown() }
+        override fun reject(code: String, message: String, userInfo: com.facebook.react.bridge.WritableMap) { latch.countDown() }
+        override fun reject(message: String) { latch.countDown() }
       }
+
+      method.invoke(nativeModule, promise)
+      latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+      result
+    } catch (e: Exception) {
+      android.util.Log.w("AutoEQModule", "getRNTPAudioSessionId failed: ${e.message}")
+      -1
     }
   }
 
@@ -101,27 +138,25 @@ class AutoEQModule : Module() {
       }
     }
 
-    // ── getAudioSessionId — FIXED: Query AudioManager directly ───────────────
-    // Returns the CURRENT active audio session from AudioManager,
-    // falling back to lastSessionId if already set, or -1 if unavailable.
-    // This allows calling getAudioSessionId() BEFORE setupEQ().
+    // ── getAudioSessionId ─────────────────────────────────────────────────────
+    // Returns the ExoPlayer audio session ID from RNTP's MusicModule.
+    // This is the only correct way to get the session — AudioManager generates
+    // a new disconnected session which DynamicsProcessing cannot attach to.
+    //
+    // Returns:
+    //   > 0  — valid session, ready for setupEQ()
+    //   -1   — player not ready yet (call after TrackPlayer.play())
     AsyncFunction("getAudioSessionId") { promise: Promise ->
       try {
-        // First, return cached session if we already have one
+        // Return cached session if we already have one from a prior setupEQ() call
         if (lastSessionId > 0) {
           promise.resolve(lastSessionId)
           return@AsyncFunction
         }
 
-        // Otherwise, query AudioManager for the current active session
-        val currentSession = getCurrentAudioSessionId()
-        if (currentSession > 0) {
-          promise.resolve(currentSession)
-        } else {
-          // No session available yet — return -1
-          // Caller should ensure audio is playing before retrying
-          promise.resolve(-1)
-        }
+        // Bridge to RNTP's patched MusicModule to get exoPlayer.audioSessionId
+        val sessionId = getRNTPAudioSessionId()
+        promise.resolve(sessionId)
       } catch (e: Exception) {
         promise.reject("EQ_SESSION_ERROR", e.message ?: "Failed to get audio session", e)
       }

@@ -1,26 +1,23 @@
 /**
  * index.ts — mavin-eq
- * 
+ *
  * Usage:
- * import MyEQ, { applyPreset } from "@/modules/mavin-eq";
- * import { NativeModules } from 'react-native';
- * 
- * // Called AFTER a song has started playing:
- * // ⚠️ TrackPlayer.getAudioSessionId() does NOT exist on JS bridge
- * // Use NativeModules directly instead:
- * const mod = NativeModules.TrackPlayerModule ?? NativeModules.TrackPlayer;
- * const sessionId = await mod.getAudioSessionId();
- * 
- * await MyEQ.setupEQ(sessionId);
- * await applyPreset(BUILT_IN_PRESETS.harman.gains_31);
- * 
+ * import MyEQ, { getAudioSessionId, applyPreset } from "@/modules/mavin-eq";
+ *
+ * // Called AFTER TrackPlayer.play() has started audio rendering:
+ * const sessionId = await getAudioSessionId();
+ * if (sessionId) {
+ *   await MyEQ.setupEQ(sessionId);
+ *   await applyPreset(BUILT_IN_PRESETS.harman.gains_31);
+ * }
+ *
  * // On track change / player destroy:
  * await MyEQ.release();
- * 
+ *
  * Platform Notes:
- * - iOS Simulator / Android Emulator: getAudioSessionId() may return null
- * - Physical devices: Session ID available for native EQ processing
- * - Graceful fallback: EQ UI works without native audio processing
+ * - Android physical device: session ID available after play() begins
+ * - Android emulator: DynamicsProcessing may attach but produce no audible effect
+ * - iOS: DynamicsProcessing is Android-only; this module is Android-only per expo-module.config.json
  */
 
 import AutoEQNative from "./AutoEQNative";
@@ -83,12 +80,17 @@ export async function applyEqPreset(preset: EqPreset): Promise<void> {
   }
 }
 
-// ── Helper: Get Audio Session ID (matches equalizer.tsx implementation) ──────
+// ── getAudioSessionId ─────────────────────────────────────────────────────────
 /**
- * Retrieve native audio session ID for EQ attachment.
- * ⚠️ Returns null on simulators/emulators — test on physical device.
- * 
+ * Retrieve the ExoPlayer audio session ID via AutoEQModule's native bridge.
+ * AutoEQModule internally reflects into RNTP's patched MusicModule to read
+ * exoPlayer.audioSessionId — the real active session, not a new generated one.
+ *
+ * ⚠️  Call this AFTER TrackPlayer.play() has started audio rendering.
+ *     Returns null if the player is idle or the session is not yet available.
+ *
  * @example
+ * await TrackPlayer.play();
  * const sessionId = await getAudioSessionId();
  * if (sessionId) {
  *   await MyEQ.setupEQ(sessionId);
@@ -96,18 +98,10 @@ export async function applyEqPreset(preset: EqPreset): Promise<void> {
  */
 export async function getAudioSessionId(): Promise<number | null> {
   try {
-    const { NativeModules } = await import('react-native');
-    const mod = NativeModules.TrackPlayerModule ?? NativeModules.TrackPlayer;
-    
-    if (typeof mod?.getAudioSessionId !== 'function') {
-      console.warn('[mavin-eq] getAudioSessionId not available on this platform');
-      return null;
-    }
-    
-    const id: number = await mod.getAudioSessionId();
+    const id = await AutoEQNative.getAudioSessionId();
     return id > 0 ? id : null;
   } catch (e) {
-    console.warn('[mavin-eq] getAudioSessionId error:', e);
+    console.warn("[mavin-eq] getAudioSessionId error:", e);
     return null;
   }
 }

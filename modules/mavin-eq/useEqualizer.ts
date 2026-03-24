@@ -10,11 +10,13 @@
  *   It resets when audioSessionId changes (new track).
  * - toggle() on an already-setup EQ just calls setEnabled() — no minute deduction.
  * - toggle() on a not-yet-setup EQ runs the full Pro gate → deduct → setupEQ.
+ * - release() is only called on cleanup when a PRIOR valid session existed,
+ *   preventing spurious calls on the initial null → null transition.
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import AutoEQNative from "./AutoEQNative"; // ← direct, no cycle through index
+import AutoEQNative from "./AutoEQNative";
 import {
   fetchUserPresets,
   claimEqMinutesForPlayback,
@@ -24,7 +26,12 @@ import type { EqPreset, EqState, EqBiquadFilter } from "./types";
 
 interface UseEqualizerOptions {
   supabase: SupabaseClient;
-  /** From TrackPlayer.getAudioSessionId() — pass null when no track loaded */
+  /**
+   * The ExoPlayer audio session ID for the currently playing track.
+   * Obtain this by calling getAudioSessionId() from mavin-eq AFTER
+   * TrackPlayer.play() has started, then pass it here.
+   * Pass null when no track is loaded or the player is idle.
+   */
   audioSessionId: number | null;
   /** Current track duration in seconds */
   trackDuration: number;
@@ -71,21 +78,32 @@ export function useEqualizer({
     Object.values(BUILT_IN_PRESETS),
   );
 
-  // true = minutes already deducted for this track's session
-  // Resets to false when audioSessionId changes (new track)
+  // true = minutes already deducted for this track's session.
+  // Resets to false when audioSessionId changes (new track).
   const sessionClaimedRef = useRef(false);
-  // true = setupEQ() is in-flight, prevents concurrent calls
+  // true = setupEQ() is in-flight, prevents concurrent calls.
   const setupInProgressRef = useRef(false);
+  // Track the previous session ID so we only release when a real session existed.
+  const prevSessionIdRef = useRef<number | null>(null);
 
   // ── Teardown on track change ──────────────────────────────────────────────
+  // Only call release() if a previous valid session was set up. Skipping this
+  // guard caused release() to fire on the initial render (null → null) and on
+  // the first real track load (null → id), neither of which has a live DP instance.
   useEffect(() => {
     sessionClaimedRef.current = false;
     setupInProgressRef.current = false;
 
-    return () => {
-      AutoEQNative.release().catch((e) => console.warn("[AutoEQ] release:", e));
+    const prevId = prevSessionIdRef.current;
+    prevSessionIdRef.current = audioSessionId;
+
+    if (prevId !== null && prevId > 0) {
+      // A real session was previously active — release the DynamicsProcessing instance.
+      AutoEQNative.release().catch((e) =>
+        console.warn("[AutoEQ] release on session change:", e),
+      );
       setState((s) => ({ ...s, isSetup: false, isEnabled: false }));
-    };
+    }
   }, [audioSessionId]);
 
   // ── Load presets from Supabase ────────────────────────────────────────────
@@ -106,7 +124,7 @@ export function useEqualizer({
   const toggle = useCallback(async () => {
     if (!audioSessionId) return;
 
-    // Already set up this session — just flip enabled, no minute cost
+    // Already set up this session — just flip enabled, no minute cost.
     if (state.isSetup) {
       const next = !state.isEnabled;
       try {
@@ -118,7 +136,7 @@ export function useEqualizer({
       return;
     }
 
-    // Guard: prevent double-tap or concurrent setup
+    // Guard: prevent double-tap or concurrent setup.
     if (setupInProgressRef.current) return;
     setupInProgressRef.current = true;
     setState((s) => ({ ...s, isLoading: true, error: null }));
@@ -145,7 +163,7 @@ export function useEqualizer({
 
       sessionClaimedRef.current = true;
 
-      // Re-apply the active preset so it takes effect immediately
+      // Re-apply the active preset so it takes effect immediately.
       if (state.activePreset) {
         await applyEqPreset(state.activePreset);
         const gains =
