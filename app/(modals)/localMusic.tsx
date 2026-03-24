@@ -1,5 +1,5 @@
 /**
- * local/index.tsx — Local Music Library
+ * localMusic.tsx — Local Music Library
  *
  * PowerAmp-style folder management:
  *   - On first launch: "Add Folders" prompt (no spinner, no auto-scan)
@@ -8,6 +8,15 @@
  *   - File additions/deletions reflect instantly (no manual refresh)
  *   - Tracks are grouped by folder with sub-tabs: All · Albums · Artists
  *   - Swipe folder card to remove (also purges its tracks from store)
+ *
+ * Smart resume behaviour:
+ *   - On mount: writes "localMusic" to MMKV so LibraryScreen can redirect here
+ *     next time the user taps the Library tab.
+ *   - When the user explicitly goes back: clears the flag so LibraryScreen
+ *     shows the normal menu again.
+ *   - Header adapts: when arrived via tab redirect (fromTab param), the back
+ *     button and title are hidden — only the right-hand action icons remain,
+ *     giving a cleaner "home" feel for the screen.
  *
  * Design: matches Mavin dark luxury — black base, gold accents, Meriva font.
  */
@@ -25,6 +34,7 @@ import {
   Image,
   ActivityIndicator,
   Platform,
+  StyleSheet,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -34,12 +44,20 @@ import {
   verticalScale,
 } from "react-native-size-matters/extend";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import * as MediaLibrary from "expo-media-library";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { useActiveTrack } from "react-native-track-player";
 import { useMediaStore, type LocalTrack, type WatchedFolder } from "@/hooks/useMediaStore";
+import { MMKV } from "react-native-mmkv";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MMKV session flag — same instance used in index.tsx
+// ─────────────────────────────────────────────────────────────────────────────
+
+const storage = new MMKV({ id: "mavin-library-session" });
+const LAST_SCREEN_KEY = "lastLibraryScreen";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette (mirrors LibraryScreen)
@@ -420,10 +438,10 @@ const fcStyles = ScaledSheet.create({
     marginRight: "12@s", borderWidth: 0.5, borderColor: C.localBorder,
   },
   name: { fontSize: "14@ms", color: C.text, fontWeight: "600" },
-  meta: { fontSize: "11@ms", color: C.textSub, marginTop: "3@vs" },
+  meta: { fontSize: "12@ms", color: C.textSub, marginTop: "2@vs" },
   liveDot: {
     width: "7@ms", height: "7@ms", borderRadius: "4@ms",
-    backgroundColor: C.local, marginRight: "10@s", opacity: 0.9,
+    backgroundColor: C.local, marginRight: "10@s", opacity: 0.8,
   },
 });
 
@@ -432,21 +450,31 @@ const fcStyles = ScaledSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function TrackRow({ item, isPlaying, onPress, onMore }: {
-  item: LocalTrack; isPlaying: boolean; onPress: () => void; onMore: () => void;
+  item: LocalTrack;
+  isPlaying: boolean;
+  onPress: () => void;
+  onMore: () => void;
 }) {
-  const SIZE = moderateScale(48);
+  const SIZE = moderateScale(50);
   return (
-    <TouchableOpacity style={trStyles.row} onPress={() => { triggerHaptic(); onPress(); }} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={trStyles.row}
+      onPress={() => { triggerHaptic(); onPress(); }}
+      activeOpacity={0.7}
+    >
       <View>
         <CoverArt uri={item.artworkUri} size={SIZE} />
         {isPlaying && (
           <View style={trStyles.playDot}>
-            <Ionicons name="musical-note" size={moderateScale(8)} color={C.gold} />
+            <Ionicons name="volume-high" size={moderateScale(8)} color={C.gold} />
           </View>
         )}
       </View>
       <View style={trStyles.info}>
-        <Text style={[trStyles.title, isPlaying && { color: C.gold }]} numberOfLines={1}>
+        <Text
+          style={[trStyles.title, isPlaying && { color: C.gold }]}
+          numberOfLines={1}
+        >
           {item.title}
         </Text>
         <Text style={trStyles.sub} numberOfLines={1}>
@@ -487,14 +515,16 @@ type SubTab = (typeof SUB_TABS)[number];
 // Main screen
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Need StyleSheet for backdrop absolute fill
-import { StyleSheet } from "react-native";
-
 export default function LocalMusicScreen() {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const activeTrack = useActiveTrack();
   const { playDownloadedSong } = useMusicPlayer();
+
+  // `fromTab` is set when LibraryScreen redirects here via the smart-resume
+  // path (router.replace). It tells us to suppress the back button.
+  const params = useLocalSearchParams<{ fromTab?: string }>();
+  const arrivedViaTab = params.fromTab === "1";
 
   const {
     tracks, folders, hydrated, permissionGranted,
@@ -506,6 +536,23 @@ export default function LocalMusicScreen() {
   const [activeFolderFilter, setActiveFolderFilter] = useState<string | null>(null); // null = all
 
   const watchedIds = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
+
+  // ── Session flag management ───────────────────────────────────────────────
+  useEffect(() => {
+    // Mark that the user is currently on Local Music so LibraryScreen can
+    // redirect here next time the Library tab is pressed.
+    storage.set(LAST_SCREEN_KEY, "localMusic");
+
+    // No cleanup needed here — we clear the flag only when the user
+    // explicitly navigates back via the back button (see handleBack).
+  }, []);
+
+  const handleBack = useCallback(() => {
+    triggerHaptic();
+    // Clear the flag so next Library tab press shows the normal menu
+    storage.delete(LAST_SCREEN_KEY);
+    router.back();
+  }, [router]);
 
   // Filtered tracks (by folder if one is selected)
   const displayTracks = useMemo(() => {
@@ -539,7 +586,10 @@ export default function LocalMusicScreen() {
     if (displayTracks.length === 0) return;
     triggerHaptic();
     const shuffled = [...displayTracks].sort(() => Math.random() - 0.5);
-    await playDownloadedSong({ ...shuffled[0], localTrackUri: shuffled[0].uri, localArtworkUri: shuffled[0].artworkUri }, shuffled.map(t => ({ ...t, localTrackUri: t.uri, localArtworkUri: t.artworkUri })));
+    await playDownloadedSong(
+      { ...shuffled[0], localTrackUri: shuffled[0].uri, localArtworkUri: shuffled[0].artworkUri },
+      shuffled.map(t => ({ ...t, localTrackUri: t.uri, localArtworkUri: t.artworkUri })),
+    );
     router.navigate("/player");
   }, [displayTracks]);
 
@@ -548,35 +598,87 @@ export default function LocalMusicScreen() {
   return (
     <View style={[scStyles.container, { paddingTop: top }]}>
 
-      {/* Header */}
-      <View style={scStyles.header}>
-        <TouchableOpacity
-          style={scStyles.backBtn}
-          onPress={() => { triggerHaptic(); router.back(); }}
-          hitSlop={10}
-        >
-          <Ionicons name="arrow-back" size={moderateScale(20)} color={C.text} />
-        </TouchableOpacity>
-        <Text style={scStyles.title}>Local Music</Text>
-        <View style={scStyles.headerRight}>
-          {hasFolders && (
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {arrivedViaTab ? (
+        /**
+         * COMPACT HEADER — no back button, no title text.
+         * Just the action icons on the right, giving the screen a "home" feel
+         * when the user landed here via the Library tab re-press.
+         */
+        <View style={scStyles.headerCompact}>
+          {/* Left: small "Local Music" label so context isn't completely lost */}
+          <View style={scStyles.compactTitleWrap}>
+            <MaterialCommunityIcons
+              name="folder-music"
+              size={moderateScale(18)}
+              color={C.local}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={scStyles.compactTitle}>Local Music</Text>
+          </View>
+
+          {/* Right: action icons only */}
+          <View style={scStyles.headerRight}>
+            {hasFolders && (
+              <TouchableOpacity
+                style={scStyles.headerBtn}
+                onPress={() => { triggerHaptic(); handleShuffleAll(); }}
+                hitSlop={10}
+              >
+                <Ionicons name="shuffle" size={moderateScale(18)} color={C.textSub} />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
-              style={scStyles.headerBtn}
-              onPress={() => { triggerHaptic(); handleShuffleAll(); }}
+              style={[scStyles.headerBtn, { backgroundColor: C.localFill, borderColor: C.localBorder }]}
+              onPress={() => { triggerHaptic(); setFolderPickerVisible(true); }}
               hitSlop={10}
             >
-              <Ionicons name="shuffle" size={moderateScale(18)} color={C.textSub} />
+              <Ionicons name="folder-open-outline" size={moderateScale(18)} color={C.local} />
             </TouchableOpacity>
-          )}
+            {/* Allow going back to library menu even from tab-redirect mode */}
+            <TouchableOpacity
+              style={scStyles.headerBtn}
+              onPress={handleBack}
+              hitSlop={10}
+            >
+              <Ionicons name="apps-outline" size={moderateScale(18)} color={C.textSub} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        /**
+         * FULL HEADER — back arrow + title + action icons.
+         * Used when navigating here normally from the LibraryScreen menu.
+         */
+        <View style={scStyles.header}>
           <TouchableOpacity
-            style={[scStyles.headerBtn, { backgroundColor: C.localFill, borderColor: C.localBorder }]}
-            onPress={() => { triggerHaptic(); setFolderPickerVisible(true); }}
+            style={scStyles.backBtn}
+            onPress={handleBack}
             hitSlop={10}
           >
-            <Ionicons name="folder-open-outline" size={moderateScale(18)} color={C.local} />
+            <Ionicons name="arrow-back" size={moderateScale(20)} color={C.text} />
           </TouchableOpacity>
+          <Text style={scStyles.title}>Local Music</Text>
+          <View style={scStyles.headerRight}>
+            {hasFolders && (
+              <TouchableOpacity
+                style={scStyles.headerBtn}
+                onPress={() => { triggerHaptic(); handleShuffleAll(); }}
+                hitSlop={10}
+              >
+                <Ionicons name="shuffle" size={moderateScale(18)} color={C.textSub} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[scStyles.headerBtn, { backgroundColor: C.localFill, borderColor: C.localBorder }]}
+              onPress={() => { triggerHaptic(); setFolderPickerVisible(true); }}
+              hitSlop={10}
+            >
+              <Ionicons name="folder-open-outline" size={moderateScale(18)} color={C.local} />
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={scStyles.divider} />
 
@@ -785,6 +887,8 @@ const gridStyles = ScaledSheet.create({
 
 const scStyles = ScaledSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
+
+  // Full header (normal navigation from library menu)
   header: {
     flexDirection: "row", alignItems: "center",
     paddingHorizontal: "16@s", paddingTop: "6@vs", paddingBottom: "14@vs",
@@ -798,12 +902,35 @@ const scStyles = ScaledSheet.create({
     flex: 1, fontSize: "22@ms", fontFamily: "Meriva",
     color: C.text, letterSpacing: 0.5,
   },
+
+  // Compact header (arrived via Library tab re-press)
+  headerCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: "16@s",
+    paddingTop: "6@vs",
+    paddingBottom: "14@vs",
+  },
+  compactTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  compactTitle: {
+    fontSize: "15@ms",
+    fontFamily: "Meriva",
+    color: C.local,
+    letterSpacing: 0.4,
+  },
+
+  // Shared right section
   headerRight: { flexDirection: "row", gap: "8@s" },
   headerBtn: {
     width: "36@ms", height: "36@ms", borderRadius: "18@ms",
     backgroundColor: C.surface, borderWidth: 0.5, borderColor: C.border,
     alignItems: "center", justifyContent: "center",
   },
+
   divider: {
     height: 0.5, backgroundColor: C.localBorder,
     marginHorizontal: "20@s", marginBottom: "4@vs",

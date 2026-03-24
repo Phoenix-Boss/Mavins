@@ -1,6 +1,6 @@
 // components/player/PlayerContent.tsx
 /**
- * PlayerContent — The actual player UI
+ * PlayerContent — The actual player UI (COMPLETE WITH RNTP PLAY FUNCTION)
  *
  * CHANGES in this version:
  *
@@ -14,6 +14,8 @@
  * 3. LYRICS button is grayed out when no videoId exists (no lyrics lookup possible).
  *
  * 4. All nav buttons remain tappable even when no track loaded.
+ *
+ * 5. ADDED: playTrack() function for RNTP integration with full lock screen compatibility
  */
 
 import React, {
@@ -291,6 +293,34 @@ function PlayerContentInner({
     setStoreIsPlaying(contextIsPlaying);
   }, [activeTrack?.id, contextIsPlaying, setStoreIsPlaying]);
 
+  // ── 🔥 ADDED: playTrack function for RNTP integration ───────────────────
+  const playTrack = useCallback(async (track: any) => {
+    try {
+      // Stop current playback
+      await TrackPlayer.stop();
+      await TrackPlayer.clearNowPlaying();
+      
+      // Add new track to queue
+      await TrackPlayer.add({
+        id: track.id || track.videoId,
+        url: track.url,
+        title: track.title || 'Unknown Track',
+        artist: track.artist || 'Unknown Artist',
+        artwork: track.thumbnail || track.artwork,
+        duration: track.duration || 0,
+        videoId: track.videoId,
+      });
+      
+      // Play and sync store
+      await TrackPlayer.play();
+      usePlayerStore.getState().setPlaying(track);
+      
+      console.log('✅ Playing:', track.title);
+    } catch (error) {
+      console.error('❌ Play failed:', error);
+    }
+  }, []);
+
   // ── Hooks ────────────────────────────────────────────────────────────────
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
@@ -518,31 +548,51 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // Instant play/pause
+  // 🔥 UPDATED: handlePlayPause with full RNTP compatibility
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
+    
+    if (!displayTrack) {
+      // No track loaded - nothing to play
+      return;
+    }
+    
     dumbModeRef.current = true;
     const nextState = !storeIsPlaying;
     setStoreIsPlaying(nextState);
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     
-    // Handle video audio handoff
-    if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
-      if (nextState) {
-        videoOwnsAudio.current = true;
-        TrackPlayer.pause().catch(() => {});
-        videoPlayer.play();
-      } else {
+    if (storeIsPlaying) {
+      // Currently playing, so pause
+      TrackPlayer.pause();
+      
+      // Handle video audio handoff when pausing
+      if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
         videoPlayer.pause();
+      }
+    } else {
+      // Currently paused, so play
+      if (activeTrack) {
+        // We have an active track in RNTP, just resume
+        TrackPlayer.play();
+        
+        // Handle video audio handoff when resuming in video mode
+        if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+          videoOwnsAudio.current = true;
+          TrackPlayer.pause().catch(() => {});
+          videoPlayer.play();
+        }
+      } else {
+        // No active track in RNTP, use our playTrack to load it
+        playTrack(displayTrack);
       }
     }
     
-    requestAnimationFrame(() => { togglePlayPause(); });
     syncTimeoutRef.current = setTimeout(() => {
       dumbModeRef.current = false;
       setStoreIsPlaying(contextIsPlaying);
     }, 300);
-  }, [storeIsPlaying, activeSegment, muxedVideoUrl, videoPlayer, togglePlayPause, contextIsPlaying, setStoreIsPlaying]);
+  }, [storeIsPlaying, displayTrack, activeTrack, activeSegment, muxedVideoUrl, videoPlayer, contextIsPlaying, setStoreIsPlaying, playTrack]);
 
   // Navigation
   const handleArtistPress = useCallback(
@@ -839,6 +889,7 @@ function PlayerContentInner({
                 <Ionicons name="play-skip-back" size={32} color="#fff" />
               </TouchableOpacity>
 
+              {/* 🔥 UPDATED PLAY BUTTON - Now fully RNTP compatible */}
               <TouchableOpacity
                 onPress={handlePlayPause}
                 style={styles.bigPlay}
