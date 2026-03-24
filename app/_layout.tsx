@@ -27,6 +27,9 @@ import { UpdateModal } from "@/components/UpdateModal";
 import { MessageModal } from "@/components/MessageModal";
 import PremiumBanner from "@/components/ads/banner/premium";
 
+// ── NEW: HomePreloader for instant home screen ────────────────────────────────
+import { HomePreloader } from "@/components/HomePreloader";
+
 // ── Mavin libs ────────────────────────────────────────────────────────────────
 import { queryClient } from "@/libs/supabase";
 import { initCache } from "@/libs/cache";
@@ -106,6 +109,11 @@ function AppShell({
 }) {
   const segments       = useSegments();
   const isPlayerScreen = segments.includes("(player)");
+  
+  // NEW: Hide floating player on modal screens
+  const isModalScreen = segments.some(s => 
+    s.includes('(modals)') || s.includes('modals')
+  );
 
   return (
     <LyricsProvider>
@@ -122,14 +130,6 @@ function AppShell({
 
             {/*
              * (player) — solid black background, slides up from bottom.
-             *
-             * KEY FIX: backgroundColor is "#000" (NOT transparent).
-             * The old "transparentModal" + transparent contentStyle meant the
-             * route rendered over a see-through layer — nothing behind it was
-             * visible through PlayerProvider's overlay → black screen.
-             *
-             * PlayerContent itself has a full-screen LinearGradient so the
-             * solid black base colour is immediately covered.
              */}
             <Stack.Screen
               name="(player)"
@@ -158,7 +158,8 @@ function AppShell({
         <LyricsFetcher />
         <NotificationPlayerExpander pendingRef={pendingExpandRef} />
 
-        {navReady && !isPlayerScreen && playerReady && (
+        {/* UPDATED: Also hide on modal screens */}
+        {navReady && !isPlayerScreen && !isModalScreen && playerReady && (
           <View style={styles.floatingPlayerWrapper}>
             <FloatingPlayer playerReady={playerReady} />
           </View>
@@ -267,6 +268,13 @@ export default function RootLayout() {
 
               <MusicPlayerProvider>
                 <PlayerProvider playerReady={playerReady}>
+                  
+                  {/* 
+                    NEW: HomePreloader — fetches all home data at app startup
+                    and populates HomeStore. Home screen reads from store instantly.
+                  */}
+                  <HomePreloader />
+                  
                   <AppShell
                     fontsLoaded={fontsLoaded}
                     navReady={navReady}

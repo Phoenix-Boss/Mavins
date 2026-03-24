@@ -1,23 +1,23 @@
+// Updated: components/sections/BiggestHitsSection.tsx
 /**
- * BiggestHitsSection
- *
- * Displays top charts data from Supabase in a 2x3 grid (2 rows, 3 columns)
+ * BiggestHitsSection — Store-First Version
+ * 
+ * Receives data from parent (HomeStore via index.tsx).
+ * No internal data fetching, no loading states.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import {
   View,
   Text,
-  ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
   Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useTopCharts } from "../../hooks/useTopCharts";
 import { AlbumCard } from "../cards/AlbumCard";
 import { SectionHeader } from "../common/SectionHeader";
-import type { ChartItem } from "../../hooks/useTopCharts";
+import type { Song } from "@/store/home";
 
 const { width } = Dimensions.get("window");
 const COLORS = {
@@ -39,7 +39,7 @@ function formatViews(viewCount: number): string {
   return String(viewCount);
 }
 
-// Fisher-Yates shuffle algorithm
+// Fisher-Yates shuffle
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -49,88 +49,43 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-export const BiggestHitsSection = () => {
-  const { data, loading, error, refetch } = useTopCharts("top50");
-  const [shuffleKey, setShuffleKey] = useState(0);
+interface BiggestHitsSectionProps {
+  data: Song[];
+}
 
-  // Shuffle on every render by including shuffleKey in dependencies
+export const BiggestHitsSection = ({ data }: BiggestHitsSectionProps) => {
+  // Shuffle and take 6 items
   const displayItems = useMemo(() => {
-    if (!data || data.length === 0) return [];
+    if (!data?.length) return [];
     const shuffled = shuffleArray(data);
     return shuffled.slice(0, 6);
-  }, [data, shuffleKey]);
+  }, [data]);
 
   // Split into 2 rows with 3 columns each
   const topRow = displayItems.slice(0, 3);
   const bottomRow = displayItems.slice(3, 6);
 
-  // ── Loading ───────────────────────────────
-  if (loading) {
-    return (
-      <View style={styles.section}>
-        <SectionHeader title="Biggest Hits" showPlayAll />
-        <View style={styles.centeredBox}>
-          <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading charts…</Text>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Error ─────────────────────────────────
-  if (error) {
-    return (
-      <View style={styles.section}>
-        <SectionHeader title="Biggest Hits" showPlayAll />
-        <View style={styles.centeredBox}>
-          <Ionicons
-            name="cloud-offline-outline"
-            size={32}
-            color={COLORS.danger}
-          />
-          <Text style={styles.errorText}>Charts unavailable</Text>
-          <Text style={styles.subtleText}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
-            <Ionicons name="refresh" size={14} color={COLORS.goldPrimary} />
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Empty ─────────────────────────────────
+  // Empty state
   if (!displayItems.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Biggest Hits" showPlayAll />
-        <View style={styles.centeredBox}>
-          <Ionicons
-            name="musical-note-outline"
-            size={32}
-            color={COLORS.textTertiary}
-          />
-          <Text style={styles.subtleText}>No charts available</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={refetch}>
-            <Text style={styles.retryText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
+        <View style={styles.emptyContainer} />
       </View>
     );
   }
 
-  // ── Success: 2 Rows × 3 Columns Grid ───────────────────────────────
   return (
     <View style={styles.section}>
       <SectionHeader title="Biggest Hits" showPlayAll />
       <View style={styles.gridContainer}>
         {/* Top Row - Items 0, 1, 2 */}
         <View style={styles.row}>
-          {topRow.map((item: ChartItem, index: number) => (
+          {topRow.map((item, index) => (
             <View key={`top-${item.id}-${index}`} style={styles.gridItem}>
               <AlbumCard
                 item={{
-                  id: item.videoId,
+                  id: item.videoId || item.id,
                   title: item.title,
                   artist: item.artist,
                   thumbnail: item.thumbnail,
@@ -145,11 +100,11 @@ export const BiggestHitsSection = () => {
 
         {/* Bottom Row - Items 3, 4, 5 */}
         <View style={styles.row}>
-          {bottomRow.map((item: ChartItem, index: number) => (
+          {bottomRow.map((item, index) => (
             <View key={`bottom-${item.id}-${index}`} style={styles.gridItem}>
               <AlbumCard
                 item={{
-                  id: item.videoId,
+                  id: item.videoId || item.id,
                   title: item.title,
                   artist: item.artist,
                   thumbnail: item.thumbnail,
@@ -184,39 +139,7 @@ const styles = StyleSheet.create({
   gridItem: {
     width: width / 3,
   },
-  centeredBox: {
-    padding: 36,
-    alignItems: "center",
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    marginHorizontal: 16,
-    gap: 8,
-  },
-  errorText: {
-    color: COLORS.danger,
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  subtleText: {
-    color: COLORS.textTertiary,
-    fontSize: 12,
-    textAlign: "center",
-  },
-  retryButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: COLORS.goldPrimary + "20",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
-    gap: 6,
-  },
-  retryText: {
-    color: COLORS.goldPrimary,
-    fontSize: 12,
-    fontWeight: "600",
+  emptyContainer: {
+    height: 120,
   },
 });

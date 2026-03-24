@@ -1,18 +1,13 @@
+// Updated: app/(tabs)/index.tsx
 /**
- * Mavin Player — Home Screen
+ * Mavin Player — Home Screen (Store-First Instant Render)
  *
- * All intended approaches incorporated:
- *
- * 1. Search bar → pushes to /(tabs)/search (the full search screen)
- * 2. Notification icon → /(modals)/notifications
- * 4. Pull-to-refresh → invalidates TanStack Query cache AND clears
- *    device cache for all home section list keys so hooks re-fetch
- * 5. Categories row commented out cleanly (re-enable by uncommenting)
- * 6. Watermark pulse animation
- * 7. SectionErrorBoundary wraps every section — one crash never takes
- *    down the whole screen
- * 8. top10ExcludedIds dedup — songs already shown above are excluded
- *    from Top 10 This Month
+ * CHANGES:
+ * 1. Reads ALL data from HomeStore — instant render, no waiting
+ * 2. NO data fetching hooks in this component
+ * 3. Sections receive data via props from store
+ * 4. Background refetch handled by HomePreloader in root layout
+ * 5. Pull-to-refresh triggers store update via invalidate + refetch
  */
 
 import React, {
@@ -20,7 +15,6 @@ import React, {
   useEffect,
   useState,
   useCallback,
-  useMemo,
 } from "react";
 import {
   View,
@@ -29,7 +23,6 @@ import {
   Animated,
   RefreshControl,
   StyleSheet,
-  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -37,12 +30,7 @@ import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
 import { queryClient } from "@/libs/supabase";
-import { cache } from "@/libs/cache";
-
-// ── Hooks for dedup ───────────────────────────────────────────────────────────
-import { useTrending }      from "@/hooks/useTrending";
-import { useTopCharts }     from "@/hooks/useTopCharts";
-import { usePopularChoice } from "@/hooks/usePopularChoice";
+import { useHomeStore } from "@/store/home";
 
 // ── Section components ────────────────────────────────────────────────────────
 import { TrendingNowSection }   from "@/components/sections/TrendingNowSection";
@@ -62,53 +50,16 @@ import { NewReleasesSection }   from "@/components/sections/NewReleasesSection";
 const COLORS = {
   background:        "#000000",
   surface:           "#121212",
-  surfaceLight:      "#1F1F1F",
-  surfaceDark:       "#0A0A0A",
   goldPrimary:       "#D4AF37",
-  goldShiny:         "#FFD700",
-  goldRich:          "#BF9B30",
   goldShimmer:       "#E6C16A",
-  goldBronze:        "#8C6F0E",
-  goldMuted:         "#C9A96A",
   text:              "#FFFFFF",
   textSecondary:     "#B3B3B3",
-  textTertiary:      "#808080",
-  textQuaternary:    "#666666",
-  border:            "#333333",
-  borderLight:       "#444444",
-  success:           "#22C55E",
-  warning:           "#F59E0B",
-  danger:            "#EF4444",
   searchBackground:  "#1A1A1A",
   searchPlaceholder: "#666666",
-  liveTag:           "#3B82F6",
+  danger:            "#EF4444",
 };
 
-/**
- * Home section device-cache keys to bust on pull-to-refresh.
- * These match the LIST_KEY_PREFIXES routing in libs/cache/index.ts.
- */
-const HOME_CACHE_KEYS = [
-  "trending:v1",
-  "charts:top50",
-  "popular:peoples_choice",
-  "editor:picks",
-  "covers:throwbacks:v6",
-  "music:newreleases:v2",
-  "mixes:create:v4",
-  "top10:month",
-  "podcasts:featured",
-  "radio:stations",
-  "music:channels",
-] as const;
-
-// ── Top categories — disabled until further notice ────────────────────────────
-// const TOP_CATEGORIES = [
-//   "Hits", "Mixes", "Charts", "Genres",
-//   "Workout", "Chill", "Energize", "Feel Good", "Focus", "Party",
-// ];
-
-// ─── Error boundary ───────────────────────────────────────────────────────────
+// ─── Error boundary ─────────────────────────────────────────────────────────--
 
 class SectionErrorBoundary extends React.Component<
   { children: React.ReactNode; sectionName: string },
@@ -153,30 +104,24 @@ export default function HomeScreen() {
   const router  = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
 
-  // ── Dedup hooks (same cache as the sections — no extra network calls) ────────
-  const { allData: trendingAllData } = useTrending();
-  const { data: biggestHitsData }    = useTopCharts("top50");
-  const { data: peoplesChoiceData }  = usePopularChoice({ shuffle: false });
+  // ── Read ALL data from store — INSTANT, no loading, no hooks ────────────────
+  const {
+    trending,
+    biggestHits,
+    peoplesChoice,
+    top10Month,
+    mavinsBest,
+    newReleases,
+    throwbacks,
+    mixes,
+    channels,
+    podcasts,
+    radioStations,
+    getExcludedIdsForTop10,
+  } = useHomeStore();
 
-  /**
-   * IDs of every song already rendered above Top10MonthSection.
-   * Passed down so Top10 can exclude duplicates.
-   */
-  const top10ExcludedIds = useMemo(() => {
-    const ids = new Set<string>();
-    trendingAllData?.forEach((item) => {
-      if (item.id)      ids.add(item.id);
-      if (item.videoId) ids.add(item.videoId);
-    });
-    biggestHitsData?.forEach((item) => {
-      if (item.id)      ids.add(item.id);
-      if (item.videoId) ids.add(item.videoId);
-    });
-    peoplesChoiceData?.forEach((item) => {
-      if (item.id) ids.add(item.id);
-    });
-    return Array.from(ids);
-  }, [trendingAllData, biggestHitsData, peoplesChoiceData]);
+  // Pre-computed excluded IDs for Top 10 deduplication
+  const top10ExcludedIds = getExcludedIdsForTop10();
 
   // ── Watermark pulse ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -197,21 +142,11 @@ export default function HomeScreen() {
   }, []);
 
   // ── Pull-to-refresh ──────────────────────────────────────────────────────────
-  /**
-   * Busts both layers:
-   *   1. TanStack Query cache (supabase-backed hooks)
-   *   2. Device cache for all home section list keys
-   *      so hooks skip L1 on the next mount and re-fetch from Supabase
-   */
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([
-        // Invalidate TanStack Query (supabase hooks)
-        queryClient.invalidateQueries({ queryKey: ["homeSection"] }),
-        // Bust device cache for all home list keys
-        ...HOME_CACHE_KEYS.map((key) => cache.delete(key).catch(() => {})),
-      ]);
+      // Invalidate all home queries — HomePreloader will refetch and update store
+      await queryClient.invalidateQueries({ queryKey: ['home'] });
     } catch (e) {
       console.warn("[HomeScreen] refresh error:", e);
     } finally {
@@ -219,7 +154,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // ── Navigation handlers ──────────────────────────────────────────────────────
+  // ── Navigation ───────────────────────────────────────────────────────────────
   const handleSearchPress = () => {
     triggerHaptic();
     router.push("/(tabs)/search");
@@ -234,8 +169,6 @@ export default function HomeScreen() {
   const CombinedHeader = () => (
     <View style={{ backgroundColor: COLORS.background }}>
       <View style={[styles.header, { paddingTop: top + 10 }]}>
-
-        {/* Search bar — tappable, navigates to full search screen */}
         <TouchableOpacity
           style={styles.searchContainer}
           onPress={handleSearchPress}
@@ -252,13 +185,11 @@ export default function HomeScreen() {
           </Text>
         </TouchableOpacity>
 
-        {/* Icon row */}
         <View style={styles.headerRight}>
           <TouchableOpacity
             onPress={handleNotificationsPress}
             style={styles.iconButton}
             hitSlop={12}
-            accessibilityLabel="Notifications"
           >
             <Ionicons
               name="notifications-outline"
@@ -266,48 +197,17 @@ export default function HomeScreen() {
               color={COLORS.goldShimmer}
             />
           </TouchableOpacity>
-
         </View>
       </View>
-
-      {/*
-        ── Categories row — uncomment to re-enable ──────────────────────────
-        <View style={styles.categoriesContainer}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoriesScrollContent}
-          >
-            {TOP_CATEGORIES.map((category) => (
-              <TouchableOpacity
-                key={category}
-                style={[
-                  styles.categoryButton,
-                  selectedTab === category && styles.categoryButtonActive,
-                ]}
-                onPress={() => { triggerHaptic(); setSelectedTab(category); }}
-              >
-                <Text
-                  style={[
-                    styles.categoryText,
-                    selectedTab === category && styles.categoryTextActive,
-                  ]}
-                >
-                  {category}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      */}
     </View>
   );
 
   // ── Render ───────────────────────────────────────────────────────────────────
+  // ALL data comes from store — sections render instantly with pre-populated data
   return (
     <View style={styles.container}>
-
-      {/* Watermark — sits behind everything, pointer events disabled */}
+      
+      {/* Watermark */}
       <Animated.View pointerEvents="none" style={styles.watermarkWrapper}>
         <Animated.Image
           source={require("@/assets/images/mavins.png")}
@@ -333,61 +233,49 @@ export default function HomeScreen() {
         contentContainerStyle={styles.scrollContent}
       >
 
+        {/* Sections receive data directly from store via props */}
         <SectionErrorBoundary sectionName="Trending Now">
-          <TrendingNowSection />
+          <TrendingNowSection data={trending} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Biggest Hits">
-          <BiggestHitsSection />
+          <BiggestHitsSection data={biggestHits} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Create Mix">
-          <CreateMixSection />
+          <CreateMixSection data={mixes} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Music Channels">
-          <MusicChannelsSection />
+          <MusicChannelsSection data={channels} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="People's Choice">
-          <PeoplesChoiceSection />
+          <PeoplesChoiceSection data={peoplesChoice} />
         </SectionErrorBoundary>
 
-        {/*
-          All IDs from trending pool + biggest hits + peoples choice are
-          excluded so Top 10 This Month never duplicates a visible song.
-        */}
         <SectionErrorBoundary sectionName="Top 10 This Month">
-          <Top10MonthSection excludedIds={top10ExcludedIds} />
+          <Top10MonthSection data={top10Month} excludedIds={top10ExcludedIds} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Mavin's Best">
-          <MavinsBestSection />
+          <MavinsBestSection data={mavinsBest} />
         </SectionErrorBoundary>
 
-        {/*
-          FeaturedSection disabled — same data source as MavinsBestSection.
-          Re-enable once Featured has its own dedicated Supabase data.
-
-          <SectionErrorBoundary sectionName="Featured">
-            <FeaturedSection />
-          </SectionErrorBoundary>
-        */}
-
         <SectionErrorBoundary sectionName="Podcasts">
-          <PodcastSection />
+          <PodcastSection data={podcasts} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Radio FM">
-          <RadioFMSection />
+          <RadioFMSection data={radioStations} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Throwbacks">
-          <ThrowbacksSection />
+          <ThrowbacksSection data={throwbacks} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="New Releases">
-          <NewReleasesSection />
+          <NewReleasesSection data={newReleases} />
         </SectionErrorBoundary>
 
         <View style={styles.bottomSpacing} />
@@ -405,7 +293,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
 
-  // ── Watermark ──────────────────────────────────────────────────────────────
   watermarkWrapper: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
@@ -418,7 +305,6 @@ const styles = StyleSheet.create({
     opacity: 0.08,
   },
 
-  // ── Header ─────────────────────────────────────────────────────────────────
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -456,49 +342,14 @@ const styles = StyleSheet.create({
     padding: 4,
   },
 
-  // ── Categories (re-enable later) ───────────────────────────────────────────
-  // categoriesContainer: {
-  //   backgroundColor: COLORS.background,
-  //   paddingVertical: 12,
-  //   borderBottomWidth: 1,
-  //   borderBottomColor: COLORS.border,
-  // },
-  // categoriesScrollContent: {
-  //   paddingHorizontal: 16,
-  // },
-  // categoryButton: {
-  //   paddingHorizontal: 14,
-  //   paddingVertical: 10,
-  //   borderRadius: 20,
-  //   marginRight: 10,
-  //   backgroundColor: COLORS.surface,
-  //   minHeight: 40,
-  // },
-  // categoryButtonActive: {
-  //   backgroundColor: `${COLORS.goldPrimary}20`,
-  //   borderWidth: 1,
-  //   borderColor: COLORS.goldPrimary,
-  // },
-  // categoryText: {
-  //   fontSize: 12,
-  //   fontWeight: "500",
-  //   color: COLORS.textTertiary,
-  // },
-  // categoryTextActive: {
-  //   color: COLORS.goldPrimary,
-  //   fontWeight: "600",
-  // },
-
-  // ── Content ────────────────────────────────────────────────────────────────
   scrollContent: {
     paddingHorizontal: 16,
     zIndex: 10,
   },
   bottomSpacing: {
-    height: 140,  // FloatingPlayer (64) + tab bar (~56) + gap — prevents last section being hidden
+    height: 140,
   },
 
-  // ── Error boundary ─────────────────────────────────────────────────────────
   errorContainer: {
     padding: 20,
     marginVertical: 10,

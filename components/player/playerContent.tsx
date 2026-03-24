@@ -6,21 +6,14 @@
  *
  * 1. No-track state renders the full UI, not a spinner or error.
  *    `displayTrack` = useActiveTrack() ?? usePlayerStore().currentTrack
- *    - If a track was ever played, the last-known metadata shows instantly.
- *    - If nothing was ever played, "—" placeholders fill the title/artist.
- *    - The artwork area uses a SkeletonLoader pulse while there is no real track.
- *    - All nav buttons (lyrics, queue, related, equalizer, etc.) remain tappable.
  *
- * 2. PlayerScreen no longer waits for a track before rendering — it just waits
- *    for the native module. This eliminates the "No track loaded" error screen.
+ * 2. Video/Song segment switching properly handles audio:
+ *    - Video mode with muxed audio: TrackPlayer pauses, video provides audio
+ *    - Song mode: Video pauses, TrackPlayer resumes
  *
- * 3. artworkForColors derived from displayTrack so gradient appears immediately
- *    when the last-played track is in the store.
+ * 3. LYRICS button is grayed out when no videoId exists (no lyrics lookup possible).
  *
- * 4. SkeletonLoader replaces the ActivityIndicator for the loading state.
- *
- * All other logic (instant play/pause, video segments, pan-to-dismiss,
- * repeat / shuffle / favourite, animated view counter, etc.) is preserved.
+ * 4. All nav buttons remain tappable even when no track loaded.
  */
 
 import React, {
@@ -250,25 +243,19 @@ function PlayerContentInner({
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // TrackPlayer hooks — safe: only called when playerReady=true
+  // TrackPlayer hooks
   const activeTrack = useActiveTrack();
   const progress    = useProgress(250);
 
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
 
   // ── Display track: real track or last-known from store ───────────────────
-  // This is what the UI renders. It means:
-  //   - On first open with no track ever played → all fields are undefined → "—"
-  //   - On open with a track in the store → last track metadata shown instantly
-  //   - Once useActiveTrack() fires → switches to live track seamlessly
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
 
   const setStoreIsPlaying  = usePlayerStore((s: PS) => s.setIsPlaying);
   const storeIsPlaying     = usePlayerStore((s: PS) => s.isPlaying);
-  // Build a displayTrack that has the same shape as activeTrack.
-  // When activeTrack exists, use it directly. Otherwise construct a fake
-  // Track-shaped object from the store so field access is uniform.
+
   const displayTrack = useMemo(() => {
     if (activeTrack) return activeTrack as any;
     if (storeCurrentTrack) {
@@ -284,7 +271,6 @@ function PlayerContentInner({
     }
     return null;
   }, [activeTrack, storeCurrentTrack]);
-
 
   const dumbModeRef    = useRef(false);
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -319,6 +305,9 @@ function PlayerContentInner({
   const uploaderUrl: string | undefined = track?.uploaderUrl as string | undefined;
   const videoId:     string | undefined = track?.videoId     as string | undefined;
 
+  // Check if lyrics are possible (need videoId for lookup)
+  const canShowLyrics = !!videoId;
+
   // Counter animation
   const [counterTarget, setCounterTarget] = useState(0);
   useEffect(() => {
@@ -338,24 +327,28 @@ function PlayerContentInner({
   const videoOwnsAudio    = useRef(false);
 
   const videoPlayer = useVideoPlayer(activeVideoUrl ?? null, (p) => {
-    p.muted  = !muxedVideoUrl;
+    p.muted  = !muxedVideoUrl; // Only unmute if we have muxed audio
     p.loop   = false;
     p.pause();
   });
 
+  // Sync video playback with app play state
   useEffect(() => {
     if (!videoPlayer || activeSegment !== "video") return;
-    if (muxedVideoUrl) {
-      if (videoOwnsAudio.current) {
-        if (contextIsPlaying) videoPlayer.play();
-        else videoPlayer.pause();
-      }
-    } else {
+    
+    if (muxedVideoUrl && videoOwnsAudio.current) {
+      // Muxed video has its own audio - sync play/pause
+      if (contextIsPlaying) videoPlayer.play();
+      else videoPlayer.pause();
+    } else if (!muxedVideoUrl) {
+      // Non-muxed: video is muted, TrackPlayer provides audio
+      // Just sync visual playback
       if (contextIsPlaying) videoPlayer.play();
       else videoPlayer.pause();
     }
   }, [contextIsPlaying, activeSegment, videoPlayer, muxedVideoUrl]);
 
+  // Handle video ready status and seeking
   useEffect(() => {
     if (!videoPlayer) return;
     const sub = videoPlayer.addListener("statusChange", ({ status }) => {
@@ -364,8 +357,10 @@ function PlayerContentInner({
         if (pendingSeek.current !== null) {
           videoPlayer.currentTime = pendingSeek.current;
           pendingSeek.current = null;
+          
           if (activeSegment === "video" && contextIsPlaying) {
             if (muxedVideoUrl) {
+              // Muxed video: video provides audio, pause TrackPlayer
               videoOwnsAudio.current = true;
               TrackPlayer.pause().catch(() => {});
             }
@@ -385,6 +380,7 @@ function PlayerContentInner({
     opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
   }));
 
+  // Handle segment switching between Song and Video
   const handleSegmentPress = useCallback(
     (seg: "song" | "video") => {
       if (seg === "video" && !hasVideo) return;
@@ -394,10 +390,12 @@ function PlayerContentInner({
 
       if (seg === "video" && videoPlayer) {
         if (muxedVideoUrl) {
+          // Switching to muxed video: video will provide audio
           TrackPlayer.getProgress().then(({ position }) => {
             if (videoPlayerReady.current) {
               videoPlayer.currentTime = position;
               if (contextIsPlaying) {
+                // Video takes over audio
                 videoOwnsAudio.current = true;
                 TrackPlayer.pause().catch(() => {});
                 videoPlayer.play();
@@ -407,6 +405,7 @@ function PlayerContentInner({
             }
           }).catch(() => {});
         } else {
+          // Non-muxed video: video is visual only, TrackPlayer continues audio
           const seekTo = progress.position;
           if (videoPlayerReady.current) {
             videoPlayer.currentTime = seekTo;
@@ -416,8 +415,10 @@ function PlayerContentInner({
           }
         }
       } else if (seg === "song" && videoPlayer) {
+        // Switching back to song mode
         videoPlayer.pause();
-        if (muxedVideoUrl) {
+        if (muxedVideoUrl && videoOwnsAudio.current) {
+          // Resume TrackPlayer audio since video no longer provides it
           videoOwnsAudio.current = false;
           TrackPlayer.play().catch(() => {});
         }
@@ -426,6 +427,7 @@ function PlayerContentInner({
     [hasVideo, videoPlayer, videoProgress, progress.position, contextIsPlaying, muxedVideoUrl]
   );
 
+  // Reset video state when track changes
   useEffect(() => {
     if (videoPlayer) videoPlayer.pause();
     if (videoOwnsAudio.current) {
@@ -444,7 +446,7 @@ function PlayerContentInner({
   const [activeBottomTab, setActiveBottomTab] = useState<"upnext" | "lyrics" | "related">("upnext");
   useEffect(() => { setActiveBottomTab("upnext"); }, [activeTrack?.id]);
 
-  // Gradient colors — use displayTrack artwork so store-cached track shows gradient
+  // Gradient colors
   const artworkForColors = typeof displayTrack?.artwork === "string" ? displayTrack.artwork : null;
   const { imageColors }  = useImageColors(artworkForColors);
   const gradientColors   = useMemo(() => {
@@ -516,17 +518,25 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // ── Instant play/pause ───────────────────────────────────────────────────
+  // Instant play/pause
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
     dumbModeRef.current = true;
     const nextState = !storeIsPlaying;
     setStoreIsPlaying(nextState);
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    if (activeSegment === "video" && muxedVideoUrl && videoOwnsAudio.current && videoPlayer) {
-      if (nextState) videoPlayer.play();
-      else videoPlayer.pause();
+    
+    // Handle video audio handoff
+    if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+      if (nextState) {
+        videoOwnsAudio.current = true;
+        TrackPlayer.pause().catch(() => {});
+        videoPlayer.play();
+      } else {
+        videoPlayer.pause();
+      }
     }
+    
     requestAnimationFrame(() => { togglePlayPause(); });
     syncTimeoutRef.current = setTimeout(() => {
       dumbModeRef.current = false;
@@ -560,6 +570,7 @@ function PlayerContentInner({
   const handleSeeAll     = () => { triggerHaptic(); router.push("/(modals)/queue"); };
 
   const handleLyrics = () => {
+    if (!canShowLyrics) return; // Disabled if no videoId
     triggerHaptic();
     router.push({
       pathname: "/(modals)/lyrics",
@@ -608,9 +619,6 @@ function PlayerContentInner({
       },
     });
   }, [router, displayTrack, track, uploaderUrl, videoId]);
-
-  // ── Artwork area: if no displayTrack yet, show a skeleton pulse ──────────
-  const artworkSize = SCREEN_WIDTH * 0.85;
 
   return (
     <GestureDetector gesture={panGesture}>
@@ -663,7 +671,6 @@ function PlayerContentInner({
 
             {/* ARTWORK / VIDEO */}
             <View style={styles.artworkContainer}>
-              {/* Always show artwork — falls back to mavins.png when no track */}
               <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
                 <Image
                   source={getImageSource(displayTrack?.artwork)}
@@ -695,7 +702,6 @@ function PlayerContentInner({
                   style={styles.title}
                 />
               ) : (
-                // No title yet — skeleton pill
                 <View style={{ alignItems: "center", marginBottom: 4 }}>
                   <SkeletonPulse width={180} height={20} borderRadius={6} />
                 </View>
@@ -874,14 +880,21 @@ function PlayerContentInner({
                   UP NEXT
                 </Text>
               </TouchableOpacity>
+              
+              {/* LYRICS button - grayed out if no videoId */}
               <TouchableOpacity
-                onPress={() => { setActiveBottomTab("lyrics"); handleLyrics(); }}
-                activeOpacity={0.7}
+                onPress={canShowLyrics ? () => { setActiveBottomTab("lyrics"); handleLyrics(); } : undefined}
+                activeOpacity={canShowLyrics ? 0.7 : 1}
+                disabled={!canShowLyrics}
               >
-                <Text style={activeBottomTab === "lyrics" ? styles.bottomTabActive : styles.bottomTab}>
+                <Text style={[
+                  activeBottomTab === "lyrics" ? styles.bottomTabActive : styles.bottomTab,
+                  !canShowLyrics && styles.bottomTabDisabled,
+                ]}>
                   LYRICS
                 </Text>
               </TouchableOpacity>
+              
               <TouchableOpacity
                 onPress={() => { setActiveBottomTab("related"); handleRelated(); }}
                 activeOpacity={0.7}
@@ -1047,4 +1060,8 @@ const styles = StyleSheet.create({
   bottomTabs: { flexDirection: "row", justifyContent: "space-around", marginTop: verticalScale(32), paddingBottom: verticalScale(5) },
   bottomTabActive: { color: "#fff", fontSize: moderateScale(13), fontWeight: "600" },
   bottomTab: { color: "rgba(255,255,255,0.5)", fontSize: moderateScale(13) },
+  bottomTabDisabled: { 
+    color: "rgba(255,255,255,0.25)", 
+    fontSize: moderateScale(13),
+  },
 });

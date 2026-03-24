@@ -1,12 +1,6 @@
+// Updated: components/sections/ThrowbacksSection.tsx
 /**
- * ThrowbacksSection
- *
- * Full-width card identical to MavinsBestSection.
- * Cycles through all cached throwback items — shows each one for exactly
- * 12 seconds before fading to the next. Manual skip via top-right button.
- *
- * Interval stability: currentIndex is tracked in a ref so the setInterval
- * callback never becomes stale and the timer never resets mid-cycle.
+ * ThrowbacksSection — Store-First Version
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
@@ -15,7 +9,6 @@ import {
   Text,
   Image,
   TouchableOpacity,
-  ActivityIndicator,
   StyleSheet,
   Dimensions,
   Animated,
@@ -23,18 +16,14 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
-import { useCoverSongs, CoverItem } from "../../hooks/useCoverSongs";
 import { SectionHeader } from "../common/SectionHeader";
-
-// ─── Layout (mirrors MavinsBestSection exactly) ───────────────────────────────
+import type { EditorPick } from "@/store/home";
 
 const { width } = Dimensions.get("window");
 const PARENT_PADDING  = 16;
 const SIDE_GAP        = 8;
 const CARD_VIS_WIDTH  = width - SIDE_GAP * 2;
 const CARD_HEIGHT     = CARD_VIS_WIDTH * 0.68;
-
-// ─── Colors ───────────────────────────────────────────────────────────────────
 
 const COLORS = {
   background:    "#000000",
@@ -46,13 +35,7 @@ const COLORS = {
   text:          "#FFFFFF",
   textSecondary: "#B3B3B3",
   textTertiary:  "#808080",
-  danger:        "#EF4444",
 };
-
-/** Each card is shown for exactly this long before auto-advancing. */
-const DISPLAY_DURATION_MS = 12_000;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatViews(n: number): string {
   if (!n) return "";
@@ -70,57 +53,23 @@ function shuffleArray<T>(arr: T[]): T[] {
   return copy;
 }
 
-// ─── YouTubeThumbnail ─────────────────────────────────────────────────────────
+const DISPLAY_DURATION_MS = 12_000;
 
-interface ThumbnailProps {
-  primary:   string;
-  secondary: string;
-  style:     any;
+interface ThrowbacksSectionProps {
+  data: EditorPick[];
 }
 
-const YouTubeThumbnail = ({ primary, secondary, style }: ThumbnailProps) => {
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => { setAttempt(0); }, [primary]);
-
-  if (attempt >= 2) {
-    return <View style={[style, { backgroundColor: COLORS.surfaceLight }]} />;
-  }
-
-  return (
-    <Image
-      source={{ uri: attempt === 0 ? primary : secondary }}
-      style={style}
-      resizeMode="cover"
-      onError={() => setAttempt(prev => Math.min(prev + 1, 2))}
-    />
-  );
-};
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export const ThrowbacksSection = () => {
-  const { data, loading, error, refetch } = useCoverSongs();
+export const ThrowbacksSection = ({ data }: ThrowbacksSectionProps) => {
   const router = useRouter();
-
-  const [shuffledItems, setShuffledItems] = useState<CoverItem[]>([]);
-  const [currentIndex,  setCurrentIndex]  = useState(0);
-
-  /**
-   * Keep currentIndex in a ref so the interval callback always reads
-   * the latest value without needing to be recreated on every index change.
-   * This is the key fix — the interval is created ONCE and never resets.
-   */
+  const [shuffledItems, setShuffledItems] = useState<EditorPick[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(0);
-  const itemCountRef    = useRef(0);
-  const fadeAnim        = useRef(new Animated.Value(1)).current;
+  const itemCountRef = useRef(0);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
 
-  // Sync ref whenever state changes
-  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
-
-  // Shuffle once when data lands
+  // Shuffle when data changes
   useEffect(() => {
-    if (data.length > 0) {
+    if (data?.length > 0) {
       const shuffled = shuffleArray(data);
       setShuffledItems(shuffled);
       itemCountRef.current = shuffled.length;
@@ -130,7 +79,10 @@ export const ThrowbacksSection = () => {
     }
   }, [data]);
 
-  /** Fade out → swap → fade in. Uses refs so it's always stable. */
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+
   const advanceTo = useCallback((nextIndex: number) => {
     Animated.timing(fadeAnim, {
       toValue:  0,
@@ -147,10 +99,7 @@ export const ThrowbacksSection = () => {
     });
   }, [fadeAnim]);
 
-  /**
-   * Stable interval — created once when shuffledItems first arrives,
-   * never recreated on index changes because it reads from currentIndexRef.
-   */
+  // Auto-advance interval
   useEffect(() => {
     if (shuffledItems.length <= 1) return;
 
@@ -160,10 +109,8 @@ export const ThrowbacksSection = () => {
     }, DISPLAY_DURATION_MS);
 
     return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shuffledItems.length]); // only recreate if list size changes
+  }, [shuffledItems.length, advanceTo]);
 
-  /** Manual skip — advances immediately, interval continues from new position. */
   const handleSkip = useCallback(() => {
     triggerHaptic();
     const next = (currentIndexRef.current + 1) % itemCountRef.current;
@@ -172,60 +119,35 @@ export const ThrowbacksSection = () => {
 
   const featured = shuffledItems[currentIndex] ?? null;
 
-  const handlePlay     = () => { triggerHaptic(); if (featured) router.navigate(`/track/${featured.id}`); };
+  const handlePlay = () => { 
+    triggerHaptic(); 
+    if (featured) router.navigate(`/track/${featured.id}`); 
+  };
   const handleBookmark = () => triggerHaptic();
 
-  // ── Loading ───────────────────────────────────────────────────────────────
-  if (loading) {
+  // Empty state
+  if (!featured) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Throwbacks" showPlayAll />
-        <View style={styles.placeholder}>
-          <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading throwbacks…</Text>
-        </View>
+        <View style={styles.emptyContainer} />
       </View>
     );
   }
 
-  // ── Error ─────────────────────────────────────────────────────────────────
-  if (error) {
-    return (
-      <View style={styles.section}>
-        <SectionHeader title="Throwbacks" showPlayAll />
-        <View style={styles.placeholder}>
-          <Ionicons name="alert-circle-outline" size={28} color={COLORS.danger} />
-          <Text style={styles.errorText}>Could not load throwbacks</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={refetch}>
-            <Ionicons name="refresh" size={13} color={COLORS.goldPrimary} />
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Empty ─────────────────────────────────────────────────────────────────
-  if (!featured) return null;
-
-  // ── Success ───────────────────────────────────────────────────────────────
   return (
     <View style={styles.section}>
       <SectionHeader title="Throwbacks" showPlayAll />
 
       <Animated.View style={[styles.card, { opacity: fadeAnim }]}>
-
-        {/* Cover art with cascading fallback */}
-        <YouTubeThumbnail
-          primary={featured.thumbnail}
-          secondary={featured.thumbnailFallback}
+        <Image
+          source={{ uri: featured.thumbnail }}
           style={StyleSheet.absoluteFillObject}
+          resizeMode="cover"
         />
 
-        {/* Scrim */}
         <View style={styles.scrim} />
 
-        {/* Actions — top right */}
         <View style={styles.actions}>
           <TouchableOpacity style={styles.actionBtn} onPress={handleBookmark} hitSlop={10}>
             <Ionicons name="bookmark-outline" size={20} color={COLORS.goldShimmer} />
@@ -237,26 +159,21 @@ export const ThrowbacksSection = () => {
           )}
         </View>
 
-        {/* Info — bottom left */}
         <View style={styles.info}>
-          <Text style={styles.title}  numberOfLines={1}>{featured.title}</Text>
+          <Text style={styles.title} numberOfLines={1}>{featured.title}</Text>
           <Text style={styles.artist} numberOfLines={1}>{featured.artist}</Text>
           {featured.views > 0 && (
             <Text style={styles.plays}>{formatViews(featured.views)}</Text>
           )}
         </View>
 
-        {/* Play — bottom right */}
         <TouchableOpacity style={styles.playBtn} onPress={handlePlay} activeOpacity={0.85}>
           <Ionicons name="play" size={22} color={COLORS.background} />
         </TouchableOpacity>
-
       </Animated.View>
     </View>
   );
 };
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   section: {
@@ -332,39 +249,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 6,
   },
-  placeholder: {
+  emptyContainer: {
     marginHorizontal: -(PARENT_PADDING - SIDE_GAP),
     height: CARD_HEIGHT,
     borderRadius: 14,
     backgroundColor: COLORS.surfaceLight,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-  },
-  subtleText: {
-    color: COLORS.textTertiary,
-    fontSize: 12,
-  },
-  errorText: {
-    color: COLORS.danger,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  retryBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    backgroundColor: COLORS.goldPrimary + "20",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
-    marginTop: 4,
-  },
-  retryText: {
-    color: COLORS.goldPrimary,
-    fontSize: 12,
-    fontWeight: "600",
   },
 });

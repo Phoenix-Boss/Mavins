@@ -1,8 +1,6 @@
+// Updated: components/sections/MusicChannelsSection.tsx
 /**
- * MusicChannelsSection
- *
- * Displays artists as circular "Music Channels" - horizontal scroll
- * Shows: circular thumbnail + artist name only
+ * MusicChannelsSection — Store-First Version
  */
 
 import React, { useCallback } from "react";
@@ -10,19 +8,18 @@ import {
   View,
   Text,
   ScrollView,
-  ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
   Image,
   Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useMusicChannels, MusicChannelItem } from "../../hooks/useMusicChannels";
 import { SectionHeader } from "../common/SectionHeader";
 import { useRouter } from "expo-router";
+import type { Channel } from "@/store/home";
 
 const { width } = Dimensions.get("window");
-const ITEM_SIZE = 80; // Circle size
+const ITEM_SIZE = 80;
 const COLORS = {
   background: "#000000",
   surface: "#121212",
@@ -30,65 +27,29 @@ const COLORS = {
   text: "#FFFFFF",
   textSecondary: "#B3B3B3",
   textTertiary: "#808080",
-  danger: "#EF4444",
 };
 
-export const MusicChannelsSection = () => {
-  const { data, loading, error, refetch } = useMusicChannels();
-  const router = useRouter();
+interface MusicChannelsSectionProps {
+  data: Channel[];
+}
 
-  const handleRetry = useCallback(() => {
-    refetch();
-  }, [refetch]);
+export const MusicChannelsSection = ({ data }: MusicChannelsSectionProps) => {
+  const router = useRouter();
 
   const handleArtistPress = useCallback((artistId: string) => {
     router.push(`/artist/${artistId}`);
   }, [router]);
 
-  // ── Loading ───────────────────────────────
-  if (loading) {
+  // Empty state
+  if (!data?.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Music Channels" showPlayAll={false} />
-        <View style={styles.centeredBox}>
-          <ActivityIndicator size="large" color={COLORS.goldPrimary} />
-          <Text style={styles.subtleText}>Loading...</Text>
-        </View>
+        <View style={styles.emptyContainer} />
       </View>
     );
   }
 
-  // ── Error ─────────────────────────────────
-  if (error) {
-    return (
-      <View style={styles.section}>
-        <SectionHeader title="Music Channels" showPlayAll={false} />
-        <View style={styles.centeredBox}>
-          <Ionicons name="alert-circle-outline" size={28} color={COLORS.danger} />
-          <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Empty ─────────────────────────────────
-  if (!data.length) {
-    return (
-      <View style={styles.section}>
-        <SectionHeader title="Music Channels" showPlayAll={false} />
-        <View style={styles.centeredBox}>
-          <Text style={styles.subtleText}>No channels</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-            <Text style={styles.retryText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── Success: Horizontal Scroll with Circles ───────────────────────────────
   return (
     <View style={styles.section}>
       <SectionHeader title="Music Channels" showPlayAll={false} />
@@ -97,11 +58,11 @@ export const MusicChannelsSection = () => {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.horizontalScroll}
       >
-        {data.map((item: MusicChannelItem, index: number) => (
+        {data.map((item, index) => (
           <TouchableOpacity
             key={`channel-${item.id}-${index}`}
             style={styles.channelItem}
-            onPress={() => handleArtistPress(item.artistId)}
+            onPress={() => handleArtistPress(item.artistId || item.id)}
             activeOpacity={0.7}
           >
             <View style={styles.circleContainer}>
@@ -117,7 +78,7 @@ export const MusicChannelsSection = () => {
               )}
             </View>
             <Text style={styles.artistName} numberOfLines={1} ellipsizeMode="tail">
-              {item.title}
+              {item.title || item.name}
             </Text>
           </TouchableOpacity>
         ))}
@@ -167,29 +128,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     width: ITEM_SIZE,
   },
-  centeredBox: {
-    padding: 24,
-    alignItems: "center",
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    marginHorizontal: 16,
-    gap: 8,
-  },
-  subtleText: {
-    color: COLORS.textTertiary,
-    fontSize: 12,
-  },
-  retryButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    backgroundColor: COLORS.goldPrimary + "20",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
-  },
-  retryText: {
-    color: COLORS.goldPrimary,
-    fontSize: 12,
-    fontWeight: "600",
+  emptyContainer: {
+    height: 100,
   },
 });

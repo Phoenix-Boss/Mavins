@@ -1,37 +1,34 @@
+// Updated: components/sections/TrendingNowSection.tsx
 /**
- * TrendingNowSection
- *
- * Changed from original:
- *   - Passes full `item` (TrendingItem extends Song) to TrendingSongRow
- *     instead of a reshaped object that dropped url/videoId
- *   - Passes `allItems={unique}` so TrendingSongRow can build the queue
- *     for TrackPlayer skip-forward/back to work correctly
+ * TrendingNowSection — Store-First Version
+ * 
+ * Receives data from parent (HomeStore via index.tsx).
+ * No internal data fetching, no loading states.
+ * Renders instantly with cached data.
  */
 
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { useTrending, TrendingItem } from '@/hooks/useTrending';
 import { TrendingSongRow } from '@/components/cards/TrendingSongRow';
 import { SectionHeader } from '@/components/common/SectionHeader';
-import { SkeletonLoader } from '@/components/common/SkeletonLoader';
+import type { Song } from '@/store/home';
 
-export const TrendingNowSection = () => {
-  const { data, loading, error } = useTrending();
+interface TrendingNowSectionProps {
+  data: Song[];
+}
 
-  if (loading) {
+export const TrendingNowSection = ({ data }: TrendingNowSectionProps) => {
+  // Empty state — section handles gracefully
+  if (!data?.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Trending Now" showPlayAll />
-        <View style={styles.list}>
-          {[1, 2, 3].map(i => (
-            <SkeletonLoader key={`trending-skeleton-${i}`} type="trending" />
-          ))}
+        <View style={styles.emptyContainer}>
+          {/* Silent empty — no text to avoid layout shift */}
         </View>
       </View>
     );
   }
-
-  if (error || !data.length) return null;
 
   // Remove duplicates within this section
   const unique = data.filter(
@@ -42,11 +39,11 @@ export const TrendingNowSection = () => {
     <View style={styles.section}>
       <SectionHeader title="Trending Now" showPlayAll />
       <View style={styles.list}>
-        {unique.map((item: TrendingItem, index: number) => (
+        {unique.map((item, index) => (
           <TrendingSongRow
             key={`trending-now-${item.id}-${index}`}
             item={item}
-            allItems={unique}   // ← full section list for queue context
+            allItems={unique}
             index={index}
           />
         ))}
@@ -62,5 +59,8 @@ const styles = StyleSheet.create({
   list: {
     gap: 10,
     paddingHorizontal: 16,
+  },
+  emptyContainer: {
+    height: 60,
   },
 });
