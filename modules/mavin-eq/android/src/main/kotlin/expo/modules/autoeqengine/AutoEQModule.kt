@@ -62,13 +62,19 @@ class AutoEQModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AutoEQModule")
 
-    // Simple metadata props
-    Prop("version") { "1.0.0" }
-    Prop("bandCount") { BAND_COUNT }
-    Prop("isSupported") { Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q }
-    Prop("sampleRate") { sampleRate }
-    Prop("isActive") { dp != null && isEnabled }
-    Prop("preamp") { preampDb }
+    // Read-only metadata.
+    // NOTE: `Prop` is only valid inside ViewManager definitions, not Module.
+    // Static values go in Constants; instance-state values use Function (synchronous).
+    Constants(
+      "version"     to "1.0.0",
+      "bandCount"   to BAND_COUNT,
+      "isSupported" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+    )
+
+    // Dynamic state: readable synchronously from JS via NativeModules.AutoEQModule.getSampleRate() etc.
+    Function("getSampleRate") { sampleRate }
+    Function("getIsActive")   { dp != null && isEnabled }
+    Function("getPreamp")     { preampDb }
 
     /**
      * setupEQ(audioSessionId: int, sampleRateHz?: int)
