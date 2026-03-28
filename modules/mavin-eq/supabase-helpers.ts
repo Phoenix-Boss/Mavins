@@ -1,15 +1,14 @@
 /**
- * supabase-helpers.ts — mavin-eq
+ * supabase-helpers.ts — mavin-eq (FREE VERSION - No Pro Required)
  *
- * FIX: claimEqMinutesForPlayback no longer calls AutoEQNative.setupEQ.
- *
- * The old version called setupEQ here AND in useEqualizer.setup(), causing a
- * double-attach: the first attach would call releaseInternal() which tore down
- * any existing DynamicsProcessing, then the second attach would hit a stale or
- * already-released session. Under the mixer-first architecture the EQ is already
- * attached at initMixerEQ() time. claimEqMinutesForPlayback is now purely a
- * Supabase billing function — it checks subscription, deducts minutes, and
- * returns true/false. The caller (useEqualizer.setup) then calls setEnabled(true).
+ * REMOVED:
+ * - Pro subscription checks (is_pro, pro_ends_at)
+ * - EQ minutes billing system
+ * - Authentication requirements for EQ usage
+ * 
+ * KEPT:
+ * - Preset saving/loading (optional, only if user is logged in)
+ * - Profile functions for other features
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -39,82 +38,44 @@ export async function fetchUserProfile(
 }
 
 export function isProActive(profile: ProfileRow): boolean {
+  // Kept for backwards compatibility with other features
   if (!profile.is_pro) return false;
   if (!profile.pro_ends_at) return true;
   return new Date(profile.pro_ends_at) > new Date();
 }
 
-// ── EQ minutes ────────────────────────────────────────────────────────────────
+// ── EQ minutes (DEPRECATED - kept for API compatibility, always returns true) ────────────────────────────────────────────────────────────────
 
 export async function claimEqMinutes(
   supabase: SupabaseClient,
   minutes: number,
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc("deduct_eq_minutes", {
-    p_minutes: minutes,
-  });
-  if (error) throw new Error(`claimEqMinutes: ${error.message}`);
-  return data === true;
+  // No longer deducts minutes - EQ is free
+  return true;
 }
 
 export async function addEqMinutes(
   supabase: SupabaseClient,
   minutes: number,
 ): Promise<void> {
-  const { error } = await supabase.rpc("add_eq_minutes", {
-    p_minutes: minutes,
-  });
-  if (error) throw new Error(`addEqMinutes: ${error.message}`);
+  // No longer adds minutes - EQ is free
+  return;
 }
 
 /**
- * Check Pro subscription and deduct minutes for a track's playback duration.
- *
- * ✅ FIX: This function no longer calls AutoEQNative.setupEQ.
- * Under the mixer-first architecture, DynamicsProcessing is attached once
- * at app startup (initMixerEQ). This function is now purely a billing gate:
- *   - Check is_pro + pro_ends_at
- *   - Deduct ceil(durationSeconds / 60) minutes via Supabase RPC
- *   - Return true if billing succeeded; false otherwise
- *
- * The `audioSessionId` parameter is kept for API compatibility but is no
- * longer used — the mixer session is managed natively.
- *
- * @param audioSessionId - kept for backwards compat; ignored in mixer mode
+ * ✅ FREE EQ - No Pro subscription required
+ * 
+ * This function now always returns true, allowing EQ for all users.
+ * The mixer-first architecture handles audio session management natively.
  */
 export async function claimEqMinutesForPlayback(
   supabase: SupabaseClient,
-  audioSessionId: number,          // kept for API compat; not used in mixer mode
+  audioSessionId: number,
   durationSeconds: number,
   onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>,
 ): Promise<boolean> {
-  const profile = await fetchUserProfile(supabase);
-  if (!profile) {
-    console.warn("[AutoEQ] Not authenticated");
-    return false;
-  }
-  if (!isProActive(profile)) {
-    console.warn("[AutoEQ] Pro required");
-    return false;
-  }
-
-  const minutesNeeded = Math.ceil(durationSeconds / 60);
-
-  if (profile.eq_minutes_remaining < minutesNeeded) {
-    if (!onNeedTopUp) return false;
-    const didTopUp = await onNeedTopUp(minutesNeeded, profile.eq_minutes_remaining);
-    if (!didTopUp) return false;
-  }
-
-  const success = await claimEqMinutes(supabase, minutesNeeded);
-  if (!success) {
-    console.warn("[AutoEQ] Insufficient minutes after top-up check");
-    return false;
-  }
-
-  // ✅ NO AutoEQNative.setupEQ call here.
-  // The mixer EQ is already initialised. useEqualizer.setup() will call
-  // setEnabled(true) after this function returns true.
+  // EQ is now free - no authentication or subscription required
+  // Just return true to allow EQ processing
   return true;
 }
 
@@ -123,35 +84,40 @@ export async function claimEqMinutesForPlayback(
 export async function fetchUserPresets(
   supabase: SupabaseClient,
 ): Promise<EqPreset[]> {
-  const { data: authData } = await supabase.auth.getUser();
-  if (!authData.user) return [];
+  // Try to fetch user presets if logged in, otherwise return empty array
+  try {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData.user) return [];
 
-  const { data, error } = await supabase
-    .from("eq_presets")
-    .select("id, name, type, gains_31, biquad_filters, preamp_db, created_at")
-    .eq("user_id", authData.user.id)
-    .order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("eq_presets")
+      .select("id, name, type, gains_31, biquad_filters, preamp_db, created_at")
+      .eq("user_id", authData.user.id)
+      .order("created_at", { ascending: false });
 
-  if (error) throw new Error(`fetchUserPresets: ${error.message}`);
+    if (error) return [];
 
-  return (data ?? []).map((row: any) => {
-    if (row.type === "graphic_31band") {
+    return (data ?? []).map((row: any) => {
+      if (row.type === "graphic_31band") {
+        return {
+          id:       row.id,
+          name:     row.name,
+          type:     "graphic_31band",
+          gains_31: row.gains_31 as EqBandGains,
+          preamp_db: row.preamp_db ?? 0,
+        } as EqPreset;
+      }
       return {
-        id:       row.id,
-        name:     row.name,
-        type:     "graphic_31band",
-        gains_31: row.gains_31 as EqBandGains,
-        preamp_db: row.preamp_db ?? 0,
+        id:             row.id,
+        name:           row.name,
+        type:           "biquad",
+        biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
+        preamp_db:      row.preamp_db ?? 0,
       } as EqPreset;
-    }
-    return {
-      id:             row.id,
-      name:           row.name,
-      type:           "biquad",
-      biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
-      preamp_db:      row.preamp_db ?? 0,
-    } as EqPreset;
-  });
+    });
+  } catch {
+    return [];
+  }
 }
 
 export async function savePreset(

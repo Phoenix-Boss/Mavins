@@ -58,6 +58,12 @@ export type EqPreset = EqPresetGraphic | EqPresetParametric;
 
 // ── Native module interface ───────────────────────────────────────────────────
 export interface AutoEQNativeModule {
+  // ✅ NEW: Mixer-first architecture methods
+  initMixer(): Promise<number>;
+  getMixerSessionId(): Promise<number>;
+  releaseMixer(): Promise<void>;
+  
+  // Legacy methods
   setupEQ(audioSessionId: number): Promise<void>;
   getAudioSessionId(): Promise<number>;
   setBand(index: number, gainDb: number): Promise<void>;
