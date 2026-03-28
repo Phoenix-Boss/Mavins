@@ -1,9 +1,8 @@
 // libs/cache/supabase-cache.ts
-
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { 
-  TrackMetadata, 
-  StreamData, 
+import {
+  TrackMetadata,
+  StreamData,
   StreamSaveData,
   RelatedTrackInput,
   ArtistCache,
@@ -13,42 +12,34 @@ import {
 import { normalizeQuery } from './utils';
 
 /**
- * Supabase Cache - Persistent storage
- *
- * Schema alignment notes (confirmed against live DB 2026-03-14):
- *
- * tracks columns used here:
- *   id, title, artist_id, album_id, video_id, duration_seconds,
- *   thumbnail_url, metadata, play_count, updated_at, created_at
- *
- * streams columns used here:
- *   id, track_id, source, stream_url, quality, format, duration,
- *   expiry, health_score, is_active, last_accessed, access_count
- *
- * artists columns used here:
- *   id, name, browse_id, thumbnail_url, subscriber_count,
- *   monthly_listeners, metadata, updated_at, created_at
- *
- * track_stats — managed by ensureSchema() / saveTrackStats():
- *   video_id TEXT PRIMARY KEY,
- *   like_count     BIGINT  DEFAULT -1,
- *   dislike_count  BIGINT  DEFAULT -1,
- *   view_count     BIGINT  DEFAULT -1,
- *   comments_count BIGINT  DEFAULT -1,
- *   uploader_url   TEXT,
- *   fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
- *   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
- *
- * cache_metadata:
- *   id, cache_key, original_query, track_id, hit_count,
- *   last_verified, updated_at, created_at,
- *   l1_cached, l2_cached, l3_cached, l4_cached + _at fields
- *
- * related_tracks → table does not exist; methods return empty / false safely.
- */
+Supabase Cache - Persistent storage
+Schema alignment notes (confirmed against live DB 2026-03-14):
+tracks columns used here:
+  id, title, artist_id, album_id, video_id, duration_seconds,
+  thumbnail_url, metadata, play_count, updated_at, created_at
+streams columns used here:
+  id, track_id, source, stream_url, quality, format, duration,
+  expiry, health_score, is_active, last_accessed, access_count
+artists columns used here:
+  id, name, browse_id, thumbnail_url, subscriber_count,
+  monthly_listeners, metadata, updated_at, created_at
+track_stats — managed by ensureSchema() / saveTrackStats():
+  video_id TEXT PRIMARY KEY,
+  like_count     BIGINT  DEFAULT -1,
+  dislike_count  BIGINT  DEFAULT -1,
+  view_count     BIGINT  DEFAULT -1,
+  comments_count BIGINT  DEFAULT -1,
+  uploader_url   TEXT,
+  fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+cache_metadata:
+  id, cache_key, original_query, track_id, hit_count,
+  last_verified, updated_at, created_at,
+  l1_cached, l2_cached, l3_cached, l4_cached + _at fields
+related_tracks → table does not exist; methods return empty / false safely.
+*/
 
 // ─── TrackStats shape ────────────────────────────────────────────────────────
-
 export interface TrackStats {
   videoId:       string;
   likeCount:     number;  // -1 = hidden / unavailable
@@ -58,6 +49,7 @@ export interface TrackStats {
   uploaderUrl:   string | null;
   fetchedAt:     string;  // ISO timestamp — used to decide staleness
 }
+
 export class SupabaseCache {
   private supabase: SupabaseClient | null = null;
   private enabled: boolean = false;
@@ -119,7 +111,6 @@ export class SupabaseCache {
   }
 
   // ─── Connection test ────────────────────────────────────────────────────────
-
   private async testConnection(): Promise<void> {
     if (!this.supabase || !this.enabled) return;
     try {
@@ -137,17 +128,14 @@ export class SupabaseCache {
   }
 
   // ─── TRACK METHODS ──────────────────────────────────────────────────────────
-
   /**
-   * Get track by ID or title+artist name.
-   *
-   * The tracks table does not have an isrc column or string artist/album columns.
-   * artist_id and album_id are UUID foreign keys. When looking up by title+artist
-   * we join through the artists table on name.
+   Get track by ID or title+artist name.
+   The tracks table does not have an isrc column or string artist/album columns.
+   artist_id and album_id are UUID foreign keys. When looking up by title+artist
+   we join through the artists table on name.
    */
   public async getTrack(identifier: string | TrackIdentifier): Promise<TrackMetadata | null> {
     if (!this.enabled || !this.supabase) return null;
-
     try {
       let data: any = null;
 
@@ -215,25 +203,59 @@ export class SupabaseCache {
   }
 
   /**
-   * Save (upsert) a track.
-   *
-   * We can only store fields that exist on the tracks table. artist and album
-   * names cannot be stored as strings — caller must resolve artist_id / album_id
-   * UUIDs beforehand and pass them in metadata if needed. video_id maps to
-   * what was previously youtubeId.
+   Save (upsert) a track — FIXED to prevent duplicate key errors.
+   
+   CRITICAL: The tracks table has a UNIQUE constraint on video_id.
+   This method now:
+   1. First checks if a track with the same video_id (youtubeId) exists
+   2. If exists → UPDATE the existing record
+   3. If not exists → INSERT new record
+   4. Handles race conditions gracefully
+   
+   @param trackData - Track metadata to save
+   @returns The track UUID if successful, null otherwise
    */
   public async saveTrack(trackData: TrackMetadata): Promise<string | null> {
     if (!this.enabled || !this.supabase) return null;
-
+    
     try {
-      const existing = await this.getTrack({
-        title: trackData.title,
-        artist: trackData.artist
-      });
-
       const now = new Date().toISOString();
+      
+      // ── STEP 1: Check if track with same video_id already exists ───────────
+      // This is the KEY fix — check by video_id (youtubeId), not just title+artist
+      let existingTrack: any = null;
+      
+      if (trackData.youtubeId) {
+        const { data: byVideoId } = await this.supabase
+          .from('tracks')
+          .select('id')
+          .eq('video_id', trackData.youtubeId)
+          .maybeSingle();
+        
+        if (byVideoId?.id) {
+          existingTrack = byVideoId;
+          console.log('✅ Track already exists by video_id:', trackData.youtubeId);
+        }
+      }
+      
+      // Fallback: check by title+artist if no video_id
+      if (!existingTrack && trackData.title && trackData.artist) {
+        const { data: byTitleArtist } = await this.supabase
+          .from('tracks')
+          .select('id')
+          .eq('title', trackData.title)
+          .eq('metadata->>artist', trackData.artist.toLowerCase())
+          .maybeSingle();
+        
+        if (byTitleArtist?.id) {
+          existingTrack = byTitleArtist;
+          console.log('✅ Track already exists by title+artist:', trackData.title);
+        }
+      }
 
-      if (existing?.id) {
+      // ── STEP 2: Update existing OR insert new ──────────────────────────────
+      if (existingTrack?.id) {
+        // UPDATE existing track
         const { data, error } = await this.supabase
           .from('tracks')
           .update({
@@ -244,24 +266,27 @@ export class SupabaseCache {
             metadata: trackData.metadata || {},
             updated_at: now
           })
-          .eq('id', existing.id)
+          .eq('id', existingTrack.id)
           .select('id')
           .single();
 
-        if (error) { console.error('❌ saveTrack update error:', error); return existing.id; }
+        if (error) {
+          console.error('❌ saveTrack update error:', error);
+          return existingTrack.id; // Return existing ID even if update fails
+        }
+        
         console.log('✅ Track updated:', data.id);
         return data.id;
       }
 
+      // ── STEP 3: Insert new track (no existing found) ───────────────────────
       // Resolve or create the artist row to satisfy the NOT NULL artist_id FK.
-      //
-      // CANNOT use onConflict:'name' — artists.name has no unique constraint
-      // (only id is unique). Doing so throws Postgres 42P10.
-      // Pattern: SELECT first → INSERT if missing → retry SELECT on race.
       let artistId: string | null = null;
+      
       if (trackData.artist) {
         const artistName = trackData.artist.toLowerCase();
 
+        // Check if artist exists
         const { data: existingArtist } = await this.supabase
           .from('artists')
           .select('id')
@@ -271,19 +296,25 @@ export class SupabaseCache {
         if (existingArtist?.id) {
           artistId = existingArtist.id;
         } else {
+          // Create new artist
           const { data: newArtist, error: insertErr } = await this.supabase
             .from('artists')
-            .insert({ name: artistName, updated_at: now, created_at: now })
+            .insert({ 
+              name: artistName, 
+              updated_at: now, 
+              created_at: now 
+            })
             .select('id')
             .single();
 
           if (insertErr || !newArtist) {
-            // Race: another concurrent insert won — look it up
+            // Race condition: another concurrent insert won — look it up
             const { data: retryArtist } = await this.supabase
               .from('artists')
               .select('id')
               .eq('name', artistName)
               .maybeSingle();
+            
             if (retryArtist?.id) {
               artistId = retryArtist.id;
             } else {
@@ -301,6 +332,7 @@ export class SupabaseCache {
         return null;
       }
 
+      // Insert the track
       const { data, error } = await this.supabase
         .from('tracks')
         .insert({
@@ -316,18 +348,59 @@ export class SupabaseCache {
         .select('id')
         .single();
 
-      if (error) { console.error('❌ saveTrack insert error:', error); return null; }
+      if (error) {
+        // Handle duplicate key error gracefully (race condition)
+        if (error.code === '23505') {
+          console.log('⚠️ Duplicate track detected (race condition), fetching existing...');
+          
+          // Fetch the existing track by video_id
+          if (trackData.youtubeId) {
+            const { data: existing } = await this.supabase
+              .from('tracks')
+              .select('id')
+              .eq('video_id', trackData.youtubeId)
+              .maybeSingle();
+            
+            if (existing?.id) {
+              console.log('✅ Retrieved existing track ID:', existing.id);
+              return existing.id;
+            }
+          }
+        }
+        
+        console.error('❌ saveTrack insert error:', error);
+        return null;
+      }
+
       console.log('✅ New track created:', data.id);
       return data.id;
-    } catch (error) {
+      
+    } catch (error: any) {
+      // Handle any remaining duplicate key errors
+      if (error?.code === '23505') {
+        console.log('⚠️ Duplicate key error caught, fetching existing track...');
+        
+        if (trackData.youtubeId) {
+          const { data: existing } = await this.supabase
+            .from('tracks')
+            .select('id')
+            .eq('video_id', trackData.youtubeId)
+            .maybeSingle();
+          
+          if (existing?.id) {
+            return existing.id;
+          }
+        }
+      }
+      
       console.error('❌ saveTrack error:', error);
       return null;
     }
   }
 
   /**
-   * Increment play_count for a track.
-   * Replaces the old increment_track_access RPC which no longer matches the schema.
+   Increment play_count for a track.
+   Replaces the old increment_track_access RPC which no longer matches the schema.
    */
   private async incrementPlayCount(trackId: string): Promise<void> {
     if (!this.supabase) return;
@@ -345,16 +418,14 @@ export class SupabaseCache {
   }
 
   // ─── STREAM METHODS ─────────────────────────────────────────────────────────
-
   /**
-   * Get the best active stream for a track.
-   * streams table has: id, track_id, source, stream_url, quality, format,
-   * duration, expiry, health_score, is_active, last_accessed, access_count.
-   * No failure_count or last_verified columns.
+   Get the best active stream for a track.
+   streams table has: id, track_id, source, stream_url, quality, format,
+   duration, expiry, health_score, is_active, last_accessed, access_count.
+   No failure_count or last_verified columns.
    */
   public async getStream(trackId: string): Promise<StreamData | null> {
     if (!this.enabled || !this.supabase) return null;
-
     try {
       // If trackId looks like a YouTube video ID (not a UUID), resolve the real UUID
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackId);
@@ -401,11 +472,10 @@ export class SupabaseCache {
   }
 
   /**
-   * Save or update a stream URL.
+   Save or update a stream URL.
    */
   public async saveStream(streamData: StreamSaveData): Promise<boolean> {
     if (!this.enabled || !this.supabase) return false;
-
     try {
       // Resolve YouTube video ID → track UUID if needed
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(streamData.trackId);
@@ -477,12 +547,11 @@ export class SupabaseCache {
   }
 
   /**
-   * Report a stream failure by reducing its health score.
-   * streams table has no failure_count column — health_score alone is used.
+   Report a stream failure by reducing its health score.
+   streams table has no failure_count column — health_score alone is used.
    */
   public async reportStreamFailure(streamId: string): Promise<void> {
     if (!this.supabase) return;
-
     try {
       const { data } = await this.supabase
         .from('streams')
@@ -507,15 +576,13 @@ export class SupabaseCache {
   }
 
   // ─── SEARCH METHODS (via cache_metadata) ───────────────────────────────────
-
   /**
-   * The `searches` table does not exist in this schema.
-   * Search query tracking is handled via the `cache_metadata` table which has:
-   * cache_key, original_query, track_id, hit_count, last_verified, updated_at.
+   The `searches` table does not exist in this schema.
+   Search query tracking is handled via the `cache_metadata` table which has:
+   cache_key, original_query, track_id, hit_count, last_verified, updated_at.
    */
   public async saveSearch(query: string, trackId: string): Promise<boolean> {
     if (!this.enabled || !this.supabase) return false;
-
     const normalized = normalizeQuery(query);
     const cacheKey = `search:${normalized}`;
     const now = new Date().toISOString();
@@ -562,11 +629,10 @@ export class SupabaseCache {
   }
 
   /**
-   * Find a cached track by search query via cache_metadata.
+   Find a cached track by search query via cache_metadata.
    */
   public async findBySearch(query: string): Promise<TrackMetadata | null> {
     if (!this.enabled || !this.supabase) return null;
-
     const cacheKey = `search:${normalizeQuery(query)}`;
     const now = new Date().toISOString();
 
@@ -593,7 +659,7 @@ export class SupabaseCache {
   }
 
   /**
-   * Get popular searches for pre-caching, from cache_metadata ordered by hit_count.
+   Get popular searches for pre-caching, from cache_metadata ordered by hit_count.
    */
   public async getPopularSearches(
     limit = 50,
@@ -601,7 +667,6 @@ export class SupabaseCache {
   ): Promise<Array<{ query: string; trackId: string; hitCount: number }>> {
     console.log(`\n📊 Getting popular searches (min hits: ${minHits}, limit: ${limit})`);
     if (!this.enabled || !this.supabase) return [];
-
     try {
       const { data, error } = await this.supabase
         .from('cache_metadata')
@@ -630,11 +695,10 @@ export class SupabaseCache {
   }
 
   // ─── RELATED TRACKS ─────────────────────────────────────────────────────────
-
   /**
-   * The `related_tracks` table does not exist in this schema.
-   * These methods are stubbed to return safe empty values until a
-   * related_tracks table is added.
+   The `related_tracks` table does not exist in this schema.
+   These methods are stubbed to return safe empty values until a
+   related_tracks table is added.
    */
   public async saveRelatedTracks(
     sourceTrackId: string,
@@ -650,24 +714,21 @@ export class SupabaseCache {
   }
 
   // ─── ARTIST METHODS ─────────────────────────────────────────────────────────
-
   /**
-   * The `artist_cache` table does not exist. The real table is `artists` with:
-   * id, name, browse_id, thumbnail_url, subscriber_count, monthly_listeners,
-   * metadata, updated_at, created_at.
-   *
-   * top_tracks, albums, and similar are stored inside the metadata jsonb column.
+   The `artist_cache` table does not exist. The real table is `artists` with:
+   id, name, browse_id, thumbnail_url, subscriber_count, monthly_listeners,
+   metadata, updated_at, created_at.
+   top_tracks, albums, and similar are stored inside the metadata jsonb column.
    */
   public async saveArtist(artistName: string, data: Partial<ArtistCache>): Promise<boolean> {
     if (!this.enabled || !this.supabase) return false;
-
     const now = new Date().toISOString();
 
     // CANNOT use onConflict:'name' — no unique constraint on artists.name.
     // Pattern: SELECT → UPDATE if found, INSERT if not.
     try {
       const nameLower = artistName.toLowerCase();
-      const metadata  = {
+      const metadata = {
         topTracks: data.topTracks || [],
         albums:    data.albums    || [],
         similar:   data.similar   || [],
@@ -712,7 +773,6 @@ export class SupabaseCache {
 
   public async getArtist(artistName: string): Promise<ArtistCache | null> {
     if (!this.enabled || !this.supabase) return null;
-
     try {
       const { data, error } = await this.supabase
         .from('artists')
@@ -737,14 +797,12 @@ export class SupabaseCache {
   }
 
   // ─── STREAM HEALTH ───────────────────────────────────────────────────────────
-
   /**
-   * Get streams expiring within the next N hours.
+   Get streams expiring within the next N hours.
    */
   public async getExpiringStreams(hoursThreshold = 6): Promise<StreamData[]> {
     console.log(`\n⏰ Getting streams expiring in ${hoursThreshold} hours`);
     if (!this.enabled || !this.supabase) return [];
-
     try {
       const thresholdDate = new Date(
         Date.now() + hoursThreshold * 60 * 60 * 1000
@@ -771,14 +829,13 @@ export class SupabaseCache {
   }
 
   /**
-   * Get IDs of tracks not updated in the last N days.
-   * tracks table has no last_accessed column — updated_at is the correct
-   * staleness signal (written on every insert, update, and play count bump).
+   Get IDs of tracks not updated in the last N days.
+   tracks table has no last_accessed column — updated_at is the correct
+   staleness signal (written on every insert, update, and play count bump).
    */
   public async getStaleTracks(daysThreshold = 90): Promise<string[]> {
     console.log(`\n🧹 Getting stale tracks (not accessed in ${daysThreshold} days)`);
     if (!this.enabled || !this.supabase) return [];
-
     try {
       const thresholdDate = new Date(
         Date.now() - daysThreshold * 24 * 60 * 60 * 1000
@@ -804,11 +861,9 @@ export class SupabaseCache {
   }
 
   // ─── STATS ──────────────────────────────────────────────────────────────────
-
   public async getStats(): Promise<SupabaseStats | null> {
     console.log('\n📊 Getting cache statistics');
     if (!this.enabled || !this.supabase) return null;
-
     try {
       const [tracks, streams, searches] = await Promise.all([
         this.supabase.from('tracks').select('*', { count: 'exact', head: true }),
@@ -831,23 +886,19 @@ export class SupabaseCache {
   }
 
   // ─── SCHEMA BOOTSTRAP ───────────────────────────────────────────────────────
-
   /**
-   * Ensure all tables the app needs exist.
-   * Uses raw SQL via Supabase's rpc('exec_sql') if available, otherwise
-   * tries each table with a lightweight probe and creates it via rpc if missing.
-   *
-   * Tables created here (existing tables are never modified):
-   *
-   *   track_stats   — per-video engagement counts from NewPipe extraction
-   *   cache_metadata — already exists in most deployments; safe no-op if so
-   *
-   * The CREATE TABLE statements use IF NOT EXISTS so they are idempotent.
-   * All timestamps default to now() so callers never need to supply them.
+   Ensure all tables the app needs exist.
+   Uses raw SQL via Supabase's rpc('exec_sql') if available, otherwise
+   tries each table with a lightweight probe and creates it via rpc if missing.
+   Tables created here (existing tables are never modified):
+   track_stats   — per-video engagement counts from NewPipe extraction
+   cache_metadata — already exists in most deployments; safe no-op if so
+   The CREATE TABLE statements use IF NOT EXISTS so they are idempotent.
+   All timestamps default to now() so callers never need to supply them.
    */
   public async ensureSchema(): Promise<void> {
     if (!this.supabase || !this.enabled) return;
-
+    
     // SQL for every table that may not exist yet.
     // Existing tables are untouched — IF NOT EXISTS is the safety net.
     const statements = [
@@ -873,7 +924,7 @@ export class SupabaseCache {
         cache_key      TEXT        NOT NULL UNIQUE,
         original_query TEXT,
         track_id       UUID        REFERENCES tracks(id) ON DELETE SET NULL,
-        hit_count      INTEGER     NOT NULL DEFAULT 0,
+        hit_count      INTEGER     NOT NULL  DEFAULT 0,
         last_verified  TIMESTAMPTZ,
         l1_cached      BOOLEAN     NOT NULL DEFAULT false,
         l2_cached      BOOLEAN     NOT NULL DEFAULT false,
@@ -921,20 +972,16 @@ export class SupabaseCache {
   }
 
   // ─── TRACK STATS ────────────────────────────────────────────────────────────
-
   /**
-   * Cache engagement stats for a YouTube video.
-   *
-   * Called fire-and-forget from MusicPlayerContext.resolveTrack() after
-   * MavinEngine.getStreamInfo() returns — the stats come for free in that
-   * response so no extra network call is needed.
-   *
-   * TTL: stats older than 24 hours are considered stale and re-fetched
-   * by MusicPlayerContext on the next play.
+   Cache engagement stats for a YouTube video.
+   Called fire-and-forget from MusicPlayerContext.resolveTrack() after
+   MavinEngine.getStreamInfo() returns — the stats come for free in that
+   response so no extra network call is needed.
+   TTL: stats older than 24 hours are considered stale and re-fetched
+   by MusicPlayerContext on the next play.
    */
   public async saveTrackStats(stats: Omit<TrackStats, 'fetchedAt'>): Promise<void> {
     if (!this.enabled || !this.supabase) return;
-
     try {
       const now = new Date().toISOString();
       const { error } = await this.supabase
@@ -961,21 +1008,18 @@ export class SupabaseCache {
   }
 
   /**
-   * Retrieve cached engagement stats for a YouTube video.
-   *
-   * Returns null if:
-   *   - No row exists for this videoId
-   *   - The row is older than maxAgeHours (default 24h) — caller should re-fetch
-   *
-   * The caller (MusicPlayerContext) uses this to skip the MavinEngine call
-   * when fresh stats are already in the DB.
+   Retrieve cached engagement stats for a YouTube video.
+   Returns null if:
+   - No row exists for this videoId
+   - The row is older than maxAgeHours (default 24h) — caller should re-fetch
+   The caller (MusicPlayerContext) uses this to skip the MavinEngine call
+   when fresh stats are already in the DB.
    */
   public async getTrackStats(
     videoId: string,
     maxAgeHours = 24,
   ): Promise<TrackStats | null> {
     if (!this.enabled || !this.supabase) return null;
-
     try {
       const { data, error } = await this.supabase
         .from('track_stats')
@@ -1008,9 +1052,9 @@ export class SupabaseCache {
   }
 
   /**
-   * Patch just the commentsCount on an existing track_stats row.
-   * Called fire-and-forget from MusicPlayerContext after the background
-   * getComments call resolves — avoids re-upserting all fields.
+   Patch just the commentsCount on an existing track_stats row.
+   Called fire-and-forget from MusicPlayerContext after the background
+   getComments call resolves — avoids re-upserting all fields.
    */
   public async patchCommentsCount(videoId: string, commentsCount: number): Promise<void> {
     if (!this.enabled || !this.supabase) return;
@@ -1029,7 +1073,6 @@ export class SupabaseCache {
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
-
   private rowToTrackMetadata(data: any): TrackMetadata {
     return {
       id: data.id,

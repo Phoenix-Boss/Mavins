@@ -1,13 +1,19 @@
 /**
  * supabase-helpers.ts — mavin-eq
  *
- * All Supabase interactions. Receives your Supabase client as a parameter
- * so it works with your existing auth session from MusicPlayerContext.
+ * FIX: claimEqMinutesForPlayback no longer calls AutoEQNative.setupEQ.
+ *
+ * The old version called setupEQ here AND in useEqualizer.setup(), causing a
+ * double-attach: the first attach would call releaseInternal() which tore down
+ * any existing DynamicsProcessing, then the second attach would hit a stale or
+ * already-released session. Under the mixer-first architecture the EQ is already
+ * attached at initMixerEQ() time. claimEqMinutesForPlayback is now purely a
+ * Supabase billing function — it checks subscription, deducts minutes, and
+ * returns true/false. The caller (useEqualizer.setup) then calls setEnabled(true).
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { EqPreset, EqBiquadFilter, EqBandGains } from "./types";
-import AutoEQNative from "./AutoEQNative"; // ← direct, no cycle through index
 
 interface ProfileRow {
   id: string;
@@ -62,12 +68,23 @@ export async function addEqMinutes(
 }
 
 /**
- * Full Pro gate — check subscription → deduct minutes → call setupEQ.
- * Called from useEqualizer when the user first enables EQ for a track.
+ * Check Pro subscription and deduct minutes for a track's playback duration.
+ *
+ * ✅ FIX: This function no longer calls AutoEQNative.setupEQ.
+ * Under the mixer-first architecture, DynamicsProcessing is attached once
+ * at app startup (initMixerEQ). This function is now purely a billing gate:
+ *   - Check is_pro + pro_ends_at
+ *   - Deduct ceil(durationSeconds / 60) minutes via Supabase RPC
+ *   - Return true if billing succeeded; false otherwise
+ *
+ * The `audioSessionId` parameter is kept for API compatibility but is no
+ * longer used — the mixer session is managed natively.
+ *
+ * @param audioSessionId - kept for backwards compat; ignored in mixer mode
  */
 export async function claimEqMinutesForPlayback(
   supabase: SupabaseClient,
-  audioSessionId: number,
+  audioSessionId: number,          // kept for API compat; not used in mixer mode
   durationSeconds: number,
   onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>,
 ): Promise<boolean> {
@@ -85,20 +102,19 @@ export async function claimEqMinutesForPlayback(
 
   if (profile.eq_minutes_remaining < minutesNeeded) {
     if (!onNeedTopUp) return false;
-    const didTopUp = await onNeedTopUp(
-      minutesNeeded,
-      profile.eq_minutes_remaining,
-    );
+    const didTopUp = await onNeedTopUp(minutesNeeded, profile.eq_minutes_remaining);
     if (!didTopUp) return false;
   }
 
   const success = await claimEqMinutes(supabase, minutesNeeded);
   if (!success) {
-    console.warn("[AutoEQ] Insufficient minutes");
+    console.warn("[AutoEQ] Insufficient minutes after top-up check");
     return false;
   }
 
-  await AutoEQNative.setupEQ(audioSessionId); // ← direct native call, no index
+  // ✅ NO AutoEQNative.setupEQ call here.
+  // The mixer EQ is already initialised. useEqualizer.setup() will call
+  // setEnabled(true) after this function returns true.
   return true;
 }
 
@@ -121,19 +137,19 @@ export async function fetchUserPresets(
   return (data ?? []).map((row: any) => {
     if (row.type === "graphic_31band") {
       return {
-        id: row.id,
-        name: row.name,
-        type: "graphic_31band",
+        id:       row.id,
+        name:     row.name,
+        type:     "graphic_31band",
         gains_31: row.gains_31 as EqBandGains,
         preamp_db: row.preamp_db ?? 0,
       } as EqPreset;
     }
     return {
-      id: row.id,
-      name: row.name,
-      type: "biquad",
+      id:             row.id,
+      name:           row.name,
+      type:           "biquad",
       biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
-      preamp_db: row.preamp_db ?? 0,
+      preamp_db:      row.preamp_db ?? 0,
     } as EqPreset;
   });
 }
@@ -146,12 +162,12 @@ export async function savePreset(
   if (!authData.user) throw new Error("Not authenticated");
 
   const row = {
-    user_id: authData.user.id,
-    name: preset.name,
-    type: preset.type,
-    gains_31: preset.type === "graphic_31band" ? preset.gains_31 : null,
+    user_id:        authData.user.id,
+    name:           preset.name,
+    type:           preset.type,
+    gains_31:       preset.type === "graphic_31band" ? preset.gains_31 : null,
     biquad_filters: preset.type === "biquad" ? preset.biquad_filters : null,
-    preamp_db: (preset as any).preamp_db ?? 0,
+    preamp_db:      (preset as any).preamp_db ?? 0,
   };
 
   const { data, error } = await supabase

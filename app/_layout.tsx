@@ -2,15 +2,20 @@
 
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import { Stack, useSegments, useRootNavigationState } from "expo-router";
+import { Stack, useRootNavigationState, useRouter, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { StyleSheet } from "react-native";
 import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
-import TrackPlayer from "react-native-track-player";
-import { StatusBar, View, ActivityIndicator, Linking } from "react-native";
+import TrackPlayer, {
+  Capability,
+  AppKilledPlaybackBehavior,
+  Event,
+  useActiveTrack,
+} from "react-native-track-player";
+import { StatusBar, View, ActivityIndicator, Linking, Platform } from "react-native";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 // ── Internal ──────────────────────────────────────────────────────────────────
@@ -26,19 +31,18 @@ import FloatingPlayer from "@/components/FloatingPlayer";
 import { UpdateModal } from "@/components/UpdateModal";
 import { MessageModal } from "@/components/MessageModal";
 import PremiumBanner from "@/components/ads/banner/premium";
-
-// ── NEW: HomePreloader for instant home screen ────────────────────────────────
 import { HomePreloader } from "@/components/HomePreloader";
-
-// ── Mavin libs ────────────────────────────────────────────────────────────────
 import { queryClient } from "@/libs/supabase";
 import { initCache } from "@/libs/cache";
-
-// ── Honeygain ─────────────────────────────────────────────────────────────────
 import HoneygainConsentGate from "@/components/HoneygainConsentGate";
 
+// ── mavin-eq: mixer-first EQ init ─────────────────────────────────────────────
+// initMixerEQ creates the permanent AudioTrack mixer + attaches DynamicsProcessing
+// BEFORE any play() call, so the EQ session ID is ready instantly.
+import { initMixerEQ } from "@/modules/mavin-eq";
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Module-level bootstrap — runs once before any component mounts.
+// Module-level bootstrap
 // ─────────────────────────────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
@@ -48,9 +52,118 @@ const PREMIUM_BANNER_DELAY_MS = 2200;
 const SPLASH_FORCE_HIDE_MS    = 4000;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL TrackPlayer Setup Promise — ensures single initialization
+// ─────────────────────────────────────────────────────────────────────────────
+let trackPlayerSetupPromise: Promise<boolean> | null = null;
+let isTrackPlayerReady = false;
+
+/**
+ * setupTrackPlayerGlobal
+ *
+ * CHANGE from old version: initMixerEQ() is now called here, AFTER
+ * TrackPlayer.setupPlayer() but BEFORE TrackPlayer.updateOptions().
+ *
+ * WHY this order matters:
+ *   1. setupPlayer() — must come first so RNTP's native bridge exists.
+ *   2. initMixerEQ() — creates the AudioTrack mixer and gets a sessionId
+ *      from AudioFlinger synchronously (no play() needed). Then calls
+ *      TrackPlayer.updateOptions({ androidAudioSessionId }) internally
+ *      so every subsequent ExoPlayer instance joins the mixer's session.
+ *   3. updateOptions() — our full capabilities config. By this point RNTP
+ *      already has the audio session ID so the options merge cleanly.
+ *
+ * This replaces the old approach where:
+ *   - No EQ init happened here at all
+ *   - equalizer.tsx tried to get the session ID AFTER play() with retries
+ *   - 500–1500ms frame-render delay caused the session to be unavailable
+ */
+export async function setupTrackPlayerGlobal(): Promise<boolean> {
+  if (isTrackPlayerReady) return true;
+  if (trackPlayerSetupPromise) return trackPlayerSetupPromise;
+
+  trackPlayerSetupPromise = (async () => {
+    try {
+      // ── Step 1: Setup RNTP player ────────────────────────────────────────
+      try {
+        await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
+        console.log("✅ RNTP: Player setup complete");
+      } catch (setupError: any) {
+        if (
+          setupError?.message?.includes("already") ||
+          setupError?.message?.includes("initialized") ||
+          setupError?.code === "player_already_initialized"
+        ) {
+          console.log("ℹ️ RNTP: Player already initialized");
+        } else {
+          throw setupError;
+        }
+      }
+
+      // ── Step 2: Init EQ mixer (Android only, no-op on iOS) ───────────────
+      // initMixerEQ() internally calls TrackPlayer.updateOptions with
+      // { androidAudioSessionId: mixerSessionId } after creating the mixer,
+      // so ExoPlayer will join the mixer's AudioFlinger session before play().
+      if (Platform.OS === "android") {
+        const mixerSessionId = await initMixerEQ(true /* configureTrackPlayer */);
+        if (mixerSessionId && mixerSessionId > 0) {
+          console.log("✅ EQ mixer ready at app boot, sessionId =", mixerSessionId);
+        } else {
+          // Non-fatal — EQ won't work but playback is unaffected
+          console.warn("⚠️ EQ mixer init failed — EQ disabled for this session");
+        }
+      }
+
+      // ── Step 3: Full RNTP options (capabilities, notification, etc.) ──────
+      await TrackPlayer.updateOptions({
+        capabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.SkipToNext,
+          Capability.SkipToPrevious,
+          Capability.SeekTo,
+          Capability.Stop,
+        ],
+        compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
+        notificationCapabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.SkipToNext,
+          Capability.SkipToPrevious,
+        ],
+        android: {
+          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+          alwaysPauseOnInterruption: true,
+        },
+        progressUpdateEventInterval: 1,
+      });
+
+      // ── Step 4: Global remote-control listeners ───────────────────────────
+      // Registered ONCE here, not in PlayerScreen (which unmounts on navigation).
+      TrackPlayer.addEventListener(Event.RemotePlay,     () => TrackPlayer.play().catch(console.error));
+      TrackPlayer.addEventListener(Event.RemotePause,    () => TrackPlayer.pause().catch(console.error));
+      TrackPlayer.addEventListener(Event.RemoteNext,     () => TrackPlayer.skipToNext().catch(console.error));
+      TrackPlayer.addEventListener(Event.RemotePrevious, () => TrackPlayer.skipToPrevious().catch(console.error));
+      TrackPlayer.addEventListener(Event.RemoteSeek,     (e) => TrackPlayer.seekTo(e.position).catch(console.error));
+      TrackPlayer.addEventListener(Event.RemoteStop,     () => TrackPlayer.stop().catch(console.error));
+      TrackPlayer.addEventListener(Event.RemoteDuck,     (e) => {
+        if (e.permanent) TrackPlayer.stop().catch(console.error);
+        else if (e.paused) TrackPlayer.pause().catch(console.error);
+      });
+
+      isTrackPlayerReady = true;
+      return true;
+    } catch (error) {
+      console.error("❌ RNTP setup failed:", error);
+      trackPlayerSetupPromise = null;
+      return false;
+    }
+  })();
+
+  return trackPlayerSetupPromise;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // NotificationPlayerExpander
-// Handles lock-screen / notification tap: waits for an active track then
-// calls expandPlayer() (which now does router.push("/(player)")).
 // ─────────────────────────────────────────────────────────────────────────────
 function NotificationPlayerExpander({
   pendingRef,
@@ -58,22 +171,24 @@ function NotificationPlayerExpander({
   pendingRef: React.MutableRefObject<boolean>;
 }) {
   const { expandPlayer } = usePlayerOverlay();
-
-  let activeTrack: any;
-  try {
-    const rntp = require("react-native-track-player");
-    activeTrack = rntp.useActiveTrack?.();
-  } catch {
-    return null;
-  }
+  const router           = useRouter();
+  const activeTrack      = useActiveTrack();
 
   useEffect(() => {
     if (!pendingRef.current) return;
     if (!activeTrack) return;
-    pendingRef.current = false;
-    const t = setTimeout(() => expandPlayer(), 300);
+
+    const t = setTimeout(() => {
+      pendingRef.current = false;
+      try {
+        expandPlayer();
+      } catch {
+        router.push("/(player)");
+      }
+    }, 500);
+
     return () => clearTimeout(t);
-  }, [activeTrack, expandPlayer, pendingRef]);
+  }, [activeTrack, expandPlayer, pendingRef, router]);
 
   return null;
 }
@@ -107,19 +222,18 @@ function AppShell({
   pendingExpandRef: React.MutableRefObject<boolean>;
   playerReady: boolean;
 }) {
-  const segments       = useSegments();
-  const isPlayerScreen = segments.includes("(player)");
-  
-  // NEW: Hide floating player on modal screens
-  const isModalScreen = segments.some(s => 
-    s.includes('(modals)') || s.includes('modals')
-  );
+  const pathname = usePathname();
+
+  const isHomeScreen     = pathname === "/" || pathname === "/(tabs)" || pathname === "/(tabs)/index";
+  const isLibraryScreen  = pathname === "/(tabs)/library";
+  const isSettingsScreen = pathname === "/(tabs)/settings";
+  const shouldShowFloatingPlayer =
+    (isHomeScreen || isLibraryScreen || isSettingsScreen) && playerReady;
 
   return (
     <LyricsProvider>
       <GlobalUIStateProvider>
         <View style={{ flex: 1, backgroundColor: "#000" }}>
-
           <Stack
             screenOptions={{
               headerShown: false,
@@ -127,10 +241,6 @@ function AppShell({
             }}
           >
             <Stack.Screen name="(tabs)" />
-
-            {/*
-             * (player) — solid black background, slides up from bottom.
-             */}
             <Stack.Screen
               name="(player)"
               options={{
@@ -139,7 +249,6 @@ function AppShell({
                 contentStyle: { backgroundColor: "#000" },
               }}
             />
-
             <Stack.Screen
               name="(modals)"
               options={{
@@ -152,14 +261,12 @@ function AppShell({
           </Stack>
 
           {!fontsLoaded && <LoadingScreen />}
-
         </View>
 
         <LyricsFetcher />
         <NotificationPlayerExpander pendingRef={pendingExpandRef} />
 
-        {/* UPDATED: Also hide on modal screens */}
-        {navReady && !isPlayerScreen && !isModalScreen && playerReady && (
+        {navReady && shouldShowFloatingPlayer && (
           <View style={styles.floatingPlayerWrapper}>
             <FloatingPlayer playerReady={playerReady} />
           </View>
@@ -172,7 +279,6 @@ function AppShell({
           visible={premiumBannerVisible}
           onDismiss={() => setPremiumBannerVisible(false)}
         />
-
       </GlobalUIStateProvider>
     </LyricsProvider>
   );
@@ -193,32 +299,27 @@ export default function RootLayout() {
   const navigationState = useRootNavigationState();
   const navReady        = !!navigationState?.key;
   const appReady        = fontsLoaded && navReady;
-
   const pendingExpandRef = useRef(false);
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
     async function prepare() {
       try {
-        await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
-      } catch (e: any) {
-        const msg = e?.message ?? "";
-        if (
-          !msg.toLowerCase().includes("already") &&
-          !msg.toLowerCase().includes("initialized")
-        ) {
-          console.warn("[TrackPlayer] setupPlayer error:", e);
+        // setupTrackPlayerGlobal now includes initMixerEQ() inside it,
+        // called between setupPlayer() and updateOptions(). No separate
+        // EQ init call needed here.
+        const setupSuccess = await setupTrackPlayerGlobal();
+        setPlayerReady(setupSuccess);
+        try {
+          await initializeLibrary();
+        } catch (error) {
+          console.warn("[Library] initialization failed:", error);
         }
-      }
-      setPlayerReady(true);
-
-      try {
-        await initializeLibrary();
-      } catch (error) {
-        console.warn("[Library] initialization failed:", error);
+      } catch (e) {
+        console.warn("[TrackPlayer] setup error:", e);
+        setPlayerReady(false);
       }
     }
-
     prepare();
   }, []);
 
@@ -247,13 +348,11 @@ export default function RootLayout() {
         handleOpenFromNotification();
       }
     });
-
     const sub = Linking.addEventListener("url", ({ url }) => {
       if (url?.startsWith("mavins-player") || url === "") {
         handleOpenFromNotification();
       }
     });
-
     return () => sub.remove();
   }, [handleOpenFromNotification]);
 
@@ -263,18 +362,10 @@ export default function RootLayout() {
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <ThemeProvider value={DarkTheme}>
-
               <StatusBar hidden />
-
               <MusicPlayerProvider>
                 <PlayerProvider playerReady={playerReady}>
-                  
-                  {/* 
-                    NEW: HomePreloader — fetches all home data at app startup
-                    and populates HomeStore. Home screen reads from store instantly.
-                  */}
                   <HomePreloader />
-                  
                   <AppShell
                     fontsLoaded={fontsLoaded}
                     navReady={navReady}
@@ -285,7 +376,6 @@ export default function RootLayout() {
                   />
                 </PlayerProvider>
               </MusicPlayerProvider>
-
             </ThemeProvider>
           </GestureHandlerRootView>
         </SafeAreaProvider>

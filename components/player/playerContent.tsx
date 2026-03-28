@@ -1,21 +1,17 @@
 // components/player/PlayerContent.tsx
 /**
- * PlayerContent — The actual player UI (COMPLETE WITH RNTP PLAY FUNCTION)
+ * PlayerContent — The actual player UI.
  *
- * CHANGES in this version:
+ * FIXES in this version:
  *
- * 1. No-track state renders the full UI, not a spinner or error.
- *    `displayTrack` = useActiveTrack() ?? usePlayerStore().currentTrack
+ * 1. Removed TrackPlayer.clearNowPlaying() — doesn't exist in RNTP v4.
+ *    Replaced with TrackPlayer.reset() in playTrack().
  *
- * 2. Video/Song segment switching properly handles audio:
- *    - Video mode with muxed audio: TrackPlayer pauses, video provides audio
- *    - Song mode: Video pauses, TrackPlayer resumes
+ * 2. Single source of truth for play state: contextIsPlaying (MusicPlayerContext).
+ *    Removed the dumbModeRef / syncTimeoutRef race-condition pattern entirely.
+ *    storeIsPlaying is only written from playerProvider, never from here.
  *
- * 3. LYRICS button is grayed out when no videoId exists (no lyrics lookup possible).
- *
- * 4. All nav buttons remain tappable even when no track loaded.
- *
- * 5. ADDED: playTrack() function for RNTP integration with full lock screen compatibility
+ * 3. handlePlayPause reads contextIsPlaying directly — no optimistic local state.
  */
 
 import React, {
@@ -249,14 +245,13 @@ function PlayerContentInner({
   const activeTrack = useActiveTrack();
   const progress    = useProgress(250);
 
+  // ✅ contextIsPlaying is the single source of truth for play state.
+  //    It reflects RNTP's actual state via MusicPlayerContext.
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
 
   // ── Display track: real track or last-known from store ───────────────────
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
-
-  const setStoreIsPlaying  = usePlayerStore((s: PS) => s.setIsPlaying);
-  const storeIsPlaying     = usePlayerStore((s: PS) => s.isPlaying);
 
   const displayTrack = useMemo(() => {
     if (activeTrack) return activeTrack as any;
@@ -274,53 +269,6 @@ function PlayerContentInner({
     return null;
   }, [activeTrack, storeCurrentTrack]);
 
-  const dumbModeRef    = useRef(false);
-  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!dumbModeRef.current && storeIsPlaying !== contextIsPlaying) {
-      setStoreIsPlaying(contextIsPlaying);
-    }
-  }, [contextIsPlaying, storeIsPlaying, setStoreIsPlaying]);
-
-  useEffect(() => () => {
-    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-  }, []);
-
-  useEffect(() => {
-    dumbModeRef.current = false;
-    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    setStoreIsPlaying(contextIsPlaying);
-  }, [activeTrack?.id, contextIsPlaying, setStoreIsPlaying]);
-
-  // ── 🔥 ADDED: playTrack function for RNTP integration ───────────────────
-  const playTrack = useCallback(async (track: any) => {
-    try {
-      // Stop current playback
-      await TrackPlayer.stop();
-      await TrackPlayer.clearNowPlaying();
-      
-      // Add new track to queue
-      await TrackPlayer.add({
-        id: track.id || track.videoId,
-        url: track.url,
-        title: track.title || 'Unknown Track',
-        artist: track.artist || 'Unknown Artist',
-        artwork: track.thumbnail || track.artwork,
-        duration: track.duration || 0,
-        videoId: track.videoId,
-      });
-      
-      // Play and sync store
-      await TrackPlayer.play();
-      usePlayerStore.getState().setPlaying(track);
-      
-      console.log('✅ Playing:', track.title);
-    } catch (error) {
-      console.error('❌ Play failed:', error);
-    }
-  }, []);
-
   // ── Hooks ────────────────────────────────────────────────────────────────
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
@@ -334,8 +282,6 @@ function PlayerContentInner({
 
   const uploaderUrl: string | undefined = track?.uploaderUrl as string | undefined;
   const videoId:     string | undefined = track?.videoId     as string | undefined;
-
-  // Check if lyrics are possible (need videoId for lookup)
   const canShowLyrics = !!videoId;
 
   // Counter animation
@@ -357,28 +303,22 @@ function PlayerContentInner({
   const videoOwnsAudio    = useRef(false);
 
   const videoPlayer = useVideoPlayer(activeVideoUrl ?? null, (p) => {
-    p.muted  = !muxedVideoUrl; // Only unmute if we have muxed audio
+    p.muted  = !muxedVideoUrl;
     p.loop   = false;
     p.pause();
   });
 
-  // Sync video playback with app play state
   useEffect(() => {
     if (!videoPlayer || activeSegment !== "video") return;
-    
     if (muxedVideoUrl && videoOwnsAudio.current) {
-      // Muxed video has its own audio - sync play/pause
       if (contextIsPlaying) videoPlayer.play();
       else videoPlayer.pause();
     } else if (!muxedVideoUrl) {
-      // Non-muxed: video is muted, TrackPlayer provides audio
-      // Just sync visual playback
       if (contextIsPlaying) videoPlayer.play();
       else videoPlayer.pause();
     }
   }, [contextIsPlaying, activeSegment, videoPlayer, muxedVideoUrl]);
 
-  // Handle video ready status and seeking
   useEffect(() => {
     if (!videoPlayer) return;
     const sub = videoPlayer.addListener("statusChange", ({ status }) => {
@@ -387,10 +327,8 @@ function PlayerContentInner({
         if (pendingSeek.current !== null) {
           videoPlayer.currentTime = pendingSeek.current;
           pendingSeek.current = null;
-          
           if (activeSegment === "video" && contextIsPlaying) {
             if (muxedVideoUrl) {
-              // Muxed video: video provides audio, pause TrackPlayer
               videoOwnsAudio.current = true;
               TrackPlayer.pause().catch(() => {});
             }
@@ -410,7 +348,6 @@ function PlayerContentInner({
     opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
   }));
 
-  // Handle segment switching between Song and Video
   const handleSegmentPress = useCallback(
     (seg: "song" | "video") => {
       if (seg === "video" && !hasVideo) return;
@@ -420,12 +357,10 @@ function PlayerContentInner({
 
       if (seg === "video" && videoPlayer) {
         if (muxedVideoUrl) {
-          // Switching to muxed video: video will provide audio
           TrackPlayer.getProgress().then(({ position }) => {
             if (videoPlayerReady.current) {
               videoPlayer.currentTime = position;
               if (contextIsPlaying) {
-                // Video takes over audio
                 videoOwnsAudio.current = true;
                 TrackPlayer.pause().catch(() => {});
                 videoPlayer.play();
@@ -435,7 +370,6 @@ function PlayerContentInner({
             }
           }).catch(() => {});
         } else {
-          // Non-muxed video: video is visual only, TrackPlayer continues audio
           const seekTo = progress.position;
           if (videoPlayerReady.current) {
             videoPlayer.currentTime = seekTo;
@@ -445,10 +379,8 @@ function PlayerContentInner({
           }
         }
       } else if (seg === "song" && videoPlayer) {
-        // Switching back to song mode
         videoPlayer.pause();
         if (muxedVideoUrl && videoOwnsAudio.current) {
-          // Resume TrackPlayer audio since video no longer provides it
           videoOwnsAudio.current = false;
           TrackPlayer.play().catch(() => {});
         }
@@ -457,7 +389,7 @@ function PlayerContentInner({
     [hasVideo, videoPlayer, videoProgress, progress.position, contextIsPlaying, muxedVideoUrl]
   );
 
-  // Reset video state when track changes
+  // Reset video state on track change
   useEffect(() => {
     if (videoPlayer) videoPlayer.pause();
     if (videoOwnsAudio.current) {
@@ -468,8 +400,6 @@ function PlayerContentInner({
     videoProgress.value      = 0;
     videoPlayerReady.current = false;
     pendingSeek.current      = null;
-    dumbModeRef.current      = false;
-    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
   }, [activeTrack?.id, videoPlayer]);
 
   // Bottom tabs
@@ -548,51 +478,58 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // 🔥 UPDATED: handlePlayPause with full RNTP compatibility
+  // ✅ FIX: handlePlayPause uses contextIsPlaying as the single source of truth.
+  //    Removed dumbModeRef, syncTimeoutRef, and setStoreIsPlaying from here.
+  //    RNTP is authoritative; context reflects it; we just call play/pause.
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
-    
-    if (!displayTrack) {
-      // No track loaded - nothing to play
-      return;
-    }
-    
-    dumbModeRef.current = true;
-    const nextState = !storeIsPlaying;
-    setStoreIsPlaying(nextState);
-    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    
-    if (storeIsPlaying) {
-      // Currently playing, so pause
-      TrackPlayer.pause();
-      
-      // Handle video audio handoff when pausing
+
+    if (!displayTrack) return;
+
+    if (contextIsPlaying) {
+      // Currently playing → pause
+      TrackPlayer.pause().catch(console.error);
+      // If video owns audio, pause video too
       if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
         videoPlayer.pause();
       }
     } else {
-      // Currently paused, so play
+      // Currently paused → play
       if (activeTrack) {
-        // We have an active track in RNTP, just resume
-        TrackPlayer.play();
-        
-        // Handle video audio handoff when resuming in video mode
+        // RNTP has an active track, just resume
+        TrackPlayer.play().catch(console.error);
+        // Handle muxed video audio handoff
         if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
           videoOwnsAudio.current = true;
           TrackPlayer.pause().catch(() => {});
           videoPlayer.play();
         }
       } else {
-        // No active track in RNTP, use our playTrack to load it
+        // No active RNTP track — load and play
         playTrack(displayTrack);
       }
     }
-    
-    syncTimeoutRef.current = setTimeout(() => {
-      dumbModeRef.current = false;
-      setStoreIsPlaying(contextIsPlaying);
-    }, 300);
-  }, [storeIsPlaying, displayTrack, activeTrack, activeSegment, muxedVideoUrl, videoPlayer, contextIsPlaying, setStoreIsPlaying, playTrack]);
+  }, [contextIsPlaying, displayTrack, activeTrack, activeSegment, muxedVideoUrl, videoPlayer]);
+
+  // ✅ FIX: playTrack uses TrackPlayer.reset() — clearNowPlaying() doesn't exist in RNTP v4.
+  const playTrack = useCallback(async (track: any) => {
+    try {
+      await TrackPlayer.reset(); // clears queue + stops playback
+      await TrackPlayer.add({
+        id:       track.id || track.videoId,
+        url:      track.url,
+        title:    track.title   || "Unknown Track",
+        artist:   track.artist  || "Unknown Artist",
+        artwork:  track.thumbnail || track.artwork,
+        duration: track.duration || 0,
+        videoId:  track.videoId,
+      });
+      await TrackPlayer.play();
+      usePlayerStore.getState().setPlaying(track);
+    } catch (error) {
+      console.error("❌ playTrack failed:", error);
+    }
+  }, []);
 
   // Navigation
   const handleArtistPress = useCallback(
@@ -620,7 +557,7 @@ function PlayerContentInner({
   const handleSeeAll     = () => { triggerHaptic(); router.push("/(modals)/queue"); };
 
   const handleLyrics = () => {
-    if (!canShowLyrics) return; // Disabled if no videoId
+    if (!canShowLyrics) return;
     triggerHaptic();
     router.push({
       pathname: "/(modals)/lyrics",
@@ -889,7 +826,6 @@ function PlayerContentInner({
                 <Ionicons name="play-skip-back" size={32} color="#fff" />
               </TouchableOpacity>
 
-              {/* 🔥 UPDATED PLAY BUTTON - Now fully RNTP compatible */}
               <TouchableOpacity
                 onPress={handlePlayPause}
                 style={styles.bigPlay}
@@ -897,7 +833,7 @@ function PlayerContentInner({
                 disabled={isLoading}
               >
                 <Ionicons
-                  name={isLoading ? "hourglass-outline" : storeIsPlaying ? "pause" : "play"}
+                  name={isLoading ? "hourglass-outline" : contextIsPlaying ? "pause" : "play"}
                   size={32}
                   color="#000"
                 />
@@ -931,8 +867,7 @@ function PlayerContentInner({
                   UP NEXT
                 </Text>
               </TouchableOpacity>
-              
-              {/* LYRICS button - grayed out if no videoId */}
+
               <TouchableOpacity
                 onPress={canShowLyrics ? () => { setActiveBottomTab("lyrics"); handleLyrics(); } : undefined}
                 activeOpacity={canShowLyrics ? 0.7 : 1}
@@ -945,7 +880,7 @@ function PlayerContentInner({
                   LYRICS
                 </Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 onPress={() => { setActiveBottomTab("related"); handleRelated(); }}
                 activeOpacity={0.7}
@@ -1021,17 +956,9 @@ const styles = StyleSheet.create({
     textAlign: "center",
     flexWrap: "wrap",
   },
-  artistName: {
-    color: "rgba(255,255,255,0.7)",
-    fontSize: moderateScale(15),
-  },
-  artistTappable: {
-    color: "rgba(255,255,255,0.9)",
-  },
-  artistSeparator: {
-    color: "rgba(255,255,255,0.5)",
-    fontSize: moderateScale(15),
-  },
+  artistName: { color: "rgba(255,255,255,0.7)", fontSize: moderateScale(15) },
+  artistTappable: { color: "rgba(255,255,255,0.9)" },
+  artistSeparator: { color: "rgba(255,255,255,0.5)", fontSize: moderateScale(15) },
 
   actionRow: {
     flexDirection: "row",
@@ -1111,8 +1038,5 @@ const styles = StyleSheet.create({
   bottomTabs: { flexDirection: "row", justifyContent: "space-around", marginTop: verticalScale(32), paddingBottom: verticalScale(5) },
   bottomTabActive: { color: "#fff", fontSize: moderateScale(13), fontWeight: "600" },
   bottomTab: { color: "rgba(255,255,255,0.5)", fontSize: moderateScale(13) },
-  bottomTabDisabled: { 
-    color: "rgba(255,255,255,0.25)", 
-    fontSize: moderateScale(13),
-  },
+  bottomTabDisabled: { color: "rgba(255,255,255,0.25)", fontSize: moderateScale(13) },
 });

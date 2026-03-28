@@ -1,15 +1,12 @@
 /**
- * FloatingPlayer — v4
+ * FloatingPlayer — v5
  *
- * Changes from v3:
+ * Changes from v4:
  *
- * 1. Hide on ALL (modals) routes — no exceptions. The equalizer screen must use
- *    its own inline player bar if needed, not the floating pill.
+ * 1. Route detection removed - parent _layout.tsx now controls visibility.
+ *    FloatingPlayer only renders when explicitly mounted by AppShell.
  *
- * 2. Simplified route detection: any pathname containing /(modals) or /modals/
- *    hides the floating player entirely.
- *
- * 3. All previous fixes preserved (pending track, singleton guard, expo-image).
+ * 2. All previous fixes preserved (pending track, singleton guard, expo-image).
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -22,7 +19,6 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { usePathname } from 'expo-router';
 import { triggerHaptic } from '@/helpers/haptics';
 import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useActiveTrack, usePlaybackState, State } from 'react-native-track-player';
@@ -52,7 +48,6 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
   tabHeight = 56,
   playerReady,
 }) => {
-  const pathname      = usePathname();
   const activeTrack   = useActiveTrack();
   const playbackState = usePlaybackState();
   const { togglePlayPause, isLoading } = useMusicPlayer();
@@ -82,13 +77,6 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
       else _floatingPlayerMountCount -= 1;
     };
   }, []);
-
-  // ── Route guard ─────────────────────────────────────────────────────────────
-  // Hide the floating pill on ALL modal screens — lyrics, queue, EQ, playlists,
-  // everything. Each modal decides for itself whether to show a player bar.
-  const isAnyModal =
-    pathname?.includes('/(modals)') ||
-    pathname?.includes('/modals/');
 
   // ── Playback state ─────────────────────────────────────────────────────────
   const currentState: State = (() => {
@@ -128,7 +116,9 @@ const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
   );
 
   // ── Guards ─────────────────────────────────────────────────────────────────
-  if (!displayTrack || isAnyModal || !isOwnerRef.current || !playerReady) {
+  // Note: Route visibility is controlled by parent _layout.tsx
+  // We only check for track data and singleton ownership here
+  if (!displayTrack || !isOwnerRef.current || !playerReady) {
     return null;
   }
 
