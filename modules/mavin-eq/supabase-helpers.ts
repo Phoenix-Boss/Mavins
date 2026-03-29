@@ -1,18 +1,11 @@
 /**
- * supabase-helpers.ts — mavin-eq (FREE VERSION - No Pro Required)
- *
- * REMOVED:
- * - Pro subscription checks (is_pro, pro_ends_at)
- * - EQ minutes billing system
- * - Authentication requirements for EQ usage
+ * supabase-helpers.ts — mavin-eq
  * 
- * KEPT:
- * - Preset saving/loading (optional, only if user is logged in)
- * - Profile functions for other features
+ * Supabase integration for cloud-synced presets + legacy profile functions
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { EqPreset, EqBiquadFilter, EqBandGains } from "./types";
+import type { EqPreset, EqBiquadFilter, EqBandGains, SupabasePresetRow } from "./types";
 
 interface ProfileRow {
   id: string;
@@ -21,137 +14,243 @@ interface ProfileRow {
   eq_minutes_remaining: number;
 }
 
-// ── Profile ───────────────────────────────────────────────────────────────────
+// ── Profile Functions ─────────────────────────────────────────────────────────
 
 export async function fetchUserProfile(
   supabase: SupabaseClient,
 ): Promise<ProfileRow | null> {
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) return null;
+  
   const { data, error } = await supabase
     .from("profiles")
     .select("id, is_pro, pro_ends_at, eq_minutes_remaining")
     .eq("id", authData.user.id)
     .single();
+    
   if (error) throw new Error(`fetchUserProfile: ${error.message}`);
   return data as ProfileRow;
 }
 
 export function isProActive(profile: ProfileRow): boolean {
-  // Kept for backwards compatibility with other features
   if (!profile.is_pro) return false;
   if (!profile.pro_ends_at) return true;
   return new Date(profile.pro_ends_at) > new Date();
 }
 
-// ── EQ minutes (DEPRECATED - kept for API compatibility, always returns true) ────────────────────────────────────────────────────────────────
+// ── Legacy EQ Minutes (Deprecated) ─────────────────────────────────────────────
 
 export async function claimEqMinutes(
   supabase: SupabaseClient,
   minutes: number,
 ): Promise<boolean> {
-  // No longer deducts minutes - EQ is free
-  return true;
+  return true; // EQ is free
 }
 
 export async function addEqMinutes(
   supabase: SupabaseClient,
   minutes: number,
 ): Promise<void> {
-  // No longer adds minutes - EQ is free
-  return;
+  return; // EQ is free
 }
 
-/**
- * ✅ FREE EQ - No Pro subscription required
- * 
- * This function now always returns true, allowing EQ for all users.
- * The mixer-first architecture handles audio session management natively.
- */
 export async function claimEqMinutesForPlayback(
   supabase: SupabaseClient,
   audioSessionId: number,
   durationSeconds: number,
   onNeedTopUp?: (needed: number, remaining: number) => Promise<boolean>,
 ): Promise<boolean> {
-  // EQ is now free - no authentication or subscription required
-  // Just return true to allow EQ processing
-  return true;
+  return true; // EQ is free
 }
 
-// ── Presets ───────────────────────────────────────────────────────────────────
+// ── Preset Cloud Functions ───────────────────────────────────────────────────
 
-export async function fetchUserPresets(
+export async function fetchCloudPresets(
   supabase: SupabaseClient,
 ): Promise<EqPreset[]> {
-  // Try to fetch user presets if logged in, otherwise return empty array
   try {
     const { data: authData } = await supabase.auth.getUser();
     if (!authData.user) return [];
 
     const { data, error } = await supabase
       .from("eq_presets")
-      .select("id, name, type, gains_31, biquad_filters, preamp_db, created_at")
+      .select("*")
       .eq("user_id", authData.user.id)
-      .order("created_at", { ascending: false });
+      .order("last_used_at", { ascending: false });
 
-    if (error) return [];
+    if (error) {
+      console.error("[supabase-helpers] fetchCloudPresets error:", error);
+      return [];
+    }
 
-    return (data ?? []).map((row: any) => {
-      if (row.type === "graphic_31band") {
-        return {
-          id:       row.id,
-          name:     row.name,
-          type:     "graphic_31band",
-          gains_31: row.gains_31 as EqBandGains,
-          preamp_db: row.preamp_db ?? 0,
-        } as EqPreset;
-      }
-      return {
-        id:             row.id,
-        name:           row.name,
-        type:           "biquad",
-        biquad_filters: (row.biquad_filters ?? []) as EqBiquadFilter[],
-        preamp_db:      row.preamp_db ?? 0,
-      } as EqPreset;
-    });
-  } catch {
+    return (data || []).map(mapSupabaseRowToPreset);
+  } catch (e) {
+    console.error("[supabase-helpers] fetchCloudPresets failed:", e);
     return [];
   }
 }
 
-export async function savePreset(
+export async function fetchPublicPresets(
   supabase: SupabaseClient,
-  preset: Omit<EqPreset, "id">,
-): Promise<string> {
-  const { data: authData } = await supabase.auth.getUser();
-  if (!authData.user) throw new Error("Not authenticated");
+  limit = 50
+): Promise<EqPreset[]> {
+  try {
+    const { data, error } = await supabase
+      .from("eq_presets")
+      .select("*")
+      .eq("is_public", true)
+      .order("created_at", { ascending: false })
+      .limit(limit);
 
-  const row = {
-    user_id:        authData.user.id,
-    name:           preset.name,
-    type:           preset.type,
-    gains_31:       preset.type === "graphic_31band" ? preset.gains_31 : null,
-    biquad_filters: preset.type === "biquad" ? preset.biquad_filters : null,
-    preamp_db:      (preset as any).preamp_db ?? 0,
-  };
+    if (error) {
+      console.error("[supabase-helpers] fetchPublicPresets error:", error);
+      return [];
+    }
 
-  const { data, error } = await supabase
-    .from("eq_presets")
-    .insert(row)
-    .select("id")
-    .single();
-  if (error) throw new Error(`savePreset: ${error.message}`);
-  return (data as { id: string }).id;
+    return (data || []).map(mapSupabaseRowToPreset);
+  } catch (e) {
+    console.error("[supabase-helpers] fetchPublicPresets failed:", e);
+    return [];
+  }
 }
 
-export async function deletePreset(
+export async function saveCloudPreset(
   supabase: SupabaseClient,
-  presetId: string,
+  preset: Omit<EqPreset, "id"> & { id?: string }
+): Promise<string | null> {
+  try {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData.user) return null;
+
+    const row: Partial<SupabasePresetRow> = {
+      user_id: authData.user.id,
+      name: preset.name,
+      type: preset.type,
+      description: preset.description,
+      icon: preset.icon,
+      color: preset.color,
+      tags: preset.tags,
+      preamp_db: preset.preamp_db ?? 0,
+      is_public: false,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (preset.type === "graphic_31band") {
+      row.gains_31 = preset.gains_31;
+    } else {
+      row.biquad_filters = preset.biquad_filters;
+    }
+
+    let result;
+    
+    // Update existing if it has a real supabase id
+    if (preset.id && !preset.id.startsWith("builtin_") && !preset.id.startsWith("user_") && !preset.id.startsWith("imported_")) {
+      const { data, error } = await supabase
+        .from("eq_presets")
+        .update(row)
+        .eq("id", preset.id)
+        .select("id")
+        .single();
+      
+      if (error) throw error;
+      result = data;
+    } else {
+      // Insert new
+      row.created_at = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("eq_presets")
+        .insert(row)
+        .select("id")
+        .single();
+      
+      if (error) throw error;
+      result = data;
+    }
+
+    return result?.id || null;
+  } catch (e) {
+    console.error("[supabase-helpers] saveCloudPreset failed:", e);
+    return null;
+  }
+}
+
+export async function deleteCloudPreset(
+  supabase: SupabaseClient,
+  presetId: string
+): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from("eq_presets")
+      .delete()
+      .eq("id", presetId);
+
+    if (error) {
+      console.error("[supabase-helpers] deleteCloudPreset error:", error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error("[supabase-helpers] deleteCloudPreset failed:", e);
+    return false;
+  }
+}
+
+export async function updatePresetLastUsed(
+  supabase: SupabaseClient,
+  presetId: string
 ): Promise<void> {
-  const { error } = await supabase
-    .from("eq_presets")
-    .delete()
-    .eq("id", presetId);
-  if (error) throw new Error(`deletePreset: ${error.message}`);
+  try {
+    await supabase
+      .from("eq_presets")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("id", presetId);
+  } catch (e) {
+    // Non-critical error
+    console.log("[supabase-helpers] updatePresetLastUsed failed:", e);
+  }
+}
+
+export async function syncPresetsToCloud(
+  supabase: SupabaseClient,
+  localPresets: EqPreset[]
+): Promise<{ uploaded: number; failed: number }> {
+  let uploaded = 0;
+  let failed = 0;
+
+  for (const preset of localPresets) {
+    // Skip if already has supabaseId (already synced)
+    if (preset.supabaseId) continue;
+
+    const cloudId = await saveCloudPreset(supabase, preset);
+    if (cloudId) {
+      uploaded++;
+    } else {
+      failed++;
+    }
+  }
+
+  return { uploaded, failed };
+}
+
+// ── Helper ───────────────────────────────────────────────────────────────────
+
+function mapSupabaseRowToPreset(row: SupabasePresetRow): EqPreset {
+  return {
+    id: `supabase_${row.id}`,
+    name: row.name,
+    type: row.type,
+    category: row.is_public ? "artist" : "supabase",
+    description: row.description,
+    icon: row.icon,
+    color: row.color,
+    tags: row.tags as any[],
+    gains_31: row.gains_31 as EqBandGains,
+    biquad_filters: row.biquad_filters,
+    preamp_db: row.preamp_db,
+    source: "supabase",
+    supabaseId: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+  };
 }
