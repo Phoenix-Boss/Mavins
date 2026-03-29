@@ -1,89 +1,72 @@
-/**
- * types.ts — expo-autoeq-engine
- */
+// ── Track ─────────────────────────────────────────────────────────────────────
 
-// ── Band index ────────────────────────────────────────────────────────────────
-export type EqBandIndex =
-  | 0|1|2|3|4|5|6|7|8|9
-  | 10|11|12|13|14|15|16|17|18|19
-  | 20|21|22|23|24|25|26|27|28|29|30;
+export interface MavinTrack {
+  /** Unique ID — used as the MediaItem ID in ExoPlayer */
+  id: string;
+  /** HTTP/HTTPS stream URL or local file:// path */
+  uri: string;
+  /** Alias for uri — accepted for RNTP migration compatibility */
+  url?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  /** HTTP or local artwork URI */
+  artwork?: string;
+  /** Duration in milliseconds (optional — ExoPlayer detects it) */
+  duration?: number;
+  /** Custom HTTP headers for authenticated streams */
+  headers?: Record<string, string>;
+}
 
-// ── 31-band gains array ───────────────────────────────────────────────────────
-export type EqBandGains = [
-  number,number,number,number,number,number,number,number,number,number,
-  number,number,number,number,number,number,number,number,number,number,
-  number,number,number,number,number,number,number,number,number,number,number
+// ── Playback state ────────────────────────────────────────────────────────────
+
+export type PlaybackState = 'idle' | 'buffering' | 'ready' | 'ended' | 'unknown';
+
+export interface PlaybackStateEvent {
+  state: PlaybackState;
+}
+
+export interface TrackChangedEvent {
+  index: number;
+}
+
+export interface PlayerError {
+  message: string;
+  code: string;
+}
+
+export interface ProgressEvent {
+  /** Current playback position in ms */
+  position: number;
+  /** Track duration in ms */
+  duration: number;
+  /** Buffered position in ms */
+  buffered: number;
+}
+
+// ── Repeat modes (match ExoPlayer constants) ──────────────────────────────────
+
+export const RepeatMode = {
+  /** No repeat */
+  Off: 0,
+  /** Repeat current track */
+  One: 1,
+  /** Repeat entire queue */
+  All: 2,
+} as const;
+
+export type RepeatModeValue = typeof RepeatMode[keyof typeof RepeatMode];
+
+// ── EQ ────────────────────────────────────────────────────────────────────────
+
+export const ISO_FREQ_CENTERS: readonly number[] = [
+  20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
+  200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
+  2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
 ];
 
-// ── Biquad filter ─────────────────────────────────────────────────────────────
-// Matches the AutoEq ParametricEQ.txt format exactly.
-// fc + q + gainDb — NO bandIndex field (bandIndex was wrong; AutoEq uses frequency)
-export type EqBiquadType =
-  | "PK" | "LS" | "HS" | "LP" | "HP"        // AutoEq short codes
-  | "peaking" | "lowShelf" | "highShelf"      // long-form aliases
-  | "lowPass" | "highPass";
-
-export interface EqBiquadFilter {
-  /** Filter type — PK/LS/HS (gain-modifying) or LP/HP (pass, no gain) */
-  filter_type: EqBiquadType;
-  /** Center / cutoff frequency in Hz */
-  fc: number;
-  /** Quality factor */
-  q: number;
-  /** Gain in dB — used for PK, LS, HS. Ignored for LP, HP. */
-  gain_db: number;
-}
-
-// ── Preset shapes ─────────────────────────────────────────────────────────────
-export interface EqPresetGraphic {
-  id: string;
-  name: string;
-  type: "graphic_31band";
-  gains_31: EqBandGains;
-  biquad_filters?: never;
-  preamp_db?: number;
-}
-
-export interface EqPresetParametric {
-  id: string;
-  name: string;
-  type: "biquad";
-  gains_31?: never;
-  biquad_filters: EqBiquadFilter[];
-  /** Preamp from AutoEq "Preamp: X dB" line — applied before all filters */
-  preamp_db: number;
-}
-
-export type EqPreset = EqPresetGraphic | EqPresetParametric;
-
-// ── Native module interface ───────────────────────────────────────────────────
-export interface AutoEQNativeModule {
-  // ✅ NEW: Mixer-first architecture methods
-  initMixer(): Promise<number>;
-  getMixerSessionId(): Promise<number>;
-  releaseMixer(): Promise<void>;
-  
-  // Legacy methods
-  setupEQ(audioSessionId: number): Promise<void>;
-  getAudioSessionId(): Promise<number>;
-  setBand(index: number, gainDb: number): Promise<void>;
-  applyBands(gains: number[]): Promise<void>;
-  setParametricFilters(
-    filters: EqBiquadFilter[],
-    preampDb: number
-  ): Promise<void>;
-  getGains(): Promise<number[]>;
-  setEnabled(enabled: boolean): Promise<void>;
-  reset(): Promise<void>;
-  release(): Promise<void>;
-}
-
-// ── EQ UI state ───────────────────────────────────────────────────────────────
-export interface EqState {
-  isSetup: boolean;
-  isEnabled: boolean;
-  gains: number[];
-  activePreset: EqPreset | null;
-  isLoading: boolean;
-  error: string | null;
-}
+export type EQGains = [
+  number, number, number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number, number, number
+];

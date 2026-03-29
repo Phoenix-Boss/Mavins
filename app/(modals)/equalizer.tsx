@@ -1,712 +1,613 @@
 ﻿// app/(modals)/equalizer.tsx
 //
-// FIXES APPLIED vs original:
-//
-// 1. runOnJS — was a broken identity-function shim that didn't actually cross
-//    the worklet/JS boundary. Replaced with the real import from
-//    react-native-reanimated. Without this, slider gestures silently dropped
-//    every band-change call on the worklet thread and nothing reached native.
-//
-// 2. Stale closure in applyToNative — `isEnabled` captured the initial `false`
-//    value forever because applyToNative was not in useCallback and re-read
-//    a stale closure variable. Fixed by using a ref (isEnabledRef) that is
-//    always current, so the "ensure EQ is enabled" branch inside applyToNative
-//    works correctly after the first toggle.
-//
-// 3. applyToNative stability — wrapped in useCallback with correct deps so
-//    handleBandChange always closes over the latest version.
-//
-// 4. Double-enable guard — MyEQ.setEnabled(true) is now called once on mount
-//    (inside checkMixer) rather than on every band change, which was causing
-//    redundant native calls.
+// UPDATED FOR MAVIN-PLAYER:
+//   - All mavin-eq imports removed (useEqualizer, getAudioSessionId, setupEQAuto, getMixerSessionId)
+//   - All audioSessionId / mixerReady / sessionError state removed
+//   - useEqualizer hook replaced with useMavinPlayer() which exposes setEQBand / applyEQBands
+//   - isActive now derives purely from player state — no session check needed
+//   - EQ works from the first frame because the AudioProcessor is inside ExoPlayer
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Text,
-  TouchableOpacity,
-  View,
-  StyleSheet,
-  Dimensions,
-  ScrollView,
-  Platform,
+  Text, TouchableOpacity, View, StyleSheet, Dimensions,
+  Modal, ScrollView, Platform, TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters/extend';
 import { Colors } from '@/constants/Colors';
-import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '@/libs/supabase';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  runOnJS,           // ✅ FIX 1: real import — replaces the broken shim below
+  useSharedValue, useAnimatedStyle, withSpring, withSequence, FadeIn,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import MyEQ, { getMixerSessionId } from "@/modules/mavin-eq";
+
+// ── MavinPlayer replaces mavin-eq ──────────────────────────────────────────
+import MavinPlayer, { useMavinPlayer, ISO_FREQ_CENTERS } from "@/modules/mavin-player";
+
+import { ProfessionalEQSlider } from '@/components/equalizer/ProfessionalEQSlider';
+import { RotaryKnob } from '@/components/equalizer/RotaryKnob';
+import { EQGraph } from '@/components/equalizer/EQGraph';
+import { Watermark } from '@/components/equalizer/Watermark';
+import { FXControls } from '@/components/equalizer/FXControls';
+import { MasteringControls } from '@/components/equalizer/MasteringControls';
+import { ParametricEQ } from '@/components/equalizer/parametricEq';
+import { PresetModal } from '@/components/equalizer/PresetDisplay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const STORAGE_KEY  = 'eqState_v5';
+const DEBOUNCE_MS  = 600;
 
-// 10 frequency bands for UI
 const FREQUENCY_BANDS = [
-  { label: '60Hz',  idx: 0, color: '#8B4513' },
-  { label: '170Hz', idx: 1, color: '#A0522D' },
-  { label: '310Hz', idx: 2, color: '#CD853F' },
-  { label: '600Hz', idx: 3, color: '#D4A574' },
-  { label: '1kHz',  idx: 4, color: '#E8D9C0' },
-  { label: '3kHz',  idx: 5, color: '#D4A574' },
-  { label: '6kHz',  idx: 6, color: '#CD853F' },
-  { label: '12kHz', idx: 7, color: '#A0522D' },
-  { label: '14kHz', idx: 8, color: '#8B4513' },
-  { label: '16kHz', idx: 9, color: '#654321' },
+  { label: '31',  frequency: 31 },
+  { label: '62',  frequency: 62 },
+  { label: '125', frequency: 125 },
+  { label: '250', frequency: 250 },
+  { label: '500', frequency: 500 },
+  { label: '1k',  frequency: 1000 },
+  { label: '2k',  frequency: 2000 },
+  { label: '4k',  frequency: 4000 },
+  { label: '8k',  frequency: 8000 },
+  { label: '16k', frequency: 16000 },
 ];
 
-// Maps 10 UI bands → 31 native ISO bands
-const BAND_MAP: [number, number][] = [
-  [0,  2],   // 60Hz
-  [3,  5],   // 170Hz
-  [6,  8],   // 310Hz
-  [9,  11],  // 600Hz
-  [12, 16],  // 1kHz
-  [17, 20],  // 3kHz
-  [21, 24],  // 6kHz
-  [25, 27],  // 12kHz
-  [28, 29],  // 14kHz
-  [30, 30],  // 16kHz
-];
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface BandBypass { bypassed: boolean; soloed: boolean; muted: boolean }
+interface FXState {
+  mode: 'reverb'|'delay'|'chorus'|'flanger'|'phaser';
+  roomSize: number; decay: number; preDelay: number; damping: number;
+  delayTime: number; feedback: number; lowCut: number; highCut: number;
+  rate: number; depth: number; phase: number; mix: number; bypass: boolean;
+}
+interface MasteringState {
+  balance: number; stereoWidth: number; loudness: number;
+  limiter: boolean; mono: boolean;
+  limiterThreshold: number; truePeak: number; gainReduction: number;
+}
+interface ParametricState {
+  selectedFilter: 'lowpass'|'highpass'|'bandpass'|'lowshelf'|'highshelf'|'peaking'|'notch';
+  filterEnabled: boolean; gain: number; frequency: number; q: number;
+}
+interface EQState {
+  enabled: boolean;
+  graphic: { preamp: number; bands: number[]; bass: number; treble: number };
+  bandBypass: BandBypass[];
+  parametric: ParametricState;
+  fx: FXState;
+  mastering: MasteringState;
+  selectedPreset: string;
+  presetType: 'factory'|'custom';
+}
 
-const PRESETS = {
-  flat:    { name: 'Flat',    bands: [0,  0,  0,  0,  0,  0,  0,  0,  0,  0] },
-  bass:    { name: 'Bass+',   bands: [12, 10, 8,  4,  0,  0,  0,  0,  0,  0] },
-  treble:  { name: 'Treble+', bands: [0,  0,  0,  0,  0,  0,  4,  8,  10, 12] },
-  vocal:   { name: 'Vocal',   bands: [-4, -2, 0,  4,  8,  6,  2,  0,  0,  0] },
-  extreme: { name: 'Extreme', bands: [15, 10, 5,  0, -5,  0,  5,  10, 12, 15] },
+const defaultBandBypass = (): BandBypass[] =>
+  Array(10).fill(null).map(() => ({ bypassed: false, soloed: false, muted: false }));
+
+const DEFAULT_STATE: EQState = {
+  enabled: true,
+  graphic: { preamp: 0, bands: Array(10).fill(0), bass: 50, treble: 50 },
+  bandBypass: defaultBandBypass(),
+  parametric: { selectedFilter: 'peaking', filterEnabled: false, gain: 0, frequency: 1000, q: 1.0 },
+  fx: {
+    mode: 'reverb', roomSize: 60, decay: 40, preDelay: 10, damping: 50,
+    delayTime: 30, feedback: 40, lowCut: 20, highCut: 80,
+    rate: 30, depth: 40, phase: 50, mix: 30, bypass: false,
+  },
+  mastering: {
+    balance: 50, stereoWidth: 50, loudness: 50,
+    limiter: false, mono: false,
+    limiterThreshold: -6, truePeak: -12, gainReduction: 0,
+  },
+  selectedPreset: 'Flat',
+  presetType: 'factory',
 };
 
-// ─── EQSlider ──────────────────────────────────────────────────────────────
-
-interface EQSliderProps {
-  value:    number;
-  onChange: (value: number) => void;
-  label:    string;
-  color:    string;
-  enabled:  boolean;
-  index:    number;
+function sanitiseBands(raw: any[]): number[] {
+  const out = Array(10).fill(0);
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < 10; i++) {
+    const v = raw[i];
+    out[i] = typeof v === 'number' && isFinite(v) ? v : 0;
+  }
+  return out;
 }
 
-function EQSlider({ value, onChange, label, color, enabled }: EQSliderProps) {
-  const SLIDER_HEIGHT = verticalScale(280);
-  const SLIDER_WIDTH  = scale(40);
-  const TRACK_WIDTH   = scale(6);
-  const KNOB_SIZE     = scale(28);
+// Maps 10 UI bands → 31 ISO bands
+const BAND_MAP: [number, number][] = [
+  [0,1],[2,3],[4,6],[7,9],[10,13],[14,17],[18,21],[22,25],[26,29],[30,30],
+];
 
-  const translateY  = useSharedValue(0);
-  const contextY    = useSharedValue(0);
-  const activeValue = useSharedValue(value);
-
-  useEffect(() => {
-    activeValue.value = value;
-    const percent    = (15 - value) / 30;
-    translateY.value = (percent * SLIDER_HEIGHT) - (SLIDER_HEIGHT / 2);
-  }, [value]);
-
-  const gesture = Gesture.Pan()
-    .enabled(enabled)
-    .onBegin(() => {
-      contextY.value = translateY.value;
-      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
-    })
-    .onUpdate((event) => {
-      let newY       = contextY.value + event.translationY;
-      const halfH    = SLIDER_HEIGHT / 2;
-      newY           = Math.max(-halfH, Math.min(halfH, newY));
-      translateY.value = newY;
-
-      const percent   = (newY + halfH) / SLIDER_HEIGHT;
-      const dbValue   = 15 - (percent * 30);
-      const roundedDb = Math.round(dbValue * 2) / 2;
-
-      if (Math.abs(activeValue.value - roundedDb) >= 0.5) {
-        activeValue.value = roundedDb;
-        runOnJS(onChange)(roundedDb); // ✅ FIX 1: real runOnJS crosses the worklet boundary
-      }
-    })
-    .onEnd(() => {
-      const finalDb = Math.round(activeValue.value * 2) / 2;
-      runOnJS(onChange)(finalDb);
-    });
-
-  const knobStyle = useAnimatedStyle(() => ({
-    transform:       [{ translateY: translateY.value }],
-    backgroundColor: enabled ? color : '#444',
-    shadowOpacity:   enabled ? 0.5 : 0,
-  }));
-
-  const fillStyle = useAnimatedStyle(() => {
-    const halfH    = SLIDER_HEIGHT / 2;
-    const fillH    = halfH - translateY.value;
-    return {
-      height:          Math.max(0, fillH),
-      backgroundColor: enabled ? color : '#666',
-      opacity:         enabled ? 1 : 0.3,
-    };
-  });
-
-  return (
-    <GestureDetector gesture={gesture}>
-      <View style={[styles.sliderContainer, { width: SLIDER_WIDTH, height: SLIDER_HEIGHT }]}>
-        <View style={[styles.track, { width: TRACK_WIDTH, height: SLIDER_HEIGHT }]} />
-        <Animated.View style={[styles.fill, fillStyle, { width: TRACK_WIDTH }]} />
-        <View style={[styles.centerLine, { width: TRACK_WIDTH + scale(4) }]} />
-        <Animated.View
-          style={[
-            styles.knob,
-            { width: KNOB_SIZE, height: KNOB_SIZE, borderRadius: KNOB_SIZE / 2,
-              marginLeft: -(KNOB_SIZE - TRACK_WIDTH) / 2 },
-            knobStyle,
-          ]}
-        >
-          <Text style={styles.knobText}>{Math.round(activeValue.value)}</Text>
-        </Animated.View>
-        <Text style={[styles.sliderLabel, { color: enabled ? color : '#666' }]}>{label}</Text>
-        <Text style={[styles.valueText, { color: enabled ? '#fff' : '#666' }]}>
-          {activeValue.value > 0
-            ? `+${activeValue.value.toFixed(1)}`
-            : activeValue.value.toFixed(1)}
-        </Text>
-      </View>
-    </GestureDetector>
-  );
-}
-
-// ─── Main Component ───────────────────────────────────────────────────────────
-
+// ── EqualizerScreen ───────────────────────────────────────────────────────────
 export default function EqualizerScreen() {
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
+  const player  = useMavinPlayer();         // ← replaces useEqualizer
+  const eqToggleScale = useSharedValue(1);
 
-  const [mixerReady,      setMixerReady     ] = useState(false);
-  const [mixerSessionId,  setMixerSessionId ] = useState(0);
-  const [bands,           setBands          ] = useState<number[]>(Array(10).fill(0));
-  const [isEnabled,       setIsEnabled      ] = useState(false);
-  const [selectedPreset,  setSelectedPreset ] = useState('Flat');
-  const [lastError,       setLastError      ] = useState<string | null>(null);
+  // ── UI State ──────────────────────────────────────────────────────────────
+  const [eqState,               setEqState              ] = useState<EQState>(DEFAULT_STATE);
+  const [isLoading,              setIsLoading            ] = useState(true);
+  const [eqMode,                 setEqMode               ] = useState<'graphic'|'parametric'>('graphic');
+  const [fxModalVisible,         setFxModalVisible       ] = useState(false);
+  const [masteringModalVisible,  setMasteringModalVisible] = useState(false);
+  const [presetModalVisible,     setPresetModalVisible   ] = useState(false);
+  const [saveModalVisible,       setSaveModalVisible     ] = useState(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ✅ FIX 2: ref always holds the current isEnabled value so applyToNative
-  // never reads a stale closure
-  const isEnabledRef     = useRef(false);
-  const nativeGainsRef   = useRef<number[]>(Array(31).fill(0));
+  // ── isActive ──────────────────────────────────────────────────────────────
+  // EQ is always available — the AudioProcessor is inside ExoPlayer from boot.
+  // No session IDs, no mixer checks. Active as long as EQ is enabled.
+  // On iOS we disable since MavinPlayer is Android-only.
+  const isActive = eqState.enabled && Platform.OS === 'android';
 
-  // Keep ref in sync with state
-  useEffect(() => { isEnabledRef.current = isEnabled; }, [isEnabled]);
-
-  // ── checkMixer ────────────────────────────────────────────────────────────
-  const checkMixer = useCallback(async () => {
-    try {
-      const sessionId = await getMixerSessionId();
-      if (sessionId && sessionId > 0) {
-        setMixerReady(true);
-        setMixerSessionId(sessionId);
-        // ✅ FIX 3: enable once on mount, not on every band change
-        await MyEQ.setEnabled(true);
-        isEnabledRef.current = true;
-        setIsEnabled(true);
-        await applyFlatNative();
-      } else {
-        setLastError('Mixer not initialized. Call initMixerEQ() before setupPlayer().');
-      }
-    } catch (e) {
-      setLastError(`Mixer error: ${e}`);
-    }
-  }, []);
-
+  // ── Persistence: load ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (Platform.OS !== 'android') {
-      setLastError('EQ only works on Android');
-      return;
-    }
-    checkMixer();
-  }, [checkMixer]);
-
-  // ── applyFlatNative ───────────────────────────────────────────────────────
-  const applyFlatNative = async () => {
-    const flat = Array(31).fill(0);
-    nativeGainsRef.current = flat;
-    await MyEQ.applyBands(flat);
-  };
-
-  // ── applyToNative ─────────────────────────────────────────────────────────
-  // ✅ FIX 2: reads isEnabledRef.current (always fresh) instead of isEnabled
-  //           (which was a stale closure from the first render)
-  const applyToNative = useCallback(async (gains31: number[]) => {
-    try {
-      const clamped          = gains31.map(g => Math.max(-15, Math.min(15, g)));
-      nativeGainsRef.current = clamped;
-      await MyEQ.applyBands(clamped);
-    } catch (e) {
-      console.error('[EQ] Native apply failed:', e);
-      setLastError(`Apply failed: ${e}`);
-    }
+    AsyncStorage.getItem(STORAGE_KEY).then(json => {
+      if (json) {
+        try {
+          const parsed = JSON.parse(json) as Partial<EQState>;
+          setEqState(prev => ({
+            ...prev, ...parsed,
+            graphic: {
+              ...DEFAULT_STATE.graphic,
+              ...(parsed.graphic ?? {}),
+              bands: sanitiseBands(parsed.graphic?.bands ?? []),
+            },
+            bandBypass: parsed.bandBypass ?? defaultBandBypass(),
+          }));
+        } catch (e) { console.warn('Load error:', e); }
+      }
+    }).finally(() => setIsLoading(false));
   }, []);
 
-  // ── handleBandChange ──────────────────────────────────────────────────────
-  const handleBandChange = useCallback((index: number, value: number) => {
-    setBands(prev => {
-      const next = [...prev];
-      next[index] = value;
-      return next;
-    });
-    setSelectedPreset('Custom');
+  // ── Persistence: save (debounced) ─────────────────────────────────────────
+  useEffect(() => {
+    if (isLoading) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(eqState)).catch(() => {});
+    }, DEBOUNCE_MS);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [eqState, isLoading]);
 
-    const [start, end]  = BAND_MAP[index];
-    const nativeGains   = [...nativeGainsRef.current];
+  // ── Apply restored EQ to native on load ───────────────────────────────────
+  // When the screen mounts and we've loaded saved state, push it to the processor.
+  useEffect(() => {
+    if (isLoading || !isActive) return;
+    const gains = Array(31).fill(0);
+    eqState.graphic.bands.forEach((gain, ui) => {
+      const [start, end] = BAND_MAP[ui] ?? [0, 0];
+      for (let i = start; i <= end; i++) gains[i] = gain;
+    });
+    MavinPlayer.applyEQBands(gains).catch(() => {});
+  }, [isLoading]); // only on mount after load
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const detach = (prev: EQState) =>
+    prev.presetType === 'factory'
+      ? { selectedPreset: 'Custom', presetType: 'custom' as const }
+      : {};
+
+  // ── Band change ───────────────────────────────────────────────────────────
+  const handleBandChange = useCallback(async (index: number, value: number) => {
+    setEqState(prev => ({
+      ...prev, ...detach(prev),
+      graphic: { ...prev.graphic, bands: prev.graphic.bands.map((v, i) => i === index ? value : v) },
+    }));
+
+    if (!isActive) return;
+
+    // Map UI band → native 31-band gains
+    const [start, end] = BAND_MAP[index];
+    const nativeGains = Array(31).fill(null).map((_, i) => {
+      const uiBand = BAND_MAP.findIndex(([s, e]) => i >= s && i <= e);
+      return eqState.graphic.bands[uiBand] ?? 0;
+    });
     for (let i = start; i <= end; i++) nativeGains[i] = value;
 
-    applyToNative(nativeGains);
+    try { await MavinPlayer.applyEQBands(nativeGains); }
+    catch (e) { console.warn('[EQ] applyEQBands failed:', e); }
+  }, [isActive, eqState.graphic.bands]);
 
-    if (Math.abs(value) >= 5) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    }
-  }, [applyToNative]);
+  const handleBassChange = useCallback((v: number) => {
+    setEqState(p => ({ ...p, ...detach(p), graphic: { ...p.graphic, bass: v } }));
+    if (!isActive) return;
+    const bassGain = (v - 50) * 0.24;
+    const gains = Array(31).fill(0);
+    for (let i = 0; i < 8; i++) gains[i] = bassGain;
+    MavinPlayer.applyEQBands(gains).catch(() => {});
+  }, [isActive]);
 
-  // ── applyPreset ───────────────────────────────────────────────────────────
-  const applyPreset = useCallback(async (presetKey: keyof typeof PRESETS) => {
-    const preset  = PRESETS[presetKey];
-    const newBands = preset.bands;
-    setBands(newBands);
-    setSelectedPreset(preset.name);
+  const handleTrebleChange = useCallback((v: number) => {
+    setEqState(p => ({ ...p, ...detach(p), graphic: { ...p.graphic, treble: v } }));
+    if (!isActive) return;
+    const trebleGain = (v - 50) * 0.24;
+    const gains = Array(31).fill(0);
+    for (let i = 23; i < 31; i++) gains[i] = trebleGain;
+    MavinPlayer.applyEQBands(gains).catch(() => {});
+  }, [isActive]);
 
-    const nativeGains = Array(31).fill(0);
-    newBands.forEach((db, i) => {
-      const [start, end] = BAND_MAP[i];
-      for (let j = start; j <= end; j++) nativeGains[j] = db;
+  const handleFXUpdate         = useCallback((u: Partial<FXState>)        => setEqState(p => ({ ...p, fx: { ...p.fx, ...u } })), []);
+  const handleMasteringUpdate  = useCallback((u: Partial<MasteringState>) => setEqState(p => ({ ...p, mastering: { ...p.mastering, ...u } })), []);
+  const handleParametricUpdate = useCallback((u: Partial<ParametricState>) =>
+    setEqState(p => ({ ...p, ...detach(p), parametric: { ...p.parametric, ...u } })), []);
+
+  const handleBandBypass = useCallback((i: number) =>
+    setEqState(p => {
+      const bb = [...p.bandBypass];
+      bb[i] = { ...bb[i], bypassed: !bb[i].bypassed };
+      return { ...p, bandBypass: bb };
+    }), []);
+
+  const handleSelectPreset = useCallback(async (preset: {
+    name: string; bands: number[]; preamp: number; is_factory: boolean;
+  }) => {
+    Haptics.selectionAsync();
+    const result = Array(31).fill(0);
+    preset.bands.forEach((gain, i) => {
+      const [start, end] = BAND_MAP[i] ?? [0, 0];
+      for (let j = start; j <= end; j++) result[j] = gain;
     });
-
-    await applyToNative(nativeGains);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-  }, [applyToNative]);
-
-  // ── toggleEQ ─────────────────────────────────────────────────────────────
-  const toggleEQ = useCallback(async () => {
-    try {
-      const next = !isEnabledRef.current;
-      await MyEQ.setEnabled(next);
-      isEnabledRef.current = next;
-      setIsEnabled(next);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    } catch (e) {
-      console.error('[EQ] Toggle failed:', e);
+    if (isActive) {
+      await MavinPlayer.applyEQBands(result).catch(e => console.warn('[EQ] applyPreset failed:', e));
     }
-  }, []);
+    setEqState(prev => ({
+      ...prev, enabled: true,
+      graphic: { ...prev.graphic, preamp: preset.preamp ?? 0, bands: sanitiseBands(preset.bands) },
+      selectedPreset: preset.name,
+      presetType: preset.is_factory ? 'factory' : 'custom',
+    }));
+    setPresetModalVisible(false);
+  }, [isActive]);
 
-  // ── resetEQ ───────────────────────────────────────────────────────────────
-  const resetEQ = useCallback(async () => {
-    await applyPreset('flat');
-  }, [applyPreset]);
+  const toggleEQ = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    eqToggleScale.value = withSequence(
+      withSpring(0.88, { damping: 10 }),
+      withSpring(1,    { damping: 15 }),
+    );
+    const next = !eqState.enabled;
+    setEqState(p => ({ ...p, enabled: next }));
+    await MavinPlayer.setEQEnabled(next).catch(() => {});
+  }, [eqState.enabled, eqToggleScale]);
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  const eqToggleAnim = useAnimatedStyle(() => ({
+    transform: [{ scale: eqToggleScale.value }],
+  }));
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const { enabled, graphic, parametric, fx, mastering, selectedPreset, bandBypass } = eqState;
+  const safeBands  = sanitiseBands(graphic.bands);
+  const safePreamp = typeof graphic.preamp === 'number' && isFinite(graphic.preamp) ? graphic.preamp : 0;
+
+  const HEADER_H     = insets.top + verticalScale(44);
+  const BOTTOM_BAR_H = insets.bottom + verticalScale(56);
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingScreen}>
+        <Text style={styles.loadingText}>Loading Equalizer…</Text>
+      </View>
+    );
+  }
+
   return (
-    <GestureHandlerRootView style={styles.root}>
+    <View style={styles.root}>
       <LinearGradient
-        colors={['#1a1208', '#0d0b09', '#0a0807']}
         style={StyleSheet.absoluteFill}
+        colors={['#0a0908', '#141210', '#0a0908']}
+        start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+      />
+      <Watermark source={require('@/assets/images/mavins.png')} />
+
+      {/* ── HEADER ───────────────────────────────────────────────────────── */}
+      <View style={[styles.header, { paddingTop: insets.top + verticalScale(4) }]}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} hitSlop={12}>
+          <Ionicons name="chevron-down" size={moderateScale(26)} color="rgba(220,200,160,0.9)" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.headerCenter} onPress={() => setPresetModalVisible(true)}>
+          <Text style={styles.headerTitle}>EQUALIZER</Text>
+          <View style={styles.presetRow}>
+            <Text style={styles.presetName} numberOfLines={1}>{selectedPreset}</Text>
+            <MaterialCommunityIcons name="chevron-down" size={12} color="rgba(200,170,110,0.7)" />
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.modeBtn}
+          onPress={() => { Haptics.selectionAsync(); setEqMode(m => m === 'graphic' ? 'parametric' : 'graphic'); }}
+        >
+          <Text style={styles.modeBtnText}>{eqMode === 'graphic' ? 'GRAPHIC' : 'PARAM'}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── SCROLL ───────────────────────────────────────────────────────── */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: HEADER_H, paddingBottom: BOTTOM_BAR_H + verticalScale(8) },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* iOS banner */}
+        {Platform.OS !== 'android' && (
+          <Animated.View entering={FadeIn} style={styles.sessionBanner}>
+            <Ionicons name="information-circle-outline" size={13} color="#f0a030" />
+            <Text style={styles.sessionBannerText}>EQ is available on Android only</Text>
+          </Animated.View>
+        )}
+
+        {eqMode === 'graphic' ? (
+          <>
+            <View style={styles.graphWrap}>
+              <EQGraph values={safeBands} enabled={isActive} style={styles.eqGraph} />
+              <View style={styles.graphOverlayLabel}>
+                <View style={[styles.eqStatusDot, { backgroundColor: isActive ? '#4cde80' : '#555' }]} />
+                <Text style={styles.graphLabel}>{isActive ? 'ACTIVE' : 'BYPASSED'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.slidersSection}>
+              <View style={styles.dbScale}>
+                {['+15', '+6', '0', '-6', '-15'].map(v => (
+                  <Text key={v} style={styles.dbMark}>{v}</Text>
+                ))}
+              </View>
+              <View style={styles.slidersRow}>
+                {FREQUENCY_BANDS.map((band, index) => (
+                  <ProfessionalEQSlider
+                    key={band.label}
+                    value={safeBands[index]}
+                    onChange={val => handleBandChange(index, val)}
+                    label={band.label}
+                    enabled={isActive}
+                    bypassed={bandBypass[index]?.bypassed ?? false}
+                    onBypass={() => handleBandBypass(index)}
+                  />
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.knobsRow}>
+              <View style={styles.knobCell}>
+                <RotaryKnob value={graphic.bass} label="BASS" onChange={handleBassChange}
+                  color={Colors.metallicBrown.primary} size={scale(72)} enabled={isActive} />
+              </View>
+              <View style={styles.knobCenter}>
+                <TouchableOpacity style={styles.presetCenterBtn} onPress={() => setPresetModalVisible(true)}>
+                  <MaterialCommunityIcons name="music-note-outline" size={14} color={Colors.metallicBrown.primary} />
+                  <Text style={styles.presetCenterText} numberOfLines={1}>{selectedPreset}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveBtn} onPress={() => setSaveModalVisible(true)}>
+                  <MaterialCommunityIcons name="content-save-outline" size={13} color="#888" />
+                  <Text style={styles.saveBtnText}>SAVE</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.knobCell}>
+                <RotaryKnob value={graphic.treble} label="TREBLE" onChange={handleTrebleChange}
+                  color={Colors.metallicBrown.secondary} size={scale(72)} enabled={isActive} />
+              </View>
+            </View>
+          </>
+        ) : (
+          <ParametricEQ enabled={isActive} parametricState={parametric} onUpdate={handleParametricUpdate} />
+        )}
+      </ScrollView>
+
+      {/* ── BOTTOM BAR ───────────────────────────────────────────────────── */}
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + verticalScale(6) }]}>
+        <View style={styles.bottomTopBorder} />
+        <View style={styles.bottomRow}>
+          <TouchableOpacity style={styles.bottomSideBtn} onPress={() => { Haptics.selectionAsync(); setFxModalVisible(true); }}>
+            <MaterialCommunityIcons name="magic-staff" size={moderateScale(20)} color="#888" />
+            <Text style={styles.bottomSideBtnText}>FX</Text>
+          </TouchableOpacity>
+
+          <Animated.View style={eqToggleAnim}>
+            <TouchableOpacity
+              style={[styles.eqToggle, enabled && styles.eqToggleOn]}
+              onPress={toggleEQ}
+              activeOpacity={0.8}
+              disabled={Platform.OS !== 'android'}
+            >
+              <MaterialCommunityIcons name="power" size={moderateScale(22)}
+                color={enabled ? '#0a0908' : 'rgba(200,180,140,0.5)'} />
+              <Text style={[styles.eqToggleText, enabled && styles.eqToggleTextOn]}>
+                {enabled ? 'EQ  ON' : 'EQ  OFF'}
+              </Text>
+              {enabled && <View style={styles.eqGlow} />}
+            </TouchableOpacity>
+          </Animated.View>
+
+          <TouchableOpacity style={styles.bottomSideBtn} onPress={() => { Haptics.selectionAsync(); setMasteringModalVisible(true); }}>
+            <MaterialCommunityIcons name="tune-vertical" size={moderateScale(20)} color="#888" />
+            <Text style={styles.bottomSideBtnText}>TONE</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* ── MODALS ───────────────────────────────────────────────────────── */}
+      <Modal animationType="slide" transparent visible={fxModalVisible} onRequestClose={() => setFxModalVisible(false)}>
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + scale(8) }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>FX PROCESSOR</Text>
+              <TouchableOpacity style={styles.sheetClose} onPress={() => setFxModalVisible(false)}>
+                <Ionicons name="close" size={18} color="#888" />
+              </TouchableOpacity>
+            </View>
+            <FXControls enabled={isActive} fxState={fx} onUpdate={handleFXUpdate} />
+          </View>
+        </View>
+      </Modal>
+
+      <Modal animationType="slide" transparent visible={masteringModalVisible} onRequestClose={() => setMasteringModalVisible(false)}>
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + scale(8) }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>TONE CONTROLS</Text>
+              <TouchableOpacity style={styles.sheetClose} onPress={() => setMasteringModalVisible(false)}>
+                <Ionicons name="close" size={18} color="#888" />
+              </TouchableOpacity>
+            </View>
+            <MasteringControls enabled={isActive} masteringState={mastering} onUpdate={handleMasteringUpdate} />
+          </View>
+        </View>
+      </Modal>
+
+      <PresetModal
+        visible={presetModalVisible} onClose={() => setPresetModalVisible(false)}
+        selectedPreset={selectedPreset} onSelectPreset={handleSelectPreset} insets={insets}
       />
 
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-down" size={24} color="#e8d9c0" />
-        </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
-          <View style={[styles.statusDot, { backgroundColor: mixerReady ? '#4cde80' : '#ff4444' }]} />
-          <Text style={styles.headerTitle}>EQUALIZER</Text>
-        </View>
-
-        <TouchableOpacity style={styles.headerBtn} onPress={resetEQ}>
-          <Text style={styles.resetText}>Reset</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Error banner */}
-      {lastError && (
-        <View style={styles.errorBanner}>
-          <Ionicons name="warning" size={16} color="#ff6666" />
-          <Text style={styles.errorText}>{lastError}</Text>
-        </View>
-      )}
-
-      {/* Loading */}
-      {!mixerReady && !lastError && (
-        <View style={styles.loadingBanner}>
-          <Text style={styles.loadingText}>Initializing EQ...</Text>
-        </View>
-      )}
-
-      {mixerReady && (
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-          {/* Presets */}
-          <View style={styles.presetContainer}>
-            {(Object.keys(PRESETS) as (keyof typeof PRESETS)[]).map((key) => (
-              <TouchableOpacity
-                key={key}
-                style={[styles.presetBtn, selectedPreset === PRESETS[key].name && styles.presetBtnActive]}
-                onPress={() => applyPreset(key)}
-              >
-                <Text style={[styles.presetText, selectedPreset === PRESETS[key].name && styles.presetTextActive]}>
-                  {PRESETS[key].name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* EQ Sliders */}
-          <View style={styles.eqContainer}>
-            {/* dB scale */}
-            <View style={styles.scaleContainer}>
-              {['+15', '+8', '0', '-8', '-15'].map((label) => (
-                <Text key={label} style={[styles.scaleText, label === '0' && styles.scaleCenter]}>
-                  {label}
-                </Text>
-              ))}
-            </View>
-
-            {/* Sliders */}
-            <View style={styles.slidersRow}>
-              {FREQUENCY_BANDS.map((band) => (
-                <EQSlider
-                  key={band.idx}
-                  index={band.idx}
-                  value={bands[band.idx]}
-                  onChange={(v) => handleBandChange(band.idx, v)}
-                  label={band.label}
-                  color={band.color}
-                  enabled={isEnabled}
-                />
-              ))}
-            </View>
-          </View>
-
-          {/* Band value readout */}
-          <View style={styles.valuesContainer}>
-            <Text style={styles.valuesTitle}>BAND GAINS (dB)</Text>
-            <View style={styles.valuesRow}>
-              {bands.map((db, i) => (
-                <View key={i} style={styles.valueBox}>
-                  <Text style={[
-                    styles.valueBoxText,
-                    db > 0 ? styles.valuePositive : db < 0 ? styles.valueNegative : null,
-                  ]}>
-                    {db > 0 ? `+${db}` : db}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          {/* Instructions */}
-          <View style={styles.instructions}>
-            <Text style={styles.instructionText}>
-              Drag sliders to adjust frequency bands.{'\n'}
-              Session ID: {mixerSessionId || 'N/A'}
-            </Text>
-          </View>
-
-          {/* Spacer for bottom bar */}
-          <View style={{ height: 120 }} />
-        </ScrollView>
-      )}
-
-      {/* Bottom bar — EQ toggle */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity
-          style={[styles.toggleBtn, isEnabled && styles.toggleBtnOn]}
-          onPress={toggleEQ}
-          disabled={!mixerReady}
-        >
-          <Ionicons
-            name={isEnabled ? 'radio-button-on' : 'radio-button-off'}
-            size={20}
-            color={isEnabled ? '#0a0908' : '#fff'}
-          />
-          <Text style={[styles.toggleText, isEnabled && styles.toggleTextOn]}>
-            {isEnabled ? 'EQ ACTIVE' : 'EQ BYPASSED'}
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.sessionText}>
-          Session: {mixerSessionId || 'N/A'}
-        </Text>
-      </View>
-    </GestureHandlerRootView>
+      <SavePresetModal
+        visible={saveModalVisible} onClose={() => setSaveModalVisible(false)}
+        bands={safeBands} preamp={safePreamp}
+        onSaved={name => { setEqState(p => ({ ...p, selectedPreset: name, presetType: 'custom' })); setSaveModalVisible(false); }}
+        insets={insets}
+      />
+    </View>
   );
 }
 
-const GOLD = Colors.metallicBrown?.primary || '#C4A35A';
+// ── SavePresetModal ───────────────────────────────────────────────────────────
+const CUSTOM_PRESETS_KEY = 'eqCustomPresets_v5';
+
+function SavePresetModal({ visible, onClose, bands, preamp, onSaved, insets }: {
+  visible: boolean; onClose: () => void; bands: number[]; preamp: number;
+  onSaved: (name: string) => void; insets: { bottom: number };
+}) {
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) { Alert.alert('Name required', 'Enter a preset name.'); return; }
+    setSaving(true);
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData.user) {
+        await supabase.from('eq_presets').upsert({
+          user_id: authData.user.id, name: trimmed,
+          type: 'graphic_31band', gains_31: bands, preamp_db: preamp,
+        }, { onConflict: 'user_id,name' });
+      }
+      const existing = await AsyncStorage.getItem(CUSTOM_PRESETS_KEY);
+      const list = existing ? JSON.parse(existing) : [];
+      await AsyncStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify([
+        ...list.filter((p: any) => p.name !== trimmed),
+        { id: `c${Date.now()}`, name: trimmed, bands, preamp, is_factory: false, category: 'user', display_order: list.length },
+      ]));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onSaved(trimmed);
+      setName('');
+    } catch (e: any) {
+      Alert.alert('Save failed', e?.message ?? 'Unknown error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal animationType="fade" transparent visible={visible} onRequestClose={onClose}>
+      <View style={saveStyles.overlay}>
+        <View style={[saveStyles.card, { marginBottom: insets.bottom + scale(20) }]}>
+          <Text style={saveStyles.title}>Save Preset</Text>
+          <TextInput style={saveStyles.textInput} placeholder="Preset name" placeholderTextColor="#555"
+            value={name} onChangeText={setName} autoFocus maxLength={40} returnKeyType="done" onSubmitEditing={handleSave} />
+          <View style={saveStyles.preview}>
+            {bands.map((v, i) => (
+              <View key={i} style={[saveStyles.previewBar, {
+                height: Math.abs((v ?? 0) * 2) + 2,
+                backgroundColor: (v ?? 0) > 0 ? Colors.metallicBrown.primary : '#444',
+              }]} />
+            ))}
+          </View>
+          <View style={saveStyles.btns}>
+            <TouchableOpacity style={saveStyles.btnCancel} onPress={onClose}>
+              <Text style={saveStyles.btnCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[saveStyles.btnSave, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
+              <Text style={saveStyles.btnSaveText}>{saving ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const GOLD  = Colors.metallicBrown.primary;
+const GOLD2 = Colors.metallicBrown.secondary;
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#0d0b09',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(139,115,85,0.3)',
-  },
-  headerBtn: {
-    padding: 8,
-    minWidth: 60,
-    alignItems: 'center',
-  },
-  headerCenter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerTitle: {
-    color: '#e8d9c0',
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 2,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  resetText: {
-    color: GOLD,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  errorBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(255,68,68,0.15)',
-    margin: 12,
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,68,68,0.4)',
-  },
-  errorText: {
-    color: '#ff6666',
-    fontSize: 13,
-    flex: 1,
-  },
-  loadingBanner: {
-    margin: 12,
-    padding: 12,
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#888',
-    fontSize: 14,
-  },
-  scroll: {
-    flex: 1,
-  },
-  presetContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 8,
-    paddingVertical: 16,
-    gap: 8,
-  },
-  presetBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    borderRadius: 20,
-    backgroundColor: 'rgba(139,115,85,0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(139,115,85,0.3)',
-    alignItems: 'center',
-  },
-  presetBtnActive: {
-    backgroundColor: GOLD,
-    borderColor: GOLD,
-  },
-  presetText: {
-    color: '#a09070',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  presetTextActive: {
-    color: '#0a0908',
-  },
-  eqContainer: {
-    flexDirection: 'row',
-    height: 340,
-    marginHorizontal: 12,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(139,115,85,0.25)',
-  },
-  scaleContainer: {
-    width: 35,
-    height: 280,
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    paddingRight: 4,
-    marginTop: 30,
-  },
-  scaleText: {
-    color: 'rgba(200,180,140,0.5)',
-    fontSize: 10,
-    fontFamily: 'monospace',
-  },
-  scaleCenter: {
-    color: GOLD,
-    fontWeight: '700',
-  },
-  slidersRow: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingLeft: 8,
-  },
-  sliderContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  track: {
-    backgroundColor: 'rgba(100,100,100,0.3)',
-    borderRadius: 3,
-  },
-  fill: {
-    position: 'absolute',
-    bottom: '50%',
-    borderRadius: 3,
-  },
-  centerLine: {
-    position: 'absolute',
-    height: 2,
-    backgroundColor: GOLD,
-    opacity: 0.5,
-    top: '50%',
-    marginTop: -1,
-  },
-  knob: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 5,
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  knobText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  sliderLabel: {
-    position: 'absolute',
-    bottom: -20,
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  valueText: {
-    position: 'absolute',
-    top: -25,
-    fontSize: 10,
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
-  valuesContainer: {
-    margin: 12,
-    padding: 16,
-    backgroundColor: 'rgba(139,115,85,0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(139,115,85,0.2)',
-  },
-  valuesTitle: {
-    color: '#a09070',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  valuesRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  valueBox: {
-    width: 30,
-    alignItems: 'center',
-  },
-  valueBoxText: {
-    color: '#888',
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
-  valuePositive: { color: '#4cde80' },
-  valueNegative: { color: '#ff6b6b' },
-  instructions: {
-    margin: 12,
-    padding: 16,
-    alignItems: 'center',
-  },
-  instructionText: {
-    color: '#666',
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(13,11,9,0.98)',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(139,115,85,0.3)',
-    paddingTop: 16,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    gap: 8,
-  },
-  toggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 40,
-    paddingVertical: 14,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  toggleBtnOn: {
-    backgroundColor: GOLD,
-    borderColor: GOLD,
-  },
-  toggleText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  toggleTextOn: {
-    color: '#0a0908',
-  },
-  sessionText: {
-    color: '#555',
-    fontSize: 10,
-    fontFamily: 'monospace',
-  },
+  root: { flex: 1, backgroundColor: '#0a0908' },
+  loadingScreen: { flex: 1, backgroundColor: '#0a0908', justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: '#666', fontSize: moderateScale(13) },
+  header: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200, flexDirection: 'row', alignItems: 'center', paddingHorizontal: scale(10), paddingBottom: verticalScale(10), backgroundColor: 'rgba(10,9,8,0.96)', borderBottomWidth: 1, borderBottomColor: `${GOLD}33` },
+  backBtn: { padding: scale(8), width: scale(40) },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle: { color: '#e8d9c0', fontSize: moderateScale(13), fontWeight: '800', letterSpacing: 2 },
+  presetRow: { flexDirection: 'row', alignItems: 'center', gap: scale(4), marginTop: verticalScale(2) },
+  presetName: { color: GOLD, fontSize: moderateScale(11), fontWeight: '600', maxWidth: scale(150) },
+  modeBtn: { paddingHorizontal: scale(10), paddingVertical: verticalScale(5), backgroundColor: 'rgba(139,115,85,0.12)', borderRadius: 12, borderWidth: 1, borderColor: `${GOLD}44`, width: scale(68), alignItems: 'center' },
+  modeBtnText: { color: GOLD, fontSize: moderateScale(9), fontWeight: '800', letterSpacing: 0.5 },
+  scrollContent: { paddingHorizontal: scale(8) },
+  sessionBanner: { flexDirection: 'row', alignItems: 'center', gap: scale(8), backgroundColor: 'rgba(240,160,48,0.1)', borderWidth: 1, borderColor: 'rgba(240,160,48,0.3)', borderRadius: 8, paddingHorizontal: scale(12), paddingVertical: verticalScale(7), marginBottom: verticalScale(8) },
+  sessionBannerText: { flex: 1, color: '#f0a030', fontSize: moderateScale(10), fontWeight: '600' },
+  graphWrap: { marginBottom: verticalScale(4), borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: `${GOLD}22`, position: 'relative' },
+  eqGraph: { marginVertical: 0 },
+  graphOverlayLabel: { position: 'absolute', top: verticalScale(6), right: scale(10), flexDirection: 'row', alignItems: 'center', gap: scale(4), backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8, paddingHorizontal: scale(7), paddingVertical: verticalScale(3) },
+  eqStatusDot: { width: scale(5), height: scale(5), borderRadius: 3 },
+  graphLabel: { color: 'rgba(255,255,255,0.5)', fontSize: moderateScale(8), fontWeight: '700', letterSpacing: 0.5 },
+  slidersSection: { flexDirection: 'row', alignItems: 'stretch', marginBottom: verticalScale(4), paddingHorizontal: scale(2) },
+  dbScale: { width: scale(22), justifyContent: 'space-between', paddingVertical: verticalScale(14), alignItems: 'flex-end', paddingRight: scale(4) },
+  dbMark: { color: 'rgba(200,180,140,0.35)', fontSize: moderateScale(7), fontWeight: '600', fontFamily: 'monospace' },
+  slidersRow: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  divider: { height: 1, backgroundColor: `${GOLD}2a`, marginHorizontal: scale(8), marginVertical: verticalScale(8) },
+  knobsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: scale(8), paddingBottom: verticalScale(8) },
+  knobCell: { alignItems: 'center' },
+  knobCenter: { alignItems: 'center', gap: verticalScale(8) },
+  presetCenterBtn: { flexDirection: 'row', alignItems: 'center', gap: scale(5), paddingHorizontal: scale(12), paddingVertical: verticalScale(6), backgroundColor: 'rgba(139,115,85,0.12)', borderRadius: 14, borderWidth: 1, borderColor: `${GOLD}40`, maxWidth: scale(130) },
+  presetCenterText: { color: GOLD, fontSize: moderateScale(11), fontWeight: '700', maxWidth: scale(100) },
+  saveBtn: { flexDirection: 'row', alignItems: 'center', gap: scale(4), paddingHorizontal: scale(10), paddingVertical: verticalScale(4), backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  saveBtnText: { color: '#777', fontSize: moderateScale(9), fontWeight: '700', letterSpacing: 0.5 },
+  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 300, backgroundColor: 'rgba(10,9,8,0.97)' },
+  bottomTopBorder: { height: 1, backgroundColor: `${GOLD}44` },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: scale(20), paddingTop: verticalScale(10) },
+  bottomSideBtn: { alignItems: 'center', gap: verticalScale(3), padding: scale(8), width: scale(56) },
+  bottomSideBtnText: { color: '#777', fontSize: moderateScale(9), fontWeight: '700', letterSpacing: 0.5 },
+  eqToggle: { flexDirection: 'row', alignItems: 'center', gap: scale(7), paddingHorizontal: scale(22), paddingVertical: verticalScale(13), borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.07)', borderWidth: 2, borderColor: 'rgba(255,255,255,0.12)', overflow: 'hidden', minWidth: scale(130), justifyContent: 'center' },
+  eqToggleOn: { backgroundColor: GOLD, borderColor: '#c8a464', shadowColor: GOLD, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12, elevation: 12 },
+  eqToggleText: { color: 'rgba(200,180,140,0.55)', fontSize: moderateScale(12), fontWeight: '800', letterSpacing: 1 },
+  eqToggleTextOn: { color: '#0a0908' },
+  eqGlow: { ...StyleSheet.absoluteFillObject, backgroundColor: GOLD, opacity: 0.15 },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.88)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#111009', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: scale(16), paddingTop: verticalScale(12), maxHeight: SCREEN_HEIGHT * 0.85, borderTopWidth: 1, borderColor: `${GOLD}33` },
+  sheetHandle: { alignSelf: 'center', width: scale(36), height: 4, borderRadius: 2, backgroundColor: `${GOLD}44`, marginBottom: verticalScale(12) },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: verticalScale(14), paddingBottom: verticalScale(10), borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
+  sheetTitle: { color: '#e8d9c0', fontSize: moderateScale(15), fontWeight: '800', letterSpacing: 0.8 },
+  sheetClose: { padding: scale(6) },
+});
+
+const saveStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end', alignItems: 'center', paddingBottom: verticalScale(40) },
+  card: { width: SCREEN_WIDTH * 0.9, backgroundColor: '#131110', borderRadius: 16, padding: scale(20), borderWidth: 1, borderColor: `${Colors.metallicBrown.primary}44` },
+  title: { color: '#e8d9c0', fontSize: moderateScale(17), fontWeight: '800', marginBottom: verticalScale(14) },
+  textInput: { backgroundColor: '#1e1c1a', borderRadius: 10, paddingHorizontal: scale(14), height: verticalScale(46), color: '#fff', fontSize: moderateScale(15), marginBottom: verticalScale(14), borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  preview: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: verticalScale(36), marginBottom: verticalScale(14), paddingHorizontal: scale(4) },
+  previewBar: { flex: 1, marginHorizontal: 1, borderRadius: 1 },
+  btns: { flexDirection: 'row', gap: scale(10) },
+  btnCancel: { flex: 1, height: verticalScale(44), borderRadius: 10, backgroundColor: '#2a2826', justifyContent: 'center', alignItems: 'center' },
+  btnCancelText: { color: '#aaa', fontSize: moderateScale(14), fontWeight: '600' },
+  btnSave: { flex: 1, height: verticalScale(44), borderRadius: 10, backgroundColor: Colors.metallicBrown.primary, justifyContent: 'center', alignItems: 'center' },
+  btnSaveText: { color: '#0a0908', fontSize: moderateScale(14), fontWeight: '800' },
 });
