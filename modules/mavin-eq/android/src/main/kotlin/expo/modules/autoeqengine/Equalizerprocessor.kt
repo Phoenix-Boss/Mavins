@@ -558,7 +558,7 @@ class EqualizerProcessor : AudioProcessor {
         
         if (peakReleaseCoeff > 0) {
             for (ch in 0 until numChannels) {
-                currentPeaks[ch] = (currentPeaks[ch] * (1.0f - peakReleaseCoeff)).coerceAtLeast(0f)
+                currentPeaks[ch] = (currentPeaks[ch] * (1.0 - peakReleaseCoeff)).toFloat().coerceAtLeast(0f)
             }
         }
         
