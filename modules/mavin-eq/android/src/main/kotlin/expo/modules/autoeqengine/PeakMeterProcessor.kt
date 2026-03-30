@@ -1,6 +1,8 @@
-package expo.modules.autoeqengine
+﻿package expo.modules.autoeqengine
 
+import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
@@ -9,15 +11,6 @@ import kotlin.math.max
 
 /**
  * PeakMeterProcessor - VU / Peak Meter
- * 
- * Tracks peak amplitude per channel with configurable hold and release.
- * Emits peak values through a callback for UI metering.
- * 
- * Features:
- * - Per-channel peak tracking (true peak, not RMS)
- * - Configurable peak hold time
- * - Configurable release time (fallback speed)
- * - Lock-free callback interface
  */
 class PeakMeterProcessor : AudioProcessor {
     
@@ -31,9 +24,10 @@ class PeakMeterProcessor : AudioProcessor {
         const val PEAK_HOLD_MAX_MS = 2000.0
         const val RELEASE_MIN_MS = 10.0
         const val RELEASE_MAX_MS = 1000.0
+        
+        const val ENCODING_PCM_32BIT = 0x00000004
     }
     
-    // Lock-free parameters
     @Volatile
     private var peakHoldMs = DEFAULT_PEAK_HOLD_MS
     @Volatile
@@ -41,29 +35,21 @@ class PeakMeterProcessor : AudioProcessor {
     @Volatile
     private var isEnabled = true
     
-    // Peak tracking per channel
     private var currentPeaks = FloatArray(8) { 0f }
     private var heldPeaks = FloatArray(8) { 0f }
     private var peakTimer = LongArray(8) { 0L }
     
-    // Release coefficient
     private var releaseCoeff = 0.0
     private var lastTimestamp = 0L
     
-    // Callback (called from audio thread - must be fast)
     private var peakCallback: ((FloatArray) -> Unit)? = null
     
-    // State
     private var numChannels = 0
     private var sampleRate = 48000.0
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
-    private var outputBuffer: ByteBuffer = EMPTY_BUFFER
+    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API
-    // ─────────────────────────────────────────────────────────────────────────
     
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
     fun isEnabled(): Boolean = isEnabled
@@ -90,10 +76,6 @@ class PeakMeterProcessor : AudioProcessor {
             peakTimer[i] = 0L
         }
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -139,20 +121,21 @@ class PeakMeterProcessor : AudioProcessor {
         output.flip()
         outputBuffer = output
         
-        // Emit peaks after processing this buffer
         emitPeaks()
     }
     
     override fun queueEndOfStream() { inputEnded = true }
+    
     override fun getOutput(): ByteBuffer {
         val out = outputBuffer
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         return out
     }
-    override fun isEnded(): Boolean = inputEnded && outputBuffer === EMPTY_BUFFER
+    
+    override fun isEnded(): Boolean = inputEnded && outputBuffer === AudioProcessor.EMPTY_BUFFER
     
     override fun flush() {
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         for (i in 0 until numChannels) {
             currentPeaks[i] = 0f
@@ -166,10 +149,6 @@ class PeakMeterProcessor : AudioProcessor {
         resetPeaks()
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // PEAK TRACKING
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         var idx = 0
         while (input.remaining() >= 2) {
@@ -177,7 +156,6 @@ class PeakMeterProcessor : AudioProcessor {
             val sample = input.short.toDouble() / 32768.0
             val absSample = abs(sample).toFloat()
             
-            // Update current peak for this channel
             if (absSample > currentPeaks[ch]) {
                 currentPeaks[ch] = absSample
             }
@@ -224,7 +202,6 @@ class PeakMeterProcessor : AudioProcessor {
         val elapsedSec = (now - lastTimestamp) / 1_000_000_000.0
         lastTimestamp = now
         
-        // Apply release to current peaks
         if (releaseCoeff > 0) {
             for (ch in 0 until numChannels) {
                 currentPeaks[ch] = (currentPeaks[ch] * (1.0 - releaseCoeff)).toFloat()
@@ -232,21 +209,18 @@ class PeakMeterProcessor : AudioProcessor {
             }
         }
         
-        // Update held peaks
         val holdNs = (peakHoldMs / 1000.0) * 1_000_000_000.0
         for (ch in 0 until numChannels) {
             if (currentPeaks[ch] > heldPeaks[ch]) {
                 heldPeaks[ch] = currentPeaks[ch]
                 peakTimer[ch] = now
             } else if (now - peakTimer[ch] > holdNs) {
-                // Hold time expired, release held peak gradually
                 val release = (releaseCoeff * 0.5).toFloat()
                 heldPeaks[ch] = max(heldPeaks[ch] * (1.0f - release), currentPeaks[ch])
                 if (heldPeaks[ch] < 1e-6f) heldPeaks[ch] = 0f
             }
         }
         
-        // Callback with copy of peaks
         peakCallback?.invoke(heldPeaks.copyOf())
     }
     
@@ -256,12 +230,10 @@ class PeakMeterProcessor : AudioProcessor {
     }
     
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
-        return if (outputBuffer === EMPTY_BUFFER || outputBuffer.capacity() < size) {
+        return if (outputBuffer === AudioProcessor.EMPTY_BUFFER || outputBuffer.capacity() < size) {
             ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).also { outputBuffer = it }
         } else {
             outputBuffer.clear().limit(size); outputBuffer
         }
     }
-    
-    private val ENCODING_PCM_32BIT = 0x00000004
 }

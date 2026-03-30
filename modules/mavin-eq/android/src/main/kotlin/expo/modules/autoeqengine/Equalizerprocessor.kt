@@ -1,4 +1,4 @@
-package expo.modules.autoeqengine
+﻿package expo.modules.autoeqengine
 
 import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
@@ -11,31 +11,31 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
 /**
- * EqualizerProcessor v5 — Complete Poweramp-parity DSP engine with 64-bit processing
+ * EqualizerProcessor v5 â€” Complete Poweramp-parity DSP engine with 64-bit processing
  *
- * ✅ 31-band ISO 1/3-octave graphic EQ
- * ✅ Full parametric EQ mode — independent per-band freq, gain, Q
- * ✅ Parallel dual-processor: graphic + parametric run simultaneously, summed and normalized
- * ✅ Low shelf (band 0) · Peaking (bands 1–29) · High shelf (band 30)
- * ✅ Per-band Q (0.3–10) — shared across both modes
- * ✅ Preamp ±15 dB — smoothed, separate gain stage
- * ✅ Loudness normalization — separate gain stage (ReplayGain / LUFS offset)
- * ✅ Parameter smoothing — linear interpolation, configurable 0–50 ms ramp
- * ✅ True-peak limiter — soft-knee, 0.1 ms attack / 80 ms release, –0.17 dBFS
- * ✅ TPDF dither + noise shaping on 16-bit output (4 shaping curves)
- * ✅ PCM_16BIT · PCM_FLOAT · PCM_32BIT support
- * ✅ Mono and stereo support
- * ✅ Denormal flush guards on all biquad state registers
- * ✅ Lock-free atomic updates from JS thread
- * ✅ Peak metering (VU) with configurable hold/release
- * ✅ 64-bin Goertzel spectrum analysis, log-spaced 20 Hz–Nyquist
- * ✅ Flat-response auto-EQ suggestion from spectrum
- * ✅ Compression/limiting stage with soft knee
- * ✅ 64-bit high-precision processing mode (Double precision)
+ * âœ… 31-band ISO 1/3-octave graphic EQ
+ * âœ… Full parametric EQ mode â€” independent per-band freq, gain, Q
+ * âœ… Parallel dual-processor: graphic + parametric run simultaneously, summed and normalized
+ * âœ… Low shelf (band 0) Â· Peaking (bands 1â€“29) Â· High shelf (band 30)
+ * âœ… Per-band Q (0.3â€“10) â€” shared across both modes
+ * âœ… Preamp Â±15 dB â€” smoothed, separate gain stage
+ * âœ… Loudness normalization â€” separate gain stage (ReplayGain / LUFS offset)
+ * âœ… Parameter smoothing â€” linear interpolation, configurable 0â€“50 ms ramp
+ * âœ… True-peak limiter â€” soft-knee, 0.1 ms attack / 80 ms release, â€“0.17 dBFS
+ * âœ… TPDF dither + noise shaping on 16-bit output (4 shaping curves)
+ * âœ… PCM_16BIT Â· PCM_FLOAT Â· PCM_32BIT support
+ * âœ… Mono and stereo support
+ * âœ… Denormal flush guards on all biquad state registers
+ * âœ… Lock-free atomic updates from JS thread
+ * âœ… Peak metering (VU) with configurable hold/release
+ * âœ… 64-bin Goertzel spectrum analysis, log-spaced 20 Hzâ€“Nyquist
+ * âœ… Flat-response auto-EQ suggestion from spectrum
+ * âœ… Compression/limiting stage with soft knee
+ * âœ… 64-bit high-precision processing mode (Double precision)
  *
  * DSP chain per sample:
- *   PCM in → loudness → preamp → graphic EQ → parametric EQ (parallel) 
- *          → compressor → true-peak limiter → dither/shaping → PCM out
+ *   PCM in â†’ loudness â†’ preamp â†’ graphic EQ â†’ parametric EQ (parallel) 
+ *          â†’ compressor â†’ true-peak limiter â†’ dither/shaping â†’ PCM out
  */
 @androidx.media3.common.util.UnstableApi
 class EqualizerProcessor : AudioProcessor {
@@ -88,7 +88,7 @@ class EqualizerProcessor : AudioProcessor {
     enum class DitherMode { FLAT, E_WEIGHTED, F_WEIGHTED, HIGHPASS }
     enum class EqMode { GRAPHIC, PARAMETRIC, PARALLEL }
 
-    // ── Atomic public state ───────────────────────────────────────────────────
+    // â”€â”€ Atomic public state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private val _isEnabled = AtomicBoolean(true)
     var isEnabled: Boolean
         get() = _isEnabled.get()
@@ -103,7 +103,7 @@ class EqualizerProcessor : AudioProcessor {
     fun setHighPrecisionMode(enabled: Boolean) { highPrecisionMode = enabled }
     fun isHighPrecisionMode(): Boolean = highPrecisionMode
 
-    // ── Pending atomic updates ────────────────────────────────────────────────
+    // â”€â”€ Pending atomic updates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private val pendingGraphicGains = AtomicReference<FloatArray?>(null)
     private val pendingParametricGains = AtomicReference<FloatArray?>(null)
     private val pendingParametricFreqs = AtomicReference<DoubleArray?>(null)
@@ -112,7 +112,7 @@ class EqualizerProcessor : AudioProcessor {
     private val pendingLoudness = AtomicReference<Float?>(null)
     private val pendingEqMode = AtomicReference<EqMode?>(null)
 
-    // ── Compressor state (lock-free) ──────────────────────────────────────────
+    // â”€â”€ Compressor state (lock-free) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     @Volatile private var compressorThreshold = COMPRESSOR_THRESHOLD_DB
     @Volatile private var compressorRatio = COMPRESSOR_RATIO
     @Volatile private var compressorAttackMs = COMPRESSOR_ATTACK_MS
@@ -130,7 +130,7 @@ class EqualizerProcessor : AudioProcessor {
     private var compressorAttackCoeff = 0.0
     private var compressorReleaseCoeff = 0.0
 
-    // ── Peak meter state ──────────────────────────────────────────────────────
+    // â”€â”€ Peak meter state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     @Volatile private var peakHoldMs = PEAK_HOLD_MS
     @Volatile private var peakReleaseMs = PEAK_RELEASE_MS
     private var currentPeaks = FloatArray(8) { 0f }
@@ -139,7 +139,7 @@ class EqualizerProcessor : AudioProcessor {
     private var peakReleaseCoeff = 0.0
     private var peakCallback: ((FloatArray) -> Unit)? = null
 
-    // ── DSP state ─────────────────────────────────────────────────────────────
+    // â”€â”€ DSP state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var numChannels = 0
     private var numBands = 0
     private var sampleRate = 48000.0
@@ -165,22 +165,22 @@ class EqualizerProcessor : AudioProcessor {
     private var paramCoeffs: Array<DoubleArray> = emptyArray()
     private var paramState: Array<Array<DoubleArray>> = emptyArray()
 
-    // ── Limiter ───────────────────────────────────────────────────────────────
+    // â”€â”€ Limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var limiterEnvelope = DoubleArray(8) { 1.0 }
     private var limiterAttCoeff = 0.0
     private var limiterRelCoeff = 0.0
 
-    // ── Dither ────────────────────────────────────────────────────────────────
+    // â”€â”€ Dither â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private val ditherRandom = Random()
     private var shapingError = Array(8) { DoubleArray(4) }
 
-    // ── Output buffer ─────────────────────────────────────────────────────────
+    // â”€â”€ Output buffer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var inputEnded = false
 
-    // ── Spectrum ──────────────────────────────────────────────────────────────
+    // â”€â”€ Spectrum â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var spectrumBuf = FloatArray(8192)
     private var spectrumWritePos = 0
     private var spectrumFrameCount = 0
@@ -195,9 +195,9 @@ class EqualizerProcessor : AudioProcessor {
         updatePeakReleaseCoeff()
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API — GRAPHIC EQ
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PUBLIC API â€” GRAPHIC EQ
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setBandGain(band: Int, gainDb: Float) {
         if (band !in 0 until BAND_COUNT) return
@@ -212,9 +212,9 @@ class EqualizerProcessor : AudioProcessor {
         })
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API — PARAMETRIC EQ
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PUBLIC API â€” PARAMETRIC EQ
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setParametricBandGain(band: Int, gainDb: Float) {
         if (band !in 0 until BAND_COUNT) return
@@ -236,9 +236,9 @@ class EqualizerProcessor : AudioProcessor {
         pendingParametricFreqs.set(next)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API — SHARED CONTROLS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PUBLIC API â€” SHARED CONTROLS
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setPreamp(gainDb: Float) {
         pendingPreamp.set(gainDb.coerceIn(PREAMP_MIN.toFloat(), PREAMP_MAX.toFloat()))
@@ -264,9 +264,9 @@ class EqualizerProcessor : AudioProcessor {
     fun resetGains() { pendingGraphicGains.set(FloatArray(BAND_COUNT) { 0f }); pendingPreamp.set(0f) }
     fun resetParametric() { pendingParametricGains.set(FloatArray(BAND_COUNT) { 0f }); pendingParametricFreqs.set(ISO_FREQ_CENTERS.copyOf()) }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API — COMPRESSOR
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PUBLIC API â€” COMPRESSOR
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setCompressorEnabled(enabled: Boolean) { compressorEnabled = enabled }
     fun isCompressorEnabled(): Boolean = compressorEnabled
@@ -278,9 +278,9 @@ class EqualizerProcessor : AudioProcessor {
     fun setCompressorMakeupGain(db: Double) { compressorMakeupDb = db.coerceIn(-12.0, 12.0); compressorMakeupLinear = dbToLinear(db) }
     fun getCompressorReductionDb(): Float = linearToDb(compressorEnvelope[0]).toFloat()
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API — PEAK METER
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PUBLIC API â€” PEAK METER
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setPeakHoldMs(ms: Double) { peakHoldMs = ms.coerceIn(50.0, 2000.0) }
     fun setPeakReleaseMs(ms: Double) { peakReleaseMs = ms.coerceIn(10.0, 1000.0); updatePeakReleaseCoeff() }
@@ -289,9 +289,9 @@ class EqualizerProcessor : AudioProcessor {
     fun getHeldPeaks(): FloatArray = heldPeaks.copyOf()
     fun resetPeaks() { for (i in heldPeaks.indices) { heldPeaks[i] = 0f; peakTimer[i] = 0L } }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // STATE GETTERS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun getCurrentGains(): FloatArray = graphicGainsDb.copyOf()
     fun getParametricGains(): FloatArray = parametricGainsDb.copyOf()
@@ -306,31 +306,32 @@ class EqualizerProcessor : AudioProcessor {
     fun getCompressorAttackMs(): Double = compressorAttackMs
     fun getCompressorReleaseMs(): Double = compressorReleaseMs
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // SPECTRUM & AUTO-EQ
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    fun computeAutoEqSuggestion(): FloatArray {
-        val mags = _spectrumMagnitudes
-        val nyquist = sampleRate / 2.0
-        val binWidth = nyquist / SPECTRUM_BINS
-        val bandDb = FloatArray(BAND_COUNT) { band ->
-            val fc = ISO_FREQ_CENTERS[band]
-            val bin = ((fc / binWidth).toInt()).coerceIn(0, SPECTRUM_BINS - 1)
-            val mag = mags[bin].toDouble().coerceAtLeast(1e-10)
-            (20.0 * log10(mag)).toFloat()
-        }
-        val mean = bandDb.average().toFloat()
-        val suggestion = FloatArray(BAND_COUNT) { band ->
-            (-(bandDb[band] - mean)).coerceIn(-AUTO_EQ_MAX_CORRECTION_DB.toFloat(), AUTO_EQ_MAX_CORRECTION_DB.toFloat())
-        }
-        _autoEqSuggestion = suggestion
-        return suggestion
+   // Around line 556-565 - Fixed version:
+fun computeAutoEqSuggestion(): FloatArray {
+    val mags = _spectrumMagnitudes
+    val nyquist = sampleRate / 2.0
+    val binWidth = nyquist / SPECTRUM_BINS
+    val bandDb = FloatArray(BAND_COUNT) { band ->
+        val fc = ISO_FREQ_CENTERS[band]
+        val bin = ((fc / binWidth).toInt()).coerceIn(0, SPECTRUM_BINS - 1)
+        val mag = mags[bin].toDouble().coerceAtLeast(1e-10)
+        (20.0 * log10(mag)).toFloat()
     }
+    val mean = bandDb.average().toFloat()  // Convert to Float here
+    val suggestion = FloatArray(BAND_COUNT) { band ->
+        (-(bandDb[band] - mean)).coerceIn(-AUTO_EQ_MAX_CORRECTION_DB.toFloat(), AUTO_EQ_MAX_CORRECTION_DB.toFloat())
+    }
+    _autoEqSuggestion = suggestion
+    return suggestion
+}
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -470,9 +471,9 @@ class EqualizerProcessor : AudioProcessor {
         updateCompressorTimeConstants()
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PARAMETER SMOOTHING
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun recomputeSmoothStep() {
         smoothStepFraction = if (smoothingRampMs <= 0.0 || sampleRate <= 0.0) 1.0
@@ -495,9 +496,9 @@ class EqualizerProcessor : AudioProcessor {
         if (paramChanged) rebuildParametricFiltersFromSmoothed()
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PCM PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         val masterGain = smoothedLoudness * smoothedPreamp
@@ -558,7 +559,7 @@ class EqualizerProcessor : AudioProcessor {
         
         if (peakReleaseCoeff > 0) {
             for (ch in 0 until numChannels) {
-                currentPeaks[ch] = (currentPeaks[ch] * (1.0 - peakReleaseCoeff)).coerceAtLeast(0f)
+                currentPeaks[ch] = (currentPeaks[ch] * (1.0f - peakReleaseCoeff)).coerceAtLeast(0f)
             }
         }
         
@@ -632,9 +633,9 @@ class EqualizerProcessor : AudioProcessor {
         return dbToLinear(compressedDb - inputDb)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // DSP PRIMITIVES
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun applyFilters(input: Double, ch: Int, coeffs: Array<DoubleArray>, state: Array<Array<DoubleArray>>): Double {
         if (coeffs.isEmpty() || state.isEmpty()) return input
@@ -699,9 +700,9 @@ class EqualizerProcessor : AudioProcessor {
         return dithered
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // SPECTRUM
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun feedSpectrum(sample: Float) {
         if (spectrumBuf.isEmpty()) return
@@ -735,9 +736,9 @@ class EqualizerProcessor : AudioProcessor {
         _spectrumMagnitudes = result
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FILTER COEFFICIENTS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun rebuildAllFilters() {
         targetGraphicGains = graphicGainsDb.copyOf()
@@ -805,9 +806,9 @@ class EqualizerProcessor : AudioProcessor {
         return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun initLimiter() {
         limiterAttCoeff = exp(-1.0 / ((LIMITER_ATTACK_MS / 1000.0) * sampleRate))

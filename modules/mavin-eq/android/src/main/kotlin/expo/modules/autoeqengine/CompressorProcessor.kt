@@ -1,7 +1,8 @@
-package expo.modules.autoeqengine
-
+﻿package expo.modules.autoeqengine
 import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.AudioProcessor.AudioFormat
+
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
@@ -9,20 +10,10 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.log10
 
 /**
  * CompressorProcessor - Dynamic Range Compression
- * 
- * Single-band soft-knee compressor placed between loudness and preamp stages.
- * Features lock-free parameter updates, attack/release smoothing, and denormal protection.
- * 
- * Parameters:
- * - threshold: dB level where compression begins (-60 to 0 dB, default -24)
- * - ratio: compression ratio (1:1 to 20:1, default 4:1)
- * - attackMs: time to reach full compression (1-100ms, default 5ms)
- * - releaseMs: time to return to unity gain (10-1000ms, default 100ms)
- * - kneeWidth: soft-knee transition width (0-12dB, default 6dB)
- * - makeupGain: post-compression makeup gain (-12 to +12dB, default 0)
  */
 class CompressorProcessor : AudioProcessor {
     
@@ -30,7 +21,6 @@ class CompressorProcessor : AudioProcessor {
         private const val TAG = "CompressorProcessor"
         private const val DENORMAL_THRESHOLD = 1e-30
         
-        // Default parameters
         const val DEFAULT_THRESHOLD_DB = -24.0
         const val DEFAULT_RATIO = 4.0
         const val DEFAULT_ATTACK_MS = 5.0
@@ -38,7 +28,6 @@ class CompressorProcessor : AudioProcessor {
         const val DEFAULT_KNEE_WIDTH_DB = 6.0
         const val DEFAULT_MAKEUP_GAIN_DB = 0.0
         
-        // Range limits
         const val THRESHOLD_MIN_DB = -60.0
         const val THRESHOLD_MAX_DB = 0.0
         const val RATIO_MIN = 1.0
@@ -51,9 +40,10 @@ class CompressorProcessor : AudioProcessor {
         const val KNEE_WIDTH_MAX = 12.0
         const val MAKEUP_GAIN_MIN_DB = -12.0
         const val MAKEUP_GAIN_MAX_DB = 12.0
+        
+        const val ENCODING_PCM_32BIT = 0x00000004
     }
     
-    // Lock-free parameter updates
     @Volatile
     private var thresholdDb = DEFAULT_THRESHOLD_DB
     @Volatile
@@ -70,7 +60,6 @@ class CompressorProcessor : AudioProcessor {
     @Volatile
     private var isEnabled = true
     
-    // Precomputed parameters (updated on parameter change)
     @Volatile
     private var linearThreshold = 0.0
     @Volatile
@@ -84,26 +73,20 @@ class CompressorProcessor : AudioProcessor {
     @Volatile
     private var makeupGainLinear = 1.0
     
-    // Envelope followers per channel
     private var envelopeGain = DoubleArray(8) { 1.0 }
     private var attackCoeff = 0.0
     private var releaseCoeff = 0.0
     
-    // State
     private var numChannels = 0
     private var sampleRate = 48000.0
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
-    private var outputBuffer: ByteBuffer = EMPTY_BUFFER
+    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
     
     init {
         updateCompressionCurve()
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API - Lock-free parameter updates
-    // ─────────────────────────────────────────────────────────────────────────
     
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
     fun isEnabled(): Boolean = isEnabled
@@ -138,7 +121,6 @@ class CompressorProcessor : AudioProcessor {
         makeupGainLinear = dbToLinear(db)
     }
     
-    // Parameter getters for state sync
     fun getThreshold(): Double = thresholdDb
     fun getRatio(): Double = ratio
     fun getAttackMs(): Double = attackMs
@@ -149,10 +131,6 @@ class CompressorProcessor : AudioProcessor {
         val currentGain = envelopeGain[0]
         return if (currentGain < 1.0) linearToDb(currentGain).toFloat() else 0f
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -201,15 +179,17 @@ class CompressorProcessor : AudioProcessor {
     }
     
     override fun queueEndOfStream() { inputEnded = true }
+    
     override fun getOutput(): ByteBuffer {
         val out = outputBuffer
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         return out
     }
-    override fun isEnded(): Boolean = inputEnded && outputBuffer === EMPTY_BUFFER
+    
+    override fun isEnded(): Boolean = inputEnded && outputBuffer === AudioProcessor.EMPTY_BUFFER
     
     override fun flush() {
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         resetEnvelopes()
     }
@@ -227,10 +207,6 @@ class CompressorProcessor : AudioProcessor {
         updateCompressionCurve()
         updateTimeConstants()
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // DSP PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         var idx = 0
@@ -266,7 +242,6 @@ class CompressorProcessor : AudioProcessor {
     }
     
     private fun processSample(input: Double, ch: Int): Double {
-        // Calculate envelope from absolute sample value
         val absInput = abs(input)
         var targetGain = 1.0
         
@@ -275,22 +250,15 @@ class CompressorProcessor : AudioProcessor {
             targetGain = calculateGainReduction(db)
         }
         
-        // Apply envelope follower (attack/release)
         val envIdx = ch.coerceAtMost(envelopeGain.size - 1)
         val currentEnv = envelopeGain[envIdx]
         val coeff = if (targetGain < currentEnv) attackCoeff else releaseCoeff
         envelopeGain[envIdx] = currentEnv + coeff * (targetGain - currentEnv)
         
-        // Denormal protection
         if (abs(envelopeGain[envIdx]) < DENORMAL_THRESHOLD) envelopeGain[envIdx] = 0.0
         
-        // Apply compression gain + makeup gain
         return input * envelopeGain[envIdx] * makeupGainLinear
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // COMPRESSION CURVE (Soft-knee)
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun updateCompressionCurve() {
         linearThreshold = dbToLinear(thresholdDb)
@@ -304,22 +272,19 @@ class CompressorProcessor : AudioProcessor {
     
     private fun calculateGainReduction(inputDb: Double): Double {
         if (inputDb <= thresholdDb - kneeWidthDb / 2.0) {
-            return 1.0  // Below knee, no compression
+            return 1.0
         }
         
         if (inputDb >= thresholdDb + kneeWidthDb / 2.0) {
-            // Above knee, full compression
             val compressedDb = thresholdDb + (inputDb - thresholdDb) * slope
             return dbToLinear(compressedDb - inputDb)
         }
         
-        // Inside knee: smooth interpolation
         val kneeStartDb = thresholdDb - kneeWidthDb / 2.0
         val kneeEndDb = thresholdDb + kneeWidthDb / 2.0
         val t = (inputDb - kneeStartDb) / kneeWidthDb
         val tSquared = t * t
         
-        // Cubic bezier for smooth knee transition
         val compressedDb = when {
             t < 0.5 -> {
                 val t2 = t * 2.0
@@ -334,10 +299,6 @@ class CompressorProcessor : AudioProcessor {
         return dbToLinear(compressedDb - inputDb)
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // ENVELOPE FOLLOWERS
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun updateTimeConstants() {
         attackCoeff = exp(-1.0 / (attackMs / 1000.0 * sampleRate))
         releaseCoeff = exp(-1.0 / (releaseMs / 1000.0 * sampleRate))
@@ -347,22 +308,16 @@ class CompressorProcessor : AudioProcessor {
         envelopeGain = DoubleArray(numChannels.coerceAtLeast(1)) { 1.0 }
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun dbToLinear(db: Double): Double = 10.0.pow(db / 20.0)
     private fun linearToDb(linear: Double): Double = 
         if (linear <= 0.0) -120.0 else 20.0 * log10(linear)
     
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
-        return if (outputBuffer === EMPTY_BUFFER || outputBuffer.capacity() < size) {
+        return if (outputBuffer === AudioProcessor.EMPTY_BUFFER || outputBuffer.capacity() < size) {
             ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).also { outputBuffer = it }
         } else {
             outputBuffer.clear().limit(size); outputBuffer
         }
     }
-    
-    // PCM encoding constant
-    private val ENCODING_PCM_32BIT = 0x00000004
 }
+

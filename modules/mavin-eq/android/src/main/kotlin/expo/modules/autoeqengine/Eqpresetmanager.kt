@@ -8,32 +8,6 @@ import org.json.JSONObject
 
 /**
  * EqPresetManager
- *
- * Persistent EQ preset storage backed by SharedPreferences (JSON).
- *
- * Features:
- *   ✅ Save / load named presets (graphic + parametric gains, Q values, preamp, loudness mode)
- *   ✅ Built-in factory presets (Flat, Bass Boost, Treble Boost, Vocal, Classical, Electronic,
- *       Rock, Jazz, Podcast, Hip-hop, Late Night)
- *   ✅ Per-track preset assignment — stores mediaId → presetName mapping
- *   ✅ Export preset to JSON string (share/backup)
- *   ✅ Import preset from JSON string
- *   ✅ Delete preset
- *   ✅ List all preset names
- *
- * Preset JSON schema:
- * {
- *   "name": "Bass Boost",
- *   "version": 1,
- *   "graphicGains": [f, f, ...],       // 31 floats, dB
- *   "parametricGains": [f, f, ...],    // 31 floats, dB
- *   "parametricFreqs": [d, d, ...],    // 31 doubles, Hz
- *   "qValues": [f, f, ...],            // 31 floats
- *   "preampDb": 0.0,
- *   "eqMode": "GRAPHIC",
- *   "loudnessMode": "TRACK",
- *   "smoothingRampMs": 10.0
- * }
  */
 class EqPresetManager(context: Context) {
 
@@ -44,7 +18,6 @@ class EqPresetManager(context: Context) {
         private const val KEY_PREFIX  = "preset_"
         private const val SCHEMA_VERSION = 1
 
-        // ── Built-in factory presets ──────────────────────────────────────────
         val FACTORY_PRESETS: Map<String, FloatArray> = mapOf(
             "Flat"        to FloatArray(31) { 0f },
             "Bass Boost"  to FloatArray(31) { band ->
@@ -148,10 +121,6 @@ class EqPresetManager(context: Context) {
     private val trackPrefs: SharedPreferences =
         context.getSharedPreferences(PREFS_TRACKS, Context.MODE_PRIVATE)
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // DATA CLASS
-    // ─────────────────────────────────────────────────────────────────────────
-
     data class EqPreset(
         val name: String,
         val graphicGains: FloatArray    = FloatArray(31) { 0f },
@@ -164,10 +133,6 @@ class EqPresetManager(context: Context) {
         val smoothingRampMs: Double     = 10.0
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // SAVE / LOAD
-    // ─────────────────────────────────────────────────────────────────────────
-
     fun savePreset(preset: EqPreset) {
         val json = presetToJson(preset)
         prefs.edit().putString(KEY_PREFIX + preset.name, json.toString()).apply()
@@ -175,13 +140,11 @@ class EqPresetManager(context: Context) {
     }
 
     fun loadPreset(name: String): EqPreset? {
-        // Check user presets first, fall back to factory
         val json = prefs.getString(KEY_PREFIX + name, null)
         if (json != null) {
             return try { jsonToPreset(JSONObject(json)) }
             catch (e: Exception) { Log.w(TAG, "Failed to parse preset $name: ${e.message}"); null }
         }
-        // Factory preset
         val gains = FACTORY_PRESETS[name] ?: return null
         return EqPreset(name = name, graphicGains = gains)
     }
@@ -201,16 +164,12 @@ class EqPresetManager(context: Context) {
         val user = prefs.all.keys
             .filter { it.startsWith(KEY_PREFIX) }
             .map { it.removePrefix(KEY_PREFIX) }
-            .filter { !FACTORY_PRESETS.containsKey(it) }  // exclude factory overrides
+            .filter { !FACTORY_PRESETS.containsKey(it) }
             .sorted()
         return factory + user
     }
 
     fun isFactoryPreset(name: String): Boolean = FACTORY_PRESETS.containsKey(name)
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // EXPORT / IMPORT
-    // ─────────────────────────────────────────────────────────────────────────
 
     fun exportPreset(name: String): String? {
         val preset = loadPreset(name) ?: return null
@@ -229,15 +188,6 @@ class EqPresetManager(context: Context) {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PER-TRACK PRESET ASSIGNMENT
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Assign a preset name to a track by its media ID.
-     * When the track plays, the player will auto-load this preset.
-     * Pass null presetName to clear the assignment.
-     */
     fun assignTrackPreset(mediaId: String, presetName: String?) {
         trackPrefs.edit().apply {
             if (presetName != null) putString(mediaId, presetName)
@@ -246,14 +196,8 @@ class EqPresetManager(context: Context) {
         Log.d(TAG, "Track $mediaId → preset: $presetName")
     }
 
-    /**
-     * Get the preset assigned to a media ID, or null if none assigned.
-     */
     fun getTrackPreset(mediaId: String): String? = trackPrefs.getString(mediaId, null)
 
-    /**
-     * Get all per-track assignments as a map of mediaId → presetName.
-     */
     fun getAllTrackAssignments(): Map<String, String> {
         @Suppress("UNCHECKED_CAST")
         return (trackPrefs.all as Map<String, String>).toMap()
@@ -262,10 +206,6 @@ class EqPresetManager(context: Context) {
     fun clearTrackAssignment(mediaId: String) {
         trackPrefs.edit().remove(mediaId).apply()
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // JSON SERIALIZATION
-    // ─────────────────────────────────────────────────────────────────────────
 
     private fun presetToJson(p: EqPreset): JSONObject = JSONObject().apply {
         put("name",            p.name)

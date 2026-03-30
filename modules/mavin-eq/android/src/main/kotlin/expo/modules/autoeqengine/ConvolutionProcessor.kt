@@ -1,4 +1,4 @@
-package expo.modules.autoeqengine
+﻿package expo.modules.autoeqengine
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -15,29 +15,11 @@ import java.nio.ShortBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
  * ConvolutionProcessor - Real-time Convolution Engine for Impulse Responses
- * 
- * Features:
- * - Load stereo/mono WAV impulse response files
- * - Partitioned convolution for low latency (FFT-based)
- * - Zero-latency direct convolution fallback for short IRs
- * - Support for 16-bit and float WAV files
- * - Lock-free parameter updates
- * - Bypass when no IR loaded
- * 
- * Use cases:
- * - Headphone virtualization (HRTF)
- * - Room reverb simulation
- * - Speaker correction curves
- * - Vintage hardware emulation
- * 
- * Performance:
- * - Direct convolution for IR < 2048 samples (< 50ms at 44.1kHz)
- * - Partitioned FFT convolution for longer IRs
- * - ~3-5% CPU for typical 500ms reverb IR on modern devices
  */
 class ConvolutionProcessor(private val context: Context) : AudioProcessor {
     
@@ -45,24 +27,22 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         private const val TAG = "ConvolutionProcessor"
         private const val DENORMAL_THRESHOLD = 1e-30
         
-        // Performance thresholds
         private const val DIRECT_CONVOLUTION_MAX_SAMPLES = 2048
         private const val PARTITION_SIZE = 512
-        private const val MAX_IR_LENGTH_SAMPLES = 65536  // ~1.5 seconds at 44.1kHz
+        private const val MAX_IR_LENGTH_SAMPLES = 65536
         
-        // WAV file constants
         private const val WAV_HEADER_SIZE = 44
-        private const val RIFF_CHUNK_ID = 0x46464952  // "RIFF"
-        private const val WAVE_FORMAT_ID = 0x45564157 // "WAVE"
-        private const val FMT_SUBCHUNK_ID = 0x20746D66 // "fmt "
-        private const val DATA_SUBCHUNK_ID = 0x61746164 // "data"
+        private const val RIFF_CHUNK_ID = 0x46464952
+        private const val WAVE_FORMAT_ID = 0x45564157
+        private const val FMT_SUBCHUNK_ID = 0x20746D66
+        private const val DATA_SUBCHUNK_ID = 0x61746164
         
-        // Audio format codes
         private const val WAVE_FORMAT_PCM = 0x0001
         private const val WAVE_FORMAT_IEEE_FLOAT = 0x0003
+        
+        const val ENCODING_PCM_32BIT = 0x00000004
     }
     
-    // Lock-free state
     private val _isEnabled = AtomicBoolean(true)
     var isEnabled: Boolean
         get() = _isEnabled.get()
@@ -77,16 +57,13 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
     @Volatile
     private var usePartitionedConvolution = false
     
-    // Impulse response data
     private var irLeft: FloatArray = floatArrayOf()
     private var irRight: FloatArray = floatArrayOf()
     private var isMonoIr = true
     
-    // Direct convolution buffers
     private var historyLeft: FloatArray = floatArrayOf()
     private var historyRight: FloatArray = floatArrayOf()
     
-    // Partitioned convolution buffers (FFT-based)
     private var partitions: Array<FloatArray> = emptyArray()
     private var fftReal: Array<FloatArray> = emptyArray()
     private var fftImag: Array<FloatArray> = emptyArray()
@@ -94,32 +71,20 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
     private var inputIndex = 0
     private var outputBuffer: FloatArray = floatArrayOf()
     
-    // State
     private var numChannels = 0
     private var sampleRate = 48000
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
-    private var processorOutputBuffer: ByteBuffer = EMPTY_BUFFER
+    private var processorOutputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
     
-    // Pending IR load
     private val pendingIrPath = AtomicReference<String?>(null)
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API
-    // ─────────────────────────────────────────────────────────────────────────
-    
-    /**
-     * Load an impulse response from a WAV file path
-     */
     fun loadImpulseResponse(filePath: String): Boolean {
         pendingIrPath.set(filePath)
         return true
     }
     
-    /**
-     * Load impulse response from raw float arrays (left and right channels)
-     */
     fun loadImpulseResponseFromArrays(left: FloatArray, right: FloatArray? = null): Boolean {
         val irLeftData = left.copyOf()
         val irRightData = if (right != null) right.copyOf() else left.copyOf()
@@ -145,9 +110,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         return true
     }
     
-    /**
-     * Clear loaded impulse response (bypass convolution)
-     */
     fun clearImpulseResponse() {
         synchronized(this) {
             isLoaded = false
@@ -163,19 +125,8 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         Log.i(TAG, "Cleared impulse response")
     }
     
-    /**
-     * Check if an IR is loaded
-     */
     fun isImpulseResponseLoaded(): Boolean = isLoaded
-    
-    /**
-     * Get loaded IR length in samples
-     */
     fun getIrLength(): Int = irLength
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -194,7 +145,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         sampleRate = inputAudioFormat.sampleRate
         numChannels = inputAudioFormat.channelCount
         
-        // Check for pending IR load
         pendingIrPath.getAndSet(null)?.let { path ->
             loadImpulseResponseFromFile(path)
         }
@@ -203,7 +153,7 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         return outputAudioFormat
     }
     
-    override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET && isEnabled && isLoaded
+    override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET && _isEnabled.get() && isLoaded
     
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!isActive() || inputBuffer.remaining() == 0) {
@@ -228,14 +178,14 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
     
     override fun getOutput(): ByteBuffer {
         val out = processorOutputBuffer
-        processorOutputBuffer = EMPTY_BUFFER
+        processorOutputBuffer = AudioProcessor.EMPTY_BUFFER
         return out
     }
     
-    override fun isEnded(): Boolean = inputEnded && processorOutputBuffer === EMPTY_BUFFER
+    override fun isEnded(): Boolean = inputEnded && processorOutputBuffer === AudioProcessor.EMPTY_BUFFER
     
     override fun flush() {
-        processorOutputBuffer = EMPTY_BUFFER
+        processorOutputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         synchronized(this) {
             if (usePartitionedConvolution) {
@@ -256,10 +206,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         clearImpulseResponse()
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // DIRECT CONVOLUTION (O(N*M) - for short IRs)
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun initializeDirectConvolution() {
         historyLeft = FloatArray(irLength)
         historyRight = FloatArray(irLength)
@@ -269,7 +215,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         val ir = if (isMonoIr) irLeft else if (channelOffset == 0) irLeft else irRight
         val history = if (channelOffset == 0) historyLeft else historyRight
         
-        // Shift history
         val shiftAmount = input.size
         for (i in 0 until history.size - shiftAmount) {
             history[i] = history[i + shiftAmount]
@@ -278,7 +223,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
             history[history.size - shiftAmount + i] = input[i]
         }
         
-        // Convolve
         for (i in output.indices) {
             var sum = 0f
             val historyStart = history.size - ir.size - i
@@ -292,20 +236,15 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         }
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // PARTITIONED CONVOLUTION (FFT-based - for long IRs)
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun initializePartitionedConvolution() {
         val numPartitions = (irLength + PARTITION_SIZE - 1) / PARTITION_SIZE
         
         partitions = Array(numPartitions) { partitionIdx ->
             val start = partitionIdx * PARTITION_SIZE
-            val end = minOf(start + PARTITION_SIZE, irLength)
+            val end = min(start + PARTITION_SIZE, irLength)
             irLeft.copyOfRange(start, end)
         }
         
-        // Precompute FFT of each partition (simplified - real implementation would use FFT library)
         fftReal = Array(numPartitions) { FloatArray(PARTITION_SIZE * 2) }
         fftImag = Array(numPartitions) { FloatArray(PARTITION_SIZE * 2) }
         
@@ -315,30 +254,19 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
     }
     
     private fun processPartitionedConvolution(input: FloatArray, output: FloatArray, channelOffset: Int) {
-        // Simplified overlap-add convolution
-        // Full implementation would require FFT library (e.g., libfftw or Kotlin native FFT)
-        
-        // Fallback to direct convolution for now
-        // In production, integrate with Kotlin FFT library or NDK-based FFT
         processDirectConvolution(input, output, channelOffset)
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PCM PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         val numSamples = input.remaining() / 2 / numChannels
         val samples = FloatArray(numSamples * numChannels)
         
-        // Convert short to float
         for (i in samples.indices) {
             samples[i] = input.short.toFloat() / 32768f
         }
         
         processSamples(samples, numSamples)
         
-        // Convert back to short
         for (sample in samples) {
             val shortVal = (sample * 32768f).coerceIn(-32768f, 32767f).toInt().toShort()
             output.putShort(shortVal)
@@ -380,7 +308,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         if (!isLoaded || numChannels < 1) return
         
         if (numChannels == 1 || isMonoIr) {
-            // Mono convolution for mono input or mono IR
             val temp = FloatArray(numSamples)
             for (i in 0 until numSamples) {
                 temp[i] = samples[i]
@@ -396,7 +323,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
                 samples[i] = temp[i]
             }
         } else {
-            // Stereo convolution
             val leftInput = FloatArray(numSamples)
             val rightInput = FloatArray(numSamples)
             val leftOutput = FloatArray(numSamples)
@@ -421,10 +347,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
             }
         }
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // FILE LOADING
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun loadImpulseResponseFromFile(filePath: String): Boolean {
         return try {
@@ -456,27 +378,23 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
         
-        // RIFF header
         if (buffer.int != RIFF_CHUNK_ID) return null
-        buffer.getInt() // Chunk size
+        buffer.getInt()
         if (buffer.int != WAVE_FORMAT_ID) return null
         
-        // fmt subchunk
         if (buffer.int != FMT_SUBCHUNK_ID) return null
         val fmtChunkSize = buffer.int
         val audioFormat = buffer.short.toInt()
         val numChannels = buffer.short.toInt()
         val sampleRate = buffer.int
-        buffer.getInt() // Byte rate
+        buffer.getInt()
         val blockAlign = buffer.short.toInt()
         val bitsPerSample = buffer.short.toInt()
         
-        // Skip extra parameters if present
         if (fmtChunkSize > 16) {
-            buffer.getShort() // Extra bytes
+            buffer.getShort()
         }
         
-        // data subchunk
         var dataSize = 0
         var dataStart = 0
         while (buffer.position() < data.size) {
@@ -492,7 +410,6 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         
         if (dataSize == 0) return null
         
-        // Read audio data
         val leftSamples = mutableListOf<Float>()
         val rightSamples = mutableListOf<Float>()
         
@@ -561,17 +478,11 @@ class ConvolutionProcessor(private val context: Context) : AudioProcessor {
         val bitsPerSample: Int
     )
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
-        return if (processorOutputBuffer === EMPTY_BUFFER || processorOutputBuffer.capacity() < size) {
+        return if (processorOutputBuffer === AudioProcessor.EMPTY_BUFFER || processorOutputBuffer.capacity() < size) {
             ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).also { processorOutputBuffer = it }
         } else {
             processorOutputBuffer.clear().limit(size); processorOutputBuffer
         }
     }
-    
-    private val ENCODING_PCM_32BIT = 0x00000004
 }

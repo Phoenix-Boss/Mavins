@@ -1,4 +1,4 @@
-package expo.modules.autoeqengine
+﻿package expo.modules.autoeqengine
 
 import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
@@ -11,19 +11,6 @@ import kotlin.math.*
 
 /**
  * FxProcessor - Professional Audio Effects Engine
- * 
- * Features:
- * ✅ Studio-quality Reverb (Schroeder/Moorer algorithm)
- * ✅ Ping-pong Delay with feedback filtering
- * ✅ Stereo Chorus with LFO modulation
- * ✅ Through-zero Flanger
- * ✅ 4/6/12-stage Phaser
- * ✅ Lock-free parameter updates
- * ✅ 16-bit, Float, 32-bit PCM support
- * ✅ Stereo processing
- * 
- * DSP Chain:
- * Input → Selected Effect → Mix (dry/wet) → Output
  */
 @androidx.media3.common.util.UnstableApi
 class FxProcessor : AudioProcessor {
@@ -32,43 +19,37 @@ class FxProcessor : AudioProcessor {
         private const val TAG = "FxProcessor"
         private const val DENORMAL_THRESHOLD = 1e-30
         
-        // Effect types
         enum class FxType { REVERB, DELAY, CHORUS, FLANGER, PHASER }
         
-        // Default values
-        const val DEFAULT_MIX = 30.0      // 0-100%
+        const val DEFAULT_MIX = 30.0
         const val DEFAULT_BYPASS = false
         
-        // Reverb defaults
-        const val REVERB_ROOM_SIZE_DEF = 50.0     // 0-100%
-        const val REVERB_DECAY_DEF = 50.0         // 0-100%
-        const val REVERB_PRE_DELAY_DEF = 10.0     // 0-100%
-        const val REVERB_DAMPING_DEF = 50.0       // 0-100%
+        const val REVERB_ROOM_SIZE_DEF = 50.0
+        const val REVERB_DECAY_DEF = 50.0
+        const val REVERB_PRE_DELAY_DEF = 10.0
+        const val REVERB_DAMPING_DEF = 50.0
         
-        // Delay defaults
-        const val DELAY_TIME_DEF = 40.0           // 0-100% (0-500ms)
-        const val DELAY_FEEDBACK_DEF = 40.0       // 0-100%
-        const val DELAY_LOW_CUT_DEF = 20.0        // 0-100% (20-200Hz)
-        const val DELAY_HIGH_CUT_DEF = 80.0       // 0-100% (2k-20kHz)
+        const val DELAY_TIME_DEF = 40.0
+        const val DELAY_FEEDBACK_DEF = 40.0
+        const val DELAY_LOW_CUT_DEF = 20.0
+        const val DELAY_HIGH_CUT_DEF = 80.0
         
-        // Modulation defaults (Chorus/Flanger/Phaser)
-        const val MOD_RATE_DEF = 30.0             // 0-100% (0.1-10Hz)
-        const val MOD_DEPTH_DEF = 40.0            // 0-100%
-        const val MOD_PHASE_DEF = 50.0            // 0-100% (0-360°)
-        const val MOD_FEEDBACK_DEF = 30.0         // 0-100% (Flanger/Phaser)
+        const val MOD_RATE_DEF = 30.0
+        const val MOD_DEPTH_DEF = 40.0
+        const val MOD_PHASE_DEF = 50.0
+        const val MOD_FEEDBACK_DEF = 30.0
         
-        // LFO frequency ranges
         private const val LFO_MIN_HZ = 0.1
         private const val LFO_MAX_HZ = 10.0
         
-        // Delay time range
         private const val DELAY_MIN_MS = 10.0
         private const val DELAY_MAX_MS = 500.0
+        
+        const val ENCODING_PCM_32BIT = 0x00000004
     }
     
     enum class FxMode { REVERB, DELAY, CHORUS, FLANGER, PHASER }
     
-    // Lock-free state
     private val _isEnabled = AtomicBoolean(true)
     var isEnabled: Boolean
         get() = _isEnabled.get()
@@ -83,7 +64,6 @@ class FxProcessor : AudioProcessor {
     @Volatile
     var bypass = DEFAULT_BYPASS
     
-    // Reverb parameters
     @Volatile
     var reverbRoomSize = REVERB_ROOM_SIZE_DEF / 100.0
     @Volatile
@@ -93,7 +73,6 @@ class FxProcessor : AudioProcessor {
     @Volatile
     var reverbDamping = REVERB_DAMPING_DEF / 100.0
     
-    // Delay parameters
     @Volatile
     var delayTime = DELAY_TIME_DEF / 100.0
     @Volatile
@@ -103,7 +82,6 @@ class FxProcessor : AudioProcessor {
     @Volatile
     var delayHighCut = DELAY_HIGH_CUT_DEF / 100.0
     
-    // Modulation parameters (shared)
     @Volatile
     var modRate = MOD_RATE_DEF / 100.0
     @Volatile
@@ -113,20 +91,17 @@ class FxProcessor : AudioProcessor {
     @Volatile
     var modFeedback = MOD_FEEDBACK_DEF / 100.0
     
-    // Pending updates
     private val pendingFxMode = AtomicReference<FxMode?>(null)
     private val pendingMix = AtomicReference<Double?>(null)
     private val pendingBypass = AtomicReference<Boolean?>(null)
     
-    // DSP state
     private var sampleRate = 48000
     private var numChannels = 0
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
-    private var outputBuffer: ByteBuffer = EMPTY_BUFFER
+    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
     
-    // Reverb state (Schroeder/Moorer)
     private var reverbCombBuffers = Array(4) { FloatArray(0) }
     private var reverbAllpassBuffers = Array(2) { FloatArray(0) }
     private var reverbCombIndex = IntArray(4)
@@ -134,7 +109,6 @@ class FxProcessor : AudioProcessor {
     private var reverbPreDelayBuffer = FloatArray(0)
     private var reverbPreDelayIndex = 0
     
-    // Delay state
     private var delayBufferL = FloatArray(0)
     private var delayBufferR = FloatArray(0)
     private var delayIndexL = 0
@@ -142,17 +116,14 @@ class FxProcessor : AudioProcessor {
     private var delayPrevOutputL = 0.0f
     private var delayPrevOutputR = 0.0f
     
-    // Modulation LFO state
     private var lfoPhase = 0.0
-    private var lfoPhaseR = 0.0  // For stereo phase offset
+    private var lfoPhaseR = 0.0
     private var lfoIncrement = 0.0
     
-    // Chorus/Flanger state
     private var chorusBufferL = FloatArray(0)
     private var chorusBufferR = FloatArray(0)
     private var chorusIndex = 0
     
-    // Phaser state
     private var phaserStages = arrayOf(
         PhaserStage(), PhaserStage(), PhaserStage(), PhaserStage(),
         PhaserStage(), PhaserStage()
@@ -164,10 +135,6 @@ class FxProcessor : AudioProcessor {
     init {
         updateLfoIncrement()
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API - Lock-free updates
-    // ─────────────────────────────────────────────────────────────────────────
     
     fun setFxMode(mode: FxMode) { pendingFxMode.set(mode) }
     fun setMix(value: Double) { pendingMix.set(value.coerceIn(0.0, 1.0)) }
@@ -191,10 +158,6 @@ class FxProcessor : AudioProcessor {
     fun getMix(): Double = mix
     fun isBypassed(): Boolean = bypass
     fun getFxMode(): FxMode = fxMode
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -222,7 +185,6 @@ class FxProcessor : AudioProcessor {
     override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET && _isEnabled.get() && !bypass
     
     override fun queueInput(inputBuffer: ByteBuffer) {
-        // Drain pending updates
         pendingFxMode.getAndSet(null)?.let { fxMode = it }
         pendingMix.getAndSet(null)?.let { mix = it }
         pendingBypass.getAndSet(null)?.let { bypass = it }
@@ -246,15 +208,17 @@ class FxProcessor : AudioProcessor {
     }
     
     override fun queueEndOfStream() { inputEnded = true }
+    
     override fun getOutput(): ByteBuffer {
         val out = outputBuffer
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         return out
     }
-    override fun isEnded(): Boolean = inputEnded && outputBuffer === EMPTY_BUFFER
+    
+    override fun isEnded(): Boolean = inputEnded && outputBuffer === AudioProcessor.EMPTY_BUFFER
     
     override fun flush() {
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         resetState()
     }
@@ -268,12 +232,7 @@ class FxProcessor : AudioProcessor {
         bypass = DEFAULT_BYPASS
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // BUFFER INITIALIZATION
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun initializeBuffers() {
-        // Reverb buffers
         val combLengths = intArrayOf(
             (0.0297 * sampleRate).toInt(),
             (0.0371 * sampleRate).toInt(),
@@ -294,12 +253,10 @@ class FxProcessor : AudioProcessor {
         reverbPreDelayBuffer = FloatArray(preDelaySamples)
         reverbPreDelayIndex = 0
         
-        // Delay buffer
         val maxDelaySamples = (DELAY_MAX_MS / 1000.0 * sampleRate).toInt()
         delayBufferL = FloatArray(maxDelaySamples)
         delayBufferR = FloatArray(maxDelaySamples)
         
-        // Chorus buffer
         val chorusMaxDelay = (0.02 * sampleRate).toInt()
         chorusBufferL = FloatArray(chorusMaxDelay)
         chorusBufferR = FloatArray(chorusMaxDelay)
@@ -346,10 +303,6 @@ class FxProcessor : AudioProcessor {
         return (ms / 1000.0 * sampleRate).toInt().coerceIn(1, delayBufferL.size - 1)
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // PCM PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         while (input.remaining() >= 2) {
             var sample = input.short.toDouble() / 32768.0
@@ -387,21 +340,15 @@ class FxProcessor : AudioProcessor {
         return dry * (1.0 - mix) + wet * mix
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // REVERB (Schroeder/Moorer)
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun processReverb(input: Float): Float {
         var signal = input
         
-        // Pre-delay
         reverbPreDelayBuffer[reverbPreDelayIndex] = signal
         reverbPreDelayIndex = (reverbPreDelayIndex + 1) % reverbPreDelayBuffer.size
         val preDelayIndex = (reverbPreDelayIndex + reverbPreDelayBuffer.size - 
             (reverbPreDelay * reverbPreDelayBuffer.size).toInt()) % reverbPreDelayBuffer.size
         signal = reverbPreDelayBuffer[preDelayIndex]
         
-        // Parallel comb filters
         var wet = 0f
         for (i in 0..3) {
             val comb = reverbCombBuffers[i]
@@ -413,7 +360,6 @@ class FxProcessor : AudioProcessor {
         }
         wet *= 0.25f
         
-        // Series allpass filters
         for (i in 0..1) {
             val allpass = reverbAllpassBuffers[i]
             val idx = reverbAllpassIndex[i]
@@ -423,43 +369,32 @@ class FxProcessor : AudioProcessor {
             wet = out
         }
         
-        // Damping filter
         val damping = 0.5f + reverbDamping.toFloat() * 0.5f
         wet = wet * damping
         
-        // Room size scaling
         wet *= (0.5f + reverbRoomSize.toFloat() * 0.5f)
         
         return wet
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // DELAY (Ping-pong with filtering)
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun processDelay(input: Float): Float {
         val delaySamples = getDelaySamples()
         val feedback = delayFeedback.toFloat() * 0.9f
         
-        // Low-cut filter coefficient
         val lowCutFreq = 20.0 + delayLowCut * 180.0
         val lowCutCoeff = exp(-2.0 * PI * lowCutFreq / sampleRate).toFloat()
         
-        // High-cut filter coefficient
         val highCutFreq = 2000.0 + delayHighCut * 18000.0
         val highCutCoeff = exp(-2.0 * PI * highCutFreq / sampleRate).toFloat()
         
-        // Read from delay buffer
         val readPosL = (delayIndexL - delaySamples + delayBufferL.size) % delayBufferL.size
         val readPosR = (delayIndexR - delaySamples + delayBufferR.size) % delayBufferR.size
         val delayOutL = delayBufferL[readPosL]
         val delayOutR = delayBufferR[readPosR]
         
-        // Write to delay buffer (ping-pong: left writes to right, right writes to left)
         delayBufferL[delayIndexL] = input + delayOutR * feedback
         delayBufferR[delayIndexR] = input + delayOutL * feedback
         
-        // Apply filtering
         val filteredL = delayOutL * (1 - lowCutCoeff) + delayPrevOutputL * lowCutCoeff
         val filteredR = delayOutR * (1 - lowCutCoeff) + delayPrevOutputR * lowCutCoeff
         delayPrevOutputL = filteredL
@@ -470,10 +405,6 @@ class FxProcessor : AudioProcessor {
         
         return (filteredL + filteredR) * 0.5f
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // CHORUS
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processChorus(input: Float): Float {
         lfoPhase += lfoIncrement
@@ -490,10 +421,6 @@ class FxProcessor : AudioProcessor {
         
         return input * 0.5f + delayed * 0.5f
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // FLANGER (Through-zero)
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processFlanger(input: Float): Float {
         lfoPhase += lfoIncrement
@@ -512,10 +439,6 @@ class FxProcessor : AudioProcessor {
         
         return input * 0.5f + delayed * 0.5f
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PHASER (Allpass filter stages)
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processPhaser(input: Float): Float {
         lfoPhase += lfoIncrement
@@ -550,17 +473,11 @@ class FxProcessor : AudioProcessor {
         return input * 0.5f + signal * 0.5f
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
-    
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
-        return if (outputBuffer === EMPTY_BUFFER || outputBuffer.capacity() < size) {
+        return if (outputBuffer === AudioProcessor.EMPTY_BUFFER || outputBuffer.capacity() < size) {
             ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).also { outputBuffer = it }
         } else {
             outputBuffer.clear().limit(size); outputBuffer
         }
     }
-    
-    private val ENCODING_PCM_32BIT = 0x00000004
 }

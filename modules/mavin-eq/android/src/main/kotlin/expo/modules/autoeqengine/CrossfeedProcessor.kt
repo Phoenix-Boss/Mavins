@@ -1,8 +1,11 @@
-package expo.modules.autoeqengine
+﻿package expo.modules.autoeqengine
 
+import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.pow
@@ -11,16 +14,6 @@ import kotlin.math.sqrt
 
 /**
  * CrossfeedProcessor - Bauer Stereophonic-to-Binaural (BS2B)
- * 
- * Simulates speaker listening experience on headphones by mixing some
- * of the left channel into the right (and vice versa) with frequency-dependent
- * filtering that mimics natural head-related transfer function (HRTF).
- * 
- * Reduces ear fatigue and improves stereo imaging for long listening sessions.
- * 
- * Parameters:
- * - crossfeedStrength: 0.0 to 1.0 (default 0.5) - how much crossfeed to apply
- * - cutoffFrequency: 400-2000 Hz (default 700 Hz) - low-pass filter cutoff for crossfeed path
  */
 class CrossfeedProcessor : AudioProcessor {
     
@@ -34,9 +27,10 @@ class CrossfeedProcessor : AudioProcessor {
         const val STRENGTH_MAX = 1.0f
         const val CUTOFF_MIN_HZ = 400.0
         const val CUTOFF_MAX_HZ = 2000.0
+        
+        const val ENCODING_PCM_32BIT = 0x00000004
     }
     
-    // Lock-free parameters
     @Volatile
     private var crossfeedStrength = DEFAULT_STRENGTH
     @Volatile
@@ -44,35 +38,28 @@ class CrossfeedProcessor : AudioProcessor {
     @Volatile
     private var isEnabled = true
     
-    // Filter state per channel
     private data class BiquadState(var x1: Double = 0.0, var x2: Double = 0.0, 
                                    var y1: Double = 0.0, var y2: Double = 0.0)
     
     private val leftState = BiquadState()
     private val rightState = BiquadState()
     
-    // Biquad coefficients
     private var b0 = 1.0
     private var b1 = 0.0
     private var b2 = 0.0
     private var a1 = 0.0
     private var a2 = 0.0
     
-    // State
     private var numChannels = 0
     private var sampleRate = 48000.0
     private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
-    private var outputBuffer: ByteBuffer = EMPTY_BUFFER
+    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
     
     init {
         updateFilter()
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // PUBLIC API
-    // ─────────────────────────────────────────────────────────────────────────
     
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
     fun isEnabled(): Boolean = isEnabled
@@ -88,10 +75,6 @@ class CrossfeedProcessor : AudioProcessor {
     
     fun getStrength(): Float = crossfeedStrength
     fun getCutoffFrequency(): Double = cutoffHz
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // AudioProcessor INTERFACE
-    // ─────────────────────────────────────────────────────────────────────────
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -139,15 +122,17 @@ class CrossfeedProcessor : AudioProcessor {
     }
     
     override fun queueEndOfStream() { inputEnded = true }
+    
     override fun getOutput(): ByteBuffer {
         val out = outputBuffer
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         return out
     }
-    override fun isEnded(): Boolean = inputEnded && outputBuffer === EMPTY_BUFFER
+    
+    override fun isEnded(): Boolean = inputEnded && outputBuffer === AudioProcessor.EMPTY_BUFFER
     
     override fun flush() {
-        outputBuffer = EMPTY_BUFFER
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         resetState()
     }
@@ -160,10 +145,6 @@ class CrossfeedProcessor : AudioProcessor {
         cutoffHz = DEFAULT_CUTOFF_HZ
         updateFilter()
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // STEREO CROSSFEED PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun processShortStereo(input: ByteBuffer, output: ByteBuffer) {
         while (input.remaining() >= 4) {
@@ -204,24 +185,17 @@ class CrossfeedProcessor : AudioProcessor {
     private fun processStereo(leftIn: Double, rightIn: Double): Pair<Double, Double> {
         val strength = crossfeedStrength.toDouble()
         
-        // Direct signal paths (slightly attenuated to maintain overall level)
         val leftDirect = leftIn * (1.0 - strength * 0.3)
         val rightDirect = rightIn * (1.0 - strength * 0.3)
         
-        // Crossfeed paths: filtered and attenuated
         val leftCross = processLowpass(leftIn, leftState) * strength * 0.7
         val rightCross = processLowpass(rightIn, rightState) * strength * 0.7
         
-        // Sum direct + crossfeed from opposite channel
         val leftOut = leftDirect + rightCross
         val rightOut = rightDirect + leftCross
         
         return Pair(leftOut, rightOut)
     }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // LOW-PASS FILTER (1st order)
-    // ─────────────────────────────────────────────────────────────────────────
     
     private fun updateFilter() {
         val w0 = 2.0 * Math.PI * cutoffHz / sampleRate
@@ -259,12 +233,10 @@ class CrossfeedProcessor : AudioProcessor {
     }
     
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
-        return if (outputBuffer === EMPTY_BUFFER || outputBuffer.capacity() < size) {
+        return if (outputBuffer === AudioProcessor.EMPTY_BUFFER || outputBuffer.capacity() < size) {
             ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).also { outputBuffer = it }
         } else {
             outputBuffer.clear().limit(size); outputBuffer
         }
     }
-    
-    private val ENCODING_PCM_32BIT = 0x00000004
 }
