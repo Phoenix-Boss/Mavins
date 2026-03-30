@@ -72,7 +72,33 @@ export interface EqBiquadFilter {
   q: number;
 }
 
-// ── Preset Categories (BandLab-style) ─────────────────────────────────────────
+// ── FX Types ──────────────────────────────────────────────────────────────────
+
+export type FxMode = 'REVERB' | 'DELAY' | 'CHORUS' | 'FLANGER' | 'PHASER';
+
+export interface FxState {
+  enabled: boolean;
+  mode: FxMode;
+  mix: number;
+  bypass: boolean;
+  // Reverb
+  reverbRoomSize: number;
+  reverbDecay: number;
+  reverbPreDelay: number;
+  reverbDamping: number;
+  // Delay
+  delayTime: number;
+  delayFeedback: number;
+  delayLowCut: number;
+  delayHighCut: number;
+  // Modulation (Chorus/Flanger/Phaser)
+  modRate: number;
+  modDepth: number;
+  modPhase: number;
+  modFeedback: number;
+}
+
+// ── Preset Categories ─────────────────────────────────────────────────────────
 
 export type PresetCategory = 
   | 'builtin'
@@ -103,6 +129,10 @@ export interface EqPreset {
   
   gains_31?: EqBandGains;
   biquad_filters?: EqBiquadFilter[];
+  parametric_gains?: number[];
+  parametric_freqs?: number[];
+  q_values?: number[];
+  eq_mode?: string;
   preamp_db?: number;
   
   source: 'local' | 'supabase' | 'imported';
@@ -136,6 +166,52 @@ export interface EqState {
   error: string | null;
 }
 
+// ── USB DAC Types ─────────────────────────────────────────────────────────────
+
+export interface DacInfo {
+  name: string;
+  vendorId: number;
+  productId: number;
+  isConnected: boolean;
+  hasAudioOutput: boolean;
+  supportedSampleRates: number[];
+  maxBitDepth: number;
+  maxChannels: number;
+  isNativeDirectSupported: boolean;
+}
+
+export interface DacCapabilities {
+  sampleRates: number[];
+  bitDepths: number[];
+  channelCounts: number[];
+  supportsFloatOutput: boolean;
+  supportsHdAudio: boolean;
+  nativeSampleRate: number;
+  nativeBitDepth: number;
+}
+
+// ── Audio Format Types ────────────────────────────────────────────────────────
+
+export interface AudioCapabilities {
+  maxSampleRate: number;
+  maxBitDepth: number;
+  supportsFloat: boolean;
+  supportsHdAudio: boolean;
+  supportsUltraHdAudio: boolean;
+  supportedSampleRates: number[];
+  supportedBitDepths: number[];
+  isHiResCapable: boolean;
+}
+
+export interface OptimalAudioFormat {
+  sampleRate: number;
+  bitDepth: number;
+  encoding: number;
+  isFloat: boolean;
+  isHiRes: boolean;
+  channelCount: number;
+}
+
 // ── Native Module Interface (MavinPlayerModule) ───────────────────────────────
 
 export interface MavinPlayerNativeModule {
@@ -153,6 +229,9 @@ export interface MavinPlayerNativeModule {
   skipToNext(): Promise<void>;
   skipToPrevious(): Promise<void>;
   skipToIndex(index: number): Promise<void>;
+  setVolume(volume: number): Promise<void>;
+  setRepeatMode(mode: number): Promise<void>;
+  setShuffleMode(enabled: boolean): Promise<void>;
   
   // Player State
   getPosition(): Promise<number>;
@@ -161,7 +240,7 @@ export interface MavinPlayerNativeModule {
   isPlaying(): Promise<boolean>;
   getQueueSize(): Promise<number>;
   
-  // EQ Control (proxied to EqualizerProcessor)
+  // EQ Control - Graphic
   setEQEnabled(enabled: boolean): Promise<void>;
   setEQBand(band: number, gainDb: number): Promise<void>;
   applyEQBands(gains: number[]): Promise<void>;
@@ -169,13 +248,132 @@ export interface MavinPlayerNativeModule {
   setEQBandQ(band: number, q: number): Promise<void>;
   resetEQ(): Promise<void>;
   
+  // EQ Control - Parametric
+  setParametricBandGain(band: number, gainDb: number): Promise<void>;
+  applyParametricBands(gains: number[]): Promise<void>;
+  setParametricBandFreq(band: number, freqHz: number): Promise<void>;
+  resetParametric(): Promise<void>;
+  
+  // EQ Mode
+  setEQMode(mode: string): Promise<void>;
+  getEQMode(): Promise<string>;
+  
+  // Dither Mode
+  setDitherMode(mode: string): Promise<void>;
+  getDitherMode(): Promise<string>;
+  
+  // Smoothing
+  setSmoothingRamp(ms: number): Promise<void>;
+  
+  // Compressor (DRC)
+  setCompressorEnabled(enabled: boolean): Promise<void>;
+  isCompressorEnabled(): Promise<boolean>;
+  setCompressorThreshold(db: number): Promise<void>;
+  setCompressorRatio(ratio: number): Promise<void>;
+  setCompressorAttack(ms: number): Promise<void>;
+  setCompressorRelease(ms: number): Promise<void>;
+  setCompressorKnee(db: number): Promise<void>;
+  setCompressorMakeupGain(db: number): Promise<void>;
+  getCompressorReduction(): Promise<number>;
+  getCompressorThreshold(): Promise<number>;
+  getCompressorRatio(): Promise<number>;
+  getCompressorAttack(): Promise<number>;
+  getCompressorRelease(): Promise<number>;
+  
+  // Crossfeed
+  setCrossfeedEnabled(enabled: boolean): Promise<void>;
+  isCrossfeedEnabled(): Promise<boolean>;
+  setCrossfeedStrength(strength: number): Promise<void>;
+  setCrossfeedCutoff(hz: number): Promise<void>;
+  getCrossfeedStrength(): Promise<number>;
+  getCrossfeedCutoff(): Promise<number>;
+  
+  // Peak Meter (VU)
+  getCurrentPeaks(): Promise<{ left: number; right: number }>;
+  getHeldPeaks(): Promise<{ left: number; right: number }>;
+  resetPeaks(): Promise<void>;
+  setPeakHoldMs(ms: number): Promise<void>;
+  setPeakReleaseMs(ms: number): Promise<void>;
+  
+  // Playback Speed
+  setPlaybackSpeed(speed: number): Promise<void>;
+  getPlaybackSpeed(): Promise<number>;
+  
+  // Crossfade
+  setCrossfadeEnabled(enabled: boolean): Promise<void>;
+  isCrossfadeEnabled(): Promise<boolean>;
+  setCrossfadeDuration(durationMs: number): Promise<void>;
+  getCrossfadeDuration(): Promise<number>;
+  
+  // Offline Mode (Zero Telemetry)
+  setOfflineMode(enabled: boolean): Promise<void>;
+  isOfflineMode(): Promise<boolean>;
+  
+  // 64-bit Processing
+  set64BitProcessingEnabled(enabled: boolean): Promise<void>;
+  is64BitProcessingEnabled(): Promise<boolean>;
+  
+  // Convolution Processor (Impulse Responses)
+  loadImpulseResponse(filePath: string): Promise<void>;
+  clearImpulseResponse(): Promise<void>;
+  isImpulseResponseLoaded(): Promise<boolean>;
+  getIrLength(): Promise<number>;
+  setConvolutionEnabled(enabled: boolean): Promise<void>;
+  isConvolutionEnabled(): Promise<boolean>;
+  
+  // FX Processor
+  setFxEnabled(enabled: boolean): Promise<void>;
+  isFxEnabled(): Promise<boolean>;
+  setFxMode(mode: string): Promise<void>;
+  getFxMode(): Promise<string>;
+  setFxMix(mix: number): Promise<void>;
+  getFxMix(): Promise<number>;
+  setFxBypass(bypass: boolean): Promise<void>;
+  isFxBypassed(): Promise<boolean>;
+  
+  // Reverb Parameters
+  setReverbRoomSize(value: number): Promise<void>;
+  setReverbDecay(value: number): Promise<void>;
+  setReverbPreDelay(value: number): Promise<void>;
+  setReverbDamping(value: number): Promise<void>;
+  
+  // Delay Parameters
+  setDelayTime(value: number): Promise<void>;
+  setDelayFeedback(value: number): Promise<void>;
+  setDelayLowCut(value: number): Promise<void>;
+  setDelayHighCut(value: number): Promise<void>;
+  
+  // Modulation Parameters
+  setModRate(value: number): Promise<void>;
+  setModDepth(value: number): Promise<void>;
+  setModPhase(value: number): Promise<void>;
+  setModFeedback(value: number): Promise<void>;
+  
+  // USB DAC Control
+  isUsbDacConnected(): Promise<boolean>;
+  getCurrentDacInfo(): Promise<DacInfo | null>;
+  getDacCapabilities(): Promise<DacCapabilities | null>;
+  enableDirectUsbRouting(enabled: boolean): Promise<boolean>;
+  isDirectUsbRoutingEnabled(): Promise<boolean>;
+  setPreferredDacSampleRate(rate: number): Promise<boolean>;
+  setPreferredDacBitDepth(depth: number): Promise<boolean>;
+  rescanUsbDevices(): Promise<void>;
+  
+  // Audio Format Detection
+  getAudioCapabilities(): Promise<AudioCapabilities | null>;
+  getOptimalAudioFormat(): Promise<OptimalAudioFormat | null>;
+  isHiResAudioCapable(): Promise<boolean>;
+  getMaxSampleRate(): Promise<number>;
+  getMaxBitDepth(): Promise<number>;
+  
   // Cleanup
   release(): Promise<void>;
 }
 
-// ── Storage Types ───────────────────────────────────────────────────────────────
+// ── Storage Types ─────────────────────────────────────────────────────────────
 
 export interface PresetStorageAdapter {
+  initialize(): Promise<void>;
   getAllPresets(): Promise<EqPreset[]>;
   getUserPresets(): Promise<EqPreset[]>;
   getPresetById(id: string): Promise<EqPreset | null>;

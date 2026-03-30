@@ -2,17 +2,12 @@
  * presets.ts — mavin-eq
  * 
  * Built-in 31-band EQ presets + factory functions + utilities
+ * Supports graphic and parametric presets
  */
 
 import type { EqBandGains, EqPreset, PresetCategory, PresetTag } from './types';
-
-// ── 31-Band ISO Frequency Centers ─────────────────────────────────────────────
-
-export const ISO_FREQ_CENTERS: readonly number[] = [
-  20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
-  200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
-  2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
-];
+// Import ISO_FREQ_CENTERS from types for internal use only
+import { ISO_FREQ_CENTERS } from './types';
 
 // ── Built-in Gain Curves ───────────────────────────────────────────────────────
 
@@ -119,9 +114,44 @@ function createBuiltinPreset(
   };
 }
 
+function createBuiltinParametricPreset(
+  id: string,
+  name: string,
+  parametric_gains: number[],
+  parametric_freqs: number[],
+  q_values: number[],
+  options: {
+    description?: string;
+    icon?: string;
+    color?: string;
+    tags?: PresetTag[];
+    preamp_db?: number;
+    eq_mode?: string;
+  } = {}
+): EqPreset {
+  return {
+    id: `builtin_${id}`,
+    name,
+    type: 'parametric',
+    category: 'builtin',
+    parametric_gains,
+    parametric_freqs,
+    q_values,
+    preamp_db: options.preamp_db ?? 0,
+    eq_mode: options.eq_mode ?? 'PARAMETRIC',
+    source: 'local',
+    description: options.description,
+    icon: options.icon || 'sliders',
+    color: options.color || '#6366f1',
+    tags: options.tags || ['parametric'],
+    isFavorite: false,
+  };
+}
+
 // ── Built-in Presets Collection ───────────────────────────────────────────────
 
 export const BUILT_IN_PRESETS: Record<string, EqPreset> = {
+  // Graphic Presets
   flat: createBuiltinPreset('flat', 'Flat', FLAT, {
     description: 'No EQ applied - pure audio',
     icon: 'minus',
@@ -255,8 +285,52 @@ export function createCustomPreset(
   };
 }
 
+export function createCustomParametricPreset(
+  name: string,
+  parametric_gains: number[],
+  parametric_freqs: number[],
+  q_values: number[],
+  options: Partial<Omit<EqPreset, 'id' | 'category' | 'source'>> = {}
+): EqPreset {
+  const now = new Date().toISOString();
+  return {
+    id: `user_parametric_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    name,
+    type: 'parametric',
+    category: 'user',
+    parametric_gains,
+    parametric_freqs,
+    q_values,
+    preamp_db: options.preamp_db ?? 0,
+    eq_mode: options.eq_mode ?? 'PARAMETRIC',
+    source: 'local',
+    description: options.description,
+    icon: options.icon || 'sliders',
+    color: options.color || '#6366f1',
+    tags: options.tags || ['parametric', 'custom'],
+    isFavorite: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function duplicatePreset(preset: EqPreset, newName?: string): EqPreset {
   const now = new Date().toISOString();
+  
+  if (preset.type === 'parametric') {
+    return {
+      ...preset,
+      id: `user_parametric_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: newName || `${preset.name} (Copy)`,
+      category: 'user',
+      source: 'local',
+      supabaseId: undefined,
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: undefined,
+    };
+  }
+  
   return {
     ...preset,
     id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -283,12 +357,20 @@ export function interpolatePreset(
   presetB: EqPreset,
   ratio: number
 ): number[] {
-  if (!presetA.gains_31 || !presetB.gains_31) return FLAT;
+  // Prefer parametric gains if available, fallback to graphic gains
+  const gainsA = presetA.parametric_gains || presetA.gains_31;
+  const gainsB = presetB.parametric_gains || presetB.gains_31;
   
-  return presetA.gains_31.map((gain, i) => {
-    const target = presetB.gains_31![i] || 0;
-    return gain + (target - gain) * ratio;
-  });
+  if (!gainsA || !gainsB) return FLAT as number[];
+  
+  const length = Math.min(gainsA.length, gainsB.length, 31);
+  const result: number[] = [];
+  
+  for (let i = 0; i < length; i++) {
+    result.push(gainsA[i] + (gainsB[i] - gainsA[i]) * ratio);
+  }
+  
+  return result;
 }
 
 export function getPresetTagsByGenre(genre: string): PresetTag[] {

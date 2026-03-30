@@ -13,6 +13,35 @@ import {
   getRecentPresets as getRecentPresetsFn,
   applyEQPreset,
   setEQEnabled,
+  setEQMode,
+  setDitherMode,
+  setSmoothingRamp,
+  setCompressorEnabled,
+  setCompressorThreshold,
+  setCompressorRatio,
+  setCompressorAttack,
+  setCompressorRelease,
+  setCompressorKnee,
+  setCompressorMakeupGain,
+  getCompressorReduction,
+  setCrossfeedEnabled,
+  setCrossfeedStrength,
+  setCrossfeedCutoff,
+  setPeakHoldMs,
+  setPeakReleaseMs,
+  resetPeaks,
+  setPlaybackSpeed,
+  setCrossfadeEnabled,
+  setCrossfadeDuration,
+  setOfflineMode,
+  set64BitProcessingEnabled,
+  loadImpulseResponse,
+  clearImpulseResponse,
+  setConvolutionEnabled,
+  enableDirectUsbRouting,
+  setPreferredDacSampleRate,
+  setPreferredDacBitDepth,
+  rescanUsbDevices,
 } from "./index";
 import { 
   fetchCloudPresets, 
@@ -40,12 +69,59 @@ interface UseEqualizerReturn extends EqState {
   favorites: EqPreset[];
   recentPresets: EqPreset[];
   
-  // Actions
+  // EQ Actions
   toggle: () => Promise<void>;
   applyPreset: (preset: EqPreset) => Promise<void>;
   setBand: (index: number, gainDb: number) => Promise<void>;
   setBands: (gains: number[]) => Promise<void>;
   resetToFlat: () => Promise<void>;
+  setEqMode: (mode: "GRAPHIC" | "PARAMETRIC" | "PARALLEL") => Promise<void>;
+  setDitherMode: (mode: "FLAT" | "HIGHPASS" | "E_WEIGHTED" | "F_WEIGHTED") => Promise<void>;
+  setSmoothingRamp: (ms: number) => Promise<void>;
+  
+  // Compressor (DRC) Actions
+  setCompressorEnabled: (enabled: boolean) => Promise<void>;
+  setCompressorThreshold: (db: number) => Promise<void>;
+  setCompressorRatio: (ratio: number) => Promise<void>;
+  setCompressorAttack: (ms: number) => Promise<void>;
+  setCompressorRelease: (ms: number) => Promise<void>;
+  setCompressorKnee: (db: number) => Promise<void>;
+  setCompressorMakeupGain: (db: number) => Promise<void>;
+  getCompressorReduction: () => Promise<number>;
+  
+  // Crossfeed Actions
+  setCrossfeedEnabled: (enabled: boolean) => Promise<void>;
+  setCrossfeedStrength: (strength: number) => Promise<void>;
+  setCrossfeedCutoff: (hz: number) => Promise<void>;
+  
+  // Peak Meter Actions
+  setPeakHoldMs: (ms: number) => Promise<void>;
+  setPeakReleaseMs: (ms: number) => Promise<void>;
+  resetPeaks: () => Promise<void>;
+  
+  // Playback Speed Actions
+  setPlaybackSpeed: (speed: number) => Promise<void>;
+  
+  // Crossfade Actions
+  setCrossfadeEnabled: (enabled: boolean) => Promise<void>;
+  setCrossfadeDuration: (durationMs: number) => Promise<void>;
+  
+  // Offline Mode
+  setOfflineMode: (enabled: boolean) => Promise<void>;
+  
+  // 64-bit Processing
+  set64BitProcessingEnabled: (enabled: boolean) => Promise<void>;
+  
+  // Convolution (Impulse Response) Actions
+  loadImpulseResponse: (filePath: string) => Promise<void>;
+  clearImpulseResponse: () => Promise<void>;
+  setConvolutionEnabled: (enabled: boolean) => Promise<void>;
+  
+  // USB DAC Actions
+  enableDirectUsbRouting: (enabled: boolean) => Promise<boolean>;
+  setPreferredDacSampleRate: (rate: number) => Promise<boolean>;
+  setPreferredDacBitDepth: (depth: number) => Promise<boolean>;
+  rescanUsbDevices: () => Promise<void>;
   
   // Preset Management
   createPreset: (name: string, description?: string) => Promise<EqPreset | null>;
@@ -115,13 +191,10 @@ export function useEqualizer(options: UseEqualizerOptions = {}): UseEqualizerRet
     setState(s => ({ ...s, isLoading: true, error: null }));
 
     try {
-      // Check if player is initialized by checking if we can call EQ
-      // The native module will reject if player not ready
       await MavinPlayerNative.setEQEnabled(true);
       
       isSetupRef.current = true;
 
-      // Restore last used preset
       const lastUsedId = await localStorage.getLastUsed();
       if (lastUsedId) {
         const lastPreset = await localStorage.getPresetById(lastUsedId);
@@ -162,7 +235,6 @@ export function useEqualizer(options: UseEqualizerOptions = {}): UseEqualizerRet
 
   const applyPreset = useCallback(async (preset: EqPreset) => {
     if (!isSetupRef.current) {
-      // Try to setup first
       try {
         await setup();
       } catch (e) {
@@ -216,7 +288,6 @@ export function useEqualizer(options: UseEqualizerOptions = {}): UseEqualizerRet
     
     await saveUserPreset(newPreset, supabase);
     await refreshPresets();
-    
     await applyPresetInternal(newPreset, true);
     
     return newPreset;
@@ -337,6 +408,124 @@ export function useEqualizer(options: UseEqualizerOptions = {}): UseEqualizerRet
     }));
   }, [setBands]);
 
+  // ── Wrapper Functions for New Features ──────────────────────────────────────
+
+  const handleSetEqMode = useCallback(async (mode: "GRAPHIC" | "PARAMETRIC" | "PARALLEL") => {
+    await setEQMode(mode);
+  }, []);
+
+  const handleSetDitherMode = useCallback(async (mode: "FLAT" | "HIGHPASS" | "E_WEIGHTED" | "F_WEIGHTED") => {
+    await setDitherMode(mode);
+  }, []);
+
+  const handleSetSmoothingRamp = useCallback(async (ms: number) => {
+    await setSmoothingRamp(ms);
+  }, []);
+
+  const handleSetCompressorEnabled = useCallback(async (enabled: boolean) => {
+    await setCompressorEnabled(enabled);
+  }, []);
+
+  const handleSetCompressorThreshold = useCallback(async (db: number) => {
+    await setCompressorThreshold(db);
+  }, []);
+
+  const handleSetCompressorRatio = useCallback(async (ratio: number) => {
+    await setCompressorRatio(ratio);
+  }, []);
+
+  const handleSetCompressorAttack = useCallback(async (ms: number) => {
+    await setCompressorAttack(ms);
+  }, []);
+
+  const handleSetCompressorRelease = useCallback(async (ms: number) => {
+    await setCompressorRelease(ms);
+  }, []);
+
+  const handleSetCompressorKnee = useCallback(async (db: number) => {
+    await setCompressorKnee(db);
+  }, []);
+
+  const handleSetCompressorMakeupGain = useCallback(async (db: number) => {
+    await setCompressorMakeupGain(db);
+  }, []);
+
+  const handleGetCompressorReduction = useCallback(async (): Promise<number> => {
+    return await getCompressorReduction();
+  }, []);
+
+  const handleSetCrossfeedEnabled = useCallback(async (enabled: boolean) => {
+    await setCrossfeedEnabled(enabled);
+  }, []);
+
+  const handleSetCrossfeedStrength = useCallback(async (strength: number) => {
+    await setCrossfeedStrength(strength);
+  }, []);
+
+  const handleSetCrossfeedCutoff = useCallback(async (hz: number) => {
+    await setCrossfeedCutoff(hz);
+  }, []);
+
+  const handleSetPeakHoldMs = useCallback(async (ms: number) => {
+    await setPeakHoldMs(ms);
+  }, []);
+
+  const handleSetPeakReleaseMs = useCallback(async (ms: number) => {
+    await setPeakReleaseMs(ms);
+  }, []);
+
+  const handleResetPeaks = useCallback(async () => {
+    await resetPeaks();
+  }, []);
+
+  const handleSetPlaybackSpeed = useCallback(async (speed: number) => {
+    await setPlaybackSpeed(speed);
+  }, []);
+
+  const handleSetCrossfadeEnabled = useCallback(async (enabled: boolean) => {
+    await setCrossfadeEnabled(enabled);
+  }, []);
+
+  const handleSetCrossfadeDuration = useCallback(async (durationMs: number) => {
+    await setCrossfadeDuration(durationMs);
+  }, []);
+
+  const handleSetOfflineMode = useCallback(async (enabled: boolean) => {
+    await setOfflineMode(enabled);
+  }, []);
+
+  const handleSet64BitProcessingEnabled = useCallback(async (enabled: boolean) => {
+    await set64BitProcessingEnabled(enabled);
+  }, []);
+
+  const handleLoadImpulseResponse = useCallback(async (filePath: string) => {
+    await loadImpulseResponse(filePath);
+  }, []);
+
+  const handleClearImpulseResponse = useCallback(async () => {
+    await clearImpulseResponse();
+  }, []);
+
+  const handleSetConvolutionEnabled = useCallback(async (enabled: boolean) => {
+    await setConvolutionEnabled(enabled);
+  }, []);
+
+  const handleEnableDirectUsbRouting = useCallback(async (enabled: boolean): Promise<boolean> => {
+    return await enableDirectUsbRouting(enabled);
+  }, []);
+
+  const handleSetPreferredDacSampleRate = useCallback(async (rate: number): Promise<boolean> => {
+    return await setPreferredDacSampleRate(rate);
+  }, []);
+
+  const handleSetPreferredDacBitDepth = useCallback(async (depth: number): Promise<boolean> => {
+    return await setPreferredDacBitDepth(depth);
+  }, []);
+
+  const handleRescanUsbDevices = useCallback(async () => {
+    await rescanUsbDevices();
+  }, []);
+
   return {
     ...state,
     presetGroups,
@@ -347,6 +536,35 @@ export function useEqualizer(options: UseEqualizerOptions = {}): UseEqualizerRet
     setBand,
     setBands,
     resetToFlat,
+    setEqMode: handleSetEqMode,
+    setDitherMode: handleSetDitherMode,
+    setSmoothingRamp: handleSetSmoothingRamp,
+    setCompressorEnabled: handleSetCompressorEnabled,
+    setCompressorThreshold: handleSetCompressorThreshold,
+    setCompressorRatio: handleSetCompressorRatio,
+    setCompressorAttack: handleSetCompressorAttack,
+    setCompressorRelease: handleSetCompressorRelease,
+    setCompressorKnee: handleSetCompressorKnee,
+    setCompressorMakeupGain: handleSetCompressorMakeupGain,
+    getCompressorReduction: handleGetCompressorReduction,
+    setCrossfeedEnabled: handleSetCrossfeedEnabled,
+    setCrossfeedStrength: handleSetCrossfeedStrength,
+    setCrossfeedCutoff: handleSetCrossfeedCutoff,
+    setPeakHoldMs: handleSetPeakHoldMs,
+    setPeakReleaseMs: handleSetPeakReleaseMs,
+    resetPeaks: handleResetPeaks,
+    setPlaybackSpeed: handleSetPlaybackSpeed,
+    setCrossfadeEnabled: handleSetCrossfadeEnabled,
+    setCrossfadeDuration: handleSetCrossfadeDuration,
+    setOfflineMode: handleSetOfflineMode,
+    set64BitProcessingEnabled: handleSet64BitProcessingEnabled,
+    loadImpulseResponse: handleLoadImpulseResponse,
+    clearImpulseResponse: handleClearImpulseResponse,
+    setConvolutionEnabled: handleSetConvolutionEnabled,
+    enableDirectUsbRouting: handleEnableDirectUsbRouting,
+    setPreferredDacSampleRate: handleSetPreferredDacSampleRate,
+    setPreferredDacBitDepth: handleSetPreferredDacBitDepth,
+    rescanUsbDevices: handleRescanUsbDevices,
     createPreset,
     deletePreset,
     toggleFavorite,

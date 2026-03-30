@@ -10,12 +10,45 @@ import type {
   EqPreset, 
   PresetGroup,
   PresetStorageAdapter,
-  MavinTrack 
+  MavinTrack,
+  PresetCategory
 } from "./types";
 
+// Re-export default
 export default MavinPlayerNative;
-export * from "./types";
-export * from "./presets";
+
+// Export types from types.ts (includes ISO_FREQ_CENTERS)
+export type * from "./types";
+
+// Export specific items from presets.ts (NOT using export * to avoid ISO_FREQ_CENTERS conflict)
+export {
+  FLAT,
+  HARMAN,
+  BASS_BOOST,
+  TREBLE_BOOST,
+  VOCAL_BOOST,
+  CLASSICAL,
+  ELECTRONIC,
+  ROCK,
+  JAZZ,
+  PODCAST,
+  LOUDNESS,
+  HIP_HOP,
+  ACOUSTIC,
+  BUILT_IN_PRESETS,
+  BUILT_IN_PRESETS_LIST,
+  formatFreq,
+  getFreqLabel,
+  createCustomPreset,
+  createCustomParametricPreset,
+  duplicatePreset,
+  normalizeGains,
+  interpolatePreset,
+  getPresetTagsByGenre,
+} from "./presets";
+
+// Note: ISO_FREQ_CENTERS is already exported via types.ts, no need to re-export from presets
+
 export {
   fetchUserProfile,
   fetchCloudPresets,
@@ -244,7 +277,7 @@ export async function getAllGroupedPresets(supabase?: SupabaseClient): Promise<P
     allPresets.push(...newCloudPresets);
   }
 
-  const groups: Record<string, EqPreset[]> = {
+  const groups: Partial<Record<PresetCategory, EqPreset[]>> = {
     builtin: [],
     user: [],
     supabase: [],
@@ -255,7 +288,7 @@ export async function getAllGroupedPresets(supabase?: SupabaseClient): Promise<P
 
   for (const preset of allPresets) {
     if (groups[preset.category]) {
-      groups[preset.category].push(preset);
+      groups[preset.category]!.push(preset);
     }
   }
 
@@ -265,40 +298,51 @@ export async function getAllGroupedPresets(supabase?: SupabaseClient): Promise<P
     return a.name.localeCompare(b.name);
   };
 
-  return [
-    {
+  const result: PresetGroup[] = [];
+
+  if (groups.builtin && groups.builtin.length > 0) {
+    result.push({
       id: "builtin",
       title: "Factory Presets",
       icon: "box",
       presets: groups.builtin.sort(sortPresets),
       isExpanded: true,
       sortOrder: 0,
-    },
-    {
-      id: "user",
-      title: "My Presets",
-      icon: "user",
-      presets: groups.user.sort(sortPresets),
-      isExpanded: true,
-      sortOrder: 1,
-    },
-    {
+    });
+  }
+
+  result.push({
+    id: "user",
+    title: "My Presets",
+    icon: "user",
+    presets: (groups.user || []).sort(sortPresets),
+    isExpanded: true,
+    sortOrder: 1,
+  });
+
+  if (groups.supabase && groups.supabase.length > 0) {
+    result.push({
       id: "supabase",
       title: "Cloud Presets",
       icon: "cloud",
       presets: groups.supabase.sort(sortPresets),
       isExpanded: false,
       sortOrder: 2,
-    },
-    {
+    });
+  }
+
+  if (groups.artist && groups.artist.length > 0) {
+    result.push({
       id: "artist",
       title: "Artist Curated",
       icon: "star",
       presets: groups.artist.sort(sortPresets),
       isExpanded: false,
       sortOrder: 3,
-    },
-  ].filter(g => g.presets.length > 0 || g.id === "user");
+    });
+  }
+
+  return result;
 }
 
 export async function searchPresets(query: string): Promise<EqPreset[]> {
@@ -358,7 +402,9 @@ export async function importUserPresets(jsonString: string): Promise<number> {
   return localStorage.importPresets(jsonString);
 }
 
-// ── EQ Control (Direct Native Calls) ───────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// EQ CONTROL (Graphic)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function setEQEnabled(enabled: boolean): Promise<void> {
   await MavinPlayerNative.setEQEnabled(enabled);
@@ -376,18 +422,517 @@ export async function setEQPreamp(gainDb: number): Promise<void> {
   await MavinPlayerNative.setEQPreamp(gainDb);
 }
 
+export async function setEQBandQ(band: number, q: number): Promise<void> {
+  await MavinPlayerNative.setEQBandQ(band, q);
+}
+
 export async function resetEQ(): Promise<void> {
   await MavinPlayerNative.resetEQ();
 }
 
-export async function applyEQPreset(preset: EqPreset): Promise<void> {
-  if (preset.type === "graphic_31band" && preset.gains_31) {
-    await MavinPlayerNative.applyEQBands(preset.gains_31 as number[]);
-  }
-  // Note: biquad/parametric not yet supported in native
+// ─────────────────────────────────────────────────────────────────────────────
+// PARAMETRIC EQ CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function applyParametricBands(gains: number[]): Promise<void> {
+  await MavinPlayerNative.applyParametricBands(gains);
 }
 
-// ── Player Control (Re-exported) ─────────────────────────────────────────────
+export async function setParametricBandGain(band: number, gainDb: number): Promise<void> {
+  await MavinPlayerNative.setParametricBandGain(band, gainDb);
+}
+
+export async function setParametricBandFreq(band: number, freqHz: number): Promise<void> {
+  await MavinPlayerNative.setParametricBandFreq(band, freqHz);
+}
+
+export async function resetParametric(): Promise<void> {
+  await MavinPlayerNative.resetParametric();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EQ MODE CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setEQMode(mode: "GRAPHIC" | "PARAMETRIC" | "PARALLEL"): Promise<void> {
+  await MavinPlayerNative.setEQMode(mode);
+}
+
+export async function getEQMode(): Promise<string> {
+  return MavinPlayerNative.getEQMode();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DITHER MODE CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setDitherMode(mode: "FLAT" | "HIGHPASS" | "E_WEIGHTED" | "F_WEIGHTED"): Promise<void> {
+  await MavinPlayerNative.setDitherMode(mode);
+}
+
+export async function getDitherMode(): Promise<string> {
+  return MavinPlayerNative.getDitherMode();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMOOTHING CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setSmoothingRamp(ms: number): Promise<void> {
+  await MavinPlayerNative.setSmoothingRamp(ms);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPRESSOR (DRC) CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCompressorEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setCompressorEnabled(enabled);
+}
+
+export async function isCompressorEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isCompressorEnabled();
+}
+
+export async function setCompressorThreshold(db: number): Promise<void> {
+  await MavinPlayerNative.setCompressorThreshold(db);
+}
+
+export async function setCompressorRatio(ratio: number): Promise<void> {
+  await MavinPlayerNative.setCompressorRatio(ratio);
+}
+
+export async function setCompressorAttack(ms: number): Promise<void> {
+  await MavinPlayerNative.setCompressorAttack(ms);
+}
+
+export async function setCompressorRelease(ms: number): Promise<void> {
+  await MavinPlayerNative.setCompressorRelease(ms);
+}
+
+export async function setCompressorKnee(db: number): Promise<void> {
+  await MavinPlayerNative.setCompressorKnee(db);
+}
+
+export async function setCompressorMakeupGain(db: number): Promise<void> {
+  await MavinPlayerNative.setCompressorMakeupGain(db);
+}
+
+export async function getCompressorReduction(): Promise<number> {
+  return MavinPlayerNative.getCompressorReduction();
+}
+
+export async function getCompressorThreshold(): Promise<number> {
+  return MavinPlayerNative.getCompressorThreshold();
+}
+
+export async function getCompressorRatio(): Promise<number> {
+  return MavinPlayerNative.getCompressorRatio();
+}
+
+export async function getCompressorAttack(): Promise<number> {
+  return MavinPlayerNative.getCompressorAttack();
+}
+
+export async function getCompressorRelease(): Promise<number> {
+  return MavinPlayerNative.getCompressorRelease();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFEED CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCrossfeedEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setCrossfeedEnabled(enabled);
+}
+
+export async function isCrossfeedEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isCrossfeedEnabled();
+}
+
+export async function setCrossfeedStrength(strength: number): Promise<void> {
+  await MavinPlayerNative.setCrossfeedStrength(strength);
+}
+
+export async function setCrossfeedCutoff(hz: number): Promise<void> {
+  await MavinPlayerNative.setCrossfeedCutoff(hz);
+}
+
+export async function getCrossfeedStrength(): Promise<number> {
+  return MavinPlayerNative.getCrossfeedStrength();
+}
+
+export async function getCrossfeedCutoff(): Promise<number> {
+  return MavinPlayerNative.getCrossfeedCutoff();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEAK METER (VU) CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getCurrentPeaks(): Promise<{ left: number; right: number }> {
+  return MavinPlayerNative.getCurrentPeaks();
+}
+
+export async function getHeldPeaks(): Promise<{ left: number; right: number }> {
+  return MavinPlayerNative.getHeldPeaks();
+}
+
+export async function resetPeaks(): Promise<void> {
+  await MavinPlayerNative.resetPeaks();
+}
+
+export async function setPeakHoldMs(ms: number): Promise<void> {
+  await MavinPlayerNative.setPeakHoldMs(ms);
+}
+
+export async function setPeakReleaseMs(ms: number): Promise<void> {
+  await MavinPlayerNative.setPeakReleaseMs(ms);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK SPEED CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setPlaybackSpeed(speed: number): Promise<void> {
+  await MavinPlayerNative.setPlaybackSpeed(speed);
+}
+
+export async function getPlaybackSpeed(): Promise<number> {
+  return MavinPlayerNative.getPlaybackSpeed();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFADE CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCrossfadeEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setCrossfadeEnabled(enabled);
+}
+
+export async function isCrossfadeEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isCrossfadeEnabled();
+}
+
+export async function setCrossfadeDuration(durationMs: number): Promise<void> {
+  await MavinPlayerNative.setCrossfadeDuration(durationMs);
+}
+
+export async function getCrossfadeDuration(): Promise<number> {
+  return MavinPlayerNative.getCrossfadeDuration();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE MODE (ZERO TELEMETRY)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setOfflineMode(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setOfflineMode(enabled);
+}
+
+export async function isOfflineMode(): Promise<boolean> {
+  return MavinPlayerNative.isOfflineMode();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 64-BIT HIGH PRECISION PROCESSING
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function set64BitProcessingEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.set64BitProcessingEnabled(enabled);
+}
+
+export async function is64BitProcessingEnabled(): Promise<boolean> {
+  return MavinPlayerNative.is64BitProcessingEnabled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVOLUTION PROCESSOR (IMPULSE RESPONSES)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function loadImpulseResponse(filePath: string): Promise<void> {
+  await MavinPlayerNative.loadImpulseResponse(filePath);
+}
+
+export async function clearImpulseResponse(): Promise<void> {
+  await MavinPlayerNative.clearImpulseResponse();
+}
+
+export async function isImpulseResponseLoaded(): Promise<boolean> {
+  return MavinPlayerNative.isImpulseResponseLoaded();
+}
+
+export async function getIrLength(): Promise<number> {
+  return MavinPlayerNative.getIrLength();
+}
+
+export async function setConvolutionEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setConvolutionEnabled(enabled);
+}
+
+export async function isConvolutionEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isConvolutionEnabled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FX PROCESSOR (REVERB, DELAY, CHORUS, FLANGER, PHASER)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setFxEnabled(enabled: boolean): Promise<void> {
+  await MavinPlayerNative.setFxEnabled(enabled);
+}
+
+export async function isFxEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isFxEnabled();
+}
+
+export async function setFxMode(mode: "REVERB" | "DELAY" | "CHORUS" | "FLANGER" | "PHASER"): Promise<void> {
+  await MavinPlayerNative.setFxMode(mode);
+}
+
+export async function getFxMode(): Promise<string> {
+  return MavinPlayerNative.getFxMode();
+}
+
+export async function setFxMix(mix: number): Promise<void> {
+  await MavinPlayerNative.setFxMix(mix);
+}
+
+export async function getFxMix(): Promise<number> {
+  return MavinPlayerNative.getFxMix();
+}
+
+export async function setFxBypass(bypass: boolean): Promise<void> {
+  await MavinPlayerNative.setFxBypass(bypass);
+}
+
+export async function isFxBypassed(): Promise<boolean> {
+  return MavinPlayerNative.isFxBypassed();
+}
+
+// Reverb Parameters
+export async function setReverbRoomSize(value: number): Promise<void> {
+  await MavinPlayerNative.setReverbRoomSize(value);
+}
+
+export async function setReverbDecay(value: number): Promise<void> {
+  await MavinPlayerNative.setReverbDecay(value);
+}
+
+export async function setReverbPreDelay(value: number): Promise<void> {
+  await MavinPlayerNative.setReverbPreDelay(value);
+}
+
+export async function setReverbDamping(value: number): Promise<void> {
+  await MavinPlayerNative.setReverbDamping(value);
+}
+
+// Delay Parameters
+export async function setDelayTime(value: number): Promise<void> {
+  await MavinPlayerNative.setDelayTime(value);
+}
+
+export async function setDelayFeedback(value: number): Promise<void> {
+  await MavinPlayerNative.setDelayFeedback(value);
+}
+
+export async function setDelayLowCut(value: number): Promise<void> {
+  await MavinPlayerNative.setDelayLowCut(value);
+}
+
+export async function setDelayHighCut(value: number): Promise<void> {
+  await MavinPlayerNative.setDelayHighCut(value);
+}
+
+// Modulation Parameters (Chorus/Flanger/Phaser)
+export async function setModRate(value: number): Promise<void> {
+  await MavinPlayerNative.setModRate(value);
+}
+
+export async function setModDepth(value: number): Promise<void> {
+  await MavinPlayerNative.setModDepth(value);
+}
+
+export async function setModPhase(value: number): Promise<void> {
+  await MavinPlayerNative.setModPhase(value);
+}
+
+export async function setModFeedback(value: number): Promise<void> {
+  await MavinPlayerNative.setModFeedback(value);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USB DAC CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function isUsbDacConnected(): Promise<boolean> {
+  return MavinPlayerNative.isUsbDacConnected();
+}
+
+export async function getCurrentDacInfo(): Promise<{
+  name: string;
+  vendorId: number;
+  productId: number;
+  isConnected: boolean;
+  hasAudioOutput: boolean;
+  supportedSampleRates: number[];
+  maxBitDepth: number;
+  maxChannels: number;
+  isNativeDirectSupported: boolean;
+} | null> {
+  return MavinPlayerNative.getCurrentDacInfo();
+}
+
+export async function getDacCapabilities(): Promise<{
+  sampleRates: number[];
+  bitDepths: number[];
+  channelCounts: number[];
+  supportsFloatOutput: boolean;
+  supportsHdAudio: boolean;
+  nativeSampleRate: number;
+  nativeBitDepth: number;
+} | null> {
+  return MavinPlayerNative.getDacCapabilities();
+}
+
+export async function enableDirectUsbRouting(enabled: boolean): Promise<boolean> {
+  return MavinPlayerNative.enableDirectUsbRouting(enabled);
+}
+
+export async function isDirectUsbRoutingEnabled(): Promise<boolean> {
+  return MavinPlayerNative.isDirectUsbRoutingEnabled();
+}
+
+export async function setPreferredDacSampleRate(rate: number): Promise<boolean> {
+  return MavinPlayerNative.setPreferredDacSampleRate(rate);
+}
+
+export async function setPreferredDacBitDepth(depth: number): Promise<boolean> {
+  return MavinPlayerNative.setPreferredDacBitDepth(depth);
+}
+
+export async function rescanUsbDevices(): Promise<void> {
+  await MavinPlayerNative.rescanUsbDevices();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIO FORMAT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getAudioCapabilities(): Promise<{
+  maxSampleRate: number;
+  maxBitDepth: number;
+  supportsFloat: boolean;
+  supportsHdAudio: boolean;
+  supportsUltraHdAudio: boolean;
+  supportedSampleRates: number[];
+  supportedBitDepths: number[];
+  isHiResCapable: boolean;
+} | null> {
+  return MavinPlayerNative.getAudioCapabilities();
+}
+
+export async function getOptimalAudioFormat(): Promise<{
+  sampleRate: number;
+  bitDepth: number;
+  encoding: number;
+  isFloat: boolean;
+  isHiRes: boolean;
+  channelCount: number;
+} | null> {
+  return MavinPlayerNative.getOptimalAudioFormat();
+}
+
+export async function isHiResAudioCapable(): Promise<boolean> {
+  return MavinPlayerNative.isHiResAudioCapable();
+}
+
+export async function getMaxSampleRate(): Promise<number> {
+  return MavinPlayerNative.getMaxSampleRate();
+}
+
+export async function getMaxBitDepth(): Promise<number> {
+  return MavinPlayerNative.getMaxBitDepth();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APPLY FULL EQ PRESET (Supports Graphic + Parametric)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function applyEQPreset(preset: EqPreset): Promise<void> {
+  // 1. Apply graphic EQ bands
+  if (preset.gains_31 && preset.type === "graphic_31band") {
+    await MavinPlayerNative.applyEQBands(preset.gains_31 as number[]);
+  }
+  
+  // 2. Apply parametric bands if present
+  if (preset.parametric_gains) {
+    await MavinPlayerNative.applyParametricBands(preset.parametric_gains as number[]);
+  }
+  
+  // 3. Apply parametric frequencies if present
+  if (preset.parametric_freqs) {
+    for (let i = 0; i < Math.min(preset.parametric_freqs.length, 31); i++) {
+      await MavinPlayerNative.setParametricBandFreq(i, preset.parametric_freqs[i]);
+    }
+  }
+  
+  // 4. Apply Q values if present
+  if (preset.q_values) {
+    for (let i = 0; i < Math.min(preset.q_values.length, 31); i++) {
+      await MavinPlayerNative.setEQBandQ(i, preset.q_values[i]);
+    }
+  }
+  
+  // 5. Apply preamp
+  if (preset.preamp_db !== undefined) {
+    await MavinPlayerNative.setEQPreamp(preset.preamp_db);
+  }
+  
+  // 6. Apply EQ mode if specified
+  if (preset.eq_mode) {
+    await MavinPlayerNative.setEQMode(preset.eq_mode);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATE BETWEEN TWO PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function animatePresetTransition(
+  fromPreset: EqPreset,
+  toPreset: EqPreset,
+  durationMs: number = 300,
+  onProgress?: (progress: number) => void
+): Promise<void> {
+  const startTime = Date.now();
+  const fromGains = fromPreset.gains_31 || new Array(31).fill(0);
+  const toGains = toPreset.gains_31 || new Array(31).fill(0);
+  
+  return new Promise((resolve) => {
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(1, elapsed / durationMs);
+      
+      const currentGains = fromGains.map((g, i) => g + (toGains[i] - g) * progress);
+      MavinPlayerNative.applyEQBands(currentGains);
+      
+      onProgress?.(progress);
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        resolve();
+      }
+    };
+    
+    requestAnimationFrame(animate);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYER CONTROL (Re-exported)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function initPlayer(): Promise<void> {
   await MavinPlayerNative.initPlayer();
