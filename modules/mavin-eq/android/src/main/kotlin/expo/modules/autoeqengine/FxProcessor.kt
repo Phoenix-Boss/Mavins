@@ -19,8 +19,6 @@ class FxProcessor : AudioProcessor {
         private const val TAG = "FxProcessor"
         private const val DENORMAL_THRESHOLD = 1e-30
         
-        enum class FxType { REVERB, DELAY, CHORUS, FLANGER, PHASER }
-        
         const val DEFAULT_MIX = 30.0
         const val DEFAULT_BYPASS = false
         

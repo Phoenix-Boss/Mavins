@@ -6,49 +6,43 @@ import androidx.media3.common.audio.AudioProcessor.AudioFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.exp
-import kotlin.math.pow
-import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.math.max
 
 /**
- * CrossfeedProcessor - Bauer Stereophonic-to-Binaural (BS2B)
+ * PeakMeterProcessor - VU / Peak Meter
  */
-class CrossfeedProcessor : AudioProcessor {
+class PeakMeterProcessor : AudioProcessor {
     
     companion object {
-        private const val TAG = "CrossfeedProcessor"
+        private const val TAG = "PeakMeterProcessor"
         private const val DENORMAL_THRESHOLD = 1e-30
         
-        const val DEFAULT_STRENGTH = 0.5f
-        const val DEFAULT_CUTOFF_HZ = 700.0
-        const val STRENGTH_MIN = 0.0f
-        const val STRENGTH_MAX = 1.0f
-        const val CUTOFF_MIN_HZ = 400.0
-        const val CUTOFF_MAX_HZ = 2000.0
+        const val DEFAULT_PEAK_HOLD_MS = 300.0
+        const val DEFAULT_RELEASE_MS = 100.0
+        const val PEAK_HOLD_MIN_MS = 50.0
+        const val PEAK_HOLD_MAX_MS = 2000.0
+        const val RELEASE_MIN_MS = 10.0
+        const val RELEASE_MAX_MS = 1000.0
         
         const val ENCODING_PCM_32BIT = 0x00000004
     }
     
     @Volatile
-    private var crossfeedStrength = DEFAULT_STRENGTH
+    private var peakHoldMs = DEFAULT_PEAK_HOLD_MS
     @Volatile
-    private var cutoffHz = DEFAULT_CUTOFF_HZ
+    private var releaseMs = DEFAULT_RELEASE_MS
     @Volatile
     private var isEnabled = true
     
-    private data class BiquadState(var x1: Double = 0.0, var x2: Double = 0.0, 
-                                   var y1: Double = 0.0, var y2: Double = 0.0)
+    private var currentPeaks = FloatArray(8) { 0f }
+    private var heldPeaks = FloatArray(8) { 0f }
+    private var peakTimer = LongArray(8) { 0L }
     
-    private val leftState = BiquadState()
-    private val rightState = BiquadState()
+    private var releaseCoeff = 0.0
+    private var lastTimestamp = 0L
     
-    private var b0 = 1.0
-    private var b1 = 0.0
-    private var b2 = 0.0
-    private var a1 = 0.0
-    private var a2 = 0.0
+    private var peakCallback: ((FloatArray) -> Unit)? = null
     
     private var numChannels = 0
     private var sampleRate = 48000.0
@@ -57,24 +51,31 @@ class CrossfeedProcessor : AudioProcessor {
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
     
-    init {
-        updateFilter()
-    }
-    
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
     fun isEnabled(): Boolean = isEnabled
     
-    fun setStrength(strength: Float) {
-        crossfeedStrength = strength.coerceIn(STRENGTH_MIN, STRENGTH_MAX)
+    fun setPeakHoldMs(ms: Double) {
+        peakHoldMs = ms.coerceIn(PEAK_HOLD_MIN_MS, PEAK_HOLD_MAX_MS)
     }
     
-    fun setCutoffFrequency(hz: Double) {
-        cutoffHz = hz.coerceIn(CUTOFF_MIN_HZ, CUTOFF_MAX_HZ)
-        updateFilter()
+    fun setReleaseMs(ms: Double) {
+        releaseMs = ms.coerceIn(RELEASE_MIN_MS, RELEASE_MAX_MS)
+        updateReleaseCoeff()
     }
     
-    fun getStrength(): Float = crossfeedStrength
-    fun getCutoffFrequency(): Double = cutoffHz
+    fun setPeakCallback(callback: ((FloatArray) -> Unit)?) {
+        peakCallback = callback
+    }
+    
+    fun getCurrentPeaks(): FloatArray = currentPeaks.copyOf()
+    fun getHeldPeaks(): FloatArray = heldPeaks.copyOf()
+    
+    fun resetPeaks() {
+        for (i in heldPeaks.indices) {
+            heldPeaks[i] = 0f
+            peakTimer[i] = 0L
+        }
+    }
     
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -82,7 +83,7 @@ class CrossfeedProcessor : AudioProcessor {
                         enc == android.media.AudioFormat.ENCODING_PCM_FLOAT ||
                         enc == ENCODING_PCM_32BIT
         
-        if (!supported || inputAudioFormat.channelCount != 2) {
+        if (!supported) {
             this.inputAudioFormat = AudioFormat.NOT_SET
             this.outputAudioFormat = AudioFormat.NOT_SET
             return AudioFormat.NOT_SET
@@ -93,17 +94,17 @@ class CrossfeedProcessor : AudioProcessor {
         sampleRate = inputAudioFormat.sampleRate.toDouble()
         numChannels = inputAudioFormat.channelCount
         
-        updateFilter()
-        resetState()
+        updateReleaseCoeff()
+        resetPeaks()
+        lastTimestamp = System.nanoTime()
         
-        Log.d(TAG, "configure: ${sampleRate}Hz strength=${crossfeedStrength} cutoff=${cutoffHz}Hz")
         return outputAudioFormat
     }
     
-    override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET && isEnabled && numChannels == 2
+    override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET && isEnabled
     
     override fun queueInput(inputBuffer: ByteBuffer) {
-        if (!isEnabled || inputBuffer.remaining() == 0 || numChannels != 2) {
+        if (!isEnabled || inputBuffer.remaining() == 0) {
             outputBuffer = inputBuffer
             return
         }
@@ -111,14 +112,16 @@ class CrossfeedProcessor : AudioProcessor {
         val output = replaceOutputBuffer(inputBuffer.remaining())
         
         when (inputAudioFormat.encoding) {
-            android.media.AudioFormat.ENCODING_PCM_16BIT -> processShortStereo(inputBuffer, output)
-            android.media.AudioFormat.ENCODING_PCM_FLOAT -> processFloatStereo(inputBuffer, output)
-            ENCODING_PCM_32BIT -> processInt32Stereo(inputBuffer, output)
+            android.media.AudioFormat.ENCODING_PCM_16BIT -> processShort(inputBuffer, output)
+            android.media.AudioFormat.ENCODING_PCM_FLOAT -> processFloat(inputBuffer, output)
+            ENCODING_PCM_32BIT -> processInt32(inputBuffer, output)
         }
         
         inputBuffer.position(inputBuffer.limit())
         output.flip()
         outputBuffer = output
+        
+        emitPeaks()
     }
     
     override fun queueEndOfStream() { inputEnded = true }
@@ -134,102 +137,96 @@ class CrossfeedProcessor : AudioProcessor {
     override fun flush() {
         outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
-        resetState()
+        for (i in 0 until numChannels) {
+            currentPeaks[i] = 0f
+        }
     }
     
     override fun reset() {
         flush()
         inputAudioFormat = AudioFormat.NOT_SET
         outputAudioFormat = AudioFormat.NOT_SET
-        crossfeedStrength = DEFAULT_STRENGTH
-        cutoffHz = DEFAULT_CUTOFF_HZ
-        updateFilter()
+        resetPeaks()
     }
     
-    private fun processShortStereo(input: ByteBuffer, output: ByteBuffer) {
+    private fun processShort(input: ByteBuffer, output: ByteBuffer) {
+        var idx = 0
+        while (input.remaining() >= 2) {
+            val ch = idx % numChannels
+            val sample = input.short.toDouble() / 32768.0
+            val absSample = abs(sample).toFloat()
+            
+            if (absSample > currentPeaks[ch]) {
+                currentPeaks[ch] = absSample
+            }
+            
+            output.putShort((sample * 32768.0).coerceIn(-32768.0, 32767.0).toInt().toShort())
+            idx++
+        }
+    }
+    
+    private fun processFloat(input: ByteBuffer, output: ByteBuffer) {
+        var idx = 0
         while (input.remaining() >= 4) {
-            val leftIn = input.short.toDouble() / 32768.0
-            val rightIn = input.short.toDouble() / 32768.0
+            val ch = idx % numChannels
+            val sample = input.float.toDouble()
+            val absSample = abs(sample).toFloat()
             
-            val (leftOut, rightOut) = processStereo(leftIn, rightIn)
+            if (absSample > currentPeaks[ch]) {
+                currentPeaks[ch] = absSample
+            }
             
-            output.putShort((leftOut * 32768.0).coerceIn(-32768.0, 32767.0).toInt().toShort())
-            output.putShort((rightOut * 32768.0).coerceIn(-32768.0, 32767.0).toInt().toShort())
+            output.putFloat(sample.toFloat())
+            idx++
         }
     }
     
-    private fun processFloatStereo(input: ByteBuffer, output: ByteBuffer) {
-        while (input.remaining() >= 8) {
-            val leftIn = input.float.toDouble()
-            val rightIn = input.float.toDouble()
+    private fun processInt32(input: ByteBuffer, output: ByteBuffer) {
+        var idx = 0
+        while (input.remaining() >= 4) {
+            val ch = idx % numChannels
+            val sample = input.int.toDouble() / 2147483648.0
+            val absSample = abs(sample).toFloat()
             
-            val (leftOut, rightOut) = processStereo(leftIn, rightIn)
+            if (absSample > currentPeaks[ch]) {
+                currentPeaks[ch] = absSample
+            }
             
-            output.putFloat(leftOut.toFloat())
-            output.putFloat(rightOut.toFloat())
+            output.putInt((sample * 2147483648.0).coerceIn(-2147483648.0, 2147483647.0).toLong().toInt())
+            idx++
         }
     }
     
-    private fun processInt32Stereo(input: ByteBuffer, output: ByteBuffer) {
-        while (input.remaining() >= 8) {
-            val leftIn = input.int.toDouble() / 2147483648.0
-            val rightIn = input.int.toDouble() / 2147483648.0
-            
-            val (leftOut, rightOut) = processStereo(leftIn, rightIn)
-            
-            output.putInt((leftOut * 2147483648.0).coerceIn(-2147483648.0, 2147483647.0).toLong().toInt())
-            output.putInt((rightOut * 2147483648.0).coerceIn(-2147483648.0, 2147483647.0).toLong().toInt())
+    private fun emitPeaks() {
+        val now = System.nanoTime()
+        val elapsedSec = (now - lastTimestamp) / 1_000_000_000.0
+        lastTimestamp = now
+        
+        if (releaseCoeff > 0) {
+            for (ch in 0 until numChannels) {
+                currentPeaks[ch] = (currentPeaks[ch] * (1.0 - releaseCoeff)).toFloat()
+                if (currentPeaks[ch] < 1e-6f) currentPeaks[ch] = 0f
+            }
         }
+        
+        val holdNs = (peakHoldMs / 1000.0) * 1_000_000_000.0
+        for (ch in 0 until numChannels) {
+            if (currentPeaks[ch] > heldPeaks[ch]) {
+                heldPeaks[ch] = currentPeaks[ch]
+                peakTimer[ch] = now
+            } else if (now - peakTimer[ch] > holdNs) {
+                val release = (releaseCoeff * 0.5).toFloat()
+                heldPeaks[ch] = max(heldPeaks[ch] * (1.0f - release), currentPeaks[ch])
+                if (heldPeaks[ch] < 1e-6f) heldPeaks[ch] = 0f
+            }
+        }
+        
+        peakCallback?.invoke(heldPeaks.copyOf())
     }
     
-    private fun processStereo(leftIn: Double, rightIn: Double): Pair<Double, Double> {
-        val strength = crossfeedStrength.toDouble()
-        
-        val leftDirect = leftIn * (1.0 - strength * 0.3)
-        val rightDirect = rightIn * (1.0 - strength * 0.3)
-        
-        val leftCross = processLowpass(leftIn, leftState) * strength * 0.7
-        val rightCross = processLowpass(rightIn, rightState) * strength * 0.7
-        
-        val leftOut = leftDirect + rightCross
-        val rightOut = rightDirect + leftCross
-        
-        return Pair(leftOut, rightOut)
-    }
-    
-    private fun updateFilter() {
-        val w0 = 2.0 * Math.PI * cutoffHz / sampleRate
-        val cosW0 = cos(w0)
-        val sinW0 = sin(w0)
-        
-        val alpha = sinW0 / (sqrt(2.0))
-        
-        b0 = (1.0 - cosW0) / 2.0
-        b1 = 1.0 - cosW0
-        b2 = (1.0 - cosW0) / 2.0
-        a1 = -2.0 * cosW0
-        a2 = 1.0 - alpha
-    }
-    
-    private fun processLowpass(input: Double, state: BiquadState): Double {
-        val output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2
-        
-        state.x2 = state.x1
-        state.x1 = input
-        state.y2 = state.y1
-        state.y1 = output
-        
-        if (abs(state.x1) < DENORMAL_THRESHOLD) state.x1 = 0.0
-        if (abs(state.x2) < DENORMAL_THRESHOLD) state.x2 = 0.0
-        if (abs(state.y1) < DENORMAL_THRESHOLD) state.y1 = 0.0
-        if (abs(state.y2) < DENORMAL_THRESHOLD) state.y2 = 0.0
-        
-        return output
-    }
-    
-    private fun resetState() {
-        leftState.x1 = 0.0; leftState.x2 = 0.0; leftState.y1 = 0.0; leftState.y2 = 0.0
-        rightState.x1 = 0.0; rightState.x2 = 0.0; rightState.y1 = 0.0; rightState.y2 = 0.0
+    private fun updateReleaseCoeff() {
+        releaseCoeff = if (releaseMs <= 0 || sampleRate <= 0) 1.0
+        else exp(-1.0 / (releaseMs / 1000.0 * sampleRate))
     }
     
     private fun replaceOutputBuffer(size: Int): ByteBuffer {

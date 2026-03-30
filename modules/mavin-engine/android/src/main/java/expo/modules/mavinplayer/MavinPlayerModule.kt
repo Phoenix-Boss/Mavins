@@ -459,6 +459,37 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 mapOf("band" to i, "gain" to g.toDouble(), "freqHz" to EqualizerProcessor.ISO_FREQ_CENTERS[i])
             } ?: emptyList<Map<String, Any>>())
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // FX PROCESSOR (REVERB, DELAY, CHORUS, FLANGER, PHASER)
+        // ─────────────────────────────────────────────────────────────────────
+
+        AsyncFunction("setFxEnabled")    { enabled: Boolean, promise: Promise -> playerInstance?.setFxEnabled(enabled);     promise.resolve(null) }
+        AsyncFunction("isFxEnabled")     { promise: Promise -> promise.resolve(playerInstance?.isFxEnabled() ?: false) }
+        AsyncFunction("setFxMode")       { mode: String, promise: Promise    -> playerInstance?.setFxMode(mode);            promise.resolve(null) }
+        AsyncFunction("getFxMode")       { promise: Promise -> promise.resolve(playerInstance?.getFxMode() ?: "REVERB") }
+        AsyncFunction("setFxMix")        { mix: Double, promise: Promise     -> playerInstance?.setFxMix(mix);              promise.resolve(null) }
+        AsyncFunction("getFxMix")        { promise: Promise -> promise.resolve(playerInstance?.getFxMix() ?: 30.0) }
+        AsyncFunction("setFxBypass")     { bypass: Boolean, promise: Promise -> playerInstance?.setFxBypass(bypass);        promise.resolve(null) }
+        AsyncFunction("isFxBypassed")    { promise: Promise -> promise.resolve(playerInstance?.isFxBypassed() ?: false) }
+
+        // Reverb
+        AsyncFunction("setReverbRoomSize") { value: Double, promise: Promise -> playerInstance?.setReverbRoomSize(value); promise.resolve(null) }
+        AsyncFunction("setReverbDecay")    { value: Double, promise: Promise -> playerInstance?.setReverbDecay(value);    promise.resolve(null) }
+        AsyncFunction("setReverbPreDelay") { value: Double, promise: Promise -> playerInstance?.setReverbPreDelay(value); promise.resolve(null) }
+        AsyncFunction("setReverbDamping")  { value: Double, promise: Promise -> playerInstance?.setReverbDamping(value);  promise.resolve(null) }
+
+        // Delay
+        AsyncFunction("setDelayTime")     { value: Double, promise: Promise -> playerInstance?.setDelayTime(value);     promise.resolve(null) }
+        AsyncFunction("setDelayFeedback") { value: Double, promise: Promise -> playerInstance?.setDelayFeedback(value); promise.resolve(null) }
+        AsyncFunction("setDelayLowCut")   { value: Double, promise: Promise -> playerInstance?.setDelayLowCut(value);   promise.resolve(null) }
+        AsyncFunction("setDelayHighCut")  { value: Double, promise: Promise -> playerInstance?.setDelayHighCut(value);  promise.resolve(null) }
+
+        // Modulation (Chorus / Flanger / Phaser)
+        AsyncFunction("setModRate")     { value: Double, promise: Promise -> playerInstance?.setModRate(value);     promise.resolve(null) }
+        AsyncFunction("setModDepth")    { value: Double, promise: Promise -> playerInstance?.setModDepth(value);    promise.resolve(null) }
+        AsyncFunction("setModPhase")    { value: Double, promise: Promise -> playerInstance?.setModPhase(value);    promise.resolve(null) }
+        AsyncFunction("setModFeedback") { value: Double, promise: Promise -> playerInstance?.setModFeedback(value); promise.resolve(null) }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

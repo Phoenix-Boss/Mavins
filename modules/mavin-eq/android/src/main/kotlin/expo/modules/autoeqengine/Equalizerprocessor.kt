@@ -310,24 +310,23 @@ class EqualizerProcessor : AudioProcessor {
     // SPECTRUM & AUTO-EQ
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-   // Around line 556-565 - Fixed version:
-fun computeAutoEqSuggestion(): FloatArray {
-    val mags = _spectrumMagnitudes
-    val nyquist = sampleRate / 2.0
-    val binWidth = nyquist / SPECTRUM_BINS
-    val bandDb = FloatArray(BAND_COUNT) { band ->
-        val fc = ISO_FREQ_CENTERS[band]
-        val bin = ((fc / binWidth).toInt()).coerceIn(0, SPECTRUM_BINS - 1)
-        val mag = mags[bin].toDouble().coerceAtLeast(1e-10)
-        (20.0 * log10(mag)).toFloat()
+    fun computeAutoEqSuggestion(): FloatArray {
+        val mags = _spectrumMagnitudes
+        val nyquist = sampleRate / 2.0
+        val binWidth = nyquist / SPECTRUM_BINS
+        val bandDb = FloatArray(BAND_COUNT) { band ->
+            val fc = ISO_FREQ_CENTERS[band]
+            val bin = ((fc / binWidth).toInt()).coerceIn(0, SPECTRUM_BINS - 1)
+            val mag = mags[bin].toDouble().coerceAtLeast(1e-10)
+            (20.0 * kotlin.math.log10(mag)).toFloat()
+        }
+        val mean = bandDb.average().toFloat()
+        val suggestion = FloatArray(BAND_COUNT) { band ->
+            (-(bandDb[band] - mean)).coerceIn(-AUTO_EQ_MAX_CORRECTION_DB.toFloat(), AUTO_EQ_MAX_CORRECTION_DB.toFloat())
+        }
+        _autoEqSuggestion = suggestion
+        return suggestion
     }
-    val mean = bandDb.average().toFloat()  // Convert to Float here
-    val suggestion = FloatArray(BAND_COUNT) { band ->
-        (-(bandDb[band] - mean)).coerceIn(-AUTO_EQ_MAX_CORRECTION_DB.toFloat(), AUTO_EQ_MAX_CORRECTION_DB.toFloat())
-    }
-    _autoEqSuggestion = suggestion
-    return suggestion
-}
 
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // AudioProcessor INTERFACE

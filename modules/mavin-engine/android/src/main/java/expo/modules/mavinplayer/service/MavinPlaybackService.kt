@@ -53,6 +53,9 @@ class MavinPlaybackService : MediaSessionService() {
         private const val COMMAND_TOGGLE_64BIT        = "mavin.action.TOGGLE_64BIT"
         private const val COMMAND_TOGGLE_CONVOLUTION  = "mavin.action.TOGGLE_CONVOLUTION"
         private const val COMMAND_TOGGLE_USB_DIRECT   = "mavin.action.TOGGLE_USB_DIRECT"
+        // FX
+        private const val COMMAND_TOGGLE_FX           = "mavin.action.TOGGLE_FX"
+        private const val COMMAND_CYCLE_FX_MODE       = "mavin.action.CYCLE_FX_MODE"
     }
 
     private var mediaSession: MediaSession? = null
@@ -128,6 +131,7 @@ class MavinPlaybackService : MediaSessionService() {
                 "usb_dac=${p.isUsbDacConnected()} " +
                 "speed=${p.getPlaybackSpeed()}x " +
                 "crossfeed=${p.isCrossfeedEnabled()} " +
+                "fx=${p.isFxEnabled()} fxMode=${p.getFxMode()} " +
                 "offline=${p.isOfflineMode()}")
     }
 
@@ -163,6 +167,8 @@ class MavinPlaybackService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_TOGGLE_64BIT,        Bundle()))
                 .add(SessionCommand(COMMAND_TOGGLE_CONVOLUTION,  Bundle()))
                 .add(SessionCommand(COMMAND_TOGGLE_USB_DIRECT,   Bundle()))
+                .add(SessionCommand(COMMAND_TOGGLE_FX,           Bundle()))
+                .add(SessionCommand(COMMAND_CYCLE_FX_MODE,       Bundle()))
                 .build()
             return MediaSession.ConnectionResult.accept(
                 cmds, MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
@@ -227,6 +233,17 @@ class MavinPlaybackService : MediaSessionService() {
                 COMMAND_TOGGLE_64BIT       -> { val s = !(p?.is64BitProcessingEnabled() ?: false); p?.set64BitProcessingEnabled(s); Log.i(TAG, "64-bit → $s") }
                 COMMAND_TOGGLE_CONVOLUTION -> { val s = !(p?.isConvolutionEnabled() ?: false); p?.setConvolutionEnabled(s); Log.i(TAG, "Convolution → $s") }
                 COMMAND_TOGGLE_USB_DIRECT  -> { val s = !(p?.isDirectUsbRoutingEnabled() ?: false); p?.enableDirectUsbRouting(s); Log.i(TAG, "USB direct → $s") }
+                COMMAND_TOGGLE_FX     -> { val s = !(p?.isFxEnabled() ?: false); p?.setFxEnabled(s); Log.i(TAG, "FX → $s") }
+                COMMAND_CYCLE_FX_MODE -> {
+                    val next = when (p?.getFxMode()) {
+                        "REVERB"  -> "DELAY"
+                        "DELAY"   -> "CHORUS"
+                        "CHORUS"  -> "FLANGER"
+                        "FLANGER" -> "PHASER"
+                        else      -> "REVERB"
+                    }
+                    p?.setFxMode(next); Log.i(TAG, "FX mode → $next")
+                }
                 else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
             }
 
@@ -271,6 +288,9 @@ class MavinPlaybackService : MediaSessionService() {
             "crossfade_enabled"    to p.isCrossfadeEnabled(),
             "crossfade_duration_ms" to p.getCrossfadeDurationMs(),
             "offline_mode"         to p.isOfflineMode(),
+            "fx_enabled"           to p.isFxEnabled(),
+            "fx_mode"              to p.getFxMode(),
+            "fx_mix"               to p.getFxMix(),
             "is_64bit_enabled"     to p.is64BitProcessingEnabled(),
             "playback_speed"       to p.getPlaybackSpeed(),
             "replay_gain"          to p.getReplayGainInfo(),
@@ -279,6 +299,7 @@ class MavinPlaybackService : MediaSessionService() {
         )
     }
 
+    fun toggleFX(): Boolean           { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isFxEnabled(); p.setFxEnabled(s); logDspState(); return s }
     fun toggleEQ(): Boolean           { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.equalizerProcessor.isEnabled; p.setEQEnabled(s); logDspState(); return s }
     fun toggleCompressor(): Boolean   { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCompressorEnabled(); p.setCompressorEnabled(s); logDspState(); return s }
     fun toggleCrossfeed(): Boolean    { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCrossfeedEnabled(); p.setCrossfeedEnabled(s); logDspState(); return s }
