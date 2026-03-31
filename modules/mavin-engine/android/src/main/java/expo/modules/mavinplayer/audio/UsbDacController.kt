@@ -1,5 +1,6 @@
 package expo.modules.mavinplayer.audio
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -7,6 +8,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.media.AudioDeviceInfo
+import android.media.AudioFormat
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -41,6 +43,7 @@ class UsbDacController(private val context: Context) {
     
     companion object {
         private const val TAG = "UsbDacController"
+        private const val ACTION_USB_PERMISSION = "expo.modules.mavinplayer.USB_PERMISSION"
         
         // USB device classes
         private const val USB_CLASS_AUDIO = 0x01
@@ -526,6 +529,5 @@ class UsbDacController(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && audioDeviceCallback != null) {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         }
-    }
     }
 }

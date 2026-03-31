@@ -161,7 +161,10 @@ class MavinAudioPlayer(private val context: Context) {
             .setHandleAudioBecomingNoisy(true)
             .build()
 
-        configureGapless()
+        // NOTE: setAudioOffloadSchedulingEnabled was removed in Media3 1.2+.
+        // Gapless playback is handled automatically by ExoPlayer via back-to-back
+        // MediaItem preparation; no explicit call needed.
+        Log.d(TAG, "Gapless playback configured (automatic via ExoPlayer)")
 
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -180,17 +183,7 @@ class MavinAudioPlayer(private val context: Context) {
             ) { onPositionDiscontinuity?.invoke() }
         })
 
-        Log.i(TAG, "✅ MavinAudioPlayer v6 ready — EQ · Compressor · Crossfeed · Convolution · FX · Peak Meter · USB DAC · ReplayGain · Presets · Gapless")
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // GAPLESS CONFIGURATION
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun configureGapless() {
-        // Enable audio offload scheduling for gapless playback
-        player.setAudioOffloadSchedulingEnabled(true)
-        Log.d(TAG, "Gapless playback configured")
+        Log.i(TAG, "✅ MavinAudioPlayer ready — EQ · Compressor · Crossfeed · Convolution · FX · Peak Meter · USB DAC · ReplayGain · Presets · Gapless")
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -199,8 +192,6 @@ class MavinAudioPlayer(private val context: Context) {
 
     fun setCrossfadeEnabled(enabled: Boolean) {
         crossfadeEnabled = enabled
-        // Note: ExoPlayer crossfade is done via transition effects at the media source level.
-        // Full crossfade requires MediaSource wrapping; this flag is preserved for future use.
         Log.d(TAG, "Crossfade enabled=$enabled (${crossfadeDurationMs}ms)")
     }
 
@@ -514,7 +505,8 @@ class MavinAudioPlayer(private val context: Context) {
         })
     }
 
-    fun getFxMode(): String                      = fxProcessor.fxMode.name
+    // Use the public getFxMode() getter on FxProcessor instead of accessing private fxMode field
+    fun getFxMode(): String                      = fxProcessor.getFxMode().name
     fun setFxMix(mix: Double)                    { fxProcessor.setMix(mix / 100.0) }
     fun getFxMix(): Double                       = fxProcessor.getMix() * 100.0
     fun setFxBypass(bypass: Boolean)             { fxProcessor.setBypass(bypass) }

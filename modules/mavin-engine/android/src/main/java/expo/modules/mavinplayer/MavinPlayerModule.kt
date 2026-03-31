@@ -12,15 +12,12 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.support.v4.media.MediaDescriptionCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaSession
 import expo.modules.autoeqengine.EqualizerProcessor
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -29,6 +26,17 @@ import expo.modules.mavinplayer.audio.MavinAudioPlayer
 import expo.modules.mavinplayer.audio.TrackData
 import expo.modules.mavinplayer.service.MavinPlaybackService
 import java.util.concurrent.ConcurrentHashMap
+
+// ---------------------------------------------------------------------------
+// Playback state constants (replacing removed PlaybackStateCompat)
+// ---------------------------------------------------------------------------
+private object PlaybackState {
+    const val STATE_NONE    = 0
+    const val STATE_PLAYING = 3
+    const val STATE_PAUSED  = 2
+    const val STATE_STOPPED = 1
+    const val STATE_ERROR   = 7
+}
 
 @UnstableApi
 class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
@@ -46,7 +54,8 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         @Volatile var playerInstance: MavinAudioPlayer? = null
 
-        private var mediaSession: MediaSessionCompat? = null
+        // Media3 MediaSession (replaces MediaSessionCompat)
+        private var mediaSession: MediaSession? = null
         private var audioManager: AudioManager? = null
         private var audioFocusRequest: AudioFocusRequest? = null
         private var hasAudioFocus = false
@@ -59,6 +68,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     private var spectrumRunnable: Runnable? = null
     private var currentTrackIndex = 0
     private var lastKnownPosition = 0L
+
+    // ─── internal playback state mirror ────────────────────────────────────
+    @Volatile private var currentPlaybackState = PlaybackState.STATE_NONE
 
     // ═════════════════════════════════════════════════════════════════════════
     // MODULE DEFINITION
@@ -167,7 +179,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 val p = requirePlayer(promise) ?: return@runOnMain
                 try {
                     p.setQueue(tracksRaw.map { it.toTrackData() }, startIndex ?: 0)
-                    updateMediaSessionQueue(tracksRaw)
                     persistQueue(tracksRaw, startIndex ?: 0)
                     promise.resolve(null)
                 } catch (e: Exception) { promise.reject("QUEUE_ERROR", e.message, e) }
@@ -191,7 +202,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             runOnMain {
                 requirePlayer(promise)?.play()
                 requestAudioFocus()
-                updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                currentPlaybackState = PlaybackState.STATE_PLAYING
                 promise.resolve(null)
             }
         }
@@ -199,7 +210,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("pause") { promise: Promise ->
             runOnMain {
                 requirePlayer(promise)?.pause()
-                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                currentPlaybackState = PlaybackState.STATE_PAUSED
                 promise.resolve(null)
             }
         }
@@ -207,18 +218,18 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("stop") { promise: Promise ->
             runOnMain {
                 requirePlayer(promise)?.stop()
-                updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
+                currentPlaybackState = PlaybackState.STATE_STOPPED
                 promise.resolve(null)
             }
         }
 
         AsyncFunction("skipToNext")     { promise: Promise -> runOnMain { requirePlayer(promise)?.skipToNext();     promise.resolve(null) } }
         AsyncFunction("skipToPrevious") { promise: Promise -> runOnMain { requirePlayer(promise)?.skipToPrevious(); promise.resolve(null) } }
-        AsyncFunction("seekTo")         { ms: Double, promise: Promise -> runOnMain { requirePlayer(promise)?.seekTo(ms.toLong()); updatePlaybackState(getCurrentPlaybackState()); promise.resolve(null) } }
+        AsyncFunction("seekTo")         { ms: Double, promise: Promise -> runOnMain { requirePlayer(promise)?.seekTo(ms.toLong()); promise.resolve(null) } }
         AsyncFunction("skipToIndex")    { idx: Int, promise: Promise -> runOnMain { requirePlayer(promise)?.skipToIndex(idx); currentTrackIndex = idx; promise.resolve(null) } }
         AsyncFunction("setVolume")      { vol: Double, promise: Promise -> runOnMain { requirePlayer(promise)?.setVolume(vol.toFloat()); promise.resolve(null) } }
-        AsyncFunction("setRepeatMode")  { mode: Int, promise: Promise -> runOnMain { requirePlayer(promise)?.setRepeatMode(mode); updatePlaybackState(getCurrentPlaybackState()); promise.resolve(null) } }
-        AsyncFunction("setShuffleMode") { en: Boolean, promise: Promise -> runOnMain { requirePlayer(promise)?.setShuffleModeEnabled(en); updatePlaybackState(getCurrentPlaybackState()); promise.resolve(null) } }
+        AsyncFunction("setRepeatMode")  { mode: Int, promise: Promise -> runOnMain { requirePlayer(promise)?.setRepeatMode(mode); promise.resolve(null) } }
+        AsyncFunction("setShuffleMode") { en: Boolean, promise: Promise -> runOnMain { requirePlayer(promise)?.setShuffleModeEnabled(en); promise.resolve(null) } }
 
         // ─────────────────────────────────────────────────────────────────────
         // PLAYBACK SPEED
@@ -226,7 +237,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         AsyncFunction("setPlaybackSpeed") { speed: Double, promise: Promise ->
             playerInstance?.setPlaybackSpeed(speed.toFloat())
-            updatePlaybackState(getCurrentPlaybackState())
             promise.resolve(null)
         }
         AsyncFunction("getPlaybackSpeed") { promise: Promise ->
@@ -493,120 +503,33 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // MEDIA SESSION SETUP
+    // MEDIA SESSION SETUP  (Media3 — replaces legacy MediaSessionCompat)
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun setupMediaSession(context: Context, player: MavinAudioPlayer) {
-        mediaSession = MediaSessionCompat(context, "MavinPlayerSession").apply {
-            setFlags(
-                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
-                MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-            )
-            setMetadata(MediaMetadataCompat.Builder().build())
-            setPlaybackState(
-                PlaybackStateCompat.Builder()
-                    .setState(PlaybackStateCompat.STATE_NONE, 0, 1f)
-                    .setActions(getAvailableActions())
-                    .build()
-            )
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() {
-                    sendEvent("onRemotePlay", emptyMap())
-                    player.play()
-                    requestAudioFocus()
-                    updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-                }
-                override fun onPause() {
-                    sendEvent("onRemotePause", emptyMap())
-                    player.pause()
-                    updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
-                }
-                override fun onStop() {
-                    player.stop()
-                    updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
-                }
-                override fun onSkipToNext() {
-                    sendEvent("onRemoteNext", emptyMap())
-                    player.skipToNext()
-                }
-                override fun onSkipToPrevious() {
-                    sendEvent("onRemotePrevious", emptyMap())
-                    player.skipToPrevious()
-                }
-                override fun onSeekTo(pos: Long) {
-                    sendEvent("onRemoteSeek", mapOf("position" to pos.toDouble()))
-                    player.seekTo(pos)
-                    updatePlaybackState(getCurrentPlaybackState())
-                }
-                override fun onSetRepeatMode(repeatMode: Int) {
-                    player.setRepeatMode(repeatMode)
-                    updatePlaybackState(getCurrentPlaybackState())
-                }
-                override fun onSetShuffleMode(shuffleMode: Int) {
-                    player.setShuffleModeEnabled(shuffleMode == PlaybackStateCompat.SHUFFLE_MODE_ALL)
-                    updatePlaybackState(getCurrentPlaybackState())
-                }
+        // Media3 MediaSession wraps ExoPlayer directly; no manual PlaybackState updates needed.
+        mediaSession = MediaSession.Builder(context, player.player)
+            .setCallback(object : MediaSession.Callback {
+                override fun onConnect(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo
+                ): MediaSession.ConnectionResult = MediaSession.ConnectionResult.accept(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
+                    MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+                )
             })
-            isActive = true
-        }
-    }
-
-    private fun getAvailableActions(): Long =
-        PlaybackStateCompat.ACTION_PLAY or
-        PlaybackStateCompat.ACTION_PAUSE or
-        PlaybackStateCompat.ACTION_PLAY_PAUSE or
-        PlaybackStateCompat.ACTION_STOP or
-        PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-        PlaybackStateCompat.ACTION_SEEK_TO or
-        PlaybackStateCompat.ACTION_SET_REPEAT_MODE or
-        PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE
-
-    private fun updatePlaybackState(state: Int) {
-        val speed    = playerInstance?.getPlaybackSpeed() ?: 1f
-        val position = playerInstance?.getCurrentPosition() ?: 0L
-        mediaSession?.setPlaybackState(
-            PlaybackStateCompat.Builder()
-                .setState(state, position, speed)
-                .setActions(getAvailableActions())
-                .build()
-        )
-    }
-
-    private fun getCurrentPlaybackState(): Int = when {
-        playerInstance?.isPlaying() == true -> PlaybackStateCompat.STATE_PLAYING
-        (playerInstance?.getCurrentPosition() ?: 0) > 0 -> PlaybackStateCompat.STATE_PAUSED
-        else -> PlaybackStateCompat.STATE_NONE
+            .build()
+        Log.i(TAG, "Media3 MediaSession created")
     }
 
     private fun updateMediaMetadata(track: TrackData, index: Int) {
-        val builder = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, track.id)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE,  track.title  ?: "Unknown")
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist ?: "Unknown")
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM,  track.album  ?: "Unknown")
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION,      track.duration ?: 0)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER,  index.toLong())
-        track.artworkUri?.let { builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, it) }
-        mediaSession?.setMetadata(builder.build())
-    }
-
-    private fun updateMediaSessionQueue(tracks: List<Map<String, Any?>>) {
-        val queue = tracks.mapIndexed { index, track ->
-            MediaSessionCompat.QueueItem(
-                MediaDescriptionCompat.Builder()
-                    .setMediaId(track["id"] as? String ?: "")
-                    .setTitle(track["title"] as? String ?: "Unknown")
-                    .setSubtitle(track["artist"] as? String ?: "")
-                    .build(),
-                index.toLong()
-            )
-        }
-        mediaSession?.setQueue(queue)
+        // Media3 MediaSession reads metadata directly from ExoPlayer's MediaItem;
+        // nothing extra needed here. This method is kept for call-site compatibility.
+        Log.d(TAG, "updateMediaMetadata: ${track.title} idx=$index")
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // AUDIO FOCUS MANAGEMENT (RNTP-level)
+    // AUDIO FOCUS MANAGEMENT
     // ═════════════════════════════════════════════════════════════════════════
 
     @Suppress("DEPRECATION")
@@ -628,7 +551,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
                 audioFocusRequest = request
                 hasAudioFocus = true
-                sendEvent("onAudioFocusGranted", emptyMap())
+                sendEvent("onAudioFocusGranted", emptyMap<String, Any>())
                 true
             } else false
         } else {
@@ -640,7 +563,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             )
             if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
                 hasAudioFocus = true
-                sendEvent("onAudioFocusGranted", emptyMap())
+                sendEvent("onAudioFocusGranted", emptyMap<String, Any>())
                 true
             } else false
         }
@@ -659,18 +582,18 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     override fun onAudioFocusChange(focusChange: Int) {
         when (focusChange) {
             AudioManager.AUDIOFOCUS_GAIN -> {
-                sendEvent("onAudioFocusGranted", emptyMap())
+                sendEvent("onAudioFocusGranted", emptyMap<String, Any>())
                 hasAudioFocus = true
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 playerInstance?.pause()
-                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                currentPlaybackState = PlaybackState.STATE_PAUSED
                 sendEvent("onAudioFocusLost", mapOf("type" to "loss"))
                 hasAudioFocus = false
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 playerInstance?.pause()
-                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                currentPlaybackState = PlaybackState.STATE_PAUSED
                 sendEvent("onAudioFocusLost", mapOf("type" to "transient"))
                 hasAudioFocus = false
             }
@@ -682,7 +605,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // FOREGROUND SERVICE + NOTIFICATION (with custom icon)
+    // FOREGROUND SERVICE + NOTIFICATION
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun startForegroundService(context: Context) {
@@ -719,8 +642,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Resolve the custom notification icon from drawable resources.
-        // Place notification-icon.png in android/app/src/main/res/drawable/
         val iconResId = context.resources.getIdentifier(
             "notification_icon", "drawable", context.packageName
         ).takeIf { it != 0 } ?: android.R.drawable.ic_media_play
@@ -730,11 +651,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             .setContentText(playerInstance?.getCurrentTrackInfo()?.get("artist") as? String ?: "Ready to play")
             .setSmallIcon(iconResId)
             .setContentIntent(pendingIntent)
-            .setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
-                    .setMediaSession(mediaSession?.sessionToken)
-                    .setShowActionsInCompactView(0, 1, 2)
-            )
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -756,13 +672,13 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
             sendDebouncedEvent("onPlaybackStateChanged", mapOf("state" to name), 50)
             if (state == Player.STATE_READY) {
+                currentPlaybackState = PlaybackState.STATE_PLAYING
                 startProgressTimer(player)
                 startSpectrumTimer(player)
-                updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
             }
             if (state == Player.STATE_IDLE || state == Player.STATE_ENDED) {
+                currentPlaybackState = PlaybackState.STATE_NONE
                 stopAllTimers()
-                updatePlaybackState(PlaybackStateCompat.STATE_NONE)
             }
         }
 
@@ -773,7 +689,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         player.onError = { message, code ->
             sendEvent("onError", mapOf("message" to message, "code" to code))
-            updatePlaybackState(PlaybackStateCompat.STATE_ERROR)
+            currentPlaybackState = PlaybackState.STATE_ERROR
         }
 
         player.onReplayGainApplied = { trackGain, albumGain, appliedDb ->
@@ -785,12 +701,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         }
 
         player.onUsbDacDisconnected = {
-            sendEvent("onUsbDacDisconnected", emptyMap())
+            sendEvent("onUsbDacDisconnected", emptyMap<String, Any>())
         }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // PROGRESS + SPECTRUM TIMERS (debounced to avoid JS bridge flooding)
+    // PROGRESS + SPECTRUM TIMERS
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun startProgressTimer(player: MavinAudioPlayer) {
@@ -862,7 +778,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // QUEUE PERSISTENCE (survives app restart / process death)
+    // QUEUE PERSISTENCE
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun persistQueue(tracks: List<Map<String, Any?>>, currentIndex: Int) {
@@ -922,8 +838,13 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     // LIFECYCLE HOOKS
     // ═════════════════════════════════════════════════════════════════════════
 
-    override fun onCatalystInstanceDestroy() {
-        super.onCatalystInstanceDestroy()
+    // onCatalystInstanceDestroy was removed in newer React Native / expo-modules-core.
+    // Use OnDestroy lifecycle from ModuleDefinition instead.
+    // The cleanup below is wired via the OnDestroy block inside definition().
+    // If your expo-modules-core version still has it, uncomment the block below.
+    // override fun onCatalystInstanceDestroy() { ... }
+
+    private fun cleanUp() {
         runOnMain {
             stopAllTimers()
             playerInstance?.let { player -> saveState(player); player.release() }

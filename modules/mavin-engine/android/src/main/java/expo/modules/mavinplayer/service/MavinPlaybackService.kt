@@ -119,7 +119,7 @@ class MavinPlaybackService : MediaSessionService() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // DSP STATE LOG (replaces setExtras which isn't in media3 1.3.1)
+    // DSP STATE LOG
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun logDspState() {
@@ -219,21 +219,21 @@ class MavinPlaybackService : MediaSessionService() {
                     p?.setReplayGainMode(next)
                     Log.i(TAG, "ReplayGain → $next")
                 }
-                COMMAND_TOGGLE_COMPRESSOR -> { val s = !(p?.isCompressorEnabled() ?: false); p?.setCompressorEnabled(s); Log.i(TAG, "Compressor → $s") }
+                COMMAND_TOGGLE_COMPRESSOR    -> { val s = !(p?.isCompressorEnabled() ?: false); p?.setCompressorEnabled(s); Log.i(TAG, "Compressor → $s") }
                 COMMAND_INCREASE_COMPRESSION -> { val r = ((p?.getCompressorRatio() ?: 4.0) + 1.0).coerceAtMost(20.0); p?.setCompressorRatio(r); Log.i(TAG, "Ratio → $r") }
                 COMMAND_DECREASE_COMPRESSION -> { val r = ((p?.getCompressorRatio() ?: 4.0) - 1.0).coerceAtLeast(1.0); p?.setCompressorRatio(r); Log.i(TAG, "Ratio → $r") }
-                COMMAND_TOGGLE_CROSSFEED -> { val s = !(p?.isCrossfeedEnabled() ?: false); p?.setCrossfeedEnabled(s); Log.i(TAG, "Crossfeed → $s") }
-                COMMAND_SPEED_UP   -> { val s = ((p?.getPlaybackSpeed() ?: 1f) + 0.1f).coerceAtMost(3f); p?.setPlaybackSpeed(s); Log.i(TAG, "Speed → $s") }
-                COMMAND_SLOW_DOWN  -> { val s = ((p?.getPlaybackSpeed() ?: 1f) - 0.1f).coerceAtLeast(0.5f); p?.setPlaybackSpeed(s); Log.i(TAG, "Speed → $s") }
-                COMMAND_RESET_SPEED -> { p?.setPlaybackSpeed(1f); Log.i(TAG, "Speed reset") }
-                COMMAND_TOGGLE_CROSSFADE -> { val s = !(p?.isCrossfadeEnabled() ?: false); p?.setCrossfadeEnabled(s); Log.i(TAG, "Crossfade → $s") }
-                COMMAND_INCREASE_CROSSFADE -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) + 500L).coerceAtMost(10_000L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
-                COMMAND_DECREASE_CROSSFADE -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) - 500L).coerceAtLeast(500L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
-                COMMAND_TOGGLE_OFFLINE     -> { val s = !(p?.isOfflineMode() ?: false); p?.setOfflineMode(s); Log.i(TAG, "Offline → $s") }
-                COMMAND_TOGGLE_64BIT       -> { val s = !(p?.is64BitProcessingEnabled() ?: false); p?.set64BitProcessingEnabled(s); Log.i(TAG, "64-bit → $s") }
-                COMMAND_TOGGLE_CONVOLUTION -> { val s = !(p?.isConvolutionEnabled() ?: false); p?.setConvolutionEnabled(s); Log.i(TAG, "Convolution → $s") }
-                COMMAND_TOGGLE_USB_DIRECT  -> { val s = !(p?.isDirectUsbRoutingEnabled() ?: false); p?.enableDirectUsbRouting(s); Log.i(TAG, "USB direct → $s") }
-                COMMAND_TOGGLE_FX     -> { val s = !(p?.isFxEnabled() ?: false); p?.setFxEnabled(s); Log.i(TAG, "FX → $s") }
+                COMMAND_TOGGLE_CROSSFEED     -> { val s = !(p?.isCrossfeedEnabled() ?: false); p?.setCrossfeedEnabled(s); Log.i(TAG, "Crossfeed → $s") }
+                COMMAND_SPEED_UP             -> { val s = ((p?.getPlaybackSpeed() ?: 1f) + 0.1f).coerceAtMost(3f); p?.setPlaybackSpeed(s); Log.i(TAG, "Speed → $s") }
+                COMMAND_SLOW_DOWN            -> { val s = ((p?.getPlaybackSpeed() ?: 1f) - 0.1f).coerceAtLeast(0.5f); p?.setPlaybackSpeed(s); Log.i(TAG, "Speed → $s") }
+                COMMAND_RESET_SPEED          -> { p?.setPlaybackSpeed(1f); Log.i(TAG, "Speed reset") }
+                COMMAND_TOGGLE_CROSSFADE     -> { val s = !(p?.isCrossfadeEnabled() ?: false); p?.setCrossfadeEnabled(s); Log.i(TAG, "Crossfade → $s") }
+                COMMAND_INCREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) + 500L).coerceAtMost(10_000L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
+                COMMAND_DECREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) - 500L).coerceAtLeast(500L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
+                COMMAND_TOGGLE_OFFLINE       -> { val s = !(p?.isOfflineMode() ?: false); p?.setOfflineMode(s); Log.i(TAG, "Offline → $s") }
+                COMMAND_TOGGLE_64BIT         -> { val s = !(p?.is64BitProcessingEnabled() ?: false); p?.set64BitProcessingEnabled(s); Log.i(TAG, "64-bit → $s") }
+                COMMAND_TOGGLE_CONVOLUTION   -> { val s = !(p?.isConvolutionEnabled() ?: false); p?.setConvolutionEnabled(s); Log.i(TAG, "Convolution → $s") }
+                COMMAND_TOGGLE_USB_DIRECT    -> { val s = !(p?.isDirectUsbRoutingEnabled() ?: false); p?.enableDirectUsbRouting(s); Log.i(TAG, "USB direct → $s") }
+                COMMAND_TOGGLE_FX            -> { val s = !(p?.isFxEnabled() ?: false); p?.setFxEnabled(s); Log.i(TAG, "FX → $s") }
                 COMMAND_CYCLE_FX_MODE -> {
                     val next = when (p?.getFxMode()) {
                         "REVERB"  -> "DELAY"
@@ -275,7 +275,7 @@ class MavinPlaybackService : MediaSessionService() {
             "compressor_threshold" to p.getCompressorThreshold(),
             "compressor_ratio"     to p.getCompressorRatio(),
             "compressor_attack_ms" to p.getCompressorAttackMs(),
-            "compressor_release_ms"to p.getCompressorReleaseMs(),
+            "compressor_release_ms" to p.getCompressorReleaseMs(),
             "compressor_reduction_db" to p.getCompressorReductionDb(),
             "crossfeed_enabled"    to p.isCrossfeedEnabled(),
             "crossfeed_strength"   to p.getCrossfeedStrength(),
