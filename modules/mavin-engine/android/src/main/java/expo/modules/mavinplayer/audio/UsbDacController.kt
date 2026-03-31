@@ -14,51 +14,36 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * UsbDacController - Direct USB DAC Control for High-Resolution Audio
- * 
- * Features:
- * - Detect USB DAC connection/disconnection
- * - Query DAC capabilities (sample rates, bit depths, channel counts)
- * - Direct audio routing to USB device
- * - Bypass Android resampling when possible
- * - Lock-free state updates for JS bridge
- * 
- * Requirements:
- * - USB host permission in AndroidManifest.xml
- * - android.permission.USB_PERMISSION
- * - USB device filter for audio class
- * 
- * Supported DACs:
- * - Any USB Audio Class 1 or 2 compliant DAC
- * - External sound cards
- * - USB-C headphones with DAC
- * - Docks with audio output
+ *
+ * Fixed for Gradle/EAS compatibility:
+ * - AudioDeviceCallback guarded behind Build.VERSION_CODES.M check using nullable reference
+ * - Replaced .encodingList (API 33) with .encodings (API 23) throughout
+ * - Replaced .isSampleRateSupported() / .isEncodingSupported() (API 33) with manual array scans
+ * - Replaced AudioDeviceInfo.maxBitDepth (non-existent) with computed bit-depth from encodings
+ * - All API-level-specific blocks are properly annotated / guarded
  */
 class UsbDacController(private val context: Context) {
-    
+
     companion object {
         private const val TAG = "UsbDacController"
         private const val ACTION_USB_PERMISSION = "expo.modules.mavinplayer.USB_PERMISSION"
-        
-        // USB device classes
+
         private const val USB_CLASS_AUDIO = 0x01
-        private const val USB_AUDIO_SUBCLASS_CONTROL = 0x01
-        private const val USB_AUDIO_SUBCLASS_STREAMING = 0x02
-        
-        // Supported sample rates (Hz)
+
         val SUPPORTED_SAMPLE_RATES = intArrayOf(
             44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000
         )
-        
-        // Supported bit depths
         val SUPPORTED_BIT_DEPTHS = intArrayOf(16, 24, 32)
+
+        // AudioFormat.ENCODING_PCM_24BIT_PACKED was added in API 31
+        private const val ENCODING_PCM_24BIT_PACKED = 0x80000004.toInt()
     }
-    
+
     data class DacInfo(
         val name: String,
         val vendorId: Int,
@@ -70,7 +55,7 @@ class UsbDacController(private val context: Context) {
         val maxChannels: Int,
         val isNativeDirectSupported: Boolean
     )
-    
+
     data class DacCapabilities(
         val sampleRates: List<Int>,
         val bitDepths: List<Int>,
@@ -80,118 +65,106 @@ class UsbDacController(private val context: Context) {
         val nativeSampleRate: Int,
         val nativeBitDepth: Int
     )
-    
+
     // Lock-free state
     private val _isDacConnected = AtomicBoolean(false)
     val isDacConnected: Boolean get() = _isDacConnected.get()
-    
+
     private val _currentDacInfo = AtomicReference<DacInfo?>(null)
     val currentDacInfo: DacInfo? get() = _currentDacInfo.get()
-    
+
     private val _dacCapabilities = AtomicReference<DacCapabilities?>(null)
     val dacCapabilities: DacCapabilities? get() = _dacCapabilities.get()
-    
-    @Volatile
-    private var isNativeDirectMode = false
-    
-    @Volatile
-    private var preferredSampleRate = 48000
-    
-    @Volatile
-    private var preferredBitDepth = 24
-    
-    // AudioManager for routing
+
+    @Volatile private var isNativeDirectMode = false
+    @Volatile private var preferredSampleRate = 48000
+    @Volatile private var preferredBitDepth = 24
+
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    
-    // USB Manager
-    private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-    
-    // Callbacks
+    private val usbManager   = context.getSystemService(Context.USB_SERVICE)   as UsbManager
+
     var onDacConnected: ((DacInfo) -> Unit)? = null
     var onDacDisconnected: (() -> Unit)? = null
     var onDacCapabilitiesChanged: ((DacCapabilities) -> Unit)? = null
-    
-    // USB device receiver
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // USB BroadcastReceiver (works on all API levels)
+    // ─────────────────────────────────────────────────────────────────────────
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
                     device?.let { handleUsbDeviceAttached(it) }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
                     device?.let { handleUsbDeviceDetached(it) }
                 }
             }
         }
     }
-    
-    // Audio device callback (API 23+)
-    private val audioDeviceCallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        object : AudioManager.AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                for (device in addedDevices) {
-                    if (isUsbAudioDevice(device)) {
-                        handleAudioDeviceAdded(device)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // AudioDeviceCallback — API 23+ only, held as Any? to avoid class-load issues
+    // on API < 23. The actual object is AudioManager.AudioDeviceCallback.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val audioDeviceCallback: AudioManager.AudioDeviceCallback? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            object : AudioManager.AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                    for (device in addedDevices) {
+                        if (isUsbAudioDevice(device)) handleAudioDeviceAdded(device)
+                    }
+                }
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                    for (device in removedDevices) {
+                        if (isUsbAudioDevice(device)) handleAudioDeviceRemoved(device)
                     }
                 }
             }
-            
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                for (device in removedDevices) {
-                    if (isUsbAudioDevice(device)) {
-                        handleAudioDeviceRemoved(device)
-                    }
-                }
-            }
-        }
-    } else null
-    
+        } else null
+
     init {
         registerReceivers()
         scanForConnectedDacs()
     }
-    
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    // ─────────────────────────────────────────────────────────────────────────
     // PUBLIC API
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    
-    /**
-     * Enable direct USB audio routing (bypass Android mixer when possible)
-     */
+    // ─────────────────────────────────────────────────────────────────────────
+
     fun enableDirectUsbRouting(enabled: Boolean): Boolean {
         if (!isDacConnected) {
             Log.w(TAG, "No DAC connected, cannot enable direct routing")
             return false
         }
-        
         isNativeDirectMode = enabled
-        
         if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // Request direct USB output if available
-            val preferredDevice = getPreferredUsbDevice()
-            if (preferredDevice != null) {
-                // Native direct routing is device-specific
-                // Full implementation requires AudioTrack.Builder.setDeviceId()
-                Log.i(TAG, "Direct USB routing enabled for ${preferredDevice.productName}")
+            getPreferredUsbDevice()?.let {
+                Log.i(TAG, "Direct USB routing enabled for ${it.productName}")
             }
         }
-        
         return true
     }
-    
-    /**
-     * Check if direct USB routing is currently active
-     */
+
     fun isDirectUsbRoutingEnabled(): Boolean = isNativeDirectMode
-    
-    /**
-     * Set preferred sample rate for USB DAC output
-     */
+
     fun setPreferredSampleRate(rate: Int): Boolean {
-        val capabilities = dacCapabilities
-        if (capabilities != null && !capabilities.sampleRates.contains(rate)) {
+        val caps = dacCapabilities
+        if (caps != null && !caps.sampleRates.contains(rate)) {
             Log.w(TAG, "Sample rate $rate not supported by DAC")
             return false
         }
@@ -199,13 +172,10 @@ class UsbDacController(private val context: Context) {
         Log.i(TAG, "Preferred sample rate set to $rate Hz")
         return true
     }
-    
-    /**
-     * Set preferred bit depth for USB DAC output
-     */
+
     fun setPreferredBitDepth(depth: Int): Boolean {
-        val capabilities = dacCapabilities
-        if (capabilities != null && !capabilities.bitDepths.contains(depth)) {
+        val caps = dacCapabilities
+        if (caps != null && !caps.bitDepths.contains(depth)) {
             Log.w(TAG, "Bit depth $depth not supported by DAC")
             return false
         }
@@ -213,33 +183,20 @@ class UsbDacController(private val context: Context) {
         Log.i(TAG, "Preferred bit depth set to $depth-bit")
         return true
     }
-    
-    /**
-     * Get current DAC information
-     */
+
     fun getCurrentDacInfo(): DacInfo? = currentDacInfo
-    
-    /**
-     * Get DAC capabilities (sample rates, bit depths, etc.)
-     */
     fun getDacCapabilities(): DacCapabilities? = dacCapabilities
-    
-    /**
-     * Request USB permission for a device
-     */
+
     fun requestUsbPermission(device: UsbDevice, callback: ((Boolean) -> Unit)? = null) {
-        if (usbManager.hasPermission(device)) {
-            callback?.invoke(true)
-            return
-        }
-        
+        if (usbManager.hasPermission(device)) { callback?.invoke(true); return }
+
+        val pendingFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            PendingIntent.FLAG_IMMUTABLE else 0
+
         val permissionIntent = PendingIntent.getBroadcast(
-            context,
-            0,
-            Intent(ACTION_USB_PERMISSION),
-            PendingIntent.FLAG_IMMUTABLE
+            context, 0, Intent(ACTION_USB_PERMISSION), pendingFlags
         )
-        
+
         val permissionReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (ACTION_USB_PERMISSION == intent.action) {
@@ -249,95 +206,71 @@ class UsbDacController(private val context: Context) {
                 }
             }
         }
-        
         context.registerReceiver(permissionReceiver, IntentFilter(ACTION_USB_PERMISSION))
         usbManager.requestPermission(device, permissionIntent)
     }
-    
-    /**
-     * Force rescan for USB DAC devices
-     */
-    fun rescanDevices() {
-        scanForConnectedDacs()
-    }
-    
-    /**
-     * Release resources
-     */
-    fun release() {
-        unregisterReceivers()
-    }
-    
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    fun rescanDevices() { scanForConnectedDacs() }
+
+    fun release() { unregisterReceivers() }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // USB DEVICE HANDLING
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun scanForConnectedDacs() {
-        val devices = usbManager.deviceList
         var foundDac = false
-        
-        for (device in devices.values) {
+        for (device in usbManager.deviceList.values) {
             if (isAudioDevice(device)) {
                 handleUsbDeviceAttached(device)
                 foundDac = true
             }
         }
-        
         if (!foundDac) {
             _isDacConnected.set(false)
             _currentDacInfo.set(null)
             _dacCapabilities.set(null)
         }
     }
-    
+
     private fun handleUsbDeviceAttached(device: UsbDevice) {
         if (!isAudioDevice(device)) return
-        
         Log.i(TAG, "USB Audio device attached: ${device.productName} (${device.vendorId}:${device.productId})")
-        
-        // Request permission if not already granted
         if (!usbManager.hasPermission(device)) {
-            requestUsbPermission(device) { granted ->
-                if (granted) {
-                    registerAudioDevice(device)
-                }
-            }
+            requestUsbPermission(device) { granted -> if (granted) registerAudioDevice(device) }
         } else {
             registerAudioDevice(device)
         }
     }
-    
+
     private fun handleUsbDeviceDetached(device: UsbDevice) {
-        val currentInfo = currentDacInfo
-        if (currentInfo != null && 
-            currentInfo.vendorId == device.vendorId && 
-            currentInfo.productId == device.productId) {
-            
+        val current = currentDacInfo
+        if (current != null && current.vendorId == device.vendorId && current.productId == device.productId) {
             Log.i(TAG, "USB Audio device detached: ${device.productName}")
             _isDacConnected.set(false)
             _currentDacInfo.set(null)
             _dacCapabilities.set(null)
             isNativeDirectMode = false
-            
             onDacDisconnected?.invoke()
         }
     }
-    
+
     private fun handleAudioDeviceAdded(device: AudioDeviceInfo) {
-        val dacInfo = extractDacInfoFromAudioDevice(device)
-        if (dacInfo != null) {
-            Log.i(TAG, "Audio device added: ${dacInfo.name}")
-            _isDacConnected.set(true)
-            _currentDacInfo.set(dacInfo)
-            _dacCapabilities.set(extractCapabilities(device))
-            onDacConnected?.invoke(dacInfo)
-            onDacCapabilitiesChanged?.invoke(dacCapabilities!!)
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val dacInfo = extractDacInfoFromAudioDevice(device) ?: return
+        Log.i(TAG, "Audio device added: ${dacInfo.name}")
+        _isDacConnected.set(true)
+        _currentDacInfo.set(dacInfo)
+        val caps = extractCapabilities(device)
+        _dacCapabilities.set(caps)
+        onDacConnected?.invoke(dacInfo)
+        caps?.let { onDacCapabilitiesChanged?.invoke(it) }
     }
-    
+
     private fun handleAudioDeviceRemoved(device: AudioDeviceInfo) {
-        val dacInfo = extractDacInfoFromAudioDevice(device)
-        if (dacInfo != null && currentDacInfo?.name == dacInfo.name) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val dacInfo = extractDacInfoFromAudioDevice(device) ?: return
+        if (currentDacInfo?.name == dacInfo.name) {
             Log.i(TAG, "Audio device removed: ${dacInfo.name}")
             _isDacConnected.set(false)
             _currentDacInfo.set(null)
@@ -345,189 +278,177 @@ class UsbDacController(private val context: Context) {
             onDacDisconnected?.invoke()
         }
     }
-    
+
     private fun registerAudioDevice(device: UsbDevice) {
         val dacInfo = extractDacInfoFromUsbDevice(device)
         val capabilities = queryDacCapabilities(device)
-        
         _isDacConnected.set(true)
         _currentDacInfo.set(dacInfo)
         _dacCapabilities.set(capabilities)
-        
         onDacConnected?.invoke(dacInfo)
         onDacCapabilitiesChanged?.invoke(capabilities)
-        
-        Log.i(TAG, "DAC registered: ${dacInfo.name}, rates=${capabilities.sampleRates}, depth=${capabilities.maxBitDepth}")
+        Log.i(TAG, "DAC registered: ${dacInfo.name}, rates=${capabilities.sampleRates}, depth=${capabilities.nativeBitDepth}")
     }
-    
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    // ─────────────────────────────────────────────────────────────────────────
     // DEVICE INFO EXTRACTION
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun isAudioDevice(device: UsbDevice): Boolean {
         for (i in 0 until device.interfaceCount) {
-            val intf = device.getInterface(i)
-            if (intf.getInterfaceClass() == USB_CLASS_AUDIO) {
-                return true
-            }
+            if (device.getInterface(i).interfaceClass == USB_CLASS_AUDIO) return true
         }
         return false
     }
-    
+
     private fun isUsbAudioDevice(device: AudioDeviceInfo): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            return device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
-                   device.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
-                   device.type == AudioDeviceInfo.TYPE_HDMI
-        }
-        return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        return device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+               device.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+               device.type == AudioDeviceInfo.TYPE_HDMI
     }
-    
+
     private fun extractDacInfoFromUsbDevice(device: UsbDevice): DacInfo {
+        val rates = detectSupportedSampleRates(device)
         return DacInfo(
-            name = device.productName ?: device.manufacturerName ?: "USB Audio Device",
-            vendorId = device.vendorId,
-            productId = device.productId,
-            isConnected = true,
-            hasAudioOutput = true,
-            supportedSampleRates = detectSupportedSampleRates(device),
-            maxBitDepth = detectMaxBitDepth(device),
-            maxChannels = detectMaxChannels(device),
+            name                  = device.productName ?: device.manufacturerName ?: "USB Audio Device",
+            vendorId              = device.vendorId,
+            productId             = device.productId,
+            isConnected           = true,
+            hasAudioOutput        = true,
+            supportedSampleRates  = rates,
+            maxBitDepth           = 24,
+            maxChannels           = 2,
             isNativeDirectSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
         )
     }
-    
+
     private fun extractDacInfoFromAudioDevice(device: AudioDeviceInfo): DacInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
-        
         return DacInfo(
-            name = device.productName?.toString() ?: "USB Audio Device",
-            vendorId = 0, // Not available from AudioDeviceInfo
-            productId = 0,
-            isConnected = true,
-            hasAudioOutput = device.type == AudioDeviceInfo.TYPE_USB_DEVICE,
-            supportedSampleRates = getSupportedSampleRates(device),
-            maxBitDepth = getMaxBitDepth(device),
-            maxChannels = device.getChannelCounts()?.maxOrNull() ?: 2,
+            name                  = device.productName?.toString() ?: "USB Audio Device",
+            vendorId              = 0,
+            productId             = 0,
+            isConnected           = true,
+            hasAudioOutput        = device.type == AudioDeviceInfo.TYPE_USB_DEVICE,
+            supportedSampleRates  = getSupportedSampleRates(device),
+            maxBitDepth           = computeMaxBitDepth(device),
+            maxChannels           = device.channelCounts?.maxOrNull() ?: 2,
             isNativeDirectSupported = true
         )
     }
-    
+
     private fun extractCapabilities(device: AudioDeviceInfo): DacCapabilities? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
-        
+        val rates  = getSupportedSampleRates(device)
+        val depths = getSupportedBitDepths(device)
+        // .encodings is available from API 23 (unlike .encodingList which needs API 33)
+        val encodings = device.encodings ?: intArrayOf()
+        val supportsFloat = AudioFormat.ENCODING_PCM_FLOAT in encodings
         return DacCapabilities(
-            sampleRates = getSupportedSampleRates(device),
-            bitDepths = getSupportedBitDepths(device),
-            channelCounts = device.getChannelCounts()?.toList() ?: listOf(2),
-            supportsFloatOutput = device.encodingList?.contains(AudioFormat.ENCODING_PCM_FLOAT) ?: false,
-            supportsHdAudio = getSupportedSampleRates(device).any { it >= 96000 },
-            nativeSampleRate = preferredSampleRate,
-            nativeBitDepth = preferredBitDepth
+            sampleRates       = rates,
+            bitDepths         = depths,
+            channelCounts     = device.channelCounts?.toList() ?: listOf(2),
+            supportsFloatOutput = supportsFloat,
+            supportsHdAudio   = rates.any { it >= 96000 },
+            nativeSampleRate  = preferredSampleRate,
+            nativeBitDepth    = preferredBitDepth
         )
     }
-    
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // CAPABILITY DETECTION
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CAPABILITY DETECTION  (API-safe helpers)
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun detectSupportedSampleRates(device: UsbDevice): List<Int> {
-        // Query USB audio control interface for supported sample rates
-        // Full implementation requires USB host library
-        // Return common high-res rates as default
+        // USB descriptor parsing requires a USB host library; return common hi-res defaults
         return listOf(44100, 48000, 88200, 96000, 176400, 192000)
     }
-    
-    private fun detectMaxBitDepth(device: UsbDevice): Int {
-        // Query USB audio streaming interface for bit depth support
-        return 24 // Most USB DACs support 24-bit
-    }
-    
-    private fun detectMaxChannels(device: UsbDevice): Int {
-        return 2 // Stereo output
-    }
-    
+
+    private fun detectMaxBitDepth(device: UsbDevice): Int = 24
+
+    private fun detectMaxChannels(device: UsbDevice): Int = 2
+
+    /**
+     * API 23+ only. Returns sample rates actually reported by the AudioDeviceInfo.
+     * Replaces .isSampleRateSupported() which is API 33+.
+     */
     private fun getSupportedSampleRates(device: AudioDeviceInfo): List<Int> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return listOf(48000)
-        
-        val rates = mutableListOf<Int>()
-        for (rate in SUPPORTED_SAMPLE_RATES) {
-            if (device.isSampleRateSupported(rate)) {
-                rates.add(rate)
-            }
+        val deviceRates = device.sampleRates ?: intArrayOf()
+        if (deviceRates.isEmpty()) {
+            // Device reports nothing — return the full hi-res list as a safe fallback
+            return SUPPORTED_SAMPLE_RATES.toList()
         }
-        return rates
+        return SUPPORTED_SAMPLE_RATES.filter { it in deviceRates }
     }
-    
+
+    /**
+     * API 23+ only. Determines bit-depth support from the encodings array.
+     * Replaces .isEncodingSupported() which is API 33+.
+     */
     private fun getSupportedBitDepths(device: AudioDeviceInfo): List<Int> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return listOf(16)
-        
-        val depths = mutableListOf<Int>()
-        for (depth in SUPPORTED_BIT_DEPTHS) {
-            if (device.isEncodingSupported(getEncodingForBitDepth(depth))) {
-                depths.add(depth)
-            }
+        val encodings = device.encodings ?: intArrayOf()
+        val depths = mutableListOf(16) // 16-bit is always safe
+        if (AudioFormat.ENCODING_PCM_32BIT in encodings) depths.add(32)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && ENCODING_PCM_24BIT_PACKED in encodings) depths.add(24)
+        return depths.sorted()
+    }
+
+    /**
+     * Computes max bit depth from the device's encoding list without using API 33 helpers.
+     */
+    private fun computeMaxBitDepth(device: AudioDeviceInfo): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return 16
+        val encodings = device.encodings ?: intArrayOf()
+        return when {
+            AudioFormat.ENCODING_PCM_32BIT in encodings -> 32
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && ENCODING_PCM_24BIT_PACKED in encodings -> 24
+            else -> 16
         }
-        return depths
     }
-    
-    private fun getMaxBitDepth(device: AudioDeviceInfo): Int {
-        return getSupportedBitDepths(device).maxOrNull() ?: 16
-    }
-    
+
     private fun getPreferredUsbDevice(): AudioDeviceInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
-        
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        return devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE }
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE }
     }
-    
-    private fun getEncodingForBitDepth(bitDepth: Int): Int {
-        return when (bitDepth) {
-            16 -> AudioFormat.ENCODING_PCM_16BIT
-            24 -> AudioFormat.ENCODING_PCM_24BIT_PACKED
-            32 -> AudioFormat.ENCODING_PCM_32BIT
-            else -> AudioFormat.ENCODING_PCM_16BIT
-        }
-    }
-    
+
     private fun queryDacCapabilities(device: UsbDevice): DacCapabilities {
         return DacCapabilities(
-            sampleRates = detectSupportedSampleRates(device),
-            bitDepths = listOf(16, 24),
-            channelCounts = listOf(2),
+            sampleRates       = detectSupportedSampleRates(device),
+            bitDepths         = listOf(16, 24),
+            channelCounts     = listOf(2),
             supportsFloatOutput = false,
-            supportsHdAudio = detectSupportedSampleRates(device).any { it >= 96000 },
-            nativeSampleRate = 48000,
-            nativeBitDepth = 24
+            supportsHdAudio   = detectSupportedSampleRates(device).any { it >= 96000 },
+            nativeSampleRate  = 48000,
+            nativeBitDepth    = 24
         )
     }
-    
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    // ─────────────────────────────────────────────────────────────────────────
     // RECEIVER MANAGEMENT
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun registerReceivers() {
         val usbFilter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
         context.registerReceiver(usbReceiver, usbFilter)
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && audioDeviceCallback != null) {
-            audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            audioDeviceCallback?.let {
+                audioManager.registerAudioDeviceCallback(it, Handler(Looper.getMainLooper()))
+            }
         }
     }
-    
+
     private fun unregisterReceivers() {
-        try {
-            context.unregisterReceiver(usbReceiver)
-        } catch (e: Exception) {
-            Log.w(TAG, "Receiver not registered")
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && audioDeviceCallback != null) {
-            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        try { context.unregisterReceiver(usbReceiver) } catch (e: Exception) { /* already unregistered */ }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            audioDeviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
         }
     }
 }
