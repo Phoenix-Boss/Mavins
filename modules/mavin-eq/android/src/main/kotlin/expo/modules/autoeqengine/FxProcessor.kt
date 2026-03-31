@@ -54,40 +54,40 @@ class FxProcessor : AudioProcessor {
         set(value) = _isEnabled.set(value)
     
     @Volatile
-    var fxMode: FxMode = FxMode.REVERB
+    private var fxMode: FxMode = FxMode.REVERB
     
     @Volatile
-    var mix = DEFAULT_MIX / 100.0
+    private var mix = DEFAULT_MIX / 100.0
     
     @Volatile
-    var bypass = DEFAULT_BYPASS
+    private var bypass = DEFAULT_BYPASS
     
     @Volatile
-    var reverbRoomSize = REVERB_ROOM_SIZE_DEF / 100.0
+    private var reverbRoomSize = REVERB_ROOM_SIZE_DEF / 100.0
     @Volatile
-    var reverbDecay = REVERB_DECAY_DEF / 100.0
+    private var reverbDecay = REVERB_DECAY_DEF / 100.0
     @Volatile
-    var reverbPreDelay = REVERB_PRE_DELAY_DEF / 100.0
+    private var reverbPreDelay = REVERB_PRE_DELAY_DEF / 100.0
     @Volatile
-    var reverbDamping = REVERB_DAMPING_DEF / 100.0
+    private var reverbDamping = REVERB_DAMPING_DEF / 100.0
     
     @Volatile
-    var delayTime = DELAY_TIME_DEF / 100.0
+    private var delayTime = DELAY_TIME_DEF / 100.0
     @Volatile
-    var delayFeedback = DELAY_FEEDBACK_DEF / 100.0
+    private var delayFeedback = DELAY_FEEDBACK_DEF / 100.0
     @Volatile
-    var delayLowCut = DELAY_LOW_CUT_DEF / 100.0
+    private var delayLowCut = DELAY_LOW_CUT_DEF / 100.0
     @Volatile
-    var delayHighCut = DELAY_HIGH_CUT_DEF / 100.0
+    private var delayHighCut = DELAY_HIGH_CUT_DEF / 100.0
     
     @Volatile
-    var modRate = MOD_RATE_DEF / 100.0
+    private var modRate = MOD_RATE_DEF / 100.0
     @Volatile
-    var modDepth = MOD_DEPTH_DEF / 100.0
+    private var modDepth = MOD_DEPTH_DEF / 100.0
     @Volatile
-    var modPhase = MOD_PHASE_DEF / 100.0
+    private var modPhase = MOD_PHASE_DEF / 100.0
     @Volatile
-    var modFeedback = MOD_FEEDBACK_DEF / 100.0
+    private var modFeedback = MOD_FEEDBACK_DEF / 100.0
     
     private val pendingFxMode = AtomicReference<FxMode?>(null)
     private val pendingMix = AtomicReference<Double?>(null)

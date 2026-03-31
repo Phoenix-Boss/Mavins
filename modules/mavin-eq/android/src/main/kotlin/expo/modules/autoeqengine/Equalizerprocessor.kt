@@ -94,8 +94,8 @@ class EqualizerProcessor : AudioProcessor {
         get() = _isEnabled.get()
         set(value) = _isEnabled.set(value)
 
-    @Volatile var eqMode: EqMode = EqMode.GRAPHIC
-    @Volatile var ditherMode: DitherMode = DitherMode.E_WEIGHTED
+    @Volatile private var eqMode: EqMode = EqMode.GRAPHIC
+    @Volatile private var ditherMode: DitherMode = DitherMode.E_WEIGHTED
     var smoothingRampMs: Double = SMOOTH_RAMP_MS_DEFAULT
     
     // 64-bit high-precision mode
