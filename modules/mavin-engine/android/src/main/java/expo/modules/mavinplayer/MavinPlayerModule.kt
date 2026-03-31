@@ -955,10 +955,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                         ), 200)
                     }
                 }
-                mainHandler.postDelayed(this, player.progressIntervalMs)
+                // FIX: Changed from property access to getter method
+                mainHandler.postDelayed(this, player.getProgressIntervalMs())
             }
         }
-        mainHandler.postDelayed(progressRunnable!!, player.progressIntervalMs)
+        // FIX: Changed from property access to getter method
+        mainHandler.postDelayed(progressRunnable!!, player.getProgressIntervalMs())
     }
 
     private fun startSpectrumTimer(player: MavinAudioPlayer) {
