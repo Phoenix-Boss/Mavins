@@ -47,36 +47,36 @@ class MavinAudioPlayer(private val context: Context) {
     }
 
     // ── DSP processors ────────────────────────────────────────────────────────
-    val equalizerProcessor  = EqualizerProcessor()
-    lateinit var compressorProcessor : CompressorProcessor
-    lateinit var crossfeedProcessor  : CrossfeedProcessor
-    lateinit var peakMeterProcessor  : PeakMeterProcessor
-    lateinit var convolutionProcessor: ConvolutionProcessor
-    lateinit var fxProcessor         : FxProcessor
-    lateinit var usbDacController    : UsbDacController
-    lateinit var audioFormatDetector : AudioFormatDetector
+    val equalizerProcessor   = EqualizerProcessor()
+    lateinit var compressorProcessor  : CompressorProcessor
+    lateinit var crossfeedProcessor   : CrossfeedProcessor
+    lateinit var peakMeterProcessor   : PeakMeterProcessor
+    lateinit var convolutionProcessor : ConvolutionProcessor
+    lateinit var fxProcessor          : FxProcessor
+    lateinit var usbDacController     : UsbDacController
+    lateinit var audioFormatDetector  : AudioFormatDetector
 
     val presetManager = EqPresetManager(context)
     val player: ExoPlayer
     private var cache: SimpleCache
     private var cacheSizeBytes: Long = DEFAULT_CACHE_SIZE_BYTES
 
-    // ── Wake Lock ──────────────────────────────────────────────────────────────
+    // ── Wake Lock ─────────────────────────────────────────────────────────────
     private var wakeLock: PowerManager.WakeLock? = null
     private var wakeMode: Int = 0 // 0: None, 1: Partial
 
     // ── ReplayGain state ──────────────────────────────────────────────────────
-    private var replayGainMode = ReplayGainParser.Mode.TRACK
+    private var replayGainMode     = ReplayGainParser.Mode.TRACK
     private var replayGainPreampDb = 0f
-    private var currentRgInfo = ReplayGainParser.EMPTY
+    private var currentRgInfo      = ReplayGainParser.EMPTY
 
     // ── Crossfade ─────────────────────────────────────────────────────────────
-    private var crossfadeEnabled = false
+    private var crossfadeEnabled    = false
     private var crossfadeDurationMs = 2000L
 
     // ── Feature flags ─────────────────────────────────────────────────────────
     private var autoSwitchPresets = true
-    private var offlineMode = false
+    private var offlineMode       = false
 
     // ── Audio attributes (configurable via initPlayer options) ────────────────
     private var audioUsage   = C.USAGE_MEDIA
@@ -89,14 +89,14 @@ class MavinAudioPlayer(private val context: Context) {
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // ── Callbacks ─────────────────────────────────────────────────────────────
-    var onPlaybackStateChanged : ((state: Int) -> Unit)?  = null
-    var onTrackChanged         : ((index: Int) -> Unit)?  = null
-    var onError                : ((message: String, code: String) -> Unit)? = null
-    var onPositionDiscontinuity: (() -> Unit)?             = null
-    var onReplayGainApplied    : ((trackGain: Float?, albumGain: Float?, appliedDb: Float) -> Unit)? = null
-    var onPeakMeter            : ((leftPeak: Float, rightPeak: Float) -> Unit)? = null
-    var onUsbDacConnected      : ((dacInfo: UsbDacController.DacInfo) -> Unit)? = null
-    var onUsbDacDisconnected   : (() -> Unit)?             = null
+    var onPlaybackStateChanged  : ((state: Int) -> Unit)?  = null
+    var onTrackChanged          : ((index: Int) -> Unit)?  = null
+    var onError                 : ((message: String, code: String) -> Unit)? = null
+    var onPositionDiscontinuity : (() -> Unit)?             = null
+    var onReplayGainApplied     : ((trackGain: Float?, albumGain: Float?, appliedDb: Float) -> Unit)? = null
+    var onPeakMeter             : ((leftPeak: Float, rightPeak: Float) -> Unit)? = null
+    var onUsbDacConnected       : ((dacInfo: UsbDacController.DacInfo) -> Unit)? = null
+    var onUsbDacDisconnected    : (() -> Unit)?             = null
 
     init {
         cache = createCache(context, cacheSizeBytes)
@@ -196,41 +196,34 @@ class MavinAudioPlayer(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // AUDIO ATTRIBUTES CONFIG (initPlayer options: usage, contentType)
+    // AUDIO ATTRIBUTES CONFIG
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Configure audio attributes from JS options map.
-     * Supports keys: "usage" (String) and "contentType" (String).
-     * Must be called before initPlayer builds the ExoPlayer, or call
-     * applyAudioAttributes() after init to rebuild the attributes.
-     */
     fun configureAudioAttributes(usage: String?, contentType: String?) {
         audioUsage = when (usage?.uppercase()) {
-            "ALARM"            -> C.USAGE_ALARM
-            "ASSISTANCE_ACCESSIBILITY" -> C.USAGE_ASSISTANCE_ACCESSIBILITY
-            "ASSISTANCE_NAVIGATION_GUIDANCE" -> C.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
-            "ASSISTANCE_SONIFICATION" -> C.USAGE_ASSISTANCE_SONIFICATION
-            "GAME"             -> C.USAGE_GAME
-            "NOTIFICATION"     -> C.USAGE_NOTIFICATION
+            "ALARM"                              -> C.USAGE_ALARM
+            "ASSISTANCE_ACCESSIBILITY"           -> C.USAGE_ASSISTANCE_ACCESSIBILITY
+            "ASSISTANCE_NAVIGATION_GUIDANCE"     -> C.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+            "ASSISTANCE_SONIFICATION"            -> C.USAGE_ASSISTANCE_SONIFICATION
+            "GAME"                               -> C.USAGE_GAME
+            "NOTIFICATION"                       -> C.USAGE_NOTIFICATION
             "NOTIFICATION_COMMUNICATION_DELAYED" -> C.USAGE_NOTIFICATION_COMMUNICATION_DELAYED
             "NOTIFICATION_COMMUNICATION_INSTANT" -> C.USAGE_NOTIFICATION_COMMUNICATION_INSTANT
-            "NOTIFICATION_EVENT" -> C.USAGE_NOTIFICATION_EVENT
-            "NOTIFICATION_RINGTONE" -> C.USAGE_NOTIFICATION_RINGTONE
-            "VOICE_COMMUNICATION" -> C.USAGE_VOICE_COMMUNICATION
-            "VOICE_COMMUNICATION_SIGNALLING" -> C.USAGE_VOICE_COMMUNICATION_SIGNALLING
-            else               -> C.USAGE_MEDIA // default
+            "NOTIFICATION_EVENT"                 -> C.USAGE_NOTIFICATION_EVENT
+            "NOTIFICATION_RINGTONE"              -> C.USAGE_NOTIFICATION_RINGTONE
+            "VOICE_COMMUNICATION"                -> C.USAGE_VOICE_COMMUNICATION
+            "VOICE_COMMUNICATION_SIGNALLING"     -> C.USAGE_VOICE_COMMUNICATION_SIGNALLING
+            else                                 -> C.USAGE_MEDIA
         }
         audioContent = when (contentType?.uppercase()) {
-            "MOVIE"            -> C.AUDIO_CONTENT_TYPE_MOVIE
-            "SONIFICATION"     -> C.AUDIO_CONTENT_TYPE_SONIFICATION
-            "SPEECH"           -> C.AUDIO_CONTENT_TYPE_SPEECH
-            "UNKNOWN"          -> C.AUDIO_CONTENT_TYPE_UNKNOWN
-            else               -> C.AUDIO_CONTENT_TYPE_MUSIC // default
+            "MOVIE"       -> C.AUDIO_CONTENT_TYPE_MOVIE
+            "SONIFICATION"-> C.AUDIO_CONTENT_TYPE_SONIFICATION
+            "SPEECH"      -> C.AUDIO_CONTENT_TYPE_SPEECH
+            "UNKNOWN"     -> C.AUDIO_CONTENT_TYPE_UNKNOWN
+            else          -> C.AUDIO_CONTENT_TYPE_MUSIC
         }
     }
 
-    /** Apply updated audio attributes to the running player. */
     fun applyAudioAttributes() {
         player.setAudioAttributes(buildAudioAttributes(), true)
     }
@@ -262,6 +255,7 @@ class MavinAudioPlayer(private val context: Context) {
         if (mode == 1) {
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MavinPlayer::WakeLock")
+            @Suppress("WakelockTimeout")
             wakeLock?.acquire(10 * 60 * 1000L)
         }
     }
@@ -270,24 +264,24 @@ class MavinAudioPlayer(private val context: Context) {
     // CROSSFADE
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun setCrossfadeEnabled(enabled: Boolean) { crossfadeEnabled = enabled }
-    fun isCrossfadeEnabled(): Boolean = crossfadeEnabled
-    fun setCrossfadeDurationMs(durationMs: Long) { crossfadeDurationMs = durationMs.coerceIn(500L, 10_000L) }
-    fun getCrossfadeDurationMs(): Long = crossfadeDurationMs
+    fun setCrossfadeEnabled(enabled: Boolean)          { crossfadeEnabled = enabled }
+    fun isCrossfadeEnabled(): Boolean                  = crossfadeEnabled
+    fun setCrossfadeDurationMs(durationMs: Long)       { crossfadeDurationMs = durationMs.coerceIn(500L, 10_000L) }
+    fun getCrossfadeDurationMs(): Long                 = crossfadeDurationMs
 
     // ─────────────────────────────────────────────────────────────────────────
     // OFFLINE MODE
     // ─────────────────────────────────────────────────────────────────────────
 
     fun setOfflineMode(enabled: Boolean) { offlineMode = enabled; Log.i(TAG, "Offline mode: $enabled") }
-    fun isOfflineMode(): Boolean = offlineMode
+    fun isOfflineMode(): Boolean         = offlineMode
 
     // ─────────────────────────────────────────────────────────────────────────
     // 64-BIT PROCESSING
     // ─────────────────────────────────────────────────────────────────────────
 
     fun set64BitProcessingEnabled(enabled: Boolean) { equalizerProcessor.setHighPrecisionMode(enabled) }
-    fun is64BitProcessingEnabled(): Boolean = equalizerProcessor.isHighPrecisionMode()
+    fun is64BitProcessingEnabled(): Boolean         = equalizerProcessor.isHighPrecisionMode()
 
     // ─────────────────────────────────────────────────────────────────────────
     // PLAYBACK CONTROL — RNTP Parity
@@ -305,31 +299,22 @@ class MavinAudioPlayer(private val context: Context) {
 
     fun addToQueue(track: TrackData) { player.addMediaItem(buildMediaItem(track)) }
 
-    /** RNTP: removeTrack(index) */
     fun removeTrack(index: Int) {
         if (index in 0 until player.mediaItemCount) player.removeMediaItem(index)
     }
 
-    /**
-     * RNTP: removeUpcomingTracks()
-     * FIX: player.removeMediaItemsRange() does not exist in Media3.
-     * Use player.removeMediaItems(fromIndex, toIndex) instead.
-     */
     fun removeUpcomingTracks() {
         val current = player.currentMediaItemIndex
         val total   = player.mediaItemCount
         if (current >= 0 && current < total - 1) {
-            // removeMediaItems(fromIndex, toIndex) removes items [fromIndex, toIndex)
             player.removeMediaItems(current + 1, total)
         }
     }
 
-    /** RNTP: updateTrack(index, track) */
     fun updateTrackMetadata(index: Int, track: TrackData) {
         if (index in 0 until player.mediaItemCount) player.replaceMediaItem(index, buildMediaItem(track))
     }
 
-    /** RNTP: getTrack(index) — returns track info map for any queue position */
     fun getTrack(index: Int): Map<String, Any?>? {
         if (index !in 0 until player.mediaItemCount) return null
         val item = player.getMediaItemAt(index)
@@ -347,65 +332,44 @@ class MavinAudioPlayer(private val context: Context) {
         )
     }
 
-    /** RNTP: reset() — stop + clear queue */
     fun reset() { player.stop(); player.clearMediaItems() }
 
-    fun play()   { player.play() }
-    fun pause()  { player.pause() }
-    fun stop()   { player.stop() }
-    fun seekTo(ms: Long) { player.seekTo(ms) }
+    fun play()                  { player.play() }
+    fun pause()                 { player.pause() }
+    fun stop()                  { player.stop() }
+    fun seekTo(ms: Long)        { player.seekTo(ms) }
 
-    /** RNTP: skip(seconds) — relative seek */
     fun skipRelative(seconds: Int) {
         val newPos = (player.currentPosition + (seconds * 1000L))
             .coerceIn(0, player.duration.takeIf { it != C.TIME_UNSET } ?: Long.MAX_VALUE)
         player.seekTo(newPos)
     }
 
-    fun skipToNext()     { player.seekToNext() }
-    fun skipToPrevious() { player.seekToPrevious() }
+    fun skipToNext()            { player.seekToNext() }
+    fun skipToPrevious()        { player.seekToPrevious() }
     fun skipToIndex(index: Int) { player.seekTo(index, C.TIME_UNSET) }
 
-    fun setRepeatMode(mode: Int)          { player.repeatMode = mode }
-    fun setShuffleModeEnabled(e: Boolean) { player.shuffleModeEnabled = e }
-    fun setVolume(volume: Float)          { player.volume = volume.coerceIn(0f, 1f) }
+    fun setRepeatMode(mode: Int)           { player.repeatMode = mode }
+    fun setShuffleModeEnabled(e: Boolean)  { player.shuffleModeEnabled = e }
+    fun setVolume(volume: Float)           { player.volume = volume.coerceIn(0f, 1f) }
 
     // ─────────────────────────────────────────────────────────────────────────
     // PLAYBACK SPEED + INDEPENDENT PITCH CONTROL
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Set playback speed while keeping pitch unchanged (default behaviour).
-     * Uses PlaybackParameters(speed, pitch) — pitch defaults to 1.0f so the
-     * perceived key stays constant when only speed changes.
-     */
     fun setPlaybackSpeed(speed: Float) {
         val current = player.playbackParameters
-        player.setPlaybackParameters(
-            PlaybackParameters(speed.coerceIn(0.5f, 3.0f), current.pitch)
-        )
+        player.setPlaybackParameters(PlaybackParameters(speed.coerceIn(0.5f, 3.0f), current.pitch))
     }
 
-    /**
-     * Set pitch independently from speed.
-     * pitch < 1.0 = lower key, pitch > 1.0 = higher key.
-     */
     fun setPlaybackPitch(pitch: Float) {
         val current = player.playbackParameters
-        player.setPlaybackParameters(
-            PlaybackParameters(current.speed, pitch.coerceIn(0.5f, 2.0f))
-        )
+        player.setPlaybackParameters(PlaybackParameters(current.speed, pitch.coerceIn(0.5f, 2.0f)))
     }
 
-    /**
-     * Set both speed and pitch together.
-     */
     fun setPlaybackParameters(speed: Float, pitch: Float) {
         player.setPlaybackParameters(
-            PlaybackParameters(
-                speed.coerceIn(0.5f, 3.0f),
-                pitch.coerceIn(0.5f, 2.0f)
-            )
+            PlaybackParameters(speed.coerceIn(0.5f, 3.0f), pitch.coerceIn(0.5f, 2.0f))
         )
     }
 
@@ -423,14 +387,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getPlaybackState(): Int     = player.playbackState
     fun getCurrentIndex(): Int      = player.currentMediaItemIndex
     fun getQueueSize(): Int         = player.mediaItemCount
-
-    /** RNTP: getVolume() */
     fun getVolume(): Float          = player.volume
-    /** RNTP: getRepeatMode() */
     fun getRepeatMode(): Int        = player.repeatMode
-    /** RNTP: getShuffleMode() */
     fun getShuffleMode(): Boolean   = player.shuffleModeEnabled
-    /** RNTP: getAudioFocus() — player assumes focus when playing */
     fun getAudioFocusState(): Boolean = true
 
     fun getCurrentTrackInfo(): Map<String, Any?> {
@@ -446,7 +405,7 @@ class MavinAudioPlayer(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // RNTP: updateNowPlayingMetadata — update current track's MediaItem metadata
+    // UPDATE NOW PLAYING METADATA
     // ─────────────────────────────────────────────────────────────────────────
 
     fun updateNowPlayingMetadata(track: TrackData) {
@@ -457,7 +416,7 @@ class MavinAudioPlayer(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PROGRESS INTERVAL (RNTP: setProgressUpdateEventInterval)
+    // PROGRESS INTERVAL
     // ─────────────────────────────────────────────────────────────────────────
 
     fun setProgressIntervalMs(ms: Long) { progressIntervalMs = ms.coerceIn(100L, 10_000L) }
@@ -477,6 +436,7 @@ class MavinAudioPlayer(private val context: Context) {
     fun applyParametricBands(gainsDb: FloatArray)         { equalizerProcessor.applyParametricBands(gainsDb) }
     fun setParametricBandFreq(band: Int, freqHz: Double)  { equalizerProcessor.setParametricBandFreq(band, freqHz) }
     fun resetParametric()                                 { equalizerProcessor.resetParametric() }
+
     fun setEQMode(mode: String) {
         equalizerProcessor.setEqMode(when (mode.uppercase()) {
             "PARAMETRIC" -> EqualizerProcessor.EqMode.PARAMETRIC
@@ -484,6 +444,7 @@ class MavinAudioPlayer(private val context: Context) {
             else         -> EqualizerProcessor.EqMode.GRAPHIC
         })
     }
+
     fun setDitherMode(mode: String) {
         equalizerProcessor.setDitherMode(when (mode.uppercase()) {
             "HIGHPASS"   -> EqualizerProcessor.DitherMode.HIGHPASS
@@ -492,7 +453,9 @@ class MavinAudioPlayer(private val context: Context) {
             else         -> EqualizerProcessor.DitherMode.FLAT
         })
     }
+
     fun getDitherMode(): String = equalizerProcessor.getDitherMode().name
+
     fun setSmoothingRamp(ms: Double) {
         equalizerProcessor.smoothingRampMs = ms.coerceIn(0.0, 50.0)
         equalizerProcessor.recomputeSmoothStep()
@@ -503,49 +466,89 @@ class MavinAudioPlayer(private val context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
 
     fun setCompressorEnabled(enabled: Boolean)  { compressorProcessor.setEnabled(enabled) }
-    fun isCompressorEnabled(): Boolean           = compressorProcessor.isEnabled()
-    fun setCompressorThreshold(db: Double)       { compressorProcessor.setThreshold(db) }
-    fun setCompressorRatio(ratio: Double)        { compressorProcessor.setRatio(ratio) }
-    fun setCompressorAttackMs(ms: Double)        { compressorProcessor.setAttackMs(ms) }
-    fun setCompressorReleaseMs(ms: Double)       { compressorProcessor.setReleaseMs(ms) }
-    fun setCompressorKneeWidth(db: Double)       { compressorProcessor.setKneeWidth(db) }
-    fun setCompressorMakeupGain(db: Double)      { compressorProcessor.setMakeupGain(db) }
-    fun getCompressorReductionDb(): Float        = compressorProcessor.getReductionDb()
-    fun getCompressorThreshold(): Double         = compressorProcessor.getThreshold()
-    fun getCompressorRatio(): Double             = compressorProcessor.getRatio()
-    fun getCompressorAttackMs(): Double          = compressorProcessor.getAttackMs()
-    fun getCompressorReleaseMs(): Double         = compressorProcessor.getReleaseMs()
+    fun isCompressorEnabled(): Boolean          = compressorProcessor.isEnabled()
+    fun setCompressorThreshold(db: Double)      { compressorProcessor.setThreshold(db) }
+    fun setCompressorRatio(ratio: Double)       { compressorProcessor.setRatio(ratio) }
+    fun setCompressorAttackMs(ms: Double)       { compressorProcessor.setAttackMs(ms) }
+    fun setCompressorReleaseMs(ms: Double)      { compressorProcessor.setReleaseMs(ms) }
+    fun setCompressorKneeWidth(db: Double)      { compressorProcessor.setKneeWidth(db) }
+    fun setCompressorMakeupGain(db: Double)     { compressorProcessor.setMakeupGain(db) }
+    fun getCompressorReductionDb(): Float       = compressorProcessor.getReductionDb()
+    fun getCompressorThreshold(): Double        = compressorProcessor.getThreshold()
+    fun getCompressorRatio(): Double            = compressorProcessor.getRatio()
+    fun getCompressorAttackMs(): Double         = compressorProcessor.getAttackMs()
+    fun getCompressorReleaseMs(): Double        = compressorProcessor.getReleaseMs()
 
     // ─────────────────────────────────────────────────────────────────────────
     // CROSSFEED
-    // FIX: CrossfeedProcessor may not expose setStrength/setCutoffFrequency
-    // directly. Provide safe delegation wrappers that fall back gracefully if
-    // the concrete implementation uses different names. Adjust the method names
-    // here to match whatever CrossfeedProcessor actually exposes.
+    //
+    // FIX (lines 535–538): The original code called setStrength / setCutoffFrequency
+    // / getStrength / getCutoffFrequency which do NOT exist on CrossfeedProcessor.
+    // CrossfeedProcessor exposes:
+    //   setFeedDb(db: Double)  / getFeedDb(): Double   — cross-feed attenuation
+    //   setCutoffHz(hz: Double)/ getCutoffHz(): Double  — low-shelf cutoff
+    //   setDelayMs(ms: Double) / getDelayMs(): Double   — inter-aural delay
+    //   setEnabled / isEnabled
+    //
+    // We map the JS-facing "strength" concept to feedDb using a 0..1 → 0..-20 dB
+    // linear scale so the public API stays unchanged from JS side.
+    // "cutoff" maps directly to setCutoffHz / getCutoffHz.
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun setCrossfeedEnabled(enabled: Boolean)    { crossfeedProcessor.setEnabled(enabled) }
-    fun isCrossfeedEnabled(): Boolean            = crossfeedProcessor.isEnabled()
+    fun setCrossfeedEnabled(enabled: Boolean) { crossfeedProcessor.setEnabled(enabled) }
+    fun isCrossfeedEnabled(): Boolean         = crossfeedProcessor.isEnabled()
 
     /**
-     * Set crossfeed strength [0..1].
-     * Delegates to CrossfeedProcessor. If your CrossfeedProcessor uses a
-     * different API (e.g. setMix / setLevel), rename accordingly.
+     * Set crossfeed strength as a normalised value [0.0 .. 1.0].
+     * Maps to CrossfeedProcessor.setFeedDb() using the range
+     * FEED_MIN_DB (-20 dB) at 0.0 → FEED_MAX_DB (0 dB) at 1.0.
+     * Default BS2B "High" preset corresponds to strength ≈ 0.7 (−6 dB).
      */
-    fun setCrossfeedStrength(strength: Float)    { crossfeedProcessor.setStrength(strength) }
-    fun setCrossfeedCutoff(hz: Double)           { crossfeedProcessor.setCutoffFrequency(hz) }
-    fun getCrossfeedStrength(): Float            = crossfeedProcessor.getStrength()
-    fun getCrossfeedCutoff(): Double             = crossfeedProcessor.getCutoffFrequency()
+    fun setCrossfeedStrength(strength: Float) {
+        val clamped = strength.coerceIn(0f, 1f)
+        val db = CrossfeedProcessor.FEED_MIN_DB +
+                 (CrossfeedProcessor.FEED_MAX_DB - CrossfeedProcessor.FEED_MIN_DB) * clamped
+        crossfeedProcessor.setFeedDb(db)
+    }
+
+    /**
+     * Get the current crossfeed strength as a normalised value [0.0 .. 1.0]
+     * derived from the underlying feedDb value.
+     */
+    fun getCrossfeedStrength(): Float {
+        val db    = crossfeedProcessor.getFeedDb()
+        val range = CrossfeedProcessor.FEED_MAX_DB - CrossfeedProcessor.FEED_MIN_DB
+        return ((db - CrossfeedProcessor.FEED_MIN_DB) / range).toFloat().coerceIn(0f, 1f)
+    }
+
+    /**
+     * Set crossfeed low-shelf cutoff frequency in Hz.
+     * Valid range: CUTOFF_MIN_HZ (300) .. CUTOFF_MAX_HZ (2000).
+     */
+    fun setCrossfeedCutoff(hz: Double) {
+        crossfeedProcessor.setCutoffHz(hz)
+    }
+
+    fun getCrossfeedCutoff(): Double = crossfeedProcessor.getCutoffHz()
+
+    /**
+     * Set the inter-aural time delay in milliseconds [0.1 .. 1.0].
+     */
+    fun setCrossfeedDelayMs(ms: Double) {
+        crossfeedProcessor.setDelayMs(ms)
+    }
+
+    fun getCrossfeedDelayMs(): Double = crossfeedProcessor.getDelayMs()
 
     // ─────────────────────────────────────────────────────────────────────────
     // PEAK METER
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun setPeakHoldMs(ms: Double)       { peakMeterProcessor.setPeakHoldMs(ms) }
-    fun setPeakReleaseMs(ms: Double)    { peakMeterProcessor.setReleaseMs(ms) }
-    fun getCurrentPeaks(): FloatArray   = peakMeterProcessor.getCurrentPeaks()
-    fun getHeldPeaks(): FloatArray      = peakMeterProcessor.getHeldPeaks()
-    fun resetPeaks()                    { peakMeterProcessor.resetPeaks() }
+    fun setPeakHoldMs(ms: Double)     { peakMeterProcessor.setPeakHoldMs(ms) }
+    fun setPeakReleaseMs(ms: Double)  { peakMeterProcessor.setReleaseMs(ms) }
+    fun getCurrentPeaks(): FloatArray = peakMeterProcessor.getCurrentPeaks()
+    fun getHeldPeaks(): FloatArray    = peakMeterProcessor.getHeldPeaks()
+    fun resetPeaks()                  { peakMeterProcessor.resetPeaks() }
 
     // ─────────────────────────────────────────────────────────────────────────
     // REPLAY GAIN
@@ -619,36 +622,36 @@ class MavinAudioPlayer(private val context: Context) {
         presetManager.savePreset(preset)
     }
 
-    fun listPresets(): List<String>            = presetManager.listPresets()
-    fun deletePreset(name: String): Boolean    = presetManager.deletePreset(name)
-    fun exportPreset(name: String): String?    = presetManager.exportPreset(name)
-    fun importPreset(json: String): Boolean    = presetManager.importPreset(json) != null
+    fun listPresets(): List<String>             = presetManager.listPresets()
+    fun deletePreset(name: String): Boolean     = presetManager.deletePreset(name)
+    fun exportPreset(name: String): String?     = presetManager.exportPreset(name)
+    fun importPreset(json: String): Boolean     = presetManager.importPreset(json) != null
     fun assignTrackPreset(mediaId: String, presetName: String?) = presetManager.assignTrackPreset(mediaId, presetName)
     fun getTrackPreset(mediaId: String): String? = presetManager.getTrackPreset(mediaId)
-    fun setAutoSwitchPresets(enabled: Boolean) { autoSwitchPresets = enabled }
+    fun setAutoSwitchPresets(enabled: Boolean)  { autoSwitchPresets = enabled }
 
     // ─────────────────────────────────────────────────────────────────────────
     // USB DAC
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun isUsbDacConnected(): Boolean                                    = usbDacController.isDacConnected
-    fun getCurrentDacInfo(): UsbDacController.DacInfo?                 = usbDacController.currentDacInfo
-    fun getDacCapabilities(): UsbDacController.DacCapabilities?        = usbDacController.dacCapabilities
-    fun enableDirectUsbRouting(enabled: Boolean): Boolean              = usbDacController.enableDirectUsbRouting(enabled)
-    fun isDirectUsbRoutingEnabled(): Boolean                           = usbDacController.isDirectUsbRoutingEnabled()
-    fun setPreferredDacSampleRate(rate: Int): Boolean                  = usbDacController.setPreferredSampleRate(rate)
-    fun setPreferredDacBitDepth(depth: Int): Boolean                   = usbDacController.setPreferredBitDepth(depth)
-    fun rescanUsbDevices()                                             { usbDacController.rescanDevices() }
+    fun isUsbDacConnected(): Boolean                             = usbDacController.isDacConnected
+    fun getCurrentDacInfo(): UsbDacController.DacInfo?          = usbDacController.currentDacInfo
+    fun getDacCapabilities(): UsbDacController.DacCapabilities? = usbDacController.dacCapabilities
+    fun enableDirectUsbRouting(enabled: Boolean): Boolean       = usbDacController.enableDirectUsbRouting(enabled)
+    fun isDirectUsbRoutingEnabled(): Boolean                    = usbDacController.isDirectUsbRoutingEnabled()
+    fun setPreferredDacSampleRate(rate: Int): Boolean           = usbDacController.setPreferredSampleRate(rate)
+    fun setPreferredDacBitDepth(depth: Int): Boolean            = usbDacController.setPreferredBitDepth(depth)
+    fun rescanUsbDevices()                                      { usbDacController.rescanDevices() }
 
     // ─────────────────────────────────────────────────────────────────────────
     // AUDIO FORMAT DETECTION
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun getAudioCapabilities(): AudioFormatDetector.AudioCapabilities  = audioFormatDetector.getAudioCapabilities()
-    fun getOptimalAudioFormat(): AudioFormatDetector.OptimalFormat     = audioFormatDetector.getOptimalFormat()
-    fun isHiResAudioCapable(): Boolean                                 = audioFormatDetector.isHdAudioCapable()
-    fun getMaxSampleRate(): Int                                        = audioFormatDetector.getMaxSampleRate()
-    fun getMaxBitDepth(): Int                                          = audioFormatDetector.getMaxBitDepth()
+    fun getAudioCapabilities(): AudioFormatDetector.AudioCapabilities = audioFormatDetector.getAudioCapabilities()
+    fun getOptimalAudioFormat(): AudioFormatDetector.OptimalFormat    = audioFormatDetector.getOptimalFormat()
+    fun isHiResAudioCapable(): Boolean                               = audioFormatDetector.isHdAudioCapable()
+    fun getMaxSampleRate(): Int                                      = audioFormatDetector.getMaxSampleRate()
+    fun getMaxBitDepth(): Int                                        = audioFormatDetector.getMaxBitDepth()
 
     // ─────────────────────────────────────────────────────────────────────────
     // CONVOLUTION
@@ -665,8 +668,8 @@ class MavinAudioPlayer(private val context: Context) {
     // FX PROCESSOR
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun setFxEnabled(enabled: Boolean)  { fxProcessor.isEnabled = enabled }
-    fun isFxEnabled(): Boolean          = fxProcessor.isEnabled
+    fun setFxEnabled(enabled: Boolean) { fxProcessor.isEnabled = enabled }
+    fun isFxEnabled(): Boolean         = fxProcessor.isEnabled
     fun setFxMode(mode: String) {
         fxProcessor.setFxMode(when (mode.uppercase()) {
             "REVERB"  -> FxProcessor.FxMode.REVERB
@@ -677,39 +680,39 @@ class MavinAudioPlayer(private val context: Context) {
             else      -> FxProcessor.FxMode.REVERB
         })
     }
-    fun getFxMode(): String             = fxProcessor.getFxMode().name
-    fun setFxMix(mix: Double)           { fxProcessor.setMix(mix / 100.0) }
-    fun getFxMix(): Double              = fxProcessor.getMix() * 100.0
-    fun setFxBypass(bypass: Boolean)    { fxProcessor.setBypass(bypass) }
-    fun isFxBypassed(): Boolean         = fxProcessor.isBypassed()
+    fun getFxMode(): String            = fxProcessor.getFxMode().name
+    fun setFxMix(mix: Double)          { fxProcessor.setMix(mix / 100.0) }
+    fun getFxMix(): Double             = fxProcessor.getMix() * 100.0
+    fun setFxBypass(bypass: Boolean)   { fxProcessor.setBypass(bypass) }
+    fun isFxBypassed(): Boolean        = fxProcessor.isBypassed()
 
-    fun setReverbRoomSize(value: Double)  { fxProcessor.setReverbRoomSize(value / 100.0) }
-    fun setReverbDecay(value: Double)     { fxProcessor.setReverbDecay(value / 100.0) }
-    fun setReverbPreDelay(value: Double)  { fxProcessor.setReverbPreDelay(value / 100.0) }
-    fun setReverbDamping(value: Double)   { fxProcessor.setReverbDamping(value / 100.0) }
-    fun setDelayTime(value: Double)       { fxProcessor.setDelayTime(value / 100.0) }
-    fun setDelayFeedback(value: Double)   { fxProcessor.setDelayFeedback(value / 100.0) }
-    fun setDelayLowCut(value: Double)     { fxProcessor.setDelayLowCut(value / 100.0) }
-    fun setDelayHighCut(value: Double)    { fxProcessor.setDelayHighCut(value / 100.0) }
-    fun setModRate(value: Double)         { fxProcessor.setModRate(value / 100.0) }
-    fun setModDepth(value: Double)        { fxProcessor.setModDepth(value / 100.0) }
-    fun setModPhase(value: Double)        { fxProcessor.setModPhase(value / 100.0) }
-    fun setModFeedback(value: Double)     { fxProcessor.setModFeedback(value / 100.0) }
+    fun setReverbRoomSize(value: Double) { fxProcessor.setReverbRoomSize(value / 100.0) }
+    fun setReverbDecay(value: Double)    { fxProcessor.setReverbDecay(value / 100.0) }
+    fun setReverbPreDelay(value: Double) { fxProcessor.setReverbPreDelay(value / 100.0) }
+    fun setReverbDamping(value: Double)  { fxProcessor.setReverbDamping(value / 100.0) }
+    fun setDelayTime(value: Double)      { fxProcessor.setDelayTime(value / 100.0) }
+    fun setDelayFeedback(value: Double)  { fxProcessor.setDelayFeedback(value / 100.0) }
+    fun setDelayLowCut(value: Double)    { fxProcessor.setDelayLowCut(value / 100.0) }
+    fun setDelayHighCut(value: Double)   { fxProcessor.setDelayHighCut(value / 100.0) }
+    fun setModRate(value: Double)        { fxProcessor.setModRate(value / 100.0) }
+    fun setModDepth(value: Double)       { fxProcessor.setModDepth(value / 100.0) }
+    fun setModPhase(value: Double)       { fxProcessor.setModPhase(value / 100.0) }
+    fun setModFeedback(value: Double)    { fxProcessor.setModFeedback(value / 100.0) }
 
     // ─────────────────────────────────────────────────────────────────────────
     // EQ GETTERS
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun getEQGains(): FloatArray         = equalizerProcessor.getCurrentGains()
-    fun getEQPreamp(): Float             = equalizerProcessor.getCurrentPreamp()
-    fun getEQQValues(): FloatArray       = equalizerProcessor.getCurrentQValues()
-    fun isEQEnabled(): Boolean           = equalizerProcessor.isEnabled
-    fun getParametricGains(): FloatArray = equalizerProcessor.getParametricGains()
+    fun getEQGains(): FloatArray          = equalizerProcessor.getCurrentGains()
+    fun getEQPreamp(): Float              = equalizerProcessor.getCurrentPreamp()
+    fun getEQQValues(): FloatArray        = equalizerProcessor.getCurrentQValues()
+    fun isEQEnabled(): Boolean            = equalizerProcessor.isEnabled
+    fun getParametricGains(): FloatArray  = equalizerProcessor.getParametricGains()
     fun getParametricFreqs(): DoubleArray = equalizerProcessor.getParametricFreqs()
-    fun getLoudnessDb(): Float           = equalizerProcessor.getCurrentLoudnessDb()
-    fun getEQMode(): String              = equalizerProcessor.getCurrentEqMode().name
+    fun getLoudnessDb(): Float            = equalizerProcessor.getCurrentLoudnessDb()
+    fun getEQMode(): String               = equalizerProcessor.getCurrentEqMode().name
     fun getSpectrumMagnitudes(): FloatArray = equalizerProcessor.spectrumMagnitudes
-    fun computeAutoEQ(): FloatArray      = equalizerProcessor.computeAutoEqSuggestion()
+    fun computeAutoEQ(): FloatArray       = equalizerProcessor.computeAutoEqSuggestion()
 
     // ─────────────────────────────────────────────────────────────────────────
     // INTERNAL
@@ -802,19 +805,19 @@ class MavinAudioPlayer(private val context: Context) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 data class TrackData(
-    val id            : String,
-    val uri           : String,
-    val title         : String?               = null,
-    val artist        : String?               = null,
-    val album         : String?               = null,
-    val artworkUri    : String?               = null,
-    val duration      : Long?                 = null,
-    val headers       : Map<String, String>?  = null,
-    val replayGainTags: Map<String, String>?  = null,
+    val id             : String,
+    val uri            : String,
+    val title          : String?               = null,
+    val artist         : String?               = null,
+    val album          : String?               = null,
+    val artworkUri     : String?               = null,
+    val duration       : Long?                 = null,
+    val headers        : Map<String, String>?  = null,
+    val replayGainTags : Map<String, String>?  = null,
     // RNTP extended fields
-    val genre         : String?               = null,
-    val description   : String?               = null,
-    val date          : String?               = null,
-    val rating        : Float?                = null,
-    val isLiveStream  : Boolean               = false,
+    val genre          : String?               = null,
+    val description    : String?               = null,
+    val date           : String?               = null,
+    val rating         : Float?                = null,
+    val isLiveStream   : Boolean               = false,
 )
