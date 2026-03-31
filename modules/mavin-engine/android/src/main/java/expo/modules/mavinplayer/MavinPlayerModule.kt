@@ -831,6 +831,18 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
      * build.gradle this will compile. If you're media3-only, use
      * androidx.media3.ui.PlayerNotificationManager instead for notifications.
      */
+       /**
+     * FIX (line 889): The original code used
+     *   androidx.media.app.NotificationCompat.MediaStyle()
+     * which is a fully-qualified reference that requires the
+     * 'androidx.media:media' artifact on the classpath AND the correct import.
+     * Replaced with the explicit import-free fully-qualified path and ensured
+     * the class resolves via androidx.media:media (not media3).
+     *
+     * If you have 'implementation "androidx.media:media:1.x.x"' in your
+     * build.gradle this will compile. If you're media3-only, use
+     * androidx.media3.ui.PlayerNotificationManager instead for notifications.
+     */
     fun buildMediaNotification(context: Context): Notification {
         val launchIntent = context.packageManager
             .getLaunchIntentForPackage(context.packageName)
@@ -868,9 +880,8 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             "mavin.action.NEXT", 2, pendingFlagsForBroadcast
         )
 
-        // FIX (line 889): use the fully-qualified MediaStyle from androidx.media:media.
-        // Do NOT use androidx.media3 here — Media3's notification system is managed
-        // through MediaSession / DefaultMediaNotificationProvider, not NotificationCompat.MediaStyle.
+        // FIX (line 874): Use the mediaStyle variable that was declared above.
+        // The original code incorrectly referenced 'media.' instead of 'mediaStyle.'
         val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
             .setShowActionsInCompactView(0, 1, 2)
 
