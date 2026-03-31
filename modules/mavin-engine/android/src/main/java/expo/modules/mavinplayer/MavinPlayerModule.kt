@@ -820,28 +820,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     /**
-     * FIX (line 889): The original code used
-     *   androidx.media.app.NotificationCompat.MediaStyle()
-     * which is a fully-qualified reference that requires the
-     * 'androidx.media:media' artifact on the classpath AND the correct import.
-     * Replaced with the explicit import-free fully-qualified path and ensured
-     * the class resolves via androidx.media:media (not media3).
-     *
-     * If you have 'implementation "androidx.media:media:1.x.x"' in your
-     * build.gradle this will compile. If you're media3-only, use
-     * androidx.media3.ui.PlayerNotificationManager instead for notifications.
-     */
-       /**
-     * FIX (line 889): The original code used
-     *   androidx.media.app.NotificationCompat.MediaStyle()
-     * which is a fully-qualified reference that requires the
-     * 'androidx.media:media' artifact on the classpath AND the correct import.
-     * Replaced with the explicit import-free fully-qualified path and ensured
-     * the class resolves via androidx.media:media (not media3).
-     *
-     * If you have 'implementation "androidx.media:media:1.x.x"' in your
-     * build.gradle this will compile. If you're media3-only, use
-     * androidx.media3.ui.PlayerNotificationManager instead for notifications.
+     * Media3-compatible notification using standard NotificationCompat.Builder
+     * instead of legacy androidx.media.app.NotificationCompat.MediaStyle.
+     * The MediaSession handles all media control integration.
      */
     fun buildMediaNotification(context: Context): Notification {
         val launchIntent = context.packageManager
@@ -862,29 +843,8 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         val artist    = trackInfo?.get("artist") as? String ?: "Ready to play"
         val isPlaying = playerInstance?.isPlaying() ?: false
 
-        val pendingFlagsForBroadcast = PendingIntent.FLAG_UPDATE_CURRENT or
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-
-        val playPauseAction = buildNotificationAction(
-            context,
-            if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-            if (isPlaying) "Pause" else "Play",
-            "mavin.action.PLAY_PAUSE", 0, pendingFlagsForBroadcast
-        )
-        val prevAction = buildNotificationAction(
-            context, android.R.drawable.ic_media_previous, "Previous",
-            "mavin.action.PREVIOUS", 1, pendingFlagsForBroadcast
-        )
-        val nextAction = buildNotificationAction(
-            context, android.R.drawable.ic_media_next, "Next",
-            "mavin.action.NEXT", 2, pendingFlagsForBroadcast
-        )
-
-        // FIX (line 874): Use the mediaStyle variable that was declared above.
-        // The original code incorrectly referenced 'media.' instead of 'mediaStyle.'
-        val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
-            .setShowActionsInCompactView(0, 1, 2)
-
+        // Use standard NotificationCompat.Builder without MediaStyle
+        // Media3 handles the media session connection internally via MediaSession
         return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(artist)
@@ -893,10 +853,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(isPlaying)
-            .setStyle(mediaStyle)
-            .addAction(prevAction)
-            .addAction(playPauseAction)
-            .addAction(nextAction)
+            .setOnlyAlertOnce(true)
             .build()
     }
 
