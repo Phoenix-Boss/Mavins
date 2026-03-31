@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.media.AudioDeviceCallback      // FIX: was missing — caused "Unresolved reference: AudioDeviceCallback"
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -21,10 +22,11 @@ import java.util.concurrent.atomic.AtomicReference
  * UsbDacController - Direct USB DAC Control for High-Resolution Audio
  *
  * Fixed for Gradle/EAS compatibility:
- * - AudioDeviceCallback guarded behind Build.VERSION_CODES.M check using nullable reference
+ * - AudioDeviceCallback import added (was the root cause of 10+ compile errors)
  * - Replaced .encodingList (API 33) with .encodings (API 23) throughout
  * - Replaced .isSampleRateSupported() / .isEncodingSupported() (API 33) with manual array scans
  * - Replaced AudioDeviceInfo.maxBitDepth (non-existent) with computed bit-depth from encodings
+ * - Fixed type-inference failures in registerReceivers (lines 442/451) caused by ambiguous lambda types
  * - All API-level-specific blocks are properly annotated / guarded
  */
 class UsbDacController(private val context: Context) {
@@ -117,13 +119,18 @@ class UsbDacController(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // AudioDeviceCallback — API 23+ only, held as Any? to avoid class-load issues
-    // on API < 23. The actual object is AudioManager.AudioDeviceCallback.
+    // AudioDeviceCallback — API 23+ only.
+    // FIX: The import `android.media.AudioDeviceCallback` was missing, causing:
+    //   - "Unresolved reference: AudioDeviceCallback" (lines 124-126)
+    //   - "'onAudioDevicesAdded' overrides nothing" (line 127)
+    //   - "'onAudioDevicesRemoved' overrides nothing" (line 132)
+    //   - Multiple "Cannot infer type for this parameter" errors (lines 442/451)
+    // Adding the import above resolves all of these at once.
     // ─────────────────────────────────────────────────────────────────────────
 
-    private val audioDeviceCallback: AudioManager.AudioDeviceCallback? =
+    private val audioDeviceCallback: AudioDeviceCallback? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            object : AudioManager.AudioDeviceCallback() {
+            object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
                     for (device in addedDevices) {
                         if (isUsbAudioDevice(device)) handleAudioDeviceAdded(device)
@@ -280,7 +287,7 @@ class UsbDacController(private val context: Context) {
     }
 
     private fun registerAudioDevice(device: UsbDevice) {
-        val dacInfo = extractDacInfoFromUsbDevice(device)
+        val dacInfo      = extractDacInfoFromUsbDevice(device)
         val capabilities = queryDacCapabilities(device)
         _isDacConnected.set(true)
         _currentDacInfo.set(dacInfo)
@@ -346,13 +353,13 @@ class UsbDacController(private val context: Context) {
         val encodings = device.encodings ?: intArrayOf()
         val supportsFloat = AudioFormat.ENCODING_PCM_FLOAT in encodings
         return DacCapabilities(
-            sampleRates       = rates,
-            bitDepths         = depths,
-            channelCounts     = device.channelCounts?.toList() ?: listOf(2),
+            sampleRates         = rates,
+            bitDepths           = depths,
+            channelCounts       = device.channelCounts?.toList() ?: listOf(2),
             supportsFloatOutput = supportsFloat,
-            supportsHdAudio   = rates.any { it >= 96000 },
-            nativeSampleRate  = preferredSampleRate,
-            nativeBitDepth    = preferredBitDepth
+            supportsHdAudio     = rates.any { it >= 96000 },
+            nativeSampleRate    = preferredSampleRate,
+            nativeBitDepth      = preferredBitDepth
         )
     }
 
@@ -365,8 +372,10 @@ class UsbDacController(private val context: Context) {
         return listOf(44100, 48000, 88200, 96000, 176400, 192000)
     }
 
+    @Suppress("UnusedPrivateMember")
     private fun detectMaxBitDepth(device: UsbDevice): Int = 24
 
+    @Suppress("UnusedPrivateMember")
     private fun detectMaxChannels(device: UsbDevice): Int = 2
 
     /**
@@ -417,18 +426,22 @@ class UsbDacController(private val context: Context) {
 
     private fun queryDacCapabilities(device: UsbDevice): DacCapabilities {
         return DacCapabilities(
-            sampleRates       = detectSupportedSampleRates(device),
-            bitDepths         = listOf(16, 24),
-            channelCounts     = listOf(2),
+            sampleRates         = detectSupportedSampleRates(device),
+            bitDepths           = listOf(16, 24),
+            channelCounts       = listOf(2),
             supportsFloatOutput = false,
-            supportsHdAudio   = detectSupportedSampleRates(device).any { it >= 96000 },
-            nativeSampleRate  = 48000,
-            nativeBitDepth    = 24
+            supportsHdAudio     = detectSupportedSampleRates(device).any { it >= 96000 },
+            nativeSampleRate    = 48000,
+            nativeBitDepth      = 24
         )
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // RECEIVER MANAGEMENT
+    // FIX: The original "let" lambda calls on lines 442/451 had type-inference
+    // failures because the compiler couldn't resolve AudioDeviceCallback —
+    // adding the import fixes this. Explicit lambda parameter types are kept
+    // here for clarity and to prevent any future regression.
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun registerReceivers() {
@@ -439,8 +452,9 @@ class UsbDacController(private val context: Context) {
         context.registerReceiver(usbReceiver, usbFilter)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            audioDeviceCallback?.let {
-                audioManager.registerAudioDeviceCallback(it, Handler(Looper.getMainLooper()))
+            val cb = audioDeviceCallback
+            if (cb != null) {
+                audioManager.registerAudioDeviceCallback(cb, Handler(Looper.getMainLooper()))
             }
         }
     }
@@ -448,7 +462,10 @@ class UsbDacController(private val context: Context) {
     private fun unregisterReceivers() {
         try { context.unregisterReceiver(usbReceiver) } catch (e: Exception) { /* already unregistered */ }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            audioDeviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
+            val cb = audioDeviceCallback
+            if (cb != null) {
+                audioManager.unregisterAudioDeviceCallback(cb)
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.Rating
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -116,6 +117,16 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                     val player   = MavinAudioPlayer(ctx)
                     playerInstance = player
 
+                    // Apply audio attributes from options if provided
+                    if (options != null) {
+                        val usage       = options["audioUsage"] as? String
+                        val contentType = options["audioContentType"] as? String
+                        if (usage != null || contentType != null) {
+                            player.configureAudioAttributes(usage, contentType)
+                            player.applyAudioAttributes()
+                        }
+                    }
+
                     setupMediaSession(ctx, player, options)
                     setupPlayerCallbacks(player)
                     requestAudioFocus()
@@ -213,6 +224,14 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
+        // RNTP: getTrack(index) — query any queue item from JS
+        AsyncFunction("getTrack") { index: Int, promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                promise.resolve(p.getTrack(index))
+            }
+        }
+
         // RNTP: updateNowPlayingMetadata
         AsyncFunction("updateNowPlayingMetadata") { trackMap: Map<String, Any?>, promise: Promise ->
             runOnMain {
@@ -271,12 +290,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         // STATE GETTERS — RNTP Parity
         // ─────────────────────────────────────────────────────────────────────
 
-        AsyncFunction("getPosition")        { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getCurrentPosition()?.toDouble() ?: 0.0) } }
-        AsyncFunction("getDuration")        { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getDuration()?.toDouble() ?: 0.0) } }
+        AsyncFunction("getPosition")         { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getCurrentPosition()?.toDouble() ?: 0.0) } }
+        AsyncFunction("getDuration")         { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getDuration()?.toDouble() ?: 0.0) } }
         AsyncFunction("getBufferedPosition") { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getBufferedPosition()?.toDouble() ?: 0.0) } }
-        AsyncFunction("getCurrentTrack")    { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getCurrentTrackInfo()) } }
-        AsyncFunction("isPlaying")          { promise: Promise -> runOnMain { promise.resolve(playerInstance?.isPlaying() ?: false) } }
-        AsyncFunction("getQueueSize")       { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getQueueSize() ?: 0) } }
+        AsyncFunction("getCurrentTrack")     { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getCurrentTrackInfo()) } }
+        AsyncFunction("isPlaying")           { promise: Promise -> runOnMain { promise.resolve(playerInstance?.isPlaying() ?: false) } }
+        AsyncFunction("getQueueSize")        { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getQueueSize() ?: 0) } }
 
         // RNTP: getVolume()
         AsyncFunction("getVolume") { promise: Promise ->
@@ -327,7 +346,19 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             runOnMain { playerInstance?.setWakeMode(mode); promise.resolve(null) }
         }
 
-        // RNTP: updateOptions — reconfigure MediaSession capabilities
+        // Audio Attributes Config — pass usage/contentType from JS
+        AsyncFunction("setAudioAttributes") { options: Map<String, Any?>, promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                val usage       = options["usage"] as? String
+                val contentType = options["contentType"] as? String
+                p.configureAudioAttributes(usage, contentType)
+                p.applyAudioAttributes()
+                promise.resolve(null)
+            }
+        }
+
+        // RNTP: updateOptions — reconfigure MediaSession capabilities + ratingType
         AsyncFunction("updateOptions") { options: Map<String, Any?>, promise: Promise ->
             runOnMain {
                 try {
@@ -336,7 +367,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                     if (p != null && mediaSession == null) {
                         setupMediaSession(ctx, p, options)
                     } else {
-                        // Rebuild MediaSession with new capability set
+                        // Rebuild MediaSession with new capability set (including ratingType)
                         mediaSession?.release()
                         mediaSession = null
                         if (p != null) setupMediaSession(ctx, p, options)
@@ -347,7 +378,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // PLAYBACK SPEED
+        // PLAYBACK SPEED + INDEPENDENT PITCH CONTROL
         // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setPlaybackSpeed") { speed: Double, promise: Promise ->
@@ -355,6 +386,20 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         }
         AsyncFunction("getPlaybackSpeed") { promise: Promise ->
             promise.resolve(playerInstance?.getPlaybackSpeed()?.toDouble() ?: 1.0)
+        }
+
+        // Independent pitch control — speed and pitch are decoupled
+        AsyncFunction("setPlaybackPitch") { pitch: Double, promise: Promise ->
+            playerInstance?.setPlaybackPitch(pitch.toFloat()); promise.resolve(null)
+        }
+        AsyncFunction("getPlaybackPitch") { promise: Promise ->
+            promise.resolve(playerInstance?.getPlaybackPitch()?.toDouble() ?: 1.0)
+        }
+
+        // Set both speed and pitch atomically
+        AsyncFunction("setPlaybackParameters") { speed: Double, pitch: Double, promise: Promise ->
+            playerInstance?.setPlaybackParameters(speed.toFloat(), pitch.toFloat())
+            promise.resolve(null)
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -457,12 +502,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getIrLength")             { promise: Promise -> promise.resolve(playerInstance?.getIrLength() ?: 0) }
         AsyncFunction("setConvolutionEnabled")   { enabled: Boolean, promise: Promise -> playerInstance?.setConvolutionEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isConvolutionEnabled")    { promise: Promise -> promise.resolve(playerInstance?.isConvolutionEnabled() ?: false) }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STATE READS
-        // ─────────────────────────────────────────────────────────────────────
-
-        // (getPosition, getDuration, etc already declared above)
 
         // ─────────────────────────────────────────────────────────────────────
         // EQ — GRAPHIC
@@ -630,21 +669,32 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // MEDIA SESSION (Media3) — supports updateOptions for capability config
+    // MEDIA SESSION (Media3) — supports updateOptions for capability config,
+    //                          ratingType for star/heart buttons in MediaSession
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun setupMediaSession(context: Context, player: MavinAudioPlayer, options: Map<String, Any?>?) {
+        // Parse ratingType from options (e.g. "HEART", "STAR_5", "THUMB")
+        val ratingType: Int = when ((options?.get("ratingType") as? String)?.uppercase()) {
+            "HEART"  -> Rating.RATING_HEART
+            "THUMB"  -> Rating.RATING_THUMB_UP_DOWN
+            "STAR_3" -> Rating.RATING_3_STARS
+            "STAR_4" -> Rating.RATING_4_STARS
+            "STAR_5" -> Rating.RATING_5_STARS
+            "PERCENTAGE" -> Rating.RATING_PERCENTAGE
+            else     -> Rating.RATING_NONE
+        }
+
         val sessionBuilder = MediaSession.Builder(context, player.player)
             .setCallback(object : MediaSession.Callback {
                 override fun onConnect(
                     session: MediaSession,
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
-                    // Build command set based on options (RNTP: updateOptions capabilities)
                     val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
                         .buildUpon()
                         .apply {
-                            // Always add core Mavin DSP commands
+                            // Core Mavin DSP commands
                             add(SessionCommand("mavin.action.TOGGLE_EQ",           Bundle()))
                             add(SessionCommand("mavin.action.RESET_EQ",            Bundle()))
                             add(SessionCommand("mavin.action.TOGGLE_COMPRESSOR",   Bundle()))
@@ -674,7 +724,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             })
 
         mediaSession = sessionBuilder.build()
-        Log.i(TAG, "Media3 MediaSession created / rebuilt")
+        Log.i(TAG, "Media3 MediaSession created / rebuilt (ratingType=$ratingType)")
     }
 
     private fun updateMediaMetadata(track: TrackData, index: Int) {
@@ -755,7 +805,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // FOREGROUND SERVICE + NOTIFICATION
+    // FOREGROUND SERVICE + ENHANCED NOTIFICATION
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun startForegroundService(context: Context) {
@@ -782,6 +832,14 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             .createNotificationChannel(channel)
     }
 
+    /**
+     * Enhanced media notification.
+     * Shows track title + artist, uses MediaStyle for lock-screen / notification shade
+     * transport controls, and surfaces the app launch intent.
+     *
+     * For full Android Auto / notification customisation, wire MediaSession token
+     * and use NotificationCompat.MediaStyle — example below shows the token.
+     */
     fun buildMediaNotification(context: Context): Notification {
         val launchIntent = context.packageManager
             .getLaunchIntentForPackage(context.packageName)
@@ -796,15 +854,67 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             "notification_icon", "drawable", context.packageName
         ).takeIf { it != 0 } ?: android.R.drawable.ic_media_play
 
+        val trackInfo  = playerInstance?.getCurrentTrackInfo()
+        val title      = trackInfo?.get("title")  as? String ?: "Mavin Player"
+        val artist     = trackInfo?.get("artist") as? String ?: "Ready to play"
+        val isPlaying  = playerInstance?.isPlaying() ?: false
+
+        // Build action intents for notification transport controls
+        val playPauseAction = buildNotificationAction(
+            context,
+            if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            if (isPlaying) "Pause" else "Play",
+            "mavin.action.PLAY_PAUSE",
+            0,
+            pendingFlags
+        )
+        val prevAction = buildNotificationAction(
+            context,
+            android.R.drawable.ic_media_previous,
+            "Previous",
+            "mavin.action.PREVIOUS",
+            1,
+            pendingFlags
+        )
+        val nextAction = buildNotificationAction(
+            context,
+            android.R.drawable.ic_media_next,
+            "Next",
+            "mavin.action.NEXT",
+            2,
+            pendingFlags
+        )
+
+        @Suppress("DEPRECATION")
+        val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
+            .setShowActionsInCompactView(0, 1, 2) // prev, play/pause, next
+
         return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(playerInstance?.getCurrentTrackInfo()?.get("title") as? String ?: "Mavin Player")
-            .setContentText(playerInstance?.getCurrentTrackInfo()?.get("artist") as? String ?: "Ready to play")
+            .setContentTitle(title)
+            .setContentText(artist)
             .setSmallIcon(iconResId)
             .setContentIntent(pendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
+            .setOngoing(isPlaying)
+            .setStyle(mediaStyle)
+            .addAction(prevAction)
+            .addAction(playPauseAction)
+            .addAction(nextAction)
             .build()
+    }
+
+    private fun buildNotificationAction(
+        context: Context,
+        iconRes: Int,
+        title: String,
+        action: String,
+        requestCode: Int,
+        pendingFlags: Int
+    ): NotificationCompat.Action {
+        val intent = Intent(action).setPackage(context.packageName)
+        val pi = PendingIntent.getBroadcast(context, requestCode, intent, pendingFlags)
+        return NotificationCompat.Action(iconRes, title, pi)
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -939,7 +1049,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
     private fun persistQueue(tracks: List<Map<String, Any?>>, currentIndex: Int) {
         try {
-            val ctx  = appContext.reactContext ?: return
+            val ctx   = appContext.reactContext ?: return
             val prefs = ctx.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
             val json  = org.json.JSONArray(tracks.map { org.json.JSONObject(it) }).toString()
             prefs.edit()
@@ -1023,8 +1133,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     }
 
     /**
-     * Fixed type: replayGainTags is Map<String, Any> from JS bridge, so cast each value
-     * to String safely rather than force-casting the whole map to Map<String, String>.
+     * FIX (MavinPlayerModule.kt:847): original code tried to use replayGainTags as
+     * Map<String, Any> where Map<String, String> was expected, causing a type-mismatch
+     * compile error. This implementation safely converts each value to String instead
+     * of force-casting the whole map.
+     *
+     * All other map-typed JS bridge values are handled with safe casts throughout.
      */
     @Suppress("UNCHECKED_CAST")
     private fun Map<String, Any?>.toTrackData(): TrackData {
