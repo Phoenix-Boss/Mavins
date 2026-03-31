@@ -83,7 +83,8 @@ class MavinAudioPlayer(private val context: Context) {
     private var audioContent = C.AUDIO_CONTENT_TYPE_MUSIC
 
     // ── Progress update interval (configurable, default 1000ms) ──────────────
-    @Volatile var progressIntervalMs: Long = 1000L
+    // FIX: Changed from property to backing field with explicit getter/setter methods
+    private var _progressIntervalMs: Long = 1000L
 
     // ── Background scope ──────────────────────────────────────────────────────
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -418,9 +419,13 @@ class MavinAudioPlayer(private val context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
     // PROGRESS INTERVAL
     // ─────────────────────────────────────────────────────────────────────────
+    // FIX: Explicit getter/setter methods using backing field (no property conflict)
 
-    fun setProgressIntervalMs(ms: Long) { progressIntervalMs = ms.coerceIn(100L, 10_000L) }
-    fun getProgressIntervalMs(): Long   = progressIntervalMs
+    fun setProgressIntervalMs(ms: Long) { 
+        _progressIntervalMs = ms.coerceIn(100L, 10_000L) 
+    }
+    
+    fun getProgressIntervalMs(): Long = _progressIntervalMs
 
     // ─────────────────────────────────────────────────────────────────────────
     // EQ / DSP
@@ -635,8 +640,8 @@ class MavinAudioPlayer(private val context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
 
     fun isUsbDacConnected(): Boolean                             = usbDacController.isDacConnected
-    fun getCurrentDacInfo(): UsbDacController.DacInfo?          = usbDacController.currentDacInfo
-    fun getDacCapabilities(): UsbDacController.DacCapabilities? = usbDacController.dacCapabilities
+    fun getCurrentDacInfo(): UsbDacController.DacInfo?          = usbDacController.getCurrentDacInfo()
+    fun getDacCapabilities(): UsbDacController.DacCapabilities? = usbDacController.getDacCapabilities()
     fun enableDirectUsbRouting(enabled: Boolean): Boolean       = usbDacController.enableDirectUsbRouting(enabled)
     fun isDirectUsbRoutingEnabled(): Boolean                    = usbDacController.isDirectUsbRoutingEnabled()
     fun setPreferredDacSampleRate(rate: Int): Boolean           = usbDacController.setPreferredSampleRate(rate)

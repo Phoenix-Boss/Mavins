@@ -28,6 +28,9 @@ import java.util.concurrent.atomic.AtomicReference
  * - Replaced AudioDeviceInfo.maxBitDepth (non-existent) with computed bit-depth from encodings
  * - Fixed type-inference failures in registerReceivers (lines 442/451) caused by ambiguous lambda types
  * - All API-level-specific blocks are properly annotated / guarded
+ * 
+ * FIX: Changed from properties with implicit getters to backing fields with explicit getter methods
+ * to avoid JVM signature clash with explicit getter methods.
  */
 class UsbDacController(private val context: Context) {
 
@@ -72,11 +75,10 @@ class UsbDacController(private val context: Context) {
     private val _isDacConnected = AtomicBoolean(false)
     val isDacConnected: Boolean get() = _isDacConnected.get()
 
+    // FIX: Changed from properties with implicit getters to backing fields only
+    // The explicit getter methods below will provide access to these
     private val _currentDacInfo = AtomicReference<DacInfo?>(null)
-    val currentDacInfo: DacInfo? get() = _currentDacInfo.get()
-
     private val _dacCapabilities = AtomicReference<DacCapabilities?>(null)
-    val dacCapabilities: DacCapabilities? get() = _dacCapabilities.get()
 
     @Volatile private var isNativeDirectMode = false
     @Volatile private var preferredSampleRate = 48000
@@ -170,7 +172,7 @@ class UsbDacController(private val context: Context) {
     fun isDirectUsbRoutingEnabled(): Boolean = isNativeDirectMode
 
     fun setPreferredSampleRate(rate: Int): Boolean {
-        val caps = dacCapabilities
+        val caps = _dacCapabilities.get()
         if (caps != null && !caps.sampleRates.contains(rate)) {
             Log.w(TAG, "Sample rate $rate not supported by DAC")
             return false
@@ -181,7 +183,7 @@ class UsbDacController(private val context: Context) {
     }
 
     fun setPreferredBitDepth(depth: Int): Boolean {
-        val caps = dacCapabilities
+        val caps = _dacCapabilities.get()
         if (caps != null && !caps.bitDepths.contains(depth)) {
             Log.w(TAG, "Bit depth $depth not supported by DAC")
             return false
@@ -191,8 +193,9 @@ class UsbDacController(private val context: Context) {
         return true
     }
 
-    fun getCurrentDacInfo(): DacInfo? = currentDacInfo
-    fun getDacCapabilities(): DacCapabilities? = dacCapabilities
+    // FIX: Explicit getter methods using backing fields (no property conflict)
+    fun getCurrentDacInfo(): DacInfo? = _currentDacInfo.get()
+    fun getDacCapabilities(): DacCapabilities? = _dacCapabilities.get()
 
     fun requestUsbPermission(device: UsbDevice, callback: ((Boolean) -> Unit)? = null) {
         if (usbManager.hasPermission(device)) { callback?.invoke(true); return }
@@ -251,7 +254,7 @@ class UsbDacController(private val context: Context) {
     }
 
     private fun handleUsbDeviceDetached(device: UsbDevice) {
-        val current = currentDacInfo
+        val current = _currentDacInfo.get()
         if (current != null && current.vendorId == device.vendorId && current.productId == device.productId) {
             Log.i(TAG, "USB Audio device detached: ${device.productName}")
             _isDacConnected.set(false)
@@ -277,7 +280,7 @@ class UsbDacController(private val context: Context) {
     private fun handleAudioDeviceRemoved(device: AudioDeviceInfo) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         val dacInfo = extractDacInfoFromAudioDevice(device) ?: return
-        if (currentDacInfo?.name == dacInfo.name) {
+        if (_currentDacInfo.get()?.name == dacInfo.name) {
             Log.i(TAG, "Audio device removed: ${dacInfo.name}")
             _isDacConnected.set(false)
             _currentDacInfo.set(null)
