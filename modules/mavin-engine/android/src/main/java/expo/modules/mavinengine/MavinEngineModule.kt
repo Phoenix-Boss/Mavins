@@ -164,7 +164,6 @@ class MavinEngineModule : Module() {
 
     override fun definition() = ModuleDefinition {
                 Name("MavinEngine")
-
         Property("version").get<String> { VERSION }
         Property("initialized").get<Boolean> { isInitialized }
         Property("services").get<List<Map<String, Any>>> { getServicesList() }
@@ -2168,4 +2167,6 @@ class MavinEngineModule : Module() {
         }
     }
 }
+
+
 

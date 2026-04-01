@@ -2,60 +2,31 @@
  * MusicPlayerContext
  *
  * Provides audio/video stream resolution and playback management.
- * Built on react-native-track-player + MavinEngine (NewPipe v0.26.0).
+ * Built on MavinPlayer (custom ExoPlayer DSP chain) + MavinEngine (NewPipe v0.26.0).
  *
- * ── v10.1.0 architecture alignment ──────────────────────────────────────────
+ * ── Architecture notes ────────────────────────────────────────────────────────
  *
- * [A] resolveTrack error handling — still correct from v10.0.0:
- *     Fallback strategies (getStreamInfoById, search) are tried unconditionally
- *     on ANY extraction failure — not keyed to specific error message strings.
- *     The underlying infrastructure errors (consent, Content-Type, visitorData)
- *     are now resolved at the Kotlin Downloader level:
- *       - SOCS consent cookie → getCookieHeader() per-request in execute()
- *         (official v0.26.0 Javadoc method; replaces the broken CookieJar /
- *         Cookie.Builder approach that threw IllegalArgumentException on init)
- *       - InnerTube POST 400/415 → Content-Type is "application/json"
- *       - visitorData → prefetched on background thread at init
+ * [A] resolveTrack 3-step strategy:
+ *     1. Supabase stream cache → use if fresh
+ *     2. MavinEngine.getStreamInfo() → primary extraction
+ *     3. getStreamInfoById() + 3 search strategies → fallbacks
  *
- * [B] getCookieHeader() injection pattern (v10.1.0 fix):
- *     YoutubeParsingHelper.getCookieHeader() is called in MavinDownloader.execute()
- *     BEFORE forwarding extractor headers, and only when the extractor has not
- *     already provided a Cookie header. This is the official TeamNewPipe pattern
- *     (DownloaderImpl PR #11969, merged Jan 31 2025).
- *     The old SimpleCookieJar / Cookie.Builder approach is completely removed —
- *     it crashed at init with: IllegalArgumentException: unexpected domain: .youtube.com
+ * [B] getCookieHeader() injection — handled inside MavinDownloader.kt
+ * [C] StreamInfo.title field is "title"
+ * [D] StreamInfoItem uses `name` from InfoItem base
+ * [E] NewPipe filter token 'videos' for standard video results
  *
- * [C] Stream field mapping corrected:
- *     StreamInfo.title field is "title" not "name" — confirmed against the
- *     MavinEngine.ts StreamInfo interface (info.title, not info.name).
+ * Track shape:
+ *   MavinTrack requires: id, uri (required), title?, artist?, artwork?, duration?
  *
- * [D] fetchRelatedSongs: relatedItems items use item.name (StreamInfoItem.name)
- *     not item.title — confirmed against the MavinEngine.ts StreamInfoItem
- *     interface. StreamInfoItem is an InfoItem with type "stream"; it inherits
- *     `name` from the NewPipe InfoItem base class.
- *     videoId extraction handles both ?v= and youtu.be/ URL formats.
+ * ── Supabase typing note ──────────────────────────────────────────────────────
  *
- * [E] search() filter corrected:
- *     'videos' is the correct NewPipe filter token for standard video results.
- *     '' (empty string) means no filter (all content types).
- *     'all' is not a valid NewPipe token — never used here.
- *
- * ── Original design (retained) ───────────────────────────────────────────────
- *
- * 1. resolveTrack 3-step strategy:
- *    a. Check Supabase streams table (audio + video) for a cached non-expired URL
- *    b. Hit → use directly, skip engine call
- *    c. Miss → call MavinEngine.getStreamInfo() for both streams in one call
- *    d. Pick best audio (highest bitrate, direct URL) + best video (720p DASH preferred)
- *    e. Fire-and-forget: write both streams to Supabase streams table
- *    f. Return Track with videoUrl as a custom field RNTP ignores
- *
- * 2. Track.videoUrl carries the video stream URL so PlayerScreen can read it
- *    via useActiveTrack() for the audio/video toggle without extra state.
- *
- * 3. Tracks with url === '' return null and are skipped with a user-facing alert.
- *
- * 4. Song type imported from @/types/song (shared canonical definition).
+ * supabase.from('streams') is cast to `any` before every query. This is
+ * intentional: the installed @supabase/supabase-js version resolves the
+ * .from() overload to `never` when the Database generic is a hand-written
+ * interface (rather than the output of `supabase gen types`). The cast is
+ * safe — the runtime shape is correct. Re-evaluate after running:
+ *   npx supabase gen types typescript --project-id <id> > libs/supabase/types.ts
  */
 
 import React, {
@@ -65,34 +36,57 @@ import React, {
   ReactNode,
   useRef,
   useCallback,
+  useEffect,
 } from 'react';
 import MavinEngine, {
   StreamInfoItem,
   AudioStream,
   VideoStream,
 } from '@/modules/mavin-engine';
-import TrackPlayer, { State, Track, Event, useTrackPlayerEvents } from 'react-native-track-player';
-import { Alert } from 'react-native';
+
+// ✅ FIX: Import the player instance directly from mavin-eq (which exports the native module)
+import MavinPlayer from '@/modules/mavin-eq';
+import type { MavinTrack } from '@/modules/mavin-eq';
+import type { PlaybackStateEvent } from '@/modules/mavin-eq/types';
+
+import { Alert, Platform } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { DownloadedSongMetadata } from '@/store/library';
 import { supabase } from '@/libs/supabase';
 import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
+import type { StreamInsert } from '@/libs/supabase';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Typed helper — casts the from() builder to `any` once, then re-asserts the
+// result type we actually expect. All Supabase queries in this file go through
+// this wrapper so the workaround is contained in one place.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const streamsTable = () => (supabase as any).from('streams');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Safe player accessor
+// Returns the native module on Android, null on iOS/web.
+// Always check the return value before calling methods.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getPlayer() {
+  if (Platform.OS !== 'android') return null;
+  // MavinPlayer is the native module instance (exported as default from mavin-eq)
+  return MavinPlayer;
+}
+
+// Helper to check if player is available
+const isPlayerAvailable = (): boolean => {
+  return Platform.OS === "android" && MavinPlayer !== null;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UUID v5 — deterministic UUID from YouTube video ID
-//
-// The `streams` table uses a UUID primary key / track_id column.
-// YouTube video IDs are 11-char strings — passing them raw causes:
-//   "invalid input syntax for type uuid: 'Abc123defgh'"
-//
-// We generate a stable UUID v5 (SHA-1 namespace hash) so the same video ID
-// always maps to the same UUID, enabling upsert/lookup to work correctly.
-//
-// Namespace: DNS namespace UUID (RFC 4122 §Appendix C) — arbitrary but fixed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// RFC 4122 DNS namespace as byte array
 const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
 function uuidToBytes(uuid: string): number[] {
@@ -100,9 +94,6 @@ function uuidToBytes(uuid: string): number[] {
 }
 
 async function sha1(data: Uint8Array): Promise<Uint8Array> {
-  // React Native doesn't have SubtleCrypto — use a pure-JS SHA-1 implementation
-  // that runs synchronously so it doesn't need the Web Crypto API.
-  // Based on RFC 3174 / FIPS 180-4.
   const H = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
   const msg = Array.from(data);
   const bitLen = msg.length * 8;
@@ -130,11 +121,13 @@ async function sha1(data: Uint8Array): Promise<Uint8Array> {
     H[3]=(H[3]+d)>>>0; H[4]=(H[4]+e)>>>0;
   }
   const out = new Uint8Array(20);
-  H.forEach((v,i) => { out[i*4]=(v>>>24)&0xff; out[i*4+1]=(v>>>16)&0xff; out[i*4+2]=(v>>>8)&0xff; out[i*4+3]=v&0xff; });
+  H.forEach((v, i) => {
+    out[i*4]   = (v>>>24)&0xff; out[i*4+1] = (v>>>16)&0xff;
+    out[i*4+2] = (v>>>8) &0xff; out[i*4+3] =  v      &0xff;
+  });
   return out;
 }
 
-// Cache so we don't hash the same video ID twice
 const _uuidCache = new Map<string, string>();
 
 async function videoIdToUuid(videoId: string): Promise<string> {
@@ -143,10 +136,9 @@ async function videoIdToUuid(videoId: string): Promise<string> {
   const idBytes  = Array.from(new TextEncoder().encode(videoId));
   const combined = new Uint8Array([...nsBytes, ...idBytes]);
   const hash     = await sha1(combined);
-  // Set version (5) and variant bits per RFC 4122 §4.3
   hash[6] = (hash[6] & 0x0f) | 0x50;
   hash[8] = (hash[8] & 0x3f) | 0x80;
-  const h  = Array.from(hash.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const h    = Array.from(hash.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
   const uuid = `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
   _uuidCache.set(videoId, uuid);
   return uuid;
@@ -154,10 +146,6 @@ async function videoIdToUuid(videoId: string): Promise<string> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // safeTrackStats — guards all track_stats calls
-//
-// The `track_stats` table may not exist yet in Supabase.
-// These wrappers swallow the "table not found in schema cache" error silently
-// so the player never logs it. Once you create the table, they start working.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TABLE_NOT_FOUND_MSG = 'track_stats';
@@ -173,7 +161,9 @@ const safeGetTrackStats = async (videoId: string) => {
   }
 };
 
-const safeSaveTrackStats = async (params: Parameters<typeof supabaseCache.saveTrackStats>[0]) => {
+const safeSaveTrackStats = async (
+  params: Parameters<typeof supabaseCache.saveTrackStats>[0],
+) => {
   try {
     await supabaseCache.saveTrackStats(params);
   } catch (e: any) {
@@ -193,7 +183,6 @@ const safePatchCommentsCount = async (videoId: string, count: number) => {
   }
 };
 
-// Re-export Song so callers that currently import it from here continue to work
 export type { Song };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,26 +203,18 @@ export interface MusicPlayerContextType {
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stream URL expiry — YouTube signed URLs last ~6 hours
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STREAM_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
 const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Pick the best audio stream: highest bitrate, prefer direct URL over manifest.
- *
- * Per NewPipe v0.26.0:
- *   audioStreams = audio-only streams, no video.
- *   isUrl === true means a direct playable URL (not a DASH/HLS manifest pointer).
- *   getBitrate() returns Int.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Stream pickers
+// ─────────────────────────────────────────────────────────────────────────────
+
 function pickBestAudio(streams: AudioStream[]): AudioStream | null {
   if (!streams?.length) return null;
   const direct = streams.filter(s => s.isUrl && !s.manifestUrl);
@@ -241,19 +222,6 @@ function pickBestAudio(streams: AudioStream[]): AudioStream | null {
   return pool.reduce((best, s) => (s.bitrate > best.bitrate ? s : best), pool[0]);
 }
 
-/**
- * Pick the best video stream from the given list.
- *
- * Per NewPipe v0.26.0 javadoc:
- *   videoOnlyStreams = ADAPTIVE_FORMATS = DASH, NO embedded audio, HD (720p/1080p)
- *   videoStreams     = FORMATS          = muxed WITH audio, typically ≤480p on YouTube
- *
- * Callers should pass videoOnlyStreams first, fall back to videoStreams:
- *   pickBestVideo(info.videoOnlyStreams) ?? pickBestVideo(info.videoStreams)
- *
- * Excludes height === 0 entries (audio-only rows that sometimes appear in the list).
- * Prefers exactly 720p — best balance of quality vs bandwidth for the video panel.
- */
 function pickBestVideo(streams: VideoStream[]): VideoStream | null {
   if (!streams?.length) return null;
   const withVideo = streams.filter(s => s.height > 0 && s.isUrl);
@@ -265,22 +233,31 @@ function pickBestVideo(streams: VideoStream[]): VideoStream | null {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Supabase stream cache
+//
+// All three functions use streamsTable() which casts supabase to `any` before
+// calling .from('streams'). This sidesteps the `never` overload resolution bug
+// in hand-written Database interfaces. The returned data is re-typed explicitly
+// via the generic on the result destructure so we don't lose type safety
+// downstream.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Check the streams table for a cached, active, non-expired audio URL.
- */
+interface StreamCacheRow {
+  stream_url: string;
+  expiry:     string;
+}
+
 async function getCachedAudioStream(trackId: string): Promise<string | null> {
   try {
     const uuid = await videoIdToUuid(trackId);
-    const { data, error } = await supabase
-      .from('streams')
-      .select('stream_url, expiry')
-      .eq('track_id', uuid)
-      .eq('stream_type', 'audio')
-      .eq('is_active', true)
-      .gt('expiry', new Date().toISOString())
-      .maybeSingle();
+    const { data, error }: { data: StreamCacheRow | null; error: unknown } =
+      await streamsTable()
+        .select('stream_url, expiry')
+        .eq('track_id', uuid)
+        .eq('stream_type', 'audio')
+        .eq('is_active', true)
+        .gt('expiry', new Date().toISOString())
+        .maybeSingle();
+
     if (error || !data) return null;
     return data.stream_url;
   } catch {
@@ -288,20 +265,18 @@ async function getCachedAudioStream(trackId: string): Promise<string | null> {
   }
 }
 
-/**
- * Check the streams table for a cached, active, non-expired video URL.
- */
 async function getCachedVideoStream(trackId: string): Promise<string | null> {
   try {
     const uuid = await videoIdToUuid(trackId);
-    const { data, error } = await supabase
-      .from('streams')
-      .select('stream_url, expiry')
-      .eq('track_id', uuid)
-      .eq('stream_type', 'video')
-      .eq('is_active', true)
-      .gt('expiry', new Date().toISOString())
-      .maybeSingle();
+    const { data, error }: { data: StreamCacheRow | null; error: unknown } =
+      await streamsTable()
+        .select('stream_url, expiry')
+        .eq('track_id', uuid)
+        .eq('stream_type', 'video')
+        .eq('is_active', true)
+        .gt('expiry', new Date().toISOString())
+        .maybeSingle();
+
     if (error || !data) return null;
     return data.stream_url;
   } catch {
@@ -309,11 +284,6 @@ async function getCachedVideoStream(trackId: string): Promise<string | null> {
   }
 }
 
-/**
- * Write both audio and video stream URLs to the streams table.
- * Fire-and-forget — never awaited on the critical path.
- * Uses upsert on (track_id, stream_type) unique constraint.
- */
 async function cacheStreamsToSupabase(
   trackId:  string,
   audioUrl: string,
@@ -321,18 +291,19 @@ async function cacheStreamsToSupabase(
   duration: number,
 ): Promise<void> {
   try {
-    // trackId is a raw YouTube video ID (e.g. "67Pylw3Kukc").
-    // The streams table expects a UUID — derive a stable one via v5 hash.
     const uuid   = await videoIdToUuid(trackId);
     const expiry = new Date(Date.now() + STREAM_TTL_MS).toISOString();
     const now    = new Date().toISOString();
 
-    const rows: any[] = [
+    // `as const` on stream_type keeps the literal 'audio'|'video' so that
+    // `satisfies StreamInsert[]` can validate the shape. Without it the value
+    // widens to `string` and the satisfies check fails.
+    const rows = [
       {
         track_id:      uuid,
         source:        'youtube',
         stream_url:    audioUrl,
-        stream_type:   'audio',
+        stream_type:   'audio' as const,
         quality:       'high',
         format:        'webm',
         duration:      Math.round(duration),
@@ -342,31 +313,31 @@ async function cacheStreamsToSupabase(
         last_accessed: now,
         access_count:  1,
       },
-    ];
+      ...(videoUrl
+        ? [
+            {
+              track_id:      uuid,
+              source:        'youtube',
+              stream_url:    videoUrl,
+              stream_type:   'video' as const,
+              quality:       '720p',
+              format:        'mp4',
+              duration:      Math.round(duration),
+              expiry,
+              is_active:     true,
+              health_score:  100,
+              last_accessed: now,
+              access_count:  1,
+            },
+          ]
+        : []),
+    ] satisfies StreamInsert[];
 
-    if (videoUrl) {
-      rows.push({
-        track_id:      uuid,
-        source:        'youtube',
-        stream_url:    videoUrl,
-        stream_type:   'video',
-        quality:       '720p',
-        format:        'mp4',
-        duration:      Math.round(duration),
-        expiry,
-        is_active:     true,
-        health_score:  100,
-        last_accessed: now,
-        access_count:  1,
-      });
-    }
-
-    const { error } = await supabase
-      .from('streams')
+    const { error }: { error: unknown } = await streamsTable()
       .upsert(rows, { onConflict: 'track_id,stream_type' });
 
     if (error) {
-      console.warn('[MusicPlayer] stream cache write error:', error.message);
+      console.warn('[MusicPlayer] stream cache write error:', (error as any)?.message);
     } else {
       console.log(`[MusicPlayer] cached streams for track ${trackId}`);
     }
@@ -376,23 +347,22 @@ async function cacheStreamsToSupabase(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// buildTrack — shared shape for all resolveTrack return paths
+// TrackExtras — extra metadata stored on the track object
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Extra fields stored on the RNTP Track object.
- * RNTP ignores unknown fields; PlayerScreen reads them via useActiveTrack().
- */
 export interface TrackExtras {
-  videoUrl?:      string;   // DASH video-only stream URL (no audio — kept for legacy)
-  muxedVideoUrl?: string;   // Muxed MP4 stream URL (audio + video) — used for full video mode
-  videoId?:       string;   // bare 11-char YouTube ID for artist page routing
-  uploaderUrl?:   string;   // YouTube channel URL for artist page routing
-  likeCount?:     number;   // -1 = hidden/unavailable
-  dislikeCount?:  number;   // -1 = hidden/unavailable
-  viewCount?:     number;   // -1 = unavailable
-  commentsCount?: number;   // -1 = disabled/unavailable
+  videoUrl?:      string;
+  muxedVideoUrl?: string;
+  videoId?:       string;
+  uploaderUrl?:   string;
+  likeCount?:     number;
+  dislikeCount?:  number;
+  viewCount?:     number;
+  commentsCount?: number;
 }
+
+// MavinTrack extended with our extras (MavinPlayer ignores unknown fields)
+export type ResolvedTrack = MavinTrack & TrackExtras;
 
 function buildTrack(
   song:          Song,
@@ -402,38 +372,30 @@ function buildTrack(
   duration:      number,
   title?:        string,
   extras?:       Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'>,
-): Track & TrackExtras {
+): ResolvedTrack {
   return {
-    id:       song.id,
-    url:      audioUrl,
-    title:    title || song.title,
-    artist:   song.artist,
-    artwork:  song.thumbnail,
-    duration: duration > 0 ? duration : undefined,
-    videoUrl:       videoUrl      ?? undefined,
-    muxedVideoUrl:  muxedVideoUrl ?? undefined,
-    videoId:        extras?.videoId       ?? song.videoId,
-    uploaderUrl:    extras?.uploaderUrl   ?? undefined,
-    likeCount:      extras?.likeCount     ?? -1,
-    dislikeCount:   extras?.dislikeCount  ?? -1,
-    viewCount:      extras?.viewCount     ?? -1,
-    commentsCount:  extras?.commentsCount ?? -1,
-  } as Track & TrackExtras;
+    id:            song.id,
+    uri:           audioUrl,
+    title:         title || song.title,
+    artist:        song.artist,
+    artwork:       song.thumbnail,
+    duration:      duration > 0 ? duration : undefined,
+    videoUrl:      videoUrl      ?? undefined,
+    muxedVideoUrl: muxedVideoUrl ?? undefined,
+    videoId:       extras?.videoId       ?? song.videoId,
+    uploaderUrl:   extras?.uploaderUrl   ?? undefined,
+    likeCount:     extras?.likeCount     ?? -1,
+    dislikeCount:  extras?.dislikeCount  ?? -1,
+    viewCount:     extras?.viewCount     ?? -1,
+    commentsCount: extras?.commentsCount ?? -1,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// resolveTrack
-//
-// Strategy:
-//   1. No URL → return null immediately (no video_id in DB)
-//   2. Check Supabase streams table — use cached audio+video if fresh
-//   3. Extract via MavinEngine.getStreamInfo() (Android/iOS client, fix [B])
-//   4. On any failure → try getStreamInfoById() then 3 search strategies
-//   5. Fire-and-forget write to streams table on every successful extraction
+// resolveTrack — 3-step strategy
 // ─────────────────────────────────────────────────────────────────────────────
 
-const resolveTrack = async (song: Song): Promise<Track | null> => {
-  // Guard: no YouTube URL means nothing to extract
+const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
   if (!song.url) {
     console.warn(`[MusicPlayer] "${song.title}" has no URL — skipping`);
     return null;
@@ -445,21 +407,15 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       getCachedAudioStream(song.id),
       getCachedVideoStream(song.id),
     ]);
-
     if (cachedAudio) {
       console.log(`[MusicPlayer] cache hit for "${song.title}"`);
       return buildTrack(song, cachedAudio, cachedVideo, null, 0);
     }
   } catch (cacheErr) {
-    // Cache read failure is non-fatal — fall through to live extraction
     console.warn(`[MusicPlayer] cache read error for "${song.title}":`, cacheErr);
   }
 
   // ── Step 2: Primary extraction — getStreamInfo ─────────────────────────────
-  //
-  // [B] serviceId 0 → MavinEngineModule.kt uses getDefaultService() which
-  // routes to the YouTube Android/iOS client (not WEB). This is the v0.26.0
-  // SABR fix that ensures audioStreams/videoStreams are populated.
   try {
     console.log(`[MusicPlayer] extracting streams for "${song.title}"...`);
     const info = await MavinEngine.getStreamInfo(song.url, 0);
@@ -469,17 +425,10 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       throw new Error('extraction returned success=false');
     }
 
-    // audioStreams = audio-only (no video), pick highest bitrate
     const bestAudio = pickBestAudio(info.audioStreams ?? []);
-
-    // videoOnlyStreams = DASH HD (no embedded audio) — for legacy/artwork overlay
-    // videoStreams     = muxed SD (audio + video)    — used for full video mode
     const bestVideo =
       pickBestVideo(info.videoOnlyStreams ?? []) ??
       pickBestVideo(info.videoStreams ?? []);
-
-    // Pick best muxed stream (has both audio + video) for full video playback.
-    // Prefer highest resolution ≤ 720p to balance quality and bandwidth.
     const bestMuxed = pickBestVideo(info.videoStreams ?? []);
 
     if (!bestAudio?.url) {
@@ -488,14 +437,10 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
     }
 
     const audioUrl      = bestAudio.url;
-    const videoUrl      = bestVideo?.url  ?? null;
-    const muxedVideoUrl = bestMuxed?.url  ?? null;
-    const duration      = info.duration   ?? 0;
+    const videoUrl      = bestVideo?.url ?? null;
+    const muxedVideoUrl = bestMuxed?.url ?? null;
+    const duration      = info.duration  ?? 0;
 
-    // ── Stats: check Supabase cache first, then use extraction result ──────────
-    // getStreamInfo already returned likeCount / dislikeCount / viewCount / uploaderUrl
-    // for free — store them now so the player screen gets them instantly on the
-    // next play without any extra network call.
     const extractedStats = {
       likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
       dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
@@ -503,8 +448,6 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       uploaderUrl:  (info.uploaderUrl as string | undefined) ?? null,
     };
 
-    // Check Supabase for a fresh cached commentsCount (avoids getComments call
-    // when the DB already has it from a recent play).
     let commentsCount = -1;
     if (song.videoId) {
       const cached = await safeGetTrackStats(song.videoId);
@@ -514,65 +457,64 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       }
     }
 
-    const extras: Omit<TrackExtras, 'videoUrl'> = {
-      videoId:       song.videoId,
-      uploaderUrl:   extractedStats.uploaderUrl ?? undefined,
-      likeCount:     extractedStats.likeCount,
-      dislikeCount:  extractedStats.dislikeCount,
-      viewCount:     extractedStats.viewCount,
+    const extras: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'> = {
+      videoId:      song.videoId,
+      uploaderUrl:  extractedStats.uploaderUrl ?? undefined,
+      likeCount:    extractedStats.likeCount,
+      dislikeCount: extractedStats.dislikeCount,
+      viewCount:    extractedStats.viewCount,
       commentsCount,
     };
 
-    // Fire-and-forget — never block playback on a cache write
     cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(
       e => console.warn('[MusicPlayer] bg cache error:', e),
     );
 
-    // Save stats to Supabase track_stats table (fire-and-forget)
     if (song.videoId) {
       safeSaveTrackStats({
-        videoId:       song.videoId,
-        likeCount:     extractedStats.likeCount,
-        dislikeCount:  extractedStats.dislikeCount,
-        viewCount:     extractedStats.viewCount,
+        videoId:      song.videoId,
+        likeCount:    extractedStats.likeCount,
+        dislikeCount: extractedStats.dislikeCount,
+        viewCount:    extractedStats.viewCount,
         commentsCount,
-        uploaderUrl:   extractedStats.uploaderUrl,
+        uploaderUrl:  extractedStats.uploaderUrl,
       });
 
-      // Fetch commentsCount in background only if not already cached
       if (commentsCount === -1) {
         const watchUrl = `https://www.youtube.com/watch?v=${song.videoId}`;
-        MavinEngine.getComments(watchUrl, null, 0)
+        MavinEngine.getComments(watchUrl, undefined, 0)
           .then((commentsInfo: any) => {
-            if (commentsInfo?.success && typeof commentsInfo.commentsCount === 'number' && commentsInfo.commentsCount > 0) {
+            if (
+              commentsInfo?.success &&
+              typeof commentsInfo.commentsCount === 'number' &&
+              commentsInfo.commentsCount > 0
+            ) {
               extras.commentsCount = commentsInfo.commentsCount;
-              // Patch just the commentsCount — no need to re-upsert everything
               safePatchCommentsCount(song.videoId!, commentsInfo.commentsCount);
             }
           })
-          .catch(() => { /* non-critical */ });
+          .catch(() => {});
       }
     }
 
-    console.log(`[MusicPlayer] resolved "${song.title}" — audio: ${bestAudio.bitrate}bps, video: ${bestVideo?.height ?? 'none'}p, muxed: ${bestMuxed?.height ?? 'none'}p`);
+    console.log(
+      `[MusicPlayer] resolved "${song.title}" — ` +
+      `audio: ${bestAudio.bitrate}bps, ` +
+      `video: ${bestVideo?.height ?? 'none'}p, ` +
+      `muxed: ${bestMuxed?.height ?? 'none'}p`,
+    );
     return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, extras);
 
   } catch (primaryErr) {
-    // [A] In v10.0.0, consent/Content-Type/visitorData errors no longer reach
-    // here — they are resolved inside MavinDownloader. Any error that does
-    // reach here is a genuine extraction failure (geo-block, age restriction,
-    // video unavailable, etc.) and warrants trying alternative strategies.
     console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, primaryErr);
   }
 
   // ── Step 3: Fallback A — getStreamInfoById ─────────────────────────────────
-  //
-  // Uses service.streamLHFactory.fromId(videoId) — a different code path
-  // from fromUrl(). Sometimes succeeds when getStreamInfo(url) fails because
-  // the ID-based handler skips URL normalisation edge cases.
   if (song.videoId) {
     try {
-      console.log(`[MusicPlayer] trying getStreamInfoById("${song.videoId}") for "${song.title}"...`);
+      console.log(
+        `[MusicPlayer] trying getStreamInfoById("${song.videoId}") for "${song.title}"...`,
+      );
       const info = await MavinEngine.getStreamInfoById(song.videoId, 0);
 
       if (info.success) {
@@ -586,27 +528,31 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
           const videoUrl      = bestVideo?.url ?? null;
           const muxedVideoUrl = pickBestVideo(info.videoStreams ?? [])?.url ?? null;
           const duration      = info.duration ?? 0;
+
           cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
+
           const fbExtras: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'> = {
-            videoId:      song.videoId,
-            uploaderUrl:  (info.uploaderUrl as string | undefined) ?? undefined,
-            likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
-            dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
-            viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+            videoId:       song.videoId,
+            uploaderUrl:   (info.uploaderUrl as string | undefined) ?? undefined,
+            likeCount:     typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+            dislikeCount:  typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+            viewCount:     typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
             commentsCount: -1,
           };
-          if (song.videoId) {
-            safeSaveTrackStats({
-              videoId:      song.videoId,
-              likeCount:    fbExtras.likeCount!,
-              dislikeCount: fbExtras.dislikeCount!,
-              viewCount:    fbExtras.viewCount!,
-              commentsCount: -1,
-              uploaderUrl:  fbExtras.uploaderUrl ?? null,
-            });
-          }
+
+          safeSaveTrackStats({
+            videoId:       song.videoId,
+            likeCount:     fbExtras.likeCount!,
+            dislikeCount:  fbExtras.dislikeCount!,
+            viewCount:     fbExtras.viewCount!,
+            commentsCount: -1,
+            uploaderUrl:   fbExtras.uploaderUrl ?? null,
+          });
+
           console.log(`[MusicPlayer] getStreamInfoById succeeded for "${song.title}"`);
-          return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, fbExtras);
+          return buildTrack(
+            song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, fbExtras,
+          );
         }
       }
     } catch (byIdErr) {
@@ -615,14 +561,6 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
   }
 
   // ── Step 4: Fallback B — search strategies ─────────────────────────────────
-  //
-  // [E] Filter tokens:
-  //   'videos' = standard YouTube video results (NewPipe standard filter)
-  //   ''       = all content types — no filter applied
-  //   'all'    is NOT a valid NewPipe token — never used here.
-  //
-  // Tries in order of specificity. Stops at first result that yields a
-  // usable audio stream.
   const searchStrategies = [
     { query: `${song.title} ${song.artist} official audio`, filter: 'videos' },
     { query: `${song.title} ${song.artist}`,                filter: ''       },
@@ -631,7 +569,10 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
 
   for (const strategy of searchStrategies) {
     try {
-      console.log(`[MusicPlayer] search fallback: "${strategy.query}" (filter: '${strategy.filter}')...`);
+      console.log(
+        `[MusicPlayer] search fallback: "${strategy.query}" ` +
+        `(filter: '${strategy.filter}')...`,
+      );
 
       const searchResult = await MavinEngine.search(
         strategy.query,
@@ -640,7 +581,6 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
         0,
       );
 
-      // response key is "results" (not "items") — per MavinEngine.ts SearchPage
       const firstStream = searchResult?.results?.find(
         (i): i is StreamInfoItem =>
           i.type === 'stream' && !i.isLive && !i.isShortFormContent,
@@ -664,39 +604,42 @@ const resolveTrack = async (song: Song): Promise<Track | null> => {
       const audioUrl      = bestAudio.url;
       const videoUrl      = bestVideo?.url ?? null;
       const muxedVideoUrl = bestMuxed?.url ?? null;
-      const duration      = info.duration ?? 0;
+      const duration      = info.duration  ?? 0;
 
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
-      console.log(`[MusicPlayer] search fallback succeeded for "${song.title}" via "${strategy.query}"`);
+      console.log(
+        `[MusicPlayer] search fallback succeeded for "${song.title}" ` +
+        `via "${strategy.query}"`,
+      );
       return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, {
-        videoId:      song.videoId,
-        uploaderUrl:  info.uploaderUrl ?? undefined,
-        likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
-        dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
-        viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+        videoId:       song.videoId,
+        uploaderUrl:   info.uploaderUrl ?? undefined,
+        likeCount:     typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+        dislikeCount:  typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+        viewCount:     typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
         commentsCount: -1,
       });
 
     } catch (searchErr) {
-      console.warn(`[MusicPlayer] search strategy "${strategy.query}" failed:`, searchErr);
+      console.warn(
+        `[MusicPlayer] search strategy "${strategy.query}" failed:`, searchErr,
+      );
     }
   }
 
-  console.warn(`[MusicPlayer] all strategies exhausted for "${song.title}" — cannot resolve`);
+  console.warn(
+    `[MusicPlayer] all strategies exhausted for "${song.title}" — cannot resolve`,
+  );
   return null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fetchRelatedSongs
-//
-// Used by the "Up Next" feature — populates the queue after a song starts
-// playing using the relatedItems from that song's StreamInfo.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
   if (!songUrl) return [];
   try {
-    // [B] serviceId 0 → Android/iOS client (SABR fix)
     const info = await MavinEngine.getStreamInfo(songUrl, 0);
     if (!info.success) return [];
 
@@ -704,7 +647,6 @@ const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
       .filter((i): i is StreamInfoItem => i.type === 'stream')
       .filter(s => !s.isLive && !s.isShortFormContent)
       .map(s => {
-        // [D] videoId: handle both youtube.com?v= and youtu.be/ URL formats
         const videoId =
           s.url.includes('v=')
             ? s.url.split('v=')[1]?.split('&')[0]
@@ -712,7 +654,6 @@ const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
             ? s.url.split('youtu.be/')[1]?.split('?')[0]
             : s.url;
         return {
-          // [D] StreamInfoItem uses `name` (NewPipe InfoItem base), not `title`
           id:        videoId ?? s.url,
           title:     s.name,
           artist:    s.uploaderName,
@@ -755,9 +696,38 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
   const log = useCallback((msg: string) => console.log(`[MusicPlayer] ${msg}`), []);
 
+  // ── Sync isPlaying from MavinPlayer native events ──────────────────────────
+  useEffect(() => {
+    if (!isPlayerAvailable()) return;
+
+    const stateSub = MavinPlayer!.addListener(
+      'onPlaybackStateChanged',
+      (e: PlaybackStateEvent) => {
+        if (e.state === 'ready') {
+          setIsPlaying(true);
+        } else if (e.state === 'idle' || e.state === 'ended') {
+          setIsPlaying(false);
+        }
+        // 'buffering' intentionally omitted — optimistic value already correct
+      },
+    );
+
+    const errorSub = MavinPlayer!.addListener('onError', () => {
+      setIsPlaying(false);
+    });
+
+    return () => {
+      stateSub.remove();
+      errorSub.remove();
+    };
+  }, []);
+
+  // ── resetPlayerState ───────────────────────────────────────────────────────
   const resetPlayerState = useCallback(async () => {
-    log('Reset: TrackPlayer.reset()');
-    await TrackPlayer.reset();
+    log('Reset: MavinPlayer.stop()');
+    if (isPlayerAvailable()) {
+      await MavinPlayer!.stop();
+    }
     currentSongIdRef.current = null;
   }, [log]);
 
@@ -765,32 +735,23 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
   const addPlaylistTracksInBackground = useCallback(
     async (
-      initialSong: Song,
+      initialSong:  Song,
       fullPlaylist: Song[],
-      abortSignal: AbortSignal,
+      abortSignal:  AbortSignal,
     ) => {
       const initialId   = initialSong.id;
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
-      const addTrack = async (
-        song: Song,
-        position: 'before' | 'after',
-      ): Promise<boolean> => {
+      const addTrack = async (song: Song): Promise<boolean> => {
         if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
+        if (!isPlayerAvailable()) return false;
         try {
           const track = await resolveTrack(song);
           if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-          if (!track) return true; // skip unresolvable, continue queue
-          const queue = await TrackPlayer.getQueue();
-          if (queue.some(t => t.id === track.id)) return true;
-          if (position === 'after') {
-            await TrackPlayer.add(track);
-          } else {
-            const playingIdx = queue.findIndex(t => t.id === initialId);
-            await TrackPlayer.add(track, playingIdx !== -1 ? playingIdx : undefined);
-          }
-          log(`BG Queue: ${position} "${track.title}"`);
+          if (!track) return true;
+          await MavinPlayer!.addToQueue(track);
+          log(`BG Queue: added "${track.title}"`);
         } catch (e) {
           log(`BG Queue error on "${song.title}": ${e}`);
         }
@@ -798,17 +759,10 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       };
 
       const songsAfter  = fullPlaylist.slice(targetIndex + 1);
-      const songsBefore = fullPlaylist.slice(0, targetIndex);
+      const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
 
-      const addAfter  = async () => {
-        for (const s of songsAfter)  { if (!(await addTrack(s, 'after')))  return; await delay(150); }
-      };
-      const addBefore = async () => {
-        for (const s of songsBefore) { if (!(await addTrack(s, 'before'))) return; await delay(150); }
-      };
-
-      if (abortSignal.aborted || currentSongIdRef.current !== initialId) return;
-      await Promise.all([addAfter(), addBefore()]);
+      for (const s of songsAfter)  { if (!(await addTrack(s))) return; await delay(150); }
+      for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
     },
     [log],
   );
@@ -817,36 +771,27 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
   const addDownloadedPlaylistTracksInBackground = useCallback(
     async (
-      initialSong: DownloadedSongMetadata,
+      initialSong:  DownloadedSongMetadata,
       fullPlaylist: DownloadedSongMetadata[],
-      abortSignal: AbortSignal,
+      abortSignal:  AbortSignal,
     ) => {
       const initialId   = initialSong.id;
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
-      const addTrack = async (
-        song: DownloadedSongMetadata,
-        position: 'before' | 'after',
-      ): Promise<boolean> => {
+      const addTrack = async (song: DownloadedSongMetadata): Promise<boolean> => {
         if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
+        if (!isPlayerAvailable()) return false;
         try {
-          const track: Track = {
+          const track: MavinTrack = {
             id:       song.id,
-            url:      song.localTrackUri,
+            uri:      song.localTrackUri,
             title:    song.title,
             artist:   song.artist,
             artwork:  song.localArtworkUri,
             duration: song.duration,
           };
-          const queue = await TrackPlayer.getQueue();
-          if (queue.some(t => t.id === track.id)) return true;
-          if (position === 'after') {
-            await TrackPlayer.add(track);
-          } else {
-            const playingIdx = queue.findIndex(t => t.id === initialId);
-            await TrackPlayer.add(track, playingIdx !== -1 ? playingIdx : undefined);
-          }
+          await MavinPlayer!.addToQueue(track);
         } catch (e) {
           log(`BG Downloaded Queue error on "${song.title}": ${e}`);
         }
@@ -854,16 +799,10 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       };
 
       const songsAfter  = fullPlaylist.slice(targetIndex + 1);
-      const songsBefore = fullPlaylist.slice(0, targetIndex);
+      const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
 
-      const addAfter  = async () => {
-        for (const s of songsAfter)  { if (!(await addTrack(s, 'after')))  return; await delay(150); }
-      };
-      const addBefore = async () => {
-        for (const s of songsBefore) { if (!(await addTrack(s, 'before'))) return; await delay(150); }
-      };
-
-      await Promise.all([addAfter(), addBefore()]);
+      for (const s of songsAfter)  { if (!(await addTrack(s))) return; await delay(150); }
+      for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
     },
     [log],
   );
@@ -876,13 +815,12 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       const songId  = song.id;
       const related = await fetchRelatedSongs(song.url);
       if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
+      if (!isPlayerAvailable()) return;
       for (const relSong of related.slice(0, 5)) {
         if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
         const track = await resolveTrack(relSong);
         if (!track) continue;
-        const queue = await TrackPlayer.getQueue();
-        if (queue.some(t => t.id === track.id)) continue;
-        await TrackPlayer.add(track);
+        await MavinPlayer!.addToQueue(track);
         await delay(200);
       }
     },
@@ -902,6 +840,11 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
         'Not Available',
         `"${songToPlay.title}" is not available for streaming yet.`,
       );
+      return;
+    }
+
+    if (!isPlayerAvailable()) {
+      Alert.alert('Player Error', 'Audio player is not available on this device.');
       return;
     }
 
@@ -928,8 +871,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
         return;
       }
 
-      await TrackPlayer.add(track);
-      await TrackPlayer.play();
+      await MavinPlayer!.load(track);
       setIsPlaying(true);
       currentSongIdRef.current = track.id;
       log(`Now playing: "${track.title}"`);
@@ -938,7 +880,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
         addPlaylistTracksInBackground(songToPlay, playlist, abortSignal)
           .catch(e => log(`BG playlist error: ${e}`));
       } else if (playlist === undefined) {
-        // No playlist provided → auto-populate Up Next from relatedItems
         addUpNextSongs(songToPlay, abortSignal)
           .catch(e => log(`Up Next error: ${e}`));
       }
@@ -954,8 +895,13 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
   const playDownloadedSong = async (
     songToPlay: DownloadedSongMetadata,
-    playlist?: DownloadedSongMetadata[],
+    playlist?:  DownloadedSongMetadata[],
   ) => {
+    if (!isPlayerAvailable()) {
+      Alert.alert('Player Error', 'Audio player is not available on this device.');
+      return;
+    }
+
     try {
       setIsLoading(true);
       bgAbortControllerRef.current?.abort();
@@ -963,9 +909,9 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       const abortSignal = bgAbortControllerRef.current.signal;
       await resetPlayerState();
 
-      const track: Track = {
+      const track: MavinTrack = {
         id:       songToPlay.id,
-        url:      songToPlay.localTrackUri,
+        uri:      songToPlay.localTrackUri,
         title:    songToPlay.title,
         artist:   songToPlay.artist,
         artwork:  songToPlay.localArtworkUri,
@@ -974,8 +920,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
       if (abortSignal.aborted) { setIsLoading(false); return; }
 
-      await TrackPlayer.add(track);
-      await TrackPlayer.play();
+      await MavinPlayer!.load(track);
       setIsPlaying(true);
       currentSongIdRef.current = track.id;
 
@@ -1014,70 +959,33 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
 
   const playNext = async (songsToAdd: Song[] | null) => {
     if (!songsToAdd?.length) return;
+    if (!isPlayerAvailable()) return;
     try {
-      const activeTrackData = await TrackPlayer.getActiveTrack();
-      const activeTrackId   = activeTrackData?.id;
-      let activeIndex       = await TrackPlayer.getActiveTrackIndex();
-      let insertAt: number | undefined =
-        typeof activeIndex === 'number' ? activeIndex + 1 : undefined;
-
       for (const song of songsToAdd) {
-        if (song.id === activeTrackId) continue;
-        const queue       = await TrackPlayer.getQueue();
-        const existingIdx = queue.findIndex(t => t.id === song.id);
-        if (existingIdx !== -1) {
-          await TrackPlayer.remove(existingIdx);
-          if (insertAt !== undefined && existingIdx < insertAt) insertAt--;
-        }
+        if (song.id === currentSongIdRef.current) continue;
         const track = await resolveTrack(song);
         if (!track) continue;
-        await TrackPlayer.add(track, insertAt);
-        if (insertAt !== undefined) insertAt++;
+        await MavinPlayer!.addToQueue(track);
       }
     } catch (error) {
       Alert.alert('Playback Error', 'Failed to queue next song(s).');
     }
   };
 
-  // ── Native event → isPlaying sync ──────────────────────────────────────────
-  // This is the ground-truth sync. Any external pause (OS audio focus loss,
-  // headphones unplugged, phone call) will land here and correct isPlaying
-  // state so the optimistic flip in togglePlayPause always starts from an
-  // accurate baseline. Without this, optimistic flips can go the wrong way
-  // after any external interruption.
-  useTrackPlayerEvents([Event.PlaybackState], (event) => {
-    if (event.type !== Event.PlaybackState) return;
-    // Only State.Playing = playing. Buffering keeps the existing optimistic
-    // value — the user already saw the flip, no need to revert it mid-buffer.
-    if (event.state === State.Playing) setIsPlaying(true);
-    else if (
-      event.state === State.Paused ||
-      event.state === State.Stopped ||
-      event.state === State.Ended ||
-      event.state === State.Error
-    ) setIsPlaying(false);
-    // State.Buffering intentionally omitted — optimistic value already correct.
-  });
-
   // ── togglePlayPause ────────────────────────────────────────────────────────
-  // Optimistic-first: flip isPlaying in React state BEFORE the async native
-  // call so the icon updates in <16 ms (next render) instead of after the
-  // JS→Native bridge round-trip (~80-230 ms). The useTrackPlayerEvents listener
-  // above corrects the value if the native call fails or an external event
-  // changes state. getPlaybackState() is intentionally removed — it was a
-  // redundant bridge round-trip since isPlaying is already kept in sync.
 
   const togglePlayPause = useCallback(async () => {
+    if (!isPlayerAvailable()) return;
     try {
       if (isPlaying) {
-        setIsPlaying(false);         // optimistic flip — icon updates <16 ms
-        await TrackPlayer.pause();
+        setIsPlaying(false);
+        await MavinPlayer!.pause();
       } else {
-        setIsPlaying(true);          // optimistic flip
-        await TrackPlayer.play();    // no-op if queue empty; native handles it
+        setIsPlaying(true);
+        await MavinPlayer!.play();
       }
     } catch (error) {
-      setIsPlaying(isPlaying);       // roll back on native failure
+      setIsPlaying(isPlaying);
       Alert.alert('Playback Error', 'Failed to toggle playback.');
     }
   }, [isPlaying]);

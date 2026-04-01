@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "mavin-eq",
   "version": "1.0.0",
   "description": "31-band DynamicsProcessing EQ engine for Mavins Player",
@@ -11,7 +11,6 @@
     "presets.ts",
     "supabase-helpers.ts",
     "useEqualizer.ts",
-    "android",
     "expo-module.config.json"
   ],
   "keywords": ["expo", "audio", "eq", "equalizer", "autoeq"],
@@ -19,5 +18,8 @@
     "expo": "*",
     "expo-modules-core": "*",
     "react-native": "*"
+  },
+  "dependencies": {
+    "mavin-player": "file:../mavin-player"
   }
 }

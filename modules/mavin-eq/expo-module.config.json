@@ -1,6 +1,9 @@
 {
   "platforms": ["android"],
   "android": {
-    "modules": ["expo.modules.autoeqengine.AutoEQModule"]
+    "modules": [
+      "expo.modules.mavinplayer.MavinPlayerModule",
+      "expo.modules.autoeqengine.AutoEQModule"
+    ]
   }
 }

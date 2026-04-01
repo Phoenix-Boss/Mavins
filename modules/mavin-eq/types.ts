@@ -1,5 +1,10 @@
 // mavin-eq/types.ts
 
+// ═════════════════════════════════════════════════════════════════════════════
+// CORRECTED IMPORT - Use NativeModule from expo-modules-core
+// ═════════════════════════════════════════════════════════════════════════════
+import type { NativeModule, EventSubscription } from 'expo-modules-core';
+
 // ── Track ─────────────────────────────────────────────────────────────────────
 
 export interface MavinTrack {
@@ -27,8 +32,8 @@ export interface TrackChangedEvent {
 }
 
 export interface PlayerError {
-  message: string;
   code: string;
+  message: string;
 }
 
 export interface ProgressEvent {
@@ -212,9 +217,34 @@ export interface OptimalAudioFormat {
   channelCount: number;
 }
 
-// ── Native Module Interface (MavinPlayerModule) ───────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// EVENTS TYPE DEFINITION - Required for addListener to work
+// ═════════════════════════════════════════════════════════════════════════════
 
-export interface MavinPlayerNativeModule {
+export type MavinPlayerModuleEvents = {
+  onPlaybackStateChanged: (event: PlaybackStateEvent) => void;
+  onTrackChanged: (event: TrackChangedEvent) => void;
+  onError: (event: PlayerError) => void;
+  onProgress: (event: ProgressEvent) => void;
+  onSpectrum: (event: { magnitudes: number[] }) => void;
+  onPeakMeter: (event: { left: number; right: number }) => void;
+  onReplayGainApplied: (event: { trackGain?: number; albumGain?: number; appliedDb: number }) => void;
+  onUsbDacConnected: (event: DacInfo) => void;
+  onUsbDacDisconnected: (event: Record<string, never>) => void;
+  onAudioFocusLost: (event: { type: string }) => void;
+  onAudioFocusGranted: (event: Record<string, never>) => void;
+  onRemotePlay: (event: Record<string, never>) => void;
+  onRemotePause: (event: Record<string, never>) => void;
+  onRemoteNext: (event: Record<string, never>) => void;
+  onRemotePrevious: (event: Record<string, never>) => void;
+  onRemoteSeek: (event: Record<string, never>) => void;
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// NATIVE MODULE CLASS DECLARATION - MUST use declare class extending NativeModule
+// ═════════════════════════════════════════════════════════════════════════════
+
+export declare class MavinPlayerNativeModule extends NativeModule<MavinPlayerModuleEvents> {
   // Player Lifecycle
   initPlayer(): Promise<void>;
   load(track: MavinTrack): Promise<void>;

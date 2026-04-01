@@ -25,6 +25,14 @@ export type {
   PodcastEpisode,
   RadioStation,
   Json,
+  Stream,        // ← ADDED: Export Stream type
+  StreamInsert,  // ← ADDED: Export StreamInsert type (fixes your error)
+  StreamUpdate,  // ← ADDED: Export StreamUpdate type (for consistency)
+  StreamRow,     // ← ADDED: Export StreamRow type (for consistency)
+  // Helper types (optional but useful)
+  Tables,
+  Insertable,
+  Updatable,
 } from './types';
 
 // ── Services (low-level, use in hooks or server code) ────────────────────────

@@ -15,6 +15,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
  */
 class AutoEQModule : Module() {
     override fun definition() = ModuleDefinition {
-        Name("AutoEQModule")
+        Name("AutoEQ")
     }
 }
+

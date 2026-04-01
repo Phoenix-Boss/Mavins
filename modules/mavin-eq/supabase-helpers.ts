@@ -5,7 +5,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { EqPreset, EqBiquadFilter, EqBandGains, SupabasePresetRow } from "./types";
+import type { EqPreset, EqBandGains, SupabasePresetRow } from "./types";
 
 interface ProfileRow {
   id: string;

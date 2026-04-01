@@ -1,18 +1,12 @@
 // app/_layout.tsx
 //
-// MIGRATION FROM RNTP + mavin-eq:
+// Player bootstrap:
+//   MavinPlayer.initPlayer() → ExoPlayer with full DSP chain (EQ, compressor,
+//   crossfeed, FX) built in as AudioProcessors.
 //
-//   BEFORE:
-//     setupTrackPlayerGlobal() → RNTP setupPlayer + updateOptions + initMixerEQ
-//     mavin-eq module for EQ (session hacks, reflection, DynamicsProcessing)
-//
-//   AFTER:
-//     MavinPlayer.initPlayer() → custom ExoPlayer with DSP chain built in
-//     MavinPlayer.setEQBand() / applyEQBands() — direct PCM processing, no hacks
-//     No mavin-eq module needed at all
-//
-// The EQ now lives INSIDE the ExoPlayer audio pipeline as an AudioProcessor.
-// No session IDs, no reflection, no DynamicsProcessing, no race conditions.
+// Remote controls (lock screen, notification) are handled automatically by
+// MavinPlaybackService via Media3's MediaSessionService — no listener setup
+// needed here beyond error monitoring.
 
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
@@ -41,8 +35,16 @@ import { queryClient } from "@/libs/supabase";
 import { initCache } from "@/libs/cache";
 import HoneygainConsentGate from "@/components/HoneygainConsentGate";
 
-// ── MavinPlayer (replaces RNTP + mavin-eq) ───────────────────────────────────
-import MavinPlayer from "@/modules/mavin-player";
+// ── MavinPlayer ───────────────────────────────────────────────────────────────
+// ✅ FIX: Import the player instance directly from mavin-eq (which exports the native module)
+// This ensures we get the actual native module, not a getter function.
+import MavinPlayer from "@/modules/mavin-eq";
+import type { MavinPlayerNativeModule } from "@/modules/mavin-eq/types";
+
+// ── Shared player bootstrap ───────────────────────────────────────────────────
+// Import (and re-export) from libs/playerSetup so any component that needs to
+// await player readiness imports from ONE place — never from a route file.
+export { setupPlayerGlobal } from "@/libs/playerSetup";
 
 // ── Module-level bootstrap ────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
@@ -52,62 +54,26 @@ initCache({ startBackgroundJobs: true });
 const PREMIUM_BANNER_DELAY_MS = 2200;
 const SPLASH_FORCE_HIDE_MS    = 4000;
 
-// ── Global player setup ───────────────────────────────────────────────────────
-let playerSetupPromise: Promise<boolean> | null = null;
-let isPlayerReady = false;
+// Helper to check if player is available (Android-only)
+const isPlayerAvailable = (): boolean => {
+  return Platform.OS === "android" && MavinPlayer !== null;
+};
 
-/**
- * setupPlayerGlobal
- *
- * Replaces the old setupTrackPlayerGlobal() which was:
- *   1. TrackPlayer.setupPlayer()
- *   2. initMixerEQ() — create AudioTrack mixer, attach DynamicsProcessing
- *   3. TrackPlayer.updateOptions({ androidAudioSessionId })
- *   4. Register remote control listeners
- *
- * Now it's simply:
- *   1. MavinPlayer.initPlayer() — creates ExoPlayer with DSP chain built in
- *      No separate EQ init, no session tricks, no AudioManager hacks.
- *
- * Remote controls (lock screen, notification) are handled automatically by
- * MavinPlaybackService via Media3's MediaSessionService.
- */
-export async function setupPlayerGlobal(): Promise<boolean> {
-  if (isPlayerReady) return true;
-  if (playerSetupPromise) return playerSetupPromise;
+// Helper to safely get the player module (throws if not available)
+const getPlayerModule = (): MavinPlayerNativeModule => {
+  if (!isPlayerAvailable()) {
+    throw new Error("[MavinPlayer] Player module not available on this platform or not initialized");
+  }
+  return MavinPlayer as MavinPlayerNativeModule;
+};
 
-  playerSetupPromise = (async () => {
-    try {
-      if (Platform.OS !== 'android') {
-        // iOS: MavinPlayer is Android-only. Wire up an iOS player here if needed.
-        console.log('[MavinPlayer] iOS — skipping player init');
-        isPlayerReady = true;
-        return true;
-      }
+// ─────────────────────────────────────────────────────────────────────────────
+// NotificationPlayerExpander
+//
+// Listens for MavinPlayer's 'onTrackChanged' event (fires when a track starts
+// via a notification action) and expands the player overlay.
+// ─────────────────────────────────────────────────────────────────────────────
 
-      await MavinPlayer.initPlayer();
-      console.log('✅ MavinPlayer: initPlayer complete — ExoPlayer + DSP chain ready');
-
-      // Subscribe to player errors globally so they don't go unnoticed
-      MavinPlayer.addEventListener('onError', (e) => {
-        console.error('[MavinPlayer] Error:', e.code, e.message);
-      });
-
-      isPlayerReady = true;
-      return true;
-    } catch (error) {
-      console.error('❌ MavinPlayer setup failed:', error);
-      playerSetupPromise = null;
-      return false;
-    }
-  })();
-
-  return playerSetupPromise;
-}
-
-// ── NotificationPlayerExpander ────────────────────────────────────────────────
-// MavinPlayer fires 'onTrackChanged' when a new track starts. We use that
-// to expand the player overlay when the app is opened from a notification.
 function NotificationPlayerExpander({
   pendingRef,
 }: {
@@ -117,21 +83,37 @@ function NotificationPlayerExpander({
   const router           = useRouter();
 
   useEffect(() => {
-    const sub = MavinPlayer.addEventListener('onTrackChanged', () => {
+    // ✅ FIX: guard against null — module is Android-only
+    if (!isPlayerAvailable()) return;
+
+    const player = getPlayerModule();
+    const subscription = player.addListener("onTrackChanged", () => {
       if (!pendingRef.current) return;
+
+      console.log("[NotificationPlayerExpander] Track changed, expanding player");
+
       const t = setTimeout(() => {
         pendingRef.current = false;
-        try { expandPlayer(); } catch { router.push('/(player)'); }
+        try {
+          expandPlayer();
+        } catch {
+          router.push("/(player)");
+        }
       }, 500);
+
       return () => clearTimeout(t);
     });
-    return () => sub.remove();
+
+    return () => subscription.remove();
   }, [expandPlayer, pendingRef, router]);
 
   return null;
 }
 
-// ── LoadingScreen ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadingScreen
+// ─────────────────────────────────────────────────────────────────────────────
+
 function LoadingScreen() {
   return (
     <View style={styles.loadingScreen}>
@@ -140,7 +122,10 @@ function LoadingScreen() {
   );
 }
 
-// ── AppShell ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// AppShell
+// ─────────────────────────────────────────────────────────────────────────────
+
 function AppShell({
   fontsLoaded,
   navReady,
@@ -218,7 +203,10 @@ function AppShell({
   );
 }
 
-// ── RootLayout ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// RootLayout
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
@@ -237,10 +225,16 @@ export default function RootLayout() {
   useEffect(() => {
     async function prepare() {
       try {
+        // ✅ FIX: Import setupPlayerGlobal from libs (which now uses MavinPlayer directly)
+        const { setupPlayerGlobal } = await import("@/libs/playerSetup");
         const ok = await setupPlayerGlobal();
         setPlayerReady(ok);
-        try { await initializeLibrary(); }
-        catch (e) { console.warn("[Library] initialization failed:", e); }
+        
+        try { 
+          await initializeLibrary(); 
+        } catch (e) { 
+          console.warn("[Library] initialization failed:", e); 
+        }
       } catch (e) {
         console.warn("[Player] setup error:", e);
         setPlayerReady(false);
@@ -248,13 +242,24 @@ export default function RootLayout() {
     }
     prepare();
 
-    // Release player on unmount (app close)
-    return () => { MavinPlayer.release().catch(() => {}); };
+    // ✅ FIX: Clean up on unmount with null check
+    return () => {
+      if (isPlayerAvailable()) {
+        try {
+          getPlayerModule().release();
+        } catch (e) {
+          console.warn("[MavinPlayer] release error on unmount:", e);
+        }
+      }
+    };
   }, []);
 
   // ── Splash ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (appReady) { SplashScreen.hideAsync(); return; }
+    if (appReady) { 
+      SplashScreen.hideAsync(); 
+      return; 
+    }
     const t = setTimeout(() => SplashScreen.hideAsync(), SPLASH_FORCE_HIDE_MS);
     return () => clearTimeout(t);
   }, [appReady]);

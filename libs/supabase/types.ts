@@ -132,6 +132,28 @@ export interface RadioStation {
 }
 
 // ─────────────────────────────────────────────
+// Stream cache table (for MavinPlayer audio/video streams)
+// ─────────────────────────────────────────────
+
+export interface Stream {
+  id: string;
+  track_id: string;
+  source: string;
+  stream_url: string;
+  stream_type: 'audio' | 'video';
+  quality: string;
+  format: string;
+  duration: number;
+  expiry: string;
+  is_active: boolean;
+  health_score: number;
+  last_accessed: string;
+  access_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─────────────────────────────────────────────
 // Database interface (for createClient generic)
 // ─────────────────────────────────────────────
 
@@ -147,6 +169,20 @@ export interface Database {
       playlists:        { Row: Playlist;      Insert: Omit<Playlist, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Playlist> };
       podcast_episodes: { Row: PodcastEpisode; Insert: Omit<PodcastEpisode, 'id' | 'created_at'>;     Update: Partial<PodcastEpisode> };
       radio_stations:   { Row: RadioStation;  Insert: Omit<RadioStation, 'id' | 'created_at'>;         Update: Partial<RadioStation> };
+      streams:          { Row: Stream;        Insert: Omit<Stream, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Stream> };
     };
   };
 }
+
+// ─────────────────────────────────────────────
+// Helper types for table operations
+// ─────────────────────────────────────────────
+
+export type Tables<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
+export type Insertable<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Insert'];
+export type Updatable<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Update'];
+
+// Specific table type aliases
+export type StreamRow = Tables<'streams'>;
+export type StreamInsert = Insertable<'streams'>;
+export type StreamUpdate = Updatable<'streams'>;

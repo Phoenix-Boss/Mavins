@@ -2,26 +2,27 @@
  * PlayerScreen — Route entry point for the (player) modal.
  *
  * BEHAVIOUR:
- * - Waits for global TrackPlayer setup then renders PlayerContent.
- * - Lock screen remote events are handled globally in _layout.tsx —
- *   NOT here. They must survive screen unmounts.
+ * - Waits for MavinPlayer global setup then renders PlayerContent.
+ * - Lock screen / notification controls are handled automatically by
+ *   MavinPlaybackService (Media3 MediaSessionService) — no listener setup
+ *   needed here.
  * - PlayerContent uses usePlayerStore.currentTrack as display fallback.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import PlayerContent from "./playerContent";
-import { setupTrackPlayerGlobal } from "@/app/_layout";
+import { setupPlayerGlobal } from "@/libs/playerSetup";
 
 export default function PlayerScreen() {
-  const router      = useRouter();
+  const router       = useRouter();
   const [isReady, setIsReady] = useState(false);
   const isMountedRef = useRef(true);
 
-  // Wait for global TrackPlayer setup to complete (fast if already done)
+  // Wait for global MavinPlayer setup to complete (instant if already done)
   useEffect(() => {
     let cancelled = false;
 
-    setupTrackPlayerGlobal().then((ready) => {
+    setupPlayerGlobal().then((ready) => {
       if (!cancelled && isMountedRef.current) {
         setIsReady(ready);
       }
@@ -33,14 +34,6 @@ export default function PlayerScreen() {
     };
   }, []);
 
-  // ✅ REMOVED: lock screen event listeners — they now live in _layout.tsx
-  //    setupTrackPlayerGlobal() and are registered once for the app lifetime.
-  //    Having them here caused them to be torn down whenever the user
-  //    navigated away from the player screen.
-
-  // ✅ REMOVED: AppState listener — wasn't doing anything actionable and
-  //    added noise. RNTP handles background state natively.
-
   const handleDismiss = useCallback(() => {
     if (router.canGoBack()) {
       router.back();
@@ -49,7 +42,7 @@ export default function PlayerScreen() {
     }
   }, [router]);
 
-  // PlayerContent renders null until playerReady=true, so no loading flash
+  // PlayerContent renders null until playerReady=true — no loading flash
   return (
     <PlayerContent
       onMinimize={handleDismiss}

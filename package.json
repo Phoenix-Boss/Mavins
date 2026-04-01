@@ -75,6 +75,7 @@
         "lrclib-api": "^2.0.4",
         "mavin-engine": "file:./modules/mavin-engine",
         "mavin-eq": "file:./modules/mavin-eq",
+        "mavin-player": "file:./modules/mavin-player",
         "react": "19.1.0",
         "react-dom": "19.1.0",
         "react-native": "0.81.5",
@@ -136,7 +137,7 @@
             "**/tests/**/*.test.tsx"
         ],
         "transformIgnorePatterns": [
-            "node_modules/(?!(jest-)?react-native|@react-native|@react-native-community|@react-navigation|@preeternal|expo(nent)?|@expo(nent)?/.*|@expo-vector-icons|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shopify/flash-list|react-native-iphone-x-helper|react-native-awesome-slider|react-native-track-player|react-native-reanimated|react-native-gesture-handler|react-native-safe-area-context|react-native-screens|react-native-paper|react-native-vector-icons|react-native-size-matters|react-native-image-colors|react-native-blurhash|@miblanchard/react-native-slider|react-native-keyboard-aware-scroll-view|react-native-webview|react-native-blob-util|react-native-pdf|react-native-fs|@preeternal/react-native-cookie-manager|react-native-cookies|react-native-device-info|react-native-mmkv|react-native-worklets|react-native-url-polyfill|react-native-track-player|react-native-awesome-slider|react-native-image-colors|react-native-loader-kit|@react-native-community/netinfo|@react-native-community/slider|@shopify/flash-list|@tanstack/react-query|@reduxjs/toolkit|@supabase/supabase-js|firebase|youtubei.js|lrclib-api|mavin-engine|mavin-eq|honeygain-sdk)"
+            "node_modules/(?!(jest-)?react-native|@react-native|@react-native-community|@react-navigation|@preeternal|expo(nent)?|@expo(nent)?/.*|@expo-vector-icons|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shopify/flash-list|react-native-iphone-x-helper|react-native-awesome-slider|react-native-track-player|react-native-reanimated|react-native-gesture-handler|react-native-safe-area-context|react-native-screens|react-native-paper|react-native-vector-icons|react-native-size-matters|react-native-image-colors|react-native-blurhash|@miblanchard/react-native-slider|react-native-keyboard-aware-scroll-view|react-native-webview|react-native-blob-util|react-native-pdf|react-native-fs|@preeternal/react-native-cookie-manager|react-native-cookies|react-native-device-info|react-native-mmkv|react-native-worklets|react-native-url-polyfill|react-native-track-player|react-native-awesome-slider|react-native-image-colors|react-native-loader-kit|@react-native-community/netinfo|@react-native-community/slider|@shopify/flash-list|@tanstack/react-query|@reduxjs/toolkit|@supabase/supabase-js|firebase|youtubei.js|lrclib-api|mavin-engine|mavin-eq|mavin-player|honeygain-sdk)"
         ],
         "moduleFileExtensions": [
             "ts",
