@@ -1,958 +1,748 @@
-// mavin-eq/index.ts
-
-import { Platform } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { getNativeModule, isNativeModuleAvailable } from "./MavinPlayerNative";
-import type { 
-  EqBandGains, 
-  EqPreset, 
-  PresetGroup,
-  PresetStorageAdapter,
-  MavinTrack,
-  PresetCategory,
-} from "./types";
-
-// Export types from types.ts (includes ISO_FREQ_CENTERS)
-export type * from "./types";
-
-// Export specific items from presets.ts (NOT using export * to avoid ISO_FREQ_CENTERS conflict)
-export {
-  FLAT,
-  HARMAN,
-  BASS_BOOST,
-  TREBLE_BOOST,
-  VOCAL_BOOST,
-  CLASSICAL,
-  ELECTRONIC,
-  ROCK,
-  JAZZ,
-  PODCAST,
-  LOUDNESS,
-  HIP_HOP,
-  ACOUSTIC,
-  BUILT_IN_PRESETS,
-  BUILT_IN_PRESETS_LIST,
-  formatFreq,
-  getFreqLabel,
-  createCustomPreset,
-  createCustomParametricPreset,
-  duplicatePreset,
-  normalizeGains,
-  interpolatePreset,
-  getPresetTagsByGenre,
-} from "./presets";
-
-export {
-  fetchUserProfile,
-  fetchCloudPresets,
-  fetchPublicPresets,
-  saveCloudPreset,
-  deleteCloudPreset,
-  updatePresetLastUsed,
-  syncPresetsToCloud,
-  claimEqMinutes,
-  addEqMinutes,
-  claimEqMinutesForPlayback,
-  isProActive,
-} from "./supabase-helpers";
-export { useEqualizer } from "./useEqualizer";
-
-// -- Storage Keys -------------------------------------------------------------
-
-const STORAGE_KEYS = {
-  USER_PRESETS: "@mavin_eq/user_presets",
-  FAVORITE_IDS: "@mavin_eq/favorite_ids",
-  LAST_USED_ID: "@mavin_eq/last_used_preset",
-};
-
-// -- Local Storage Implementation ---------------------------------------------
-
-class LocalPresetStorage implements PresetStorageAdapter {
-  private cache: Map<string, EqPreset> = new Map();
-  private favorites: Set<string> = new Set();
-  private initialized = false;
-
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    
-    try {
-      const [userPresetsJson, favoritesJson] = await Promise.all([
-        AsyncStorage.getItem(STORAGE_KEYS.USER_PRESETS),
-        AsyncStorage.getItem(STORAGE_KEYS.FAVORITE_IDS),
-      ]);
-
-      if (userPresetsJson) {
-        const presets: EqPreset[] = JSON.parse(userPresetsJson);
-        presets.forEach(p => this.cache.set(p.id, p));
-      }
-
-      if (favoritesJson) {
-        const favs: string[] = JSON.parse(favoritesJson);
-        favs.forEach(id => this.favorites.add(id));
-      }
-
-      this.initialized = true;
-    } catch (error) {
-      console.error("[mavin-eq] LocalStorage init failed:", error);
-    }
-  }
-
-  async getAllPresets(): Promise<EqPreset[]> {
-    await this.initialize();
-    const { BUILT_IN_PRESETS_LIST } = await import("./presets");
-    
-    const userPresets = Array.from(this.cache.values());
-    const allPresets = [...BUILT_IN_PRESETS_LIST, ...userPresets];
-    
-    return allPresets.map(p => ({
-      ...p,
-      isFavorite: this.favorites.has(p.id),
-    }));
-  }
-
-  async getUserPresets(): Promise<EqPreset[]> {
-    await this.initialize();
-    return Array.from(this.cache.values()).map(p => ({
-      ...p,
-      isFavorite: this.favorites.has(p.id),
-    }));
-  }
-
-  async getPresetById(id: string): Promise<EqPreset | null> {
-    await this.initialize();
-    
-    const { BUILT_IN_PRESETS_LIST } = await import("./presets");
-    const builtin = BUILT_IN_PRESETS_LIST.find(p => p.id === id);
-    if (builtin) return { ...builtin, isFavorite: this.favorites.has(id) };
-    
-    const user = this.cache.get(id);
-    if (user) return { ...user, isFavorite: this.favorites.has(id) };
-    
-    return null;
-  }
-
-  async savePreset(preset: EqPreset): Promise<void> {
-    await this.initialize();
-    
-    const presetWithMeta = {
-      ...preset,
-      updatedAt: new Date().toISOString(),
-      source: "local" as const,
-      category: "user" as const,
-    };
-    
-    this.cache.set(preset.id, presetWithMeta);
-    await this.persist();
-  }
-
-  async deletePreset(id: string): Promise<boolean> {
-    await this.initialize();
-    
-    if (id.startsWith("builtin_")) return false;
-    
-    const deleted = this.cache.delete(id);
-    if (deleted) {
-      this.favorites.delete(id);
-      await Promise.all([this.persist(), this.persistFavorites()]);
-    }
-    return deleted;
-  }
-
-  async updatePreset(id: string, updates: Partial<EqPreset>): Promise<EqPreset | null> {
-    await this.initialize();
-    
-    const existing = this.cache.get(id);
-    if (!existing) return null;
-    
-    const updated = {
-      ...existing,
-      ...updates,
-      id,
-      updatedAt: new Date().toISOString(),
-    };
-    
-    this.cache.set(id, updated);
-    await this.persist();
-    return updated;
-  }
-
-  async toggleFavorite(id: string): Promise<boolean> {
-    await this.initialize();
-    
-    const isFav = this.favorites.has(id);
-    if (isFav) {
-      this.favorites.delete(id);
-    } else {
-      this.favorites.add(id);
-    }
-    
-    await this.persistFavorites();
-    return !isFav;
-  }
-
-  async getFavorites(): Promise<EqPreset[]> {
-    await this.initialize();
-    const all = await this.getAllPresets();
-    return all.filter(p => this.favorites.has(p.id));
-  }
-
-  async setLastUsed(id: string): Promise<void> {
-    await AsyncStorage.setItem(STORAGE_KEYS.LAST_USED_ID, id);
-  }
-
-  async getLastUsed(): Promise<string | null> {
-    return AsyncStorage.getItem(STORAGE_KEYS.LAST_USED_ID);
-  }
-
-  async exportPresets(): Promise<string> {
-    const presets = await this.getUserPresets();
-    return JSON.stringify(presets, null, 2);
-  }
-
-  async importPresets(jsonString: string): Promise<number> {
-    try {
-      const imported: EqPreset[] = JSON.parse(jsonString);
-      let count = 0;
-      
-      for (const preset of imported) {
-        if (preset.id && preset.name && preset.gains_31) {
-          const newPreset = {
-            ...preset,
-            id: `imported_${Date.now()}_${count}`,
-            source: "imported" as const,
-            category: "user" as const,
-            createdAt: new Date().toISOString(),
-          };
-          this.cache.set(newPreset.id, newPreset);
-          count++;
-        }
-      }
-      
-      await this.persist();
-      return count;
-    } catch (error) {
-      console.error("[mavin-eq] Import failed:", error);
-      return 0;
-    }
-  }
-
-  private async persist(): Promise<void> {
-    const presets = Array.from(this.cache.values());
-    await AsyncStorage.setItem(STORAGE_KEYS.USER_PRESETS, JSON.stringify(presets));
-  }
-
-  private async persistFavorites(): Promise<void> {
-    const favs = Array.from(this.favorites);
-    await AsyncStorage.setItem(STORAGE_KEYS.FAVORITE_IDS, JSON.stringify(favs));
-  }
+﻿// mavin-player/index.ts
+// Full RNTP-parity JS layer for MavinPlayer.
+// Drop-in replacement for react-native-track-player in existing service files.
+
+import { requireNativeModule, EventEmitter } from 'expo-modules-core';
+import { useEffect, useRef, useState, useCallback } from 'react';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native module bootstrap
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _native = requireNativeModule('MavinPlayer');
+const _emitter = new EventEmitter(_native);
+
+export const MavinPlayer = _native;
+export default MavinPlayer;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Mirrors RNTP's State enum */
+export enum State {
+  None      = 'none',
+  Ready     = 'ready',
+  Playing   = 'playing',
+  Paused    = 'paused',
+  Stopped   = 'stopped',
+  Buffering = 'buffering',
+  Loading   = 'loading',
+  Error     = 'error',
+  Ended     = 'ended',
+}
+
+/** Mirrors RNTP's RepeatMode enum */
+export enum RepeatMode {
+  Off   = 0,
+  Track = 1,
+  Queue = 2,
+}
+
+/** All event names emitted by the native module. Mirrors RNTP's Event enum. */
+export enum Event {
+  // ── Playback ──────────────────────────────────────────────────────────────
+  PlaybackState                = 'onPlaybackStateChanged',
+  PlaybackError                = 'onError',
+  PlaybackQueueEnded           = 'onPlaybackQueueEnded',
+  /** @deprecated Use PlaybackActiveTrackChanged */
+  PlaybackTrackChanged         = 'onTrackChanged',
+  PlaybackActiveTrackChanged   = 'onPlaybackActiveTrackChanged',
+  PlaybackProgressUpdated      = 'onProgress',
+  PlaybackPlayWhenReadyChanged = 'onPlaybackPlayWhenReadyChanged',
+  // ── Remote controls ────────────────────────────────────────────────────────
+  RemotePlay        = 'onRemotePlay',
+  RemotePlayId      = 'onRemotePlayId',
+  RemotePlaySearch  = 'onRemotePlaySearch',
+  RemotePause       = 'onRemotePause',
+  RemoteStop        = 'onRemoteStop',
+  RemoteSkip        = 'onRemoteSkip',
+  RemoteNext        = 'onRemoteNext',
+  RemotePrevious    = 'onRemotePrevious',
+  RemoteSeek        = 'onRemoteSeek',
+  RemoteSetRating   = 'onRemoteSetRating',
+  RemoteJumpForward  = 'onRemoteJumpForward',
+  RemoteJumpBackward = 'onRemoteJumpBackward',
+  RemoteDuck        = 'onRemoteDuck',
+  // ── Metadata ──────────────────────────────────────────────────────────────
+  AudioCommonMetadataReceived = 'onAudioCommonMetadataReceived',
+  AudioTimedMetadataReceived  = 'onAudioTimedMetadataReceived',
+  // ── Mavin-specific ────────────────────────────────────────────────────────
+  Spectrum           = 'onSpectrum',
+  PeakMeter          = 'onPeakMeter',
+  ReplayGainApplied  = 'onReplayGainApplied',
+  UsbDacConnected    = 'onUsbDacConnected',
+  UsbDacDisconnected = 'onUsbDacDisconnected',
+  AudioFocusLost     = 'onAudioFocusLost',
+  AudioFocusGranted  = 'onAudioFocusGranted',
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Track {
+  id?: string;
+  /** Audio source – required */
+  url: string;
+  /** Alias for url */
+  uri?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  artwork?: string;
+  artworkUri?: string;
+  duration?: number;
+  genre?: string;
+  description?: string;
+  date?: string;
+  rating?: number;
+  isLiveStream?: boolean;
+  headers?: Record<string, string>;
+  replayGainTags?: Record<string, string>;
+  [key: string]: unknown;
 }
 
-// -- Singleton Storage Instance -----------------------------------------------
-
-const localStorage = new LocalPresetStorage();
-
-export function getLocalPresetStorage(): PresetStorageAdapter {
-  return localStorage;
-}
-
-// -- Preset Engine Functions -------------------------------------------------
-
-export async function getAllGroupedPresets(supabase?: SupabaseClient): Promise<PresetGroup[]> {
-  await localStorage.initialize();
-  
-  let allPresets = await localStorage.getAllPresets();
-  
-  if (supabase) {
-    const { fetchCloudPresets } = await import("./supabase-helpers");
-    const cloudPresets = await fetchCloudPresets(supabase);
-    const existingIds = new Set(allPresets.map(p => p.supabaseId).filter(Boolean));
-    const newCloudPresets = cloudPresets.filter(p => !existingIds.has(p.supabaseId));
-    allPresets.push(...newCloudPresets);
-  }
-
-  const groups: Partial<Record<PresetCategory, EqPreset[]>> = {
-    builtin: [],
-    user: [],
-    supabase: [],
-    artist: [],
-    genre: [],
-    device: [],
-  };
-
-  for (const preset of allPresets) {
-    if (groups[preset.category]) {
-      groups[preset.category]!.push(preset);
-    }
-  }
-
-  const sortPresets = (a: EqPreset, b: EqPreset) => {
-    if (a.isFavorite && !b.isFavorite) return -1;
-    if (!a.isFavorite && b.isFavorite) return 1;
-    return a.name.localeCompare(b.name);
-  };
-
-  const result: PresetGroup[] = [];
-
-  if (groups.builtin && groups.builtin.length > 0) {
-    result.push({
-      id: "builtin",
-      title: "Factory Presets",
-      icon: "box",
-      presets: groups.builtin.sort(sortPresets),
-      isExpanded: true,
-      sortOrder: 0,
-    });
-  }
-
-  result.push({
-    id: "user",
-    title: "My Presets",
-    icon: "user",
-    presets: (groups.user || []).sort(sortPresets),
-    isExpanded: true,
-    sortOrder: 1,
-  });
-
-  if (groups.supabase && groups.supabase.length > 0) {
-    result.push({
-      id: "supabase",
-      title: "Cloud Presets",
-      icon: "cloud",
-      presets: groups.supabase.sort(sortPresets),
-      isExpanded: false,
-      sortOrder: 2,
-    });
-  }
-
-  if (groups.artist && groups.artist.length > 0) {
-    result.push({
-      id: "artist",
-      title: "Artist Curated",
-      icon: "star",
-      presets: groups.artist.sort(sortPresets),
-      isExpanded: false,
-      sortOrder: 3,
-    });
-  }
-
-  return result;
-}
-
-export async function searchPresets(query: string): Promise<EqPreset[]> {
-  await localStorage.initialize();
-  const all = await localStorage.getAllPresets();
-  const lowerQuery = query.toLowerCase();
-  
-  return all.filter(p => 
-    p.name.toLowerCase().includes(lowerQuery) ||
-    p.description?.toLowerCase().includes(lowerQuery) ||
-    p.tags?.some(t => t.toLowerCase().includes(lowerQuery))
-  );
-}
-
-export async function getRecentPresets(limit = 5): Promise<EqPreset[]> {
-  await localStorage.initialize();
-  const all = await localStorage.getAllPresets();
-  return all
-    .filter(p => p.lastUsedAt)
-    .sort((a, b) => new Date(b.lastUsedAt!).getTime() - new Date(a.lastUsedAt!).getTime())
-    .slice(0, limit);
-}
-
-export async function saveUserPreset(preset: EqPreset, supabase?: SupabaseClient): Promise<void> {
-  await localStorage.savePreset(preset);
-  
-  if (supabase) {
-    const { saveCloudPreset } = await import("./supabase-helpers");
-    await saveCloudPreset(supabase, preset);
-  }
-}
-
-export async function deleteUserPreset(id: string, supabase?: SupabaseClient): Promise<boolean> {
-  const success = await localStorage.deletePreset(id);
-  
-  if (success && supabase && id.startsWith("supabase_")) {
-    const { deleteCloudPreset } = await import("./supabase-helpers");
-    const supabaseId = id.replace("supabase_", "");
-    await deleteCloudPreset(supabase, supabaseId);
-  }
-  
-  return success;
-}
-
-export async function duplicateUserPreset(preset: EqPreset): Promise<EqPreset> {
-  const { duplicatePreset } = await import("./presets");
-  const duplicated = duplicatePreset(preset);
-  await localStorage.savePreset(duplicated);
-  return duplicated;
-}
-
-export async function exportUserPresets(): Promise<string> {
-  return localStorage.exportPresets();
-}
-
-export async function importUserPresets(jsonString: string): Promise<number> {
-  return localStorage.importPresets(jsonString);
-}
-
-// -----------------------------------------------------------------------------
-// EQ CONTROL (Graphic)
-// -----------------------------------------------------------------------------
-
-export async function setEQEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setEQEnabled(enabled);
-}
-
-export async function applyEQBands(gains: EqBandGains | number[]): Promise<void> {
-  await getNativeModule().applyEQBands(gains as number[]);
-}
-
-export async function setEQBand(index: number, gainDb: number): Promise<void> {
-  await getNativeModule().setEQBand(index, gainDb);
-}
-
-export async function setEQPreamp(gainDb: number): Promise<void> {
-  await getNativeModule().setEQPreamp(gainDb);
-}
-
-export async function setEQBandQ(band: number, q: number): Promise<void> {
-  await getNativeModule().setEQBandQ(band, q);
-}
-
-export async function resetEQ(): Promise<void> {
-  await getNativeModule().resetEQ();
-}
-
-// -----------------------------------------------------------------------------
-// PARAMETRIC EQ CONTROL
-// -----------------------------------------------------------------------------
-
-export async function applyParametricBands(gains: number[]): Promise<void> {
-  await getNativeModule().applyParametricBands(gains);
-}
-
-export async function setParametricBandGain(band: number, gainDb: number): Promise<void> {
-  await getNativeModule().setParametricBandGain(band, gainDb);
-}
-
-export async function setParametricBandFreq(band: number, freqHz: number): Promise<void> {
-  await getNativeModule().setParametricBandFreq(band, freqHz);
-}
-
-export async function resetParametric(): Promise<void> {
-  await getNativeModule().resetParametric();
-}
-
-// -----------------------------------------------------------------------------
-// EQ MODE CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setEQMode(mode: "GRAPHIC" | "PARAMETRIC" | "PARALLEL"): Promise<void> {
-  await getNativeModule().setEQMode(mode);
-}
-
-export async function getEQMode(): Promise<string> {
-  return getNativeModule().getEQMode();
-}
-
-// -----------------------------------------------------------------------------
-// DITHER MODE CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setDitherMode(mode: "FLAT" | "HIGHPASS" | "E_WEIGHTED" | "F_WEIGHTED"): Promise<void> {
-  await getNativeModule().setDitherMode(mode);
-}
-
-export async function getDitherMode(): Promise<string> {
-  return getNativeModule().getDitherMode();
-}
-
-// -----------------------------------------------------------------------------
-// SMOOTHING CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setSmoothingRamp(ms: number): Promise<void> {
-  await getNativeModule().setSmoothingRamp(ms);
-}
-
-// -----------------------------------------------------------------------------
-// COMPRESSOR (DRC) CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setCompressorEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setCompressorEnabled(enabled);
-}
-
-export async function isCompressorEnabled(): Promise<boolean> {
-  return getNativeModule().isCompressorEnabled();
-}
-
-export async function setCompressorThreshold(db: number): Promise<void> {
-  await getNativeModule().setCompressorThreshold(db);
-}
-
-export async function setCompressorRatio(ratio: number): Promise<void> {
-  await getNativeModule().setCompressorRatio(ratio);
-}
-
-export async function setCompressorAttack(ms: number): Promise<void> {
-  await getNativeModule().setCompressorAttack(ms);
-}
-
-export async function setCompressorRelease(ms: number): Promise<void> {
-  await getNativeModule().setCompressorRelease(ms);
-}
-
-export async function setCompressorKnee(db: number): Promise<void> {
-  await getNativeModule().setCompressorKnee(db);
-}
-
-export async function setCompressorMakeupGain(db: number): Promise<void> {
-  await getNativeModule().setCompressorMakeupGain(db);
-}
-
-export async function getCompressorReduction(): Promise<number> {
-  return getNativeModule().getCompressorReduction();
-}
-
-export async function getCompressorThreshold(): Promise<number> {
-  return getNativeModule().getCompressorThreshold();
-}
-
-export async function getCompressorRatio(): Promise<number> {
-  return getNativeModule().getCompressorRatio();
-}
-
-export async function getCompressorAttack(): Promise<number> {
-  return getNativeModule().getCompressorAttack();
-}
-
-export async function getCompressorRelease(): Promise<number> {
-  return getNativeModule().getCompressorRelease();
-}
-
-// -----------------------------------------------------------------------------
-// CROSSFEED CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setCrossfeedEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setCrossfeedEnabled(enabled);
-}
-
-export async function isCrossfeedEnabled(): Promise<boolean> {
-  return getNativeModule().isCrossfeedEnabled();
-}
-
-export async function setCrossfeedStrength(strength: number): Promise<void> {
-  await getNativeModule().setCrossfeedStrength(strength);
-}
-
-export async function setCrossfeedCutoff(hz: number): Promise<void> {
-  await getNativeModule().setCrossfeedCutoff(hz);
-}
-
-export async function getCrossfeedStrength(): Promise<number> {
-  return getNativeModule().getCrossfeedStrength();
-}
-
-export async function getCrossfeedCutoff(): Promise<number> {
-  return getNativeModule().getCrossfeedCutoff();
-}
-
-// -----------------------------------------------------------------------------
-// PEAK METER (VU) CONTROL
-// -----------------------------------------------------------------------------
-
-export async function getCurrentPeaks(): Promise<{ left: number; right: number }> {
-  return getNativeModule().getCurrentPeaks();
-}
-
-export async function getHeldPeaks(): Promise<{ left: number; right: number }> {
-  return getNativeModule().getHeldPeaks();
-}
-
-export async function resetPeaks(): Promise<void> {
-  await getNativeModule().resetPeaks();
-}
-
-export async function setPeakHoldMs(ms: number): Promise<void> {
-  await getNativeModule().setPeakHoldMs(ms);
-}
-
-export async function setPeakReleaseMs(ms: number): Promise<void> {
-  await getNativeModule().setPeakReleaseMs(ms);
-}
-
-// -----------------------------------------------------------------------------
-// PLAYBACK SPEED CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setPlaybackSpeed(speed: number): Promise<void> {
-  await getNativeModule().setPlaybackSpeed(speed);
-}
-
-export async function getPlaybackSpeed(): Promise<number> {
-  return getNativeModule().getPlaybackSpeed();
-}
-
-// -----------------------------------------------------------------------------
-// CROSSFADE CONTROL
-// -----------------------------------------------------------------------------
-
-export async function setCrossfadeEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setCrossfadeEnabled(enabled);
-}
-
-export async function isCrossfadeEnabled(): Promise<boolean> {
-  return getNativeModule().isCrossfadeEnabled();
-}
-
-export async function setCrossfadeDuration(durationMs: number): Promise<void> {
-  await getNativeModule().setCrossfadeDuration(durationMs);
-}
-
-export async function getCrossfadeDuration(): Promise<number> {
-  return getNativeModule().getCrossfadeDuration();
-}
-
-// -----------------------------------------------------------------------------
-// OFFLINE MODE (ZERO TELEMETRY)
-// -----------------------------------------------------------------------------
-
-export async function setOfflineMode(enabled: boolean): Promise<void> {
-  await getNativeModule().setOfflineMode(enabled);
-}
-
-export async function isOfflineMode(): Promise<boolean> {
-  return getNativeModule().isOfflineMode();
-}
-
-// -----------------------------------------------------------------------------
-// 64-BIT HIGH PRECISION PROCESSING
-// -----------------------------------------------------------------------------
-
-export async function set64BitProcessingEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().set64BitProcessingEnabled(enabled);
-}
-
-export async function is64BitProcessingEnabled(): Promise<boolean> {
-  return getNativeModule().is64BitProcessingEnabled();
-}
-
-// -----------------------------------------------------------------------------
-// CONVOLUTION PROCESSOR (IMPULSE RESPONSES)
-// -----------------------------------------------------------------------------
-
-export async function loadImpulseResponse(filePath: string): Promise<void> {
-  await getNativeModule().loadImpulseResponse(filePath);
-}
-
-export async function clearImpulseResponse(): Promise<void> {
-  await getNativeModule().clearImpulseResponse();
-}
-
-export async function isImpulseResponseLoaded(): Promise<boolean> {
-  return getNativeModule().isImpulseResponseLoaded();
+/** Progress values are in milliseconds (raw native values). */
+export interface Progress {
+  position: number;
+  duration: number;
+  buffered: number;
 }
 
-export async function getIrLength(): Promise<number> {
-  return getNativeModule().getIrLength();
+export interface PlaybackState {
+  state: State | undefined;
 }
 
-export async function setConvolutionEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setConvolutionEnabled(enabled);
+export interface PlayerOptions {
+  minBuffer?: number;
+  maxBuffer?: number;
+  playBuffer?: number;
+  backBuffer?: number;
+  maxCacheSize?: number;
+  waitForBuffer?: boolean;
+  autoHandleInterruptions?: boolean;
+  audioContentType?: string;
+  audioUsage?: string;
 }
 
-export async function isConvolutionEnabled(): Promise<boolean> {
-  return getNativeModule().isConvolutionEnabled();
-}
-
-// -----------------------------------------------------------------------------
-// FX PROCESSOR (REVERB, DELAY, CHORUS, FLANGER, PHASER)
-// -----------------------------------------------------------------------------
-
-export async function setFxEnabled(enabled: boolean): Promise<void> {
-  await getNativeModule().setFxEnabled(enabled);
-}
-
-export async function isFxEnabled(): Promise<boolean> {
-  return getNativeModule().isFxEnabled();
-}
-
-export async function setFxMode(mode: "REVERB" | "DELAY" | "CHORUS" | "FLANGER" | "PHASER"): Promise<void> {
-  await getNativeModule().setFxMode(mode);
-}
-
-export async function getFxMode(): Promise<string> {
-  return getNativeModule().getFxMode();
-}
-
-export async function setFxMix(mix: number): Promise<void> {
-  await getNativeModule().setFxMix(mix);
-}
-
-export async function getFxMix(): Promise<number> {
-  return getNativeModule().getFxMix();
-}
-
-export async function setFxBypass(bypass: boolean): Promise<void> {
-  await getNativeModule().setFxBypass(bypass);
-}
-
-export async function isFxBypassed(): Promise<boolean> {
-  return getNativeModule().isFxBypassed();
-}
-
-// Reverb Parameters
-export async function setReverbRoomSize(value: number): Promise<void> {
-  await getNativeModule().setReverbRoomSize(value);
-}
-
-export async function setReverbDecay(value: number): Promise<void> {
-  await getNativeModule().setReverbDecay(value);
-}
-
-export async function setReverbPreDelay(value: number): Promise<void> {
-  await getNativeModule().setReverbPreDelay(value);
-}
-
-export async function setReverbDamping(value: number): Promise<void> {
-  await getNativeModule().setReverbDamping(value);
-}
-
-// Delay Parameters
-export async function setDelayTime(value: number): Promise<void> {
-  await getNativeModule().setDelayTime(value);
-}
-
-export async function setDelayFeedback(value: number): Promise<void> {
-  await getNativeModule().setDelayFeedback(value);
-}
-
-export async function setDelayLowCut(value: number): Promise<void> {
-  await getNativeModule().setDelayLowCut(value);
-}
-
-export async function setDelayHighCut(value: number): Promise<void> {
-  await getNativeModule().setDelayHighCut(value);
-}
+type EventPayload = Record<string, unknown>;
+type EventHandler = (data: EventPayload & { type: string }) => void;
 
-// Modulation Parameters (Chorus/Flanger/Phaser)
-export async function setModRate(value: number): Promise<void> {
-  await getNativeModule().setModRate(value);
-}
-
-export async function setModDepth(value: number): Promise<void> {
-  await getNativeModule().setModDepth(value);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// LIFECYCLE
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function setModPhase(value: number): Promise<void> {
-  await getNativeModule().setModPhase(value);
+/** Initialise the player. Mirrors RNTP's setupPlayer(). */
+export async function setupPlayer(options?: PlayerOptions): Promise<void> {
+  return _native.initPlayer(options ?? null);
 }
 
-export async function setModFeedback(value: number): Promise<void> {
-  await getNativeModule().setModFeedback(value);
+/** Tear down the player and release all resources. */
+export async function destroy(): Promise<void> {
+  return _native.release();
 }
 
-// -----------------------------------------------------------------------------
-// USB DAC CONTROL
-// -----------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function isUsbDacConnected(): Promise<boolean> {
-  return getNativeModule().isUsbDacConnected();
-}
-
-export async function getCurrentDacInfo(): Promise<{
-  name: string;
-  vendorId: number;
-  productId: number;
-  isConnected: boolean;
-  hasAudioOutput: boolean;
-  supportedSampleRates: number[];
-  maxBitDepth: number;
-  maxChannels: number;
-  isNativeDirectSupported: boolean;
-} | null> {
-  return getNativeModule().getCurrentDacInfo();
-}
+export async function play(): Promise<void>  { return _native.play(); }
+export async function pause(): Promise<void> { return _native.pause(); }
+export async function stop(): Promise<void>  { return _native.stop(); }
+export async function reset(): Promise<void> { return _native.reset(); }
 
-export async function getDacCapabilities(): Promise<{
-  sampleRates: number[];
-  bitDepths: number[];
-  channelCounts: number[];
-  supportsFloatOutput: boolean;
-  supportsHdAudio: boolean;
-  nativeSampleRate: number;
-  nativeBitDepth: number;
-} | null> {
-  return getNativeModule().getDacCapabilities();
+/**
+ * Seek to an absolute position in seconds (RNTP-compatible).
+ * Converts to milliseconds before calling the native layer.
+ */
+export async function seekTo(positionSeconds: number): Promise<void> {
+  return _native.seekTo(positionSeconds * 1000);
 }
 
-export async function enableDirectUsbRouting(enabled: boolean): Promise<boolean> {
-  return getNativeModule().enableDirectUsbRouting(enabled);
+/**
+ * Seek forward or backward by a relative offset in seconds.
+ * Mirrors RNTP's seekBy().
+ */
+export async function seekBy(offsetSeconds: number): Promise<void> {
+  return _native.skip(Math.round(offsetSeconds));
 }
 
-export async function isDirectUsbRoutingEnabled(): Promise<boolean> {
-  return getNativeModule().isDirectUsbRoutingEnabled();
-}
+export async function skipToNext(): Promise<void>     { return _native.skipToNext(); }
+export async function skipToPrevious(): Promise<void>  { return _native.skipToPrevious(); }
 
-export async function setPreferredDacSampleRate(rate: number): Promise<boolean> {
-  return getNativeModule().setPreferredDacSampleRate(rate);
+/**
+ * Skip to a track by index. Mirrors RNTP's skip(index).
+ */
+export async function skip(index: number): Promise<void> {
+  return _native.skipToIndex(index);
 }
 
-export async function setPreferredDacBitDepth(depth: number): Promise<boolean> {
-  return getNativeModule().setPreferredDacBitDepth(depth);
-}
+export async function setVolume(level: number): Promise<void>       { return _native.setVolume(level); }
+export async function setRepeatMode(mode: RepeatMode): Promise<void> { return _native.setRepeatMode(mode); }
+export async function setShuffleMode(enabled: boolean): Promise<void>{ return _native.setShuffleMode(enabled); }
 
-export async function rescanUsbDevices(): Promise<void> {
-  await getNativeModule().rescanUsbDevices();
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// RATE  (RNTP-compatible aliases for setPlaybackSpeed / getPlaybackSpeed)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// -----------------------------------------------------------------------------
-// AUDIO FORMAT DETECTION
-// -----------------------------------------------------------------------------
-
-export async function getAudioCapabilities(): Promise<{
-  maxSampleRate: number;
-  maxBitDepth: number;
-  supportsFloat: boolean;
-  supportsHdAudio: boolean;
-  supportsUltraHdAudio: boolean;
-  supportedSampleRates: number[];
-  supportedBitDepths: number[];
-  isHiResCapable: boolean;
-} | null> {
-  return getNativeModule().getAudioCapabilities();
-}
+/** Set playback rate. 1.0 = normal speed. */
+export async function setRate(rate: number): Promise<void>  { return _native.setPlaybackSpeed(rate); }
+/** Get current playback rate. */
+export async function getRate(): Promise<number>            { return _native.getPlaybackSpeed(); }
 
-export async function getOptimalAudioFormat(): Promise<{
-  sampleRate: number;
-  bitDepth: number;
-  encoding: number;
-  isFloat: boolean;
-  isHiRes: boolean;
-  channelCount: number;
-} | null> {
-  return getNativeModule().getOptimalAudioFormat();
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAY-WHEN-READY  (RNTP 4.x)
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function isHiResAudioCapable(): Promise<boolean> {
-  return getNativeModule().isHiResAudioCapable();
+export async function setPlayWhenReady(playWhenReady: boolean): Promise<void> {
+  return _native.setPlayWhenReady(playWhenReady);
 }
 
-export async function getMaxSampleRate(): Promise<number> {
-  return getNativeModule().getMaxSampleRate();
+export async function getPlayWhenReady(): Promise<boolean> {
+  return _native.getPlayWhenReady();
 }
 
-export async function getMaxBitDepth(): Promise<number> {
-  return getNativeModule().getMaxBitDepth();
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// QUEUE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
 
-// -----------------------------------------------------------------------------
-// APPLY FULL EQ PRESET (Supports Graphic + Parametric)
-// -----------------------------------------------------------------------------
-
-export async function applyEQPreset(preset: EqPreset): Promise<void> {
-  // 1. Apply graphic EQ bands
-  if (preset.gains_31 && preset.type === "graphic_31band") {
-    await getNativeModule().applyEQBands(preset.gains_31 as number[]);
-  }
-  
-  // 2. Apply parametric bands if present
-  if (preset.parametric_gains) {
-    await getNativeModule().applyParametricBands(preset.parametric_gains as number[]);
-  }
-  
-  // 3. Apply parametric frequencies if present
-  if (preset.parametric_freqs) {
-    for (let i = 0; i < Math.min(preset.parametric_freqs.length, 31); i++) {
-      await getNativeModule().setParametricBandFreq(i, preset.parametric_freqs[i]);
-    }
-  }
-  
-  // 4. Apply Q values if present
-  if (preset.q_values) {
-    for (let i = 0; i < Math.min(preset.q_values.length, 31); i++) {
-      await getNativeModule().setEQBandQ(i, preset.q_values[i]);
-    }
-  }
-  
-  // 5. Apply preamp
-  if (preset.preamp_db !== undefined) {
-    await getNativeModule().setEQPreamp(preset.preamp_db);
-  }
-  
-  // 6. Apply EQ mode if specified
-  if (preset.eq_mode) {
-    await getNativeModule().setEQMode(preset.eq_mode);
-  }
+/** Load a single track (replaces current item). Mirrors RNTP's load(). */
+export async function load(track: Track): Promise<void> {
+  return _native.load(track);
 }
 
-// -----------------------------------------------------------------------------
-// ANIMATE BETWEEN TWO PRESETS
-// -----------------------------------------------------------------------------
-
-export async function animatePresetTransition(
-  fromPreset: EqPreset,
-  toPreset: EqPreset,
-  durationMs: number = 300,
-  onProgress?: (progress: number) => void
+/**
+ * Add one or more tracks to the queue.
+ * Mirrors RNTP's add(tracks, insertBeforeIndex?).
+ *
+ * @param tracks           Single track or array of tracks.
+ * @param insertBeforeIndex  Insert before this index. Appends if omitted.
+ */
+export async function add(
+  tracks: Track | Track[],
+  insertBeforeIndex?: number
 ): Promise<void> {
-  const startTime = Date.now();
-  const fromGains = fromPreset.gains_31 || new Array(31).fill(0);
-  const toGains = toPreset.gains_31 || new Array(31).fill(0);
-  
-  return new Promise((resolve) => {
-    const animate = () => {
-      const elapsed = Date.now() - startTime;
-      const progress = Math.min(1, elapsed / durationMs);
-      
-      const currentGains = fromGains.map((g, i) => g + (toGains[i] - g) * progress);
-      getNativeModule().applyEQBands(currentGains);
-      
-      onProgress?.(progress);
-      
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      } else {
-        resolve();
-      }
+  const arr = Array.isArray(tracks) ? tracks : [tracks];
+  if (insertBeforeIndex !== undefined) {
+    for (let i = 0; i < arr.length; i++) {
+      await _native.addToQueueAt(arr[i], insertBeforeIndex + i);
+    }
+  } else {
+    for (const track of arr) {
+      await _native.addToQueue(track);
+    }
+  }
+}
+
+/**
+ * Remove one or more tracks from the queue by index.
+ * Mirrors RNTP's remove(indexes).
+ */
+export async function remove(indexes: number | number[]): Promise<void> {
+  const arr = (Array.isArray(indexes) ? indexes : [indexes])
+    .slice()
+    .sort((a, b) => b - a); // remove highest index first to keep earlier indices valid
+  for (const idx of arr) {
+    await _native.removeTrack(idx);
+  }
+}
+
+/** Remove all upcoming tracks. */
+export async function removeUpcomingTracks(): Promise<void> {
+  return _native.removeUpcomingTracks();
+}
+
+/**
+ * Move a track from one position to another.
+ * Mirrors RNTP's move(fromIndex, toIndex).
+ */
+export async function move(fromIndex: number, toIndex: number): Promise<void> {
+  return _native.moveTrack(fromIndex, toIndex);
+}
+
+/**
+ * Replace the entire queue.
+ * @param tracks      New queue.
+ * @param startIndex  Track to start playing from (default 0).
+ */
+export async function setQueue(tracks: Track[], startIndex = 0): Promise<void> {
+  return _native.setQueue(tracks, startIndex);
+}
+
+/** Update a track's metadata at a given index. */
+export async function updateMetadataForTrack(
+  index: number,
+  metadata: Partial<Track>
+): Promise<void> {
+  return _native.updateTrack(index, metadata);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE GETTERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the full queue.
+ * Mirrors RNTP's getQueue().
+ */
+export async function getQueue(): Promise<Track[]> {
+  return _native.getQueue();
+}
+
+/**
+ * Get a single track by index.
+ * Mirrors RNTP's getTrack(index).
+ */
+export async function getTrack(index: number): Promise<Track | undefined> {
+  const t = await _native.getTrack(index);
+  return t ?? undefined;
+}
+
+/**
+ * Get the currently active track object.
+ * Mirrors RNTP's getActiveTrack().
+ */
+export async function getActiveTrack(): Promise<Track | undefined> {
+  const info = await _native.getActiveTrack();
+  return info ?? undefined;
+}
+
+/**
+ * Get the index of the currently active track.
+ * Mirrors RNTP's getActiveTrackIndex().
+ */
+export async function getActiveTrackIndex(): Promise<number | undefined> {
+  const idx = await _native.getActiveTrackIndex();
+  return idx ?? undefined;
+}
+
+/** @deprecated Use getActiveTrack() */
+export async function getCurrentTrack(): Promise<Track | undefined> {
+  return getActiveTrack();
+}
+
+/**
+ * Returns { position, duration, buffered } snapshot in milliseconds.
+ * Mirrors RNTP's getProgress().
+ */
+export async function getProgress(): Promise<Progress> {
+  return _native.getProgress();
+}
+
+/**
+ * Returns the current playback state.
+ * Mirrors RNTP's getPlaybackState().
+ */
+export async function getPlaybackState(): Promise<PlaybackState> {
+  const result = await _native.getPlaybackState() as { state: string };
+  const stateValues = Object.values(State) as string[];
+  const state = stateValues.includes(result.state) ? (result.state as State) : State.None;
+  return { state };
+}
+
+/** @deprecated Use getPlaybackState() */
+export async function getState(): Promise<State> {
+  const { state } = await getPlaybackState();
+  return state ?? State.None;
+}
+
+/** Current position in milliseconds. */
+export async function getPosition(): Promise<number>       { return _native.getPosition(); }
+/** Total duration in milliseconds. */
+export async function getDuration(): Promise<number>       { return _native.getDuration(); }
+/** Buffered position in milliseconds. */
+export async function getBufferedPosition(): Promise<number>{ return _native.getBufferedPosition(); }
+
+export async function getVolume(): Promise<number>         { return _native.getVolume(); }
+export async function getRepeatMode(): Promise<RepeatMode> { return _native.getRepeatMode(); }
+export async function getShuffleMode(): Promise<boolean>   { return _native.getShuffleMode(); }
+export async function isPlaying(): Promise<boolean>        { return _native.isPlaying(); }
+export async function getQueueSize(): Promise<number>      { return _native.getQueueSize(); }
+export async function getAudioFocus(): Promise<boolean>    { return _native.getAudioFocus(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION / OPTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function updateOptions(options: Record<string, unknown>): Promise<void> {
+  return _native.updateOptions(options);
+}
+export async function setProgressUpdateEventInterval(ms: number): Promise<void> {
+  return _native.setProgressUpdateInterval(ms);
+}
+export async function setCacheConfig(options: { sizeMB?: number; sizeBytes?: number }): Promise<void> {
+  return _native.setCacheConfig(options);
+}
+export async function setAudioAttributes(options: { usage?: string; contentType?: string }): Promise<void> {
+  return _native.setAudioAttributes(options);
+}
+export async function setWakeMode(mode: number): Promise<void> {
+  return _native.setWakeMode(mode);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEED / PITCH
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setPlaybackSpeed(speed: number): Promise<void>              { return _native.setPlaybackSpeed(speed); }
+export async function getPlaybackSpeed(): Promise<number>                          { return _native.getPlaybackSpeed(); }
+export async function setPlaybackPitch(pitch: number): Promise<void>              { return _native.setPlaybackPitch(pitch); }
+export async function getPlaybackPitch(): Promise<number>                          { return _native.getPlaybackPitch(); }
+export async function setPlaybackParameters(speed: number, pitch: number): Promise<void> {
+  return _native.setPlaybackParameters(speed, pitch);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EQ
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setEQEnabled(enabled: boolean): Promise<void>                         { return _native.setEQEnabled(enabled); }
+export async function isEQEnabled(): Promise<boolean>                                        { return _native.isEQEnabled(); }
+export async function setEQBand(band: number, gainDb: number): Promise<void>                { return _native.setEQBand(band, gainDb); }
+export async function applyEQBands(gains: number[]): Promise<void>                         { return _native.applyEQBands(gains); }
+export async function setEQPreamp(gainDb: number): Promise<void>                           { return _native.setEQPreamp(gainDb); }
+export async function setEQBandQ(band: number, q: number): Promise<void>                   { return _native.setEQBandQ(band, q); }
+export async function resetEQ(): Promise<void>                                              { return _native.resetEQ(); }
+export async function getEQGains(): Promise<Array<{ band: number; gain: number }>>          { return _native.getEQGains(); }
+export async function getEQPreamp(): Promise<number>                                        { return _native.getEQPreamp(); }
+export async function getEQQValues(): Promise<Array<{ band: number; q: number }>>           { return _native.getEQQValues(); }
+export async function setEQMode(mode: 'GRAPHIC' | 'PARAMETRIC' | 'PARALLEL'): Promise<void>{ return _native.setEQMode(mode); }
+export async function getEQMode(): Promise<string>                                          { return _native.getEQMode(); }
+export async function getLoudnessDb(): Promise<number>                                      { return _native.getLoudnessDb(); }
+
+// Parametric EQ
+export async function setParametricBandGain(band: number, gainDb: number): Promise<void>    { return _native.setParametricBandGain(band, gainDb); }
+export async function applyParametricBands(gains: number[]): Promise<void>                  { return _native.applyParametricBands(gains); }
+export async function setParametricBandFreq(band: number, freqHz: number): Promise<void>    { return _native.setParametricBandFreq(band, freqHz); }
+export async function resetParametric(): Promise<void>                                       { return _native.resetParametric(); }
+export async function getParametricGains(): Promise<Array<{ band: number; gain: number }>>  { return _native.getParametricGains(); }
+export async function getParametricFreqs(): Promise<Array<{ band: number; freqHz: number }>>{ return _native.getParametricFreqs(); }
+
+// Dither / smoothing
+export async function setDitherMode(mode: string): Promise<void>  { return _native.setDitherMode(mode); }
+export async function getDitherMode(): Promise<string>            { return _native.getDitherMode(); }
+export async function setSmoothingRamp(ms: number): Promise<void> { return _native.setSmoothingRamp(ms); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPRESSOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCompressorEnabled(enabled: boolean): Promise<void>  { return _native.setCompressorEnabled(enabled); }
+export async function isCompressorEnabled(): Promise<boolean>                { return _native.isCompressorEnabled(); }
+export async function setCompressorThreshold(db: number): Promise<void>     { return _native.setCompressorThreshold(db); }
+export async function setCompressorRatio(ratio: number): Promise<void>      { return _native.setCompressorRatio(ratio); }
+export async function setCompressorAttack(ms: number): Promise<void>        { return _native.setCompressorAttack(ms); }
+export async function setCompressorRelease(ms: number): Promise<void>       { return _native.setCompressorRelease(ms); }
+export async function setCompressorKnee(db: number): Promise<void>          { return _native.setCompressorKnee(db); }
+export async function setCompressorMakeupGain(db: number): Promise<void>    { return _native.setCompressorMakeupGain(db); }
+export async function getCompressorReduction(): Promise<number>             { return _native.getCompressorReduction(); }
+export async function getCompressorThreshold(): Promise<number>             { return _native.getCompressorThreshold(); }
+export async function getCompressorRatio(): Promise<number>                 { return _native.getCompressorRatio(); }
+export async function getCompressorAttack(): Promise<number>                { return _native.getCompressorAttack(); }
+export async function getCompressorRelease(): Promise<number>               { return _native.getCompressorRelease(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFADE
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCrossfadeEnabled(enabled: boolean): Promise<void>   { return _native.setCrossfadeEnabled(enabled); }
+export async function isCrossfadeEnabled(): Promise<boolean>                 { return _native.isCrossfadeEnabled(); }
+export async function setCrossfadeDuration(ms: number): Promise<void>        { return _native.setCrossfadeDuration(ms); }
+export async function getCrossfadeDuration(): Promise<number>                { return _native.getCrossfadeDuration(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFEED
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCrossfeedEnabled(enabled: boolean): Promise<void>   { return _native.setCrossfeedEnabled(enabled); }
+export async function isCrossfeedEnabled(): Promise<boolean>                 { return _native.isCrossfeedEnabled(); }
+export async function setCrossfeedStrength(strength: number): Promise<void>  { return _native.setCrossfeedStrength(strength); }
+export async function setCrossfeedCutoff(hz: number): Promise<void>          { return _native.setCrossfeedCutoff(hz); }
+export async function getCrossfeedStrength(): Promise<number>                { return _native.getCrossfeedStrength(); }
+export async function getCrossfeedCutoff(): Promise<number>                  { return _native.getCrossfeedCutoff(); }
+export async function setCrossfeedDelayMs(ms: number): Promise<void>        { return _native.setCrossfeedDelayMs(ms); }
+export async function getCrossfeedDelayMs(): Promise<number>                { return _native.getCrossfeedDelayMs(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REPLAY GAIN
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setReplayGainMode(mode: string): Promise<void>                     { return _native.setReplayGainMode(mode); }
+export async function setReplayGainPreamp(gainDb: number): Promise<void>                { return _native.setReplayGainPreamp(gainDb); }
+export async function setReplayGainFromMap(tags: Record<string, string>): Promise<void> { return _native.setReplayGainFromMap(tags); }
+export async function getReplayGainInfo(): Promise<unknown>                              { return _native.getReplayGainInfo(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEAK METER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setPeakHoldMs(ms: number): Promise<void>                  { return _native.setPeakHoldMs(ms); }
+export async function setPeakReleaseMs(ms: number): Promise<void>               { return _native.setPeakReleaseMs(ms); }
+export async function getCurrentPeaks(): Promise<{ left: number; right: number }>{ return _native.getCurrentPeaks(); }
+export async function getHeldPeaks(): Promise<{ left: number; right: number }>   { return _native.getHeldPeaks(); }
+export async function resetPeaks(): Promise<void>                               { return _native.resetPeaks(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVOLUTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function loadImpulseResponse(filePath: string): Promise<void>   { return _native.loadImpulseResponse(filePath); }
+export async function clearImpulseResponse(): Promise<void>                  { return _native.clearImpulseResponse(); }
+export async function isImpulseResponseLoaded(): Promise<boolean>            { return _native.isImpulseResponseLoaded(); }
+export async function getIrLength(): Promise<number>                         { return _native.getIrLength(); }
+export async function setConvolutionEnabled(enabled: boolean): Promise<void> { return _native.setConvolutionEnabled(enabled); }
+export async function isConvolutionEnabled(): Promise<boolean>               { return _native.isConvolutionEnabled(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FX (Reverb / Delay / Mod)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setFxEnabled(enabled: boolean): Promise<void>   { return _native.setFxEnabled(enabled); }
+export async function isFxEnabled(): Promise<boolean>                 { return _native.isFxEnabled(); }
+export async function setFxMode(mode: string): Promise<void>          { return _native.setFxMode(mode); }
+export async function getFxMode(): Promise<string>                    { return _native.getFxMode(); }
+export async function setFxMix(mix: number): Promise<void>            { return _native.setFxMix(mix); }
+export async function getFxMix(): Promise<number>                     { return _native.getFxMix(); }
+export async function setFxBypass(bypass: boolean): Promise<void>    { return _native.setFxBypass(bypass); }
+export async function isFxBypassed(): Promise<boolean>               { return _native.isFxBypassed(); }
+
+export async function setReverbRoomSize(value: number): Promise<void> { return _native.setReverbRoomSize(value); }
+export async function setReverbDecay(value: number): Promise<void>    { return _native.setReverbDecay(value); }
+export async function setReverbPreDelay(value: number): Promise<void> { return _native.setReverbPreDelay(value); }
+export async function setReverbDamping(value: number): Promise<void>  { return _native.setReverbDamping(value); }
+export async function setDelayTime(value: number): Promise<void>      { return _native.setDelayTime(value); }
+export async function setDelayFeedback(value: number): Promise<void>  { return _native.setDelayFeedback(value); }
+export async function setDelayLowCut(value: number): Promise<void>    { return _native.setDelayLowCut(value); }
+export async function setDelayHighCut(value: number): Promise<void>   { return _native.setDelayHighCut(value); }
+export async function setModRate(value: number): Promise<void>        { return _native.setModRate(value); }
+export async function setModDepth(value: number): Promise<void>       { return _native.setModDepth(value); }
+export async function setModPhase(value: number): Promise<void>       { return _native.setModPhase(value); }
+export async function setModFeedback(value: number): Promise<void>    { return _native.setModFeedback(value); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function applyPreset(name: string): Promise<void>                                          { return _native.applyPreset(name); }
+export async function savePreset(name: string): Promise<void>                                           { return _native.savePreset(name); }
+export async function listPresets(): Promise<string[]>                                                  { return _native.listPresets(); }
+export async function deletePreset(name: string): Promise<boolean>                                      { return _native.deletePreset(name); }
+export async function exportPreset(name: string): Promise<string>                                       { return _native.exportPreset(name); }
+export async function importPreset(json: string): Promise<void>                                         { return _native.importPreset(json); }
+export async function assignTrackPreset(mediaId: string, presetName: string | null): Promise<void>      { return _native.assignTrackPreset(mediaId, presetName); }
+export async function getTrackPreset(mediaId: string): Promise<string | null>                           { return _native.getTrackPreset(mediaId); }
+export async function setAutoSwitchPresets(enabled: boolean): Promise<void>                             { return _native.setAutoSwitchPresets(enabled); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPECTRUM / AUTO-EQ
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getSpectrumMagnitudes(): Promise<Array<{ bin: number; magnitude: number }>> {
+  return _native.getSpectrumMagnitudes();
+}
+export async function computeAutoEQ(): Promise<Array<{ band: number; gain: number; freqHz: number }>> {
+  return _native.computeAutoEQ();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USB DAC
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function isUsbDacConnected(): Promise<boolean>                       { return _native.isUsbDacConnected(); }
+export async function getCurrentDacInfo(): Promise<unknown>                       { return _native.getCurrentDacInfo(); }
+export async function getDacCapabilities(): Promise<unknown>                      { return _native.getDacCapabilities(); }
+export async function enableDirectUsbRouting(enabled: boolean): Promise<boolean>  { return _native.enableDirectUsbRouting(enabled); }
+export async function isDirectUsbRoutingEnabled(): Promise<boolean>               { return _native.isDirectUsbRoutingEnabled(); }
+export async function setPreferredDacSampleRate(rate: number): Promise<boolean>   { return _native.setPreferredDacSampleRate(rate); }
+export async function setPreferredDacBitDepth(depth: number): Promise<boolean>    { return _native.setPreferredDacBitDepth(depth); }
+export async function rescanUsbDevices(): Promise<void>                           { return _native.rescanUsbDevices(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIO FORMAT DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getAudioCapabilities(): Promise<unknown>  { return _native.getAudioCapabilities(); }
+export async function getOptimalAudioFormat(): Promise<unknown> { return _native.getOptimalAudioFormat(); }
+export async function isHiResAudioCapable(): Promise<boolean>  { return _native.isHiResAudioCapable(); }
+export async function getMaxSampleRate(): Promise<number>       { return _native.getMaxSampleRate(); }
+export async function getMaxBitDepth(): Promise<number>         { return _native.getMaxBitDepth(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE / 64-BIT
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setOfflineMode(enabled: boolean): Promise<void>             { return _native.setOfflineMode(enabled); }
+export async function isOfflineMode(): Promise<boolean>                           { return _native.isOfflineMode(); }
+export async function set64BitProcessingEnabled(enabled: boolean): Promise<void>  { return _native.set64BitProcessingEnabled(enabled); }
+export async function is64BitProcessingEnabled(): Promise<boolean>                { return _native.is64BitProcessingEnabled(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOW-PLAYING METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function updateNowPlayingMetadata(track: Partial<Track>): Promise<void> {
+  return _native.updateNowPlayingMetadata(track);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENT SUBSCRIPTION  (mirrors RNTP's addEventListener)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function addEventListener(
+  event: Event | string,
+  listener: (data: EventPayload) => void
+): { remove: () => void } {
+  const subscription = _emitter.addListener(event as string, listener);
+  return { remove: () => subscription.remove() };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOOKS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Poll for playback progress at the given interval (ms).
+ * Returns { position, duration, buffered } in milliseconds.
+ * Mirrors RNTP's useProgress(interval?).
+ */
+export function useProgress(intervalMs = 1000): Progress {
+  const [progress, setProgress] = useState<Progress>({ position: 0, duration: 0, buffered: 0 });
+
+  useEffect(() => {
+    let active = true;
+
+    const sync = async () => {
+      try {
+        const p = await getProgress();
+        if (active) setProgress(p);
+      } catch { /* player not ready yet */ }
     };
-    
-    requestAnimationFrame(animate);
-  });
+
+    sync();
+    const id = setInterval(sync, intervalMs);
+    return () => { active = false; clearInterval(id); };
+  }, [intervalMs]);
+
+  return progress;
 }
 
-// -----------------------------------------------------------------------------
-// PLAYER CONTROL (Re-exported)
-// -----------------------------------------------------------------------------
+/**
+ * Keeps track of the current playback state.
+ * Mirrors RNTP's usePlaybackState().
+ */
+export function usePlaybackState(): PlaybackState {
+  const [ps, setPs] = useState<PlaybackState>({ state: undefined });
 
-export async function initPlayer(): Promise<void> {
-  await getNativeModule().initPlayer();
+  useEffect(() => {
+    getPlaybackState().then(setPs).catch(() => {});
+
+    const sub = addEventListener(Event.PlaybackState, (data) => {
+      const raw = (data as { state?: string }).state ?? '';
+      const stateValues = Object.values(State) as string[];
+      setPs({ state: stateValues.includes(raw) ? (raw as State) : State.None });
+    });
+    return () => sub.remove();
+  }, []);
+
+  return ps;
 }
 
-export async function loadTrack(track: MavinTrack): Promise<void> {
-  await getNativeModule().load(track);
+/**
+ * Returns the currently active track, updating whenever it changes.
+ * Mirrors RNTP's useActiveTrack().
+ */
+export function useActiveTrack(): Track | undefined {
+  const [track, setTrack] = useState<Track | undefined>(undefined);
+
+  useEffect(() => {
+    getActiveTrack().then(setTrack).catch(() => {});
+
+    const refresh = () => { getActiveTrack().then(setTrack).catch(() => {}); };
+    const s1 = addEventListener(Event.PlaybackActiveTrackChanged, refresh);
+    const s2 = addEventListener(Event.PlaybackTrackChanged, refresh);  // compat
+    return () => { s1.remove(); s2.remove(); };
+  }, []);
+
+  return track;
 }
 
-export async function play(): Promise<void> {
-  await getNativeModule().play();
+/**
+ * Returns { playing, bufferingDuringPlay }.
+ * Mirrors RNTP's useIsPlaying().
+ */
+export function useIsPlaying(): { playing: boolean; bufferingDuringPlay: boolean } {
+  const { state } = usePlaybackState();
+  return {
+    playing: state === State.Playing,
+    bufferingDuringPlay: state === State.Buffering,
+  };
 }
 
-export async function pause(): Promise<void> {
-  await getNativeModule().pause();
+/**
+ * Keeps track of the playWhenReady flag.
+ * Mirrors RNTP's usePlayWhenReady().
+ */
+export function usePlayWhenReady(): boolean {
+  const [pwr, setPwr] = useState(true);
+
+  useEffect(() => {
+    getPlayWhenReady().then(setPwr).catch(() => {});
+
+    const sub = addEventListener(Event.PlaybackPlayWhenReadyChanged, (data) => {
+      setPwr(!!(data as { playWhenReady?: boolean }).playWhenReady);
+    });
+    return () => sub.remove();
+  }, []);
+
+  return pwr;
 }
 
-export async function releasePlayer(): Promise<void> {
-  await getNativeModule().release();
+/**
+ * Returns the full queue and keeps it fresh.
+ * Mirrors RNTP's useQueue().
+ */
+export function useQueue(): Track[] {
+  const [queue, setQueue] = useState<Track[]>([]);
+
+  const refresh = useCallback(() => {
+    getQueue().then(setQueue).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const subs = [
+      addEventListener(Event.PlaybackActiveTrackChanged, refresh),
+      addEventListener(Event.PlaybackTrackChanged, refresh),
+      addEventListener(Event.PlaybackQueueEnded, refresh),
+    ];
+    return () => subs.forEach(s => s.remove());
+  }, [refresh]);
+
+  return queue;
 }
 
-export function isSupported(): boolean {
-  return Platform.OS === "android";
-}
+/**
+ * Subscribe to one or more events and call the handler when they fire.
+ * Mirrors RNTP's useTrackPlayerEvents(events, handler).
+ */
+export function useTrackPlayerEvents(
+  events: (Event | string)[],
+  handler: EventHandler
+): void {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
 
-// ✅ FIX: Export the native module instance as default export
-// This allows consumers to import MavinPlayer directly from 'mavin-eq'
-const MavinPlayerInstance = isNativeModuleAvailable() ? getNativeModule() : null;
-export default MavinPlayerInstance;
+  // Stringify events array for stable dep comparison
+  const eventsKey = events.join(',');
+
+  useEffect(() => {
+    const subs = events.map((event) =>
+      addEventListener(event, (data) =>
+        handlerRef.current({ ...data, type: event })
+      )
+    );
+    return () => subs.forEach(s => s.remove());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventsKey]);
+}

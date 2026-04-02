@@ -30,9 +30,10 @@ import expo.modules.mavinplayer.audio.TrackData
 import expo.modules.mavinplayer.service.MavinPlaybackService
 import java.util.concurrent.ConcurrentHashMap
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Playback state constants
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+
 private object PlaybackState {
     const val STATE_NONE    = 0
     const val STATE_PLAYING = 3
@@ -72,35 +73,53 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
     @Volatile private var currentPlaybackState = PlaybackState.STATE_NONE
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // MODULE DEFINITION
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     override fun definition() = ModuleDefinition {
         Name("MavinPlayer")
 
         Events(
+            // ── Playback ────────────────────────────────────────────────────
             "onPlaybackStateChanged",
-            "onTrackChanged",
+            "onTrackChanged",                    // deprecated — kept for compat
+            "onPlaybackActiveTrackChanged",      // NEW: RNTP PlaybackActiveTrackChanged
+            "onPlaybackQueueEnded",              // NEW: RNTP PlaybackQueueEnded
+            "onPlaybackPlayWhenReadyChanged",    // NEW: RNTP PlaybackPlayWhenReadyChanged
             "onError",
             "onProgress",
+            // ── DSP / hardware ──────────────────────────────────────────────
             "onSpectrum",
             "onPeakMeter",
             "onReplayGainApplied",
             "onUsbDacConnected",
             "onUsbDacDisconnected",
+            // ── Audio focus ──────────────────────────────────────────────────
             "onAudioFocusLost",
             "onAudioFocusGranted",
+            // ── Remote controls ─────────────────────────────────────────────
             "onRemotePlay",
             "onRemotePause",
+            "onRemoteStop",                      // NEW
             "onRemoteNext",
             "onRemotePrevious",
-            "onRemoteSeek"
+            "onRemoteSeek",
+            "onRemoteSkip",                      // NEW: Android Auto skip-to-index
+            "onRemotePlayId",                    // NEW: Android Auto play-by-id
+            "onRemotePlaySearch",                // NEW: Android Auto voice search
+            "onRemoteSetRating",                 // NEW: rating change
+            "onRemoteJumpForward",               // NEW
+            "onRemoteJumpBackward",              // NEW
+            "onRemoteDuck",                      // NEW: audio interruption / ducking
+            // ── Metadata ────────────────────────────────────────────────────
+            "onAudioCommonMetadataReceived",     // NEW: ID3 / Vorbis / QT metadata
+            "onAudioTimedMetadataReceived"       // NEW: Icy / timed metadata
         )
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // LIFECYCLE
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("initPlayer") { options: Map<String, Any?>?, promise: Promise ->
             runOnMain {
@@ -132,7 +151,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                     restoreState()
                     startForegroundService(ctx)
 
-                    Log.i(TAG, "âœ… initPlayer complete")
+                    Log.i(TAG, "✅ initPlayer complete")
                     promise.resolve(null)
                 } catch (e: Exception) {
                     Log.e(TAG, "initPlayer failed", e)
@@ -160,9 +179,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // PLAYBACK CONTROL
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("load") { trackMap: Map<String, Any?>, promise: Promise ->
             runOnMain {
@@ -199,6 +218,17 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
+        // NEW: insert at specific index (RNTP add(tracks, insertBeforeIndex))
+        AsyncFunction("addToQueueAt") { trackMap: Map<String, Any?>, index: Int, promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                try {
+                    p.addToQueueAt(trackMap.toTrackData(), index)
+                    promise.resolve(null)
+                } catch (e: Exception) { promise.reject("QUEUE_ERROR", e.message, e) }
+            }
+        }
+
         AsyncFunction("removeTrack") { index: Int, promise: Promise ->
             runOnMain {
                 requirePlayer(promise)?.removeTrack(index)
@@ -208,6 +238,17 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         AsyncFunction("removeUpcomingTracks") { promise: Promise ->
             runOnMain { requirePlayer(promise)?.removeUpcomingTracks(); promise.resolve(null) }
+        }
+
+        // NEW: move a track from one position to another (RNTP move())
+        AsyncFunction("moveTrack") { fromIndex: Int, toIndex: Int, promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                try {
+                    p.moveTrack(fromIndex, toIndex)
+                    promise.resolve(null)
+                } catch (e: Exception) { promise.reject("MOVE_ERROR", e.message, e) }
+            }
         }
 
         AsyncFunction("updateTrack") { index: Int, trackMap: Map<String, Any?>, promise: Promise ->
@@ -224,6 +265,14 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             runOnMain {
                 val p = requirePlayer(promise) ?: return@runOnMain
                 promise.resolve(p.getTrack(index))
+            }
+        }
+
+        // NEW: return entire queue as list (RNTP getQueue())
+        AsyncFunction("getQueue") { promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                promise.resolve(p.getAllTracks())
             }
         }
 
@@ -282,9 +331,28 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             runOnMain { requirePlayer(promise)?.skipRelative(seconds); promise.resolve(null) }
         }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // STATE GETTERS â€” RNTP Parity
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
+        // PLAY-WHEN-READY  (RNTP 4.x parity)
+        // ─────────────────────────────────────────────────────────────────────
+
+        AsyncFunction("setPlayWhenReady") { playWhenReady: Boolean, promise: Promise ->
+            runOnMain {
+                val p = requirePlayer(promise) ?: return@runOnMain
+                p.setPlayWhenReady(playWhenReady)
+                sendEvent("onPlaybackPlayWhenReadyChanged", mapOf("playWhenReady" to playWhenReady))
+                promise.resolve(null)
+            }
+        }
+
+        AsyncFunction("getPlayWhenReady") { promise: Promise ->
+            runOnMain {
+                promise.resolve(playerInstance?.getPlayWhenReady() ?: true)
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STATE GETTERS
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("getPosition")         { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getCurrentPosition()?.toDouble() ?: 0.0) } }
         AsyncFunction("getDuration")         { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getDuration()?.toDouble() ?: 0.0) } }
@@ -297,9 +365,42 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getShuffleMode")      { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getShuffleMode() ?: false) } }
         AsyncFunction("getAudioFocus")       { promise: Promise -> promise.resolve(hasAudioFocus) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // CONFIGURATION â€” RNTP Parity
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // NEW: RNTP getActiveTrack() — full track object
+        AsyncFunction("getActiveTrack") { promise: Promise ->
+            runOnMain { promise.resolve(playerInstance?.getCurrentTrackInfo()) }
+        }
+
+        // NEW: RNTP getActiveTrackIndex() — just the index
+        AsyncFunction("getActiveTrackIndex") { promise: Promise ->
+            runOnMain {
+                val info = playerInstance?.getCurrentTrackInfo()
+                promise.resolve(info?.get("index") as? Int)
+            }
+        }
+
+        // NEW: RNTP getProgress() — { position, duration, buffered } in ms
+        AsyncFunction("getProgress") { promise: Promise ->
+            runOnMain {
+                val p = playerInstance
+                promise.resolve(if (p != null) mapOf(
+                    "position" to p.getCurrentPosition().toDouble(),
+                    "duration" to p.getDuration().toDouble(),
+                    "buffered" to p.getBufferedPosition().toDouble()
+                ) else mapOf("position" to 0.0, "duration" to 0.0, "buffered" to 0.0))
+            }
+        }
+
+        // NEW: RNTP getPlaybackState() — { state: string }
+        AsyncFunction("getPlaybackState") { promise: Promise ->
+            runOnMain {
+                val state = playerInstance?.getPlaybackStateString() ?: "none"
+                promise.resolve(mapOf("state" to state))
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // CONFIGURATION
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setProgressUpdateInterval") { ms: Double, promise: Promise ->
             playerInstance?.setProgressIntervalMs(ms.toLong())
@@ -352,9 +453,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // PLAYBACK SPEED + INDEPENDENT PITCH CONTROL
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
+        // PLAYBACK SPEED + PITCH
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setPlaybackSpeed") { speed: Double, promise: Promise ->
             playerInstance?.setPlaybackSpeed(speed.toFloat()); promise.resolve(null)
@@ -373,32 +474,32 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             promise.resolve(null)
         }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // CROSSFADE
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setCrossfadeEnabled")  { enabled: Boolean, promise: Promise -> playerInstance?.setCrossfadeEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isCrossfadeEnabled")   { promise: Promise -> promise.resolve(playerInstance?.isCrossfadeEnabled() ?: false) }
         AsyncFunction("setCrossfadeDuration") { durationMs: Double, promise: Promise -> playerInstance?.setCrossfadeDurationMs(durationMs.toLong()); promise.resolve(null) }
         AsyncFunction("getCrossfadeDuration") { promise: Promise -> promise.resolve(playerInstance?.getCrossfadeDurationMs()?.toDouble() ?: 2000.0) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // OFFLINE MODE
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setOfflineMode") { enabled: Boolean, promise: Promise -> playerInstance?.setOfflineMode(enabled); promise.resolve(null) }
         AsyncFunction("isOfflineMode")  { promise: Promise -> promise.resolve(playerInstance?.isOfflineMode() ?: false) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // 64-BIT PROCESSING
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("set64BitProcessingEnabled") { enabled: Boolean, promise: Promise -> playerInstance?.set64BitProcessingEnabled(enabled); promise.resolve(null) }
         AsyncFunction("is64BitProcessingEnabled")  { promise: Promise -> promise.resolve(playerInstance?.is64BitProcessingEnabled() ?: false) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // USB DAC
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("isUsbDacConnected") { promise: Promise -> promise.resolve(playerInstance?.isUsbDacConnected() ?: false) }
 
@@ -430,9 +531,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("setPreferredDacBitDepth")   { depth: Int, promise: Promise -> promise.resolve(playerInstance?.setPreferredDacBitDepth(depth) ?: false) }
         AsyncFunction("rescanUsbDevices")          { promise: Promise -> playerInstance?.rescanUsbDevices(); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // AUDIO FORMAT DETECTION
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("getAudioCapabilities") { promise: Promise ->
             val c = playerInstance?.getAudioCapabilities()
@@ -460,9 +561,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getMaxSampleRate")    { promise: Promise -> promise.resolve(playerInstance?.getMaxSampleRate() ?: 48000) }
         AsyncFunction("getMaxBitDepth")      { promise: Promise -> promise.resolve(playerInstance?.getMaxBitDepth() ?: 16) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // CONVOLUTION
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("loadImpulseResponse") { filePath: String, promise: Promise ->
             if (playerInstance?.loadImpulseResponse(filePath) == true) promise.resolve(null)
@@ -474,9 +575,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("setConvolutionEnabled")   { enabled: Boolean, promise: Promise -> playerInstance?.setConvolutionEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isConvolutionEnabled")    { promise: Promise -> promise.resolve(playerInstance?.isConvolutionEnabled() ?: false) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // EQ â€” GRAPHIC
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
+        // EQ — GRAPHIC
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setEQEnabled") { en: Boolean, promise: Promise -> playerInstance?.setEQEnabled(en); promise.resolve(null) }
         AsyncFunction("setEQBand")    { band: Int, gainDb: Double, promise: Promise -> playerInstance?.setEQBand(band, gainDb.toFloat()); promise.resolve(null) }
@@ -485,9 +586,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("setEQBandQ")   { band: Int, q: Double, promise: Promise -> playerInstance?.setEQBandQ(band, q.toFloat()); promise.resolve(null) }
         AsyncFunction("resetEQ")      { promise: Promise -> playerInstance?.resetEQ(); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // EQ â€” PARAMETRIC
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
+        // EQ — PARAMETRIC
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setParametricBandGain") { band: Int, gainDb: Double, promise: Promise -> playerInstance?.setParametricBandGain(band, gainDb.toFloat()); promise.resolve(null) }
         AsyncFunction("applyParametricBands")  { gains: List<Double>, promise: Promise -> playerInstance?.applyParametricBands(gains.toFloatArray()); promise.resolve(null) }
@@ -495,17 +596,17 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("resetParametric")       { promise: Promise -> playerInstance?.resetParametric(); promise.resolve(null) }
         AsyncFunction("setEQMode")             { mode: String, promise: Promise -> playerInstance?.setEQMode(mode); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // EQ â€” DITHER / SMOOTHING
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
+        // EQ — DITHER / SMOOTHING
+        // ─────────────────────────────────────────────────────────────────────
 
-        AsyncFunction("setDitherMode")  { mode: String, promise: Promise -> playerInstance?.setDitherMode(mode); promise.resolve(null) }
-        AsyncFunction("getDitherMode")  { promise: Promise -> promise.resolve(playerInstance?.getDitherMode() ?: "E_WEIGHTED") }
+        AsyncFunction("setDitherMode")   { mode: String, promise: Promise -> playerInstance?.setDitherMode(mode); promise.resolve(null) }
+        AsyncFunction("getDitherMode")   { promise: Promise -> promise.resolve(playerInstance?.getDitherMode() ?: "E_WEIGHTED") }
         AsyncFunction("setSmoothingRamp") { ms: Double, promise: Promise -> playerInstance?.setSmoothingRamp(ms); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // COMPRESSOR (DRC)
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setCompressorEnabled")    { enabled: Boolean, promise: Promise -> playerInstance?.setCompressorEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isCompressorEnabled")     { promise: Promise -> promise.resolve(playerInstance?.isCompressorEnabled() ?: false) }
@@ -521,9 +622,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getCompressorAttack")     { promise: Promise -> promise.resolve(playerInstance?.getCompressorAttackMs() ?: 5.0) }
         AsyncFunction("getCompressorRelease")    { promise: Promise -> promise.resolve(playerInstance?.getCompressorReleaseMs() ?: 100.0) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // CROSSFEED
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setCrossfeedEnabled")  { enabled: Boolean, promise: Promise -> playerInstance?.setCrossfeedEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isCrossfeedEnabled")   { promise: Promise -> promise.resolve(playerInstance?.isCrossfeedEnabled() ?: false) }
@@ -531,13 +632,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("setCrossfeedCutoff")   { hz: Double, promise: Promise -> playerInstance?.setCrossfeedCutoff(hz); promise.resolve(null) }
         AsyncFunction("getCrossfeedStrength") { promise: Promise -> promise.resolve(playerInstance?.getCrossfeedStrength()?.toDouble() ?: 0.7) }
         AsyncFunction("getCrossfeedCutoff")   { promise: Promise -> promise.resolve(playerInstance?.getCrossfeedCutoff() ?: 700.0) }
-        // Extra crossfeed delay exposed to JS
         AsyncFunction("setCrossfeedDelayMs")  { ms: Double, promise: Promise -> playerInstance?.setCrossfeedDelayMs(ms); promise.resolve(null) }
         AsyncFunction("getCrossfeedDelayMs")  { promise: Promise -> promise.resolve(playerInstance?.getCrossfeedDelayMs() ?: 0.3) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // PEAK METER
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setPeakHoldMs")    { ms: Double, promise: Promise -> playerInstance?.setPeakHoldMs(ms); promise.resolve(null) }
         AsyncFunction("setPeakReleaseMs") { ms: Double, promise: Promise -> playerInstance?.setPeakReleaseMs(ms); promise.resolve(null) }
@@ -557,18 +657,18 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         }
         AsyncFunction("resetPeaks") { promise: Promise -> playerInstance?.resetPeaks(); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // REPLAY GAIN
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setReplayGainMode")    { mode: String, promise: Promise -> playerInstance?.setReplayGainMode(mode); promise.resolve(null) }
         AsyncFunction("setReplayGainPreamp")  { gainDb: Double, promise: Promise -> playerInstance?.setReplayGainPreamp(gainDb.toFloat()); promise.resolve(null) }
         AsyncFunction("setReplayGainFromMap") { tags: Map<String, String>, promise: Promise -> playerInstance?.setReplayGainFromMap(tags); promise.resolve(null) }
         AsyncFunction("getReplayGainInfo")    { promise: Promise -> promise.resolve(playerInstance?.getReplayGainInfo()) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // PRESETS
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("applyPreset") { name: String, promise: Promise ->
             if (playerInstance?.applyPresetByName(name) == true) promise.resolve(null)
@@ -586,9 +686,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getTrackPreset")       { mediaId: String, promise: Promise -> promise.resolve(playerInstance?.getTrackPreset(mediaId)) }
         AsyncFunction("setAutoSwitchPresets") { enabled: Boolean, promise: Promise -> playerInstance?.setAutoSwitchPresets(enabled); promise.resolve(null) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // EQ STATE GETTERS
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("getEQGains") { promise: Promise ->
             promise.resolve(playerInstance?.getEQGains()?.mapIndexed { i, g ->
@@ -615,9 +715,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getEQMode")     { promise: Promise -> promise.resolve(playerInstance?.getEQMode() ?: "GRAPHIC") }
         AsyncFunction("getLoudnessDb") { promise: Promise -> promise.resolve(playerInstance?.getLoudnessDb()?.toDouble() ?: 0.0) }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // SPECTRUM & AUTO-EQ
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("getSpectrumMagnitudes") { promise: Promise ->
             promise.resolve(playerInstance?.getSpectrumMagnitudes()?.mapIndexed { i, m ->
@@ -631,9 +731,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             } ?: emptyList<Map<String, Any>>())
         }
 
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
         // FX PROCESSOR
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─────────────────────────────────────────────────────────────────────
 
         AsyncFunction("setFxEnabled")  { enabled: Boolean, promise: Promise -> playerInstance?.setFxEnabled(enabled); promise.resolve(null) }
         AsyncFunction("isFxEnabled")   { promise: Promise -> promise.resolve(playerInstance?.isFxEnabled() ?: false) }
@@ -658,9 +758,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("setModFeedback")    { value: Double, promise: Promise -> playerInstance?.setModFeedback(value); promise.resolve(null) }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // MEDIA SESSION (Media3)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun setupMediaSession(context: Context, player: MavinAudioPlayer, options: Map<String, Any?>?) {
         val ratingType: Int = when ((options?.get("ratingType") as? String)?.uppercase()) {
@@ -718,9 +818,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         Log.d(TAG, "updateMediaMetadata: ${track.title} idx=$index")
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // AUDIO FOCUS
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     @Suppress("DEPRECATION")
     private fun requestAudioFocus(): Boolean {
@@ -776,24 +876,28 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 playerInstance?.pause()
                 currentPlaybackState = PlaybackState.STATE_PAUSED
                 sendEvent("onAudioFocusLost", mapOf("type" to "loss"))
+                // Also fire onRemoteDuck for RNTP compatibility
+                sendEvent("onRemoteDuck", mapOf("permanent" to true, "paused" to true))
                 hasAudioFocus = false
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 playerInstance?.pause()
                 currentPlaybackState = PlaybackState.STATE_PAUSED
                 sendEvent("onAudioFocusLost", mapOf("type" to "transient"))
+                sendEvent("onRemoteDuck", mapOf("permanent" to false, "paused" to true))
                 hasAudioFocus = false
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 playerInstance?.setVolume(0.3f)
                 sendEvent("onAudioFocusLost", mapOf("type" to "duck"))
+                sendEvent("onRemoteDuck", mapOf("permanent" to false, "paused" to false))
             }
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // FOREGROUND SERVICE + NOTIFICATION
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun startForegroundService(context: Context) {
         if (isForegroundService) return
@@ -819,11 +923,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             .createNotificationChannel(channel)
     }
 
-    /**
-     * Media3-compatible notification using standard NotificationCompat.Builder
-     * instead of legacy androidx.media.app.NotificationCompat.MediaStyle.
-     * The MediaSession handles all media control integration.
-     */
     fun buildMediaNotification(context: Context): Notification {
         val launchIntent = context.packageManager
             .getLaunchIntentForPackage(context.packageName)
@@ -843,8 +942,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         val artist    = trackInfo?.get("artist") as? String ?: "Ready to play"
         val isPlaying = playerInstance?.isPlaying() ?: false
 
-        // Use standard NotificationCompat.Builder without MediaStyle
-        // Media3 handles the media session connection internally via MediaSession
         return NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(artist)
@@ -870,11 +967,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         return NotificationCompat.Action(iconRes, title, pi)
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // PLAYER CALLBACKS
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun setupPlayerCallbacks(player: MavinAudioPlayer) {
+
         player.onPlaybackStateChanged = { state ->
             val name = when (state) {
                 Player.STATE_IDLE      -> "idle"
@@ -897,7 +995,15 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         player.onTrackChanged = { index ->
             currentTrackIndex = index
+            // Fire legacy event (RNTP PlaybackTrackChanged — deprecated)
             sendDebouncedEvent("onTrackChanged", mapOf("index" to index), 100)
+            // Fire modern event (RNTP PlaybackActiveTrackChanged)
+            val trackInfo = playerInstance?.getCurrentTrackInfo() ?: emptyMap<String, Any?>()
+            sendDebouncedEvent(
+                "onPlaybackActiveTrackChanged",
+                mapOf("index" to index, "track" to trackInfo),
+                100
+            )
         }
 
         player.onError = { message, code ->
@@ -905,11 +1011,17 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             currentPlaybackState = PlaybackState.STATE_ERROR
         }
 
-        // FIX (line 957): onReplayGainApplied callback parameters are
-        // (trackGain: Float?, albumGain: Float?, appliedDb: Float).
-        // mapOf() infers Map<String, Float?> when nullable Floats are values,
-        // but sendDebouncedEvent expects Map<String, Any>.
-        // Fix: explicitly cast each value to Any? and use a typed map.
+        // Queue ended
+        player.onQueueEnded = { position ->
+            sendEvent("onPlaybackQueueEnded", mapOf("position" to position.toDouble()))
+        }
+
+        // playWhenReady changed
+        player.onPlayWhenReadyChanged = { playWhenReady ->
+            sendEvent("onPlaybackPlayWhenReadyChanged", mapOf("playWhenReady" to playWhenReady))
+        }
+
+        // ReplayGain
         player.onReplayGainApplied = { trackGain, albumGain, appliedDb ->
             val payload = mutableMapOf<String, Any>()
             trackGain?.let  { payload["trackGain"]  = it }
@@ -918,15 +1030,16 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             sendDebouncedEvent("onReplayGainApplied", payload, 200)
         }
 
+        // USB DAC
         player.onUsbDacConnected = { dacInfo ->
             sendEvent("onUsbDacConnected", mapOf(
-                "name"                   to dacInfo.name,
-                "vendorId"               to dacInfo.vendorId,
-                "productId"              to dacInfo.productId,
-                "hasAudioOutput"         to dacInfo.hasAudioOutput,
-                "supportedSampleRates"   to dacInfo.supportedSampleRates,
-                "maxBitDepth"            to dacInfo.maxBitDepth,
-                "maxChannels"            to dacInfo.maxChannels,
+                "name"                    to dacInfo.name,
+                "vendorId"                to dacInfo.vendorId,
+                "productId"               to dacInfo.productId,
+                "hasAudioOutput"          to dacInfo.hasAudioOutput,
+                "supportedSampleRates"    to dacInfo.supportedSampleRates,
+                "maxBitDepth"             to dacInfo.maxBitDepth,
+                "maxChannels"             to dacInfo.maxChannels,
                 "isNativeDirectSupported" to dacInfo.isNativeDirectSupported
             ))
         }
@@ -934,11 +1047,58 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         player.onUsbDacDisconnected = {
             sendEvent("onUsbDacDisconnected", emptyMap<String, Any>())
         }
+
+        // ── New RNTP-parity remote callbacks ──────────────────────────────────
+        // These are fired from the MediaSession callback in MavinPlaybackService
+        // when remote commands arrive.  We wire them here so the JS layer
+        // receives them identically to RNTP.
+
+        player.onRemoteStop = {
+            sendEvent("onRemoteStop", emptyMap<String, Any>())
+        }
+
+        player.onRemoteSkip = { index ->
+            sendEvent("onRemoteSkip", mapOf("index" to index))
+        }
+
+        player.onRemotePlayId = { id ->
+            sendEvent("onRemotePlayId", mapOf("id" to id))
+        }
+
+        player.onRemotePlaySearch = { query, extras ->
+            val payload = mutableMapOf<String, Any>("query" to query)
+            extras.forEach { (k, v) -> if (v != null) payload[k] = v }
+            sendEvent("onRemotePlaySearch", payload)
+        }
+
+        player.onRemoteSetRating = { rating ->
+            sendEvent("onRemoteSetRating", mapOf("rating" to rating.toDouble()))
+        }
+
+        player.onRemoteJumpForward = { interval ->
+            sendEvent("onRemoteJumpForward", mapOf("interval" to interval))
+        }
+
+        player.onRemoteJumpBackward = { interval ->
+            sendEvent("onRemoteJumpBackward", mapOf("interval" to interval))
+        }
+
+        player.onRemoteDuck = { permanent, paused ->
+            sendEvent("onRemoteDuck", mapOf("permanent" to permanent, "paused" to paused))
+        }
+
+        player.onAudioCommonMetadata = { metadata ->
+            sendEvent("onAudioCommonMetadataReceived", mapOf("metadata" to metadata))
+        }
+
+        player.onAudioTimedMetadata = { metadata ->
+            sendEvent("onAudioTimedMetadataReceived", mapOf("metadata" to metadata))
+        }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // PROGRESS + SPECTRUM TIMERS
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun startProgressTimer(player: MavinAudioPlayer) {
         stopProgressTimer()
@@ -955,11 +1115,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                         ), 200)
                     }
                 }
-                // FIX: Changed from property access to getter method
                 mainHandler.postDelayed(this, player.getProgressIntervalMs())
             }
         }
-        // FIX: Changed from property access to getter method
         mainHandler.postDelayed(progressRunnable!!, player.getProgressIntervalMs())
     }
 
@@ -989,9 +1147,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     private fun stopSpectrumTimer()  { spectrumRunnable?.let  { mainHandler.removeCallbacks(it) }; spectrumRunnable  = null }
     private fun stopAllTimers()      { stopProgressTimer(); stopSpectrumTimer() }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // DEBOUNCED EVENT EMISSION
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private class Debouncer(
         private val delayMs: Long,
@@ -1012,9 +1170,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         eventDebouncers.getOrPut(eventName) { Debouncer(debounceMs) { sendEvent(eventName, it) } }.trigger(data)
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // QUEUE PERSISTENCE
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun persistQueue(tracks: List<Map<String, Any?>>, currentIndex: Int) {
         try {
@@ -1060,7 +1218,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 if (position > 0) playerInstance?.seekTo(position)
                 currentTrackIndex = trackIndex
                 lastKnownPosition = position
-                Log.i(TAG, "âœ… Restored queue: ${queue.size} tracks, index $trackIndex, pos $position")
+                Log.i(TAG, "✅ Restored queue: ${queue.size} tracks, index $trackIndex, pos $position")
             }
         } catch (e: Exception) { Log.w(TAG, "Failed to restore state", e) }
     }
@@ -1069,9 +1227,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         loadPersistedQueue()?.let { persistQueue(it, currentTrackIndex) }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // CLEANUP
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun cleanUp() {
         runOnMain {
@@ -1083,13 +1241,13 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             abandonAudioFocus()
             eventDebouncers.values.forEach { it.cancel() }
             eventDebouncers.clear()
-            Log.i(TAG, "ðŸ§¹ Module cleaned up")
+            Log.i(TAG, "🧹 Module cleaned up")
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
     // HELPERS
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun runOnMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
@@ -1101,12 +1259,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         return p
     }
 
-    /**
-     * FIX (line 957): original code produced Map<String, Float?> (because
-     * replayGainTags values are nullable Floats) which didn't satisfy
-     * Map<String, Any>. Now using safe per-entry String conversion so the
-     * whole map is always Map<String, String>, satisfying Map<String, Any>.
-     */
     @Suppress("UNCHECKED_CAST")
     private fun Map<String, Any?>.toTrackData(): TrackData {
         val rawRgTags = get("replayGainTags")
