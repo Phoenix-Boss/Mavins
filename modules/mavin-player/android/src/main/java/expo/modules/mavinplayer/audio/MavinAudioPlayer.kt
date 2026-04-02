@@ -1,4 +1,4 @@
-package expo.modules.mavinplayer.audio
+﻿package expo.modules.mavinplayer.audio
 
 import android.content.Context
 import android.media.AudioFormat
@@ -24,14 +24,14 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import expo.modules.autoeqengine.CompressorProcessor
-import expo.modules.autoeqengine.ConvolutionProcessor
-import expo.modules.autoeqengine.CrossfeedProcessor
-import expo.modules.autoeqengine.EqPresetManager
-import expo.modules.autoeqengine.EqualizerProcessor
-import expo.modules.autoeqengine.FxProcessor
-import expo.modules.autoeqengine.PeakMeterProcessor
-import expo.modules.autoeqengine.ReplayGainParser
+import expo.modules.mavinplayer.audio.CompressorProcessor
+import expo.modules.mavinplayer.audio.ConvolutionProcessor
+import expo.modules.mavinplayer.audio.CrossfeedProcessor
+import expo.modules.mavinplayer.audio.EqPresetManager
+import expo.modules.mavinplayer.audio.EqualizerProcessor
+import expo.modules.mavinplayer.audio.FxProcessor
+import expo.modules.mavinplayer.audio.PeakMeterProcessor
+import expo.modules.mavinplayer.audio.ReplayGainParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +46,7 @@ class MavinAudioPlayer(private val context: Context) {
         private const val DEFAULT_CACHE_SIZE_BYTES = 200L * 1024 * 1024
     }
 
-    // ── DSP processors ────────────────────────────────────────────────────────
+    // â”€â”€ DSP processors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     val equalizerProcessor   = EqualizerProcessor()
     lateinit var compressorProcessor  : CompressorProcessor
     lateinit var crossfeedProcessor   : CrossfeedProcessor
@@ -61,35 +61,35 @@ class MavinAudioPlayer(private val context: Context) {
     private var cache: SimpleCache
     private var cacheSizeBytes: Long = DEFAULT_CACHE_SIZE_BYTES
 
-    // ── Wake Lock ─────────────────────────────────────────────────────────────
+    // â”€â”€ Wake Lock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var wakeLock: PowerManager.WakeLock? = null
     private var wakeMode: Int = 0 // 0: None, 1: Partial
 
-    // ── ReplayGain state ──────────────────────────────────────────────────────
+    // â”€â”€ ReplayGain state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var replayGainMode     = ReplayGainParser.Mode.TRACK
     private var replayGainPreampDb = 0f
     private var currentRgInfo      = ReplayGainParser.EMPTY
 
-    // ── Crossfade ─────────────────────────────────────────────────────────────
+    // â”€â”€ Crossfade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var crossfadeEnabled    = false
     private var crossfadeDurationMs = 2000L
 
-    // ── Feature flags ─────────────────────────────────────────────────────────
+    // â”€â”€ Feature flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var autoSwitchPresets = true
     private var offlineMode       = false
 
-    // ── Audio attributes (configurable via initPlayer options) ────────────────
+    // â”€â”€ Audio attributes (configurable via initPlayer options) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private var audioUsage   = C.USAGE_MEDIA
     private var audioContent = C.AUDIO_CONTENT_TYPE_MUSIC
 
-    // ── Progress update interval (configurable, default 1000ms) ──────────────
+    // â”€â”€ Progress update interval (configurable, default 1000ms) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FIX: Changed from property to backing field with explicit getter/setter methods
     private var _progressIntervalMs: Long = 1000L
 
-    // ── Background scope ──────────────────────────────────────────────────────
+    // â”€â”€ Background scope â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // ── Callbacks ─────────────────────────────────────────────────────────────
+    // â”€â”€ Callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     var onPlaybackStateChanged  : ((state: Int) -> Unit)?  = null
     var onTrackChanged          : ((index: Int) -> Unit)?  = null
     var onError                 : ((message: String, code: String) -> Unit)? = null
@@ -182,7 +182,7 @@ class MavinAudioPlayer(private val context: Context) {
             ) { onPositionDiscontinuity?.invoke() }
         })
 
-        Log.i(TAG, "✅ MavinAudioPlayer ready — Full RNTP Parity + USB DAC")
+        Log.i(TAG, "âœ… MavinAudioPlayer ready â€” Full RNTP Parity + USB DAC")
     }
 
     private fun buildAudioAttributes(): AudioAttributes =
@@ -196,9 +196,9 @@ class MavinAudioPlayer(private val context: Context) {
         return SimpleCache(cacheDir, LeastRecentlyUsedCacheEvictor(size))
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // AUDIO ATTRIBUTES CONFIG
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun configureAudioAttributes(usage: String?, contentType: String?) {
         audioUsage = when (usage?.uppercase()) {
@@ -229,9 +229,9 @@ class MavinAudioPlayer(private val context: Context) {
         player.setAudioAttributes(buildAudioAttributes(), true)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // CACHE CONFIGURATION
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun updateCacheConfig(sizeBytes: Long) {
         if (sizeBytes == cacheSizeBytes) return
@@ -245,9 +245,9 @@ class MavinAudioPlayer(private val context: Context) {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // WAKE LOCK
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setWakeMode(mode: Int) {
         wakeMode = mode
@@ -261,32 +261,32 @@ class MavinAudioPlayer(private val context: Context) {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // CROSSFADE
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setCrossfadeEnabled(enabled: Boolean)          { crossfadeEnabled = enabled }
     fun isCrossfadeEnabled(): Boolean                  = crossfadeEnabled
     fun setCrossfadeDurationMs(durationMs: Long)       { crossfadeDurationMs = durationMs.coerceIn(500L, 10_000L) }
     fun getCrossfadeDurationMs(): Long                 = crossfadeDurationMs
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // OFFLINE MODE
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setOfflineMode(enabled: Boolean) { offlineMode = enabled; Log.i(TAG, "Offline mode: $enabled") }
     fun isOfflineMode(): Boolean         = offlineMode
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // 64-BIT PROCESSING
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun set64BitProcessingEnabled(enabled: Boolean) { equalizerProcessor.setHighPrecisionMode(enabled) }
     fun is64BitProcessingEnabled(): Boolean         = equalizerProcessor.isHighPrecisionMode()
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PLAYBACK CONTROL — RNTP Parity
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // PLAYBACK CONTROL â€” RNTP Parity
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun load(track: TrackData) {
         player.setMediaItem(buildMediaItem(track))
@@ -354,9 +354,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun setShuffleModeEnabled(e: Boolean)  { player.shuffleModeEnabled = e }
     fun setVolume(volume: Float)           { player.volume = volume.coerceIn(0f, 1f) }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PLAYBACK SPEED + INDEPENDENT PITCH CONTROL
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setPlaybackSpeed(speed: Float) {
         val current = player.playbackParameters
@@ -377,9 +377,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getPlaybackSpeed(): Float = player.playbackParameters.speed
     fun getPlaybackPitch(): Float = player.playbackParameters.pitch
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // STATE QUERIES — RNTP Parity
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // STATE QUERIES â€” RNTP Parity
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun getCurrentPosition(): Long  = player.currentPosition
     fun getDuration(): Long         = player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
@@ -405,9 +405,9 @@ class MavinAudioPlayer(private val context: Context) {
         )
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // UPDATE NOW PLAYING METADATA
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun updateNowPlayingMetadata(track: TrackData) {
         val idx = player.currentMediaItemIndex
@@ -416,9 +416,9 @@ class MavinAudioPlayer(private val context: Context) {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PROGRESS INTERVAL
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FIX: Explicit getter/setter methods using backing field (no property conflict)
 
     fun setProgressIntervalMs(ms: Long) { 
@@ -427,9 +427,9 @@ class MavinAudioPlayer(private val context: Context) {
     
     fun getProgressIntervalMs(): Long = _progressIntervalMs
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // EQ / DSP
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setEQEnabled(enabled: Boolean)                    { equalizerProcessor.isEnabled = enabled }
     fun setEQBand(band: Int, gainDb: Float)               { equalizerProcessor.setBandGain(band, gainDb) }
@@ -466,9 +466,9 @@ class MavinAudioPlayer(private val context: Context) {
         equalizerProcessor.recomputeSmoothStep()
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // COMPRESSOR
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setCompressorEnabled(enabled: Boolean)  { compressorProcessor.setEnabled(enabled) }
     fun isCompressorEnabled(): Boolean          = compressorProcessor.isEnabled()
@@ -484,21 +484,21 @@ class MavinAudioPlayer(private val context: Context) {
     fun getCompressorAttackMs(): Double         = compressorProcessor.getAttackMs()
     fun getCompressorReleaseMs(): Double        = compressorProcessor.getReleaseMs()
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // CROSSFEED
     //
-    // FIX (lines 535–538): The original code called setStrength / setCutoffFrequency
+    // FIX (lines 535â€“538): The original code called setStrength / setCutoffFrequency
     // / getStrength / getCutoffFrequency which do NOT exist on CrossfeedProcessor.
     // CrossfeedProcessor exposes:
-    //   setFeedDb(db: Double)  / getFeedDb(): Double   — cross-feed attenuation
-    //   setCutoffHz(hz: Double)/ getCutoffHz(): Double  — low-shelf cutoff
-    //   setDelayMs(ms: Double) / getDelayMs(): Double   — inter-aural delay
+    //   setFeedDb(db: Double)  / getFeedDb(): Double   â€” cross-feed attenuation
+    //   setCutoffHz(hz: Double)/ getCutoffHz(): Double  â€” low-shelf cutoff
+    //   setDelayMs(ms: Double) / getDelayMs(): Double   â€” inter-aural delay
     //   setEnabled / isEnabled
     //
-    // We map the JS-facing "strength" concept to feedDb using a 0..1 → 0..-20 dB
+    // We map the JS-facing "strength" concept to feedDb using a 0..1 â†’ 0..-20 dB
     // linear scale so the public API stays unchanged from JS side.
     // "cutoff" maps directly to setCutoffHz / getCutoffHz.
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setCrossfeedEnabled(enabled: Boolean) { crossfeedProcessor.setEnabled(enabled) }
     fun isCrossfeedEnabled(): Boolean         = crossfeedProcessor.isEnabled()
@@ -506,8 +506,8 @@ class MavinAudioPlayer(private val context: Context) {
     /**
      * Set crossfeed strength as a normalised value [0.0 .. 1.0].
      * Maps to CrossfeedProcessor.setFeedDb() using the range
-     * FEED_MIN_DB (-20 dB) at 0.0 → FEED_MAX_DB (0 dB) at 1.0.
-     * Default BS2B "High" preset corresponds to strength ≈ 0.7 (−6 dB).
+     * FEED_MIN_DB (-20 dB) at 0.0 â†’ FEED_MAX_DB (0 dB) at 1.0.
+     * Default BS2B "High" preset corresponds to strength â‰ˆ 0.7 (âˆ’6 dB).
      */
     fun setCrossfeedStrength(strength: Float) {
         val clamped = strength.coerceIn(0f, 1f)
@@ -545,9 +545,9 @@ class MavinAudioPlayer(private val context: Context) {
 
     fun getCrossfeedDelayMs(): Double = crossfeedProcessor.getDelayMs()
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PEAK METER
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setPeakHoldMs(ms: Double)     { peakMeterProcessor.setPeakHoldMs(ms) }
     fun setPeakReleaseMs(ms: Double)  { peakMeterProcessor.setReleaseMs(ms) }
@@ -555,9 +555,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getHeldPeaks(): FloatArray    = peakMeterProcessor.getHeldPeaks()
     fun resetPeaks()                  { peakMeterProcessor.resetPeaks() }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // REPLAY GAIN
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setReplayGainMode(mode: String) {
         replayGainMode = when (mode.uppercase()) {
@@ -590,9 +590,9 @@ class MavinAudioPlayer(private val context: Context) {
         "preampDb"  to replayGainPreampDb
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // PRESETS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun applyPresetByName(name: String): Boolean {
         val preset = presetManager.loadPreset(name) ?: return false
@@ -635,9 +635,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getTrackPreset(mediaId: String): String? = presetManager.getTrackPreset(mediaId)
     fun setAutoSwitchPresets(enabled: Boolean)  { autoSwitchPresets = enabled }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // USB DAC
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun isUsbDacConnected(): Boolean                             = usbDacController.isDacConnected
     fun getCurrentDacInfo(): UsbDacController.DacInfo?          = usbDacController.getCurrentDacInfo()
@@ -648,9 +648,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun setPreferredDacBitDepth(depth: Int): Boolean            = usbDacController.setPreferredBitDepth(depth)
     fun rescanUsbDevices()                                      { usbDacController.rescanDevices() }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // AUDIO FORMAT DETECTION
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun getAudioCapabilities(): AudioFormatDetector.AudioCapabilities = audioFormatDetector.getAudioCapabilities()
     fun getOptimalAudioFormat(): AudioFormatDetector.OptimalFormat    = audioFormatDetector.getOptimalFormat()
@@ -658,9 +658,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getMaxSampleRate(): Int                                      = audioFormatDetector.getMaxSampleRate()
     fun getMaxBitDepth(): Int                                        = audioFormatDetector.getMaxBitDepth()
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // CONVOLUTION
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun loadImpulseResponse(filePath: String): Boolean = convolutionProcessor.loadImpulseResponse(filePath)
     fun clearImpulseResponse()                         { convolutionProcessor.clearImpulseResponse() }
@@ -669,9 +669,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun setConvolutionEnabled(enabled: Boolean)        { convolutionProcessor.isEnabled = enabled }
     fun isConvolutionEnabled(): Boolean                = convolutionProcessor.isEnabled
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // FX PROCESSOR
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun setFxEnabled(enabled: Boolean) { fxProcessor.isEnabled = enabled }
     fun isFxEnabled(): Boolean         = fxProcessor.isEnabled
@@ -704,9 +704,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun setModPhase(value: Double)       { fxProcessor.setModPhase(value / 100.0) }
     fun setModFeedback(value: Double)    { fxProcessor.setModFeedback(value / 100.0) }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // EQ GETTERS
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fun getEQGains(): FloatArray          = equalizerProcessor.getCurrentGains()
     fun getEQPreamp(): Float              = equalizerProcessor.getCurrentPreamp()
@@ -719,9 +719,9 @@ class MavinAudioPlayer(private val context: Context) {
     fun getSpectrumMagnitudes(): FloatArray = equalizerProcessor.spectrumMagnitudes
     fun computeAutoEQ(): FloatArray       = equalizerProcessor.computeAutoEqSuggestion()
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // INTERNAL
-    // ─────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun handleTrackTransition(mediaItem: MediaItem) {
         val mediaId  = mediaItem.mediaId
@@ -805,9 +805,9 @@ class MavinAudioPlayer(private val context: Context) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TrackData — extended with RNTP parity fields
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// TrackData â€” extended with RNTP parity fields
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 data class TrackData(
     val id             : String,
