@@ -18,7 +18,7 @@
         "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand",
         "test:clear": "jest --clearCache",
         "ios": "expo run:ios",
-        "postinstall": "patch-package"
+        "postinstall": "patch-package && node scripts/fix-bom.js"
     },
     "dependencies": {
         "@animatereactnative/marquee": "^0.5.2",
