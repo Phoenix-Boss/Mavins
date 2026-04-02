@@ -1,4 +1,4 @@
-package expo.modules.autoeqengine
+package expo.modules.mavinplayer.audio
 
 import android.util.Log
 import java.io.File
