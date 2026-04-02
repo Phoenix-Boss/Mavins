@@ -30,7 +30,7 @@ import {
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
 // ─── Sort options ───────────────────────────────────────────────────────────
 

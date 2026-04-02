@@ -35,7 +35,7 @@ import {
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
 // ─── Sort options ───────────────────────────────────────────────────────────
 
@@ -239,7 +239,7 @@ const PlaylistView = () => {
           <Text numberOfLines={1} style={[styles.headerText, !showHeaderTitle && { opacity: 0 }]}>
             {playlistName}
           </Text>
-          {/* Header play button — visible when title visible */}
+          {/* Header play button — visible when title scrolled past */}
           {showHeaderTitle && playlist.length > 0 && (
             <TouchableOpacity style={styles.headerPlayBtn} onPress={handlePlayAll} hitSlop={10}>
               <MaterialCommunityIcons name="play" size={moderateScale(18)} color="#000" />

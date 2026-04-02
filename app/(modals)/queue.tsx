@@ -7,12 +7,15 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
-  Platform,
 } from "react-native";
-import TrackPlayer, {
+import {
   Track,
   useActiveTrack,
-} from "react-native-track-player";
+  getQueue,
+  skip,
+  play,
+  remove,
+} from "@/modules/mavin-eq";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -47,21 +50,21 @@ export default function QueueModal() {
 
   // ── Load queue ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    TrackPlayer.getQueue().then(setQueue).catch(() => setQueue([]));
+    getQueue().then(setQueue).catch(() => setQueue([]));
   }, []);
 
   // ── Play a track by index ──────────────────────────────────────────────────
   const handlePlay = async (index: number) => {
     triggerHaptic();
-    await TrackPlayer.skip(index);
-    await TrackPlayer.play();
+    await skip(index);
+    await play();
   };
 
   // ── Remove a track from queue ──────────────────────────────────────────────
   const handleRemove = async (index: number) => {
     triggerHaptic();
-    await TrackPlayer.remove(index);
-    const updated = await TrackPlayer.getQueue();
+    await remove(index);
+    const updated = await getQueue();
     setQueue(updated);
   };
 
@@ -199,8 +202,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
   },
-
-  // ── Handle + header ────────────────────────────────────────────────────────
   handle: {
     alignSelf: "center",
     width: 36,
@@ -241,8 +242,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
   },
-
-  // ── List ───────────────────────────────────────────────────────────────────
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 8,
@@ -250,8 +249,6 @@ const styles = StyleSheet.create({
   listContentEmpty: {
     flex: 1,
   },
-
-  // ── Track row ──────────────────────────────────────────────────────────────
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -296,8 +293,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: C.textSub,
   },
-
-  // ── Active / remove ────────────────────────────────────────────────────────
   playingBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -322,8 +317,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  // ── Empty state ────────────────────────────────────────────────────────────
   emptyWrap: {
     flex: 1,
     alignItems: "center",
