@@ -1,4 +1,4 @@
-﻿package expo.modules.mavinplayer.audio
+package expo.modules.mavinplayer.audio
 
 import android.content.Context
 import android.media.AudioFormat

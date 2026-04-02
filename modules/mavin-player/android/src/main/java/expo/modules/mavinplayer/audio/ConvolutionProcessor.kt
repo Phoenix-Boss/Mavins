@@ -1,4 +1,4 @@
-﻿package expo.modules.autoeqengine
+package expo.modules.autoeqengine
 
 import android.content.Context
 import android.media.AudioAttributes

@@ -1,4 +1,4 @@
-﻿package expo.modules.mavinplayer
+package expo.modules.mavinplayer
 
 import android.app.Notification
 import android.app.NotificationChannel

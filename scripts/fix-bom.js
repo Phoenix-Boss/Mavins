@@ -9,12 +9,14 @@ function walk(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walk(full);
-    } else if (entry.name.endsWith('.json')) {
-      const buf = fs.readFileSync(full);
-      if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-        fs.writeFileSync(full, buf.slice(3));
-        console.log('Fixed BOM:', full);
-      }
+    } else {
+      try {
+        const buf = fs.readFileSync(full);
+        if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+          fs.writeFileSync(full, buf.slice(3));
+          console.log('Fixed BOM:', full);
+        }
+      } catch {}
     }
   }
 }
