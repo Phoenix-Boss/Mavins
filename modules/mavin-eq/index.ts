@@ -1,748 +1,1328 @@
-﻿// mavin-player/index.ts
-// Full RNTP-parity JS layer for MavinPlayer.
-// Drop-in replacement for react-native-track-player in existing service files.
+﻿// modules/mavin-eq/index.ts
+// Complete JS wrapper for MavinPlayer — imports types from types.ts
 
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+
+// Import all types from centralized types file
+import type {
+  // Core types
+  Nullable,
+  Optional,
+  
+  // Track & Playback
+  Track,
+  State,
+  PlaybackState,
+  Progress,
+  PeakMeter,
+  RepeatMode,
+  ShuffleMode,
+  
+  // EQ Types
+  ISO_FREQ_CENTERS,
+  IsoFreqIndex,
+  EQGains,
+  EqBandGains,
+  EqBandInfo,
+  EqMode,
+  DitherMode,
+  EqBiquadFilter,
+  
+  // DSP Types
+  CompressorSettings,
+  CrossfeedSettings,
+  ReplayGainMode,
+  ReplayGainInfo,
+  FxMode,
+  FxState,
+  ConvolutionState,
+  
+  // Hardware Types
+  DacInfo,
+  DacCapabilities,
+  AudioCapabilities,
+  OptimalAudioFormat,
+  
+  // Config Types
+  CacheStats,
+  PreloadStrategy,
+  AndroidOptions,
+  BufferConfig,
+  SetupOptions,
+  Capability,
+  UpdateOptions,
+  
+  // Events
+  MavinEvent,
+  RNTPEvent,
+  EventName,
+  EventSubscription,
+  
+  // Event Payloads
+  PlaybackStateChangedEvent,
+  TrackChangedEvent,
+  PlaybackActiveTrackChangedEvent,
+  PlaybackQueueEndedEvent,
+  PlaybackErrorEvent,
+  ProgressEvent,
+  SpectrumEvent,
+  PeakMeterEvent,
+  ReplayGainAppliedEvent,
+  AudioFocusEvent,
+  RemoteSeekEvent,
+  RemoteSkipEvent,
+  RemoteSetRatingEvent,
+  RemoteJumpEvent,
+  RemoteDuckEvent,
+  MetadataEvent,
+  
+  // Preset Types
+  PresetCategory,
+  PresetTag,
+  EqPreset,
+  PresetGroup,
+  
+  // Hook Types
+  UseProgressOptions,
+  UsePlaybackStateResult,
+  UseActiveTrackResult,
+  UseSpectrumOptions,
+  
+  // Storage Types
+  PresetStorageAdapter,
+  SupabasePresetRow,
+  
+  // Native Module
+  MavinPlayerNativeModule,
+  MavinPlayerEvents,
+} from './types';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Native module bootstrap
+// Native module access
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _native = requireNativeModule('MavinPlayer');
-const _emitter = new EventEmitter(_native);
-
-export const MavinPlayer = _native;
-export default MavinPlayer;
+const MavinPlayer = requireNativeModule('MavinPlayer') as MavinPlayerNativeModule;
+const eventEmitter = new EventEmitter(MavinPlayer);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENUMS
+// EVENT SUBSCRIPTION — Type-safe with string fallback
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Mirrors RNTP's State enum */
-export enum State {
-  None      = 'none',
-  Ready     = 'ready',
-  Playing   = 'playing',
-  Paused    = 'paused',
-  Stopped   = 'stopped',
-  Buffering = 'buffering',
-  Loading   = 'loading',
-  Error     = 'error',
-  Ended     = 'ended',
-}
-
-/** Mirrors RNTP's RepeatMode enum */
-export enum RepeatMode {
-  Off   = 0,
-  Track = 1,
-  Queue = 2,
-}
-
-/** All event names emitted by the native module. Mirrors RNTP's Event enum. */
-export enum Event {
-  // ── Playback ──────────────────────────────────────────────────────────────
-  PlaybackState                = 'onPlaybackStateChanged',
-  PlaybackError                = 'onError',
-  PlaybackQueueEnded           = 'onPlaybackQueueEnded',
-  /** @deprecated Use PlaybackActiveTrackChanged */
-  PlaybackTrackChanged         = 'onTrackChanged',
-  PlaybackActiveTrackChanged   = 'onPlaybackActiveTrackChanged',
-  PlaybackProgressUpdated      = 'onProgress',
-  PlaybackPlayWhenReadyChanged = 'onPlaybackPlayWhenReadyChanged',
-  // ── Remote controls ────────────────────────────────────────────────────────
-  RemotePlay        = 'onRemotePlay',
-  RemotePlayId      = 'onRemotePlayId',
-  RemotePlaySearch  = 'onRemotePlaySearch',
-  RemotePause       = 'onRemotePause',
-  RemoteStop        = 'onRemoteStop',
-  RemoteSkip        = 'onRemoteSkip',
-  RemoteNext        = 'onRemoteNext',
-  RemotePrevious    = 'onRemotePrevious',
-  RemoteSeek        = 'onRemoteSeek',
-  RemoteSetRating   = 'onRemoteSetRating',
-  RemoteJumpForward  = 'onRemoteJumpForward',
-  RemoteJumpBackward = 'onRemoteJumpBackward',
-  RemoteDuck        = 'onRemoteDuck',
-  // ── Metadata ──────────────────────────────────────────────────────────────
-  AudioCommonMetadataReceived = 'onAudioCommonMetadataReceived',
-  AudioTimedMetadataReceived  = 'onAudioTimedMetadataReceived',
-  // ── Mavin-specific ────────────────────────────────────────────────────────
-  Spectrum           = 'onSpectrum',
-  PeakMeter          = 'onPeakMeter',
-  ReplayGainApplied  = 'onReplayGainApplied',
-  UsbDacConnected    = 'onUsbDacConnected',
-  UsbDacDisconnected = 'onUsbDacDisconnected',
-  AudioFocusLost     = 'onAudioFocusLost',
-  AudioFocusGranted  = 'onAudioFocusGranted',
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface Track {
-  id?: string;
-  /** Audio source – required */
-  url: string;
-  /** Alias for url */
-  uri?: string;
-  title?: string;
-  artist?: string;
-  album?: string;
-  artwork?: string;
-  artworkUri?: string;
-  duration?: number;
-  genre?: string;
-  description?: string;
-  date?: string;
-  rating?: number;
-  isLiveStream?: boolean;
-  headers?: Record<string, string>;
-  replayGainTags?: Record<string, string>;
-  [key: string]: unknown;
-}
-
-/** Progress values are in milliseconds (raw native values). */
-export interface Progress {
-  position: number;
-  duration: number;
-  buffered: number;
-}
-
-export interface PlaybackState {
-  state: State | undefined;
-}
-
-export interface PlayerOptions {
-  minBuffer?: number;
-  maxBuffer?: number;
-  playBuffer?: number;
-  backBuffer?: number;
-  maxCacheSize?: number;
-  waitForBuffer?: boolean;
-  autoHandleInterruptions?: boolean;
-  audioContentType?: string;
-  audioUsage?: string;
-}
-
-type EventPayload = Record<string, unknown>;
-type EventHandler = (data: EventPayload & { type: string }) => void;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LIFECYCLE
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Initialise the player. Mirrors RNTP's setupPlayer(). */
-export async function setupPlayer(options?: PlayerOptions): Promise<void> {
-  return _native.initPlayer(options ?? null);
-}
-
-/** Tear down the player and release all resources. */
-export async function destroy(): Promise<void> {
-  return _native.release();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYBACK CONTROL
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function play(): Promise<void>  { return _native.play(); }
-export async function pause(): Promise<void> { return _native.pause(); }
-export async function stop(): Promise<void>  { return _native.stop(); }
-export async function reset(): Promise<void> { return _native.reset(); }
-
-/**
- * Seek to an absolute position in seconds (RNTP-compatible).
- * Converts to milliseconds before calling the native layer.
- */
-export async function seekTo(positionSeconds: number): Promise<void> {
-  return _native.seekTo(positionSeconds * 1000);
+export interface EventSubscription {
+  remove: () => void;
 }
 
 /**
- * Seek forward or backward by a relative offset in seconds.
- * Mirrors RNTP's seekBy().
+ * Add an event listener for playback events.
+ * Supports both Mavin (camelCase) and RNTP (kebab-case) event names.
+ * 
+ * @example
+ * ```ts
+ * addEventListener(MavinEvent.PlaybackStateChanged, (data) => {
+ *   console.log('State:', data.state);
+ * });
+ * 
+ * addEventListener('playback-state', (data) => {
+ *   // RNTP parity event
+ *   console.log('RNTP state:', data.state);
+ * });
+ * ```
  */
-export async function seekBy(offsetSeconds: number): Promise<void> {
-  return _native.skip(Math.round(offsetSeconds));
-}
-
-export async function skipToNext(): Promise<void>     { return _native.skipToNext(); }
-export async function skipToPrevious(): Promise<void>  { return _native.skipToPrevious(); }
-
-/**
- * Skip to a track by index. Mirrors RNTP's skip(index).
- */
-export async function skip(index: number): Promise<void> {
-  return _native.skipToIndex(index);
-}
-
-export async function setVolume(level: number): Promise<void>       { return _native.setVolume(level); }
-export async function setRepeatMode(mode: RepeatMode): Promise<void> { return _native.setRepeatMode(mode); }
-export async function setShuffleMode(enabled: boolean): Promise<void>{ return _native.setShuffleMode(enabled); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RATE  (RNTP-compatible aliases for setPlaybackSpeed / getPlaybackSpeed)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Set playback rate. 1.0 = normal speed. */
-export async function setRate(rate: number): Promise<void>  { return _native.setPlaybackSpeed(rate); }
-/** Get current playback rate. */
-export async function getRate(): Promise<number>            { return _native.getPlaybackSpeed(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAY-WHEN-READY  (RNTP 4.x)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setPlayWhenReady(playWhenReady: boolean): Promise<void> {
-  return _native.setPlayWhenReady(playWhenReady);
-}
-
-export async function getPlayWhenReady(): Promise<boolean> {
-  return _native.getPlayWhenReady();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// QUEUE MANAGEMENT
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Load a single track (replaces current item). Mirrors RNTP's load(). */
-export async function load(track: Track): Promise<void> {
-  return _native.load(track);
-}
-
-/**
- * Add one or more tracks to the queue.
- * Mirrors RNTP's add(tracks, insertBeforeIndex?).
- *
- * @param tracks           Single track or array of tracks.
- * @param insertBeforeIndex  Insert before this index. Appends if omitted.
- */
-export async function add(
-  tracks: Track | Track[],
-  insertBeforeIndex?: number
-): Promise<void> {
-  const arr = Array.isArray(tracks) ? tracks : [tracks];
-  if (insertBeforeIndex !== undefined) {
-    for (let i = 0; i < arr.length; i++) {
-      await _native.addToQueueAt(arr[i], insertBeforeIndex + i);
-    }
-  } else {
-    for (const track of arr) {
-      await _native.addToQueue(track);
-    }
-  }
-}
-
-/**
- * Remove one or more tracks from the queue by index.
- * Mirrors RNTP's remove(indexes).
- */
-export async function remove(indexes: number | number[]): Promise<void> {
-  const arr = (Array.isArray(indexes) ? indexes : [indexes])
-    .slice()
-    .sort((a, b) => b - a); // remove highest index first to keep earlier indices valid
-  for (const idx of arr) {
-    await _native.removeTrack(idx);
-  }
-}
-
-/** Remove all upcoming tracks. */
-export async function removeUpcomingTracks(): Promise<void> {
-  return _native.removeUpcomingTracks();
-}
-
-/**
- * Move a track from one position to another.
- * Mirrors RNTP's move(fromIndex, toIndex).
- */
-export async function move(fromIndex: number, toIndex: number): Promise<void> {
-  return _native.moveTrack(fromIndex, toIndex);
-}
-
-/**
- * Replace the entire queue.
- * @param tracks      New queue.
- * @param startIndex  Track to start playing from (default 0).
- */
-export async function setQueue(tracks: Track[], startIndex = 0): Promise<void> {
-  return _native.setQueue(tracks, startIndex);
-}
-
-/** Update a track's metadata at a given index. */
-export async function updateMetadataForTrack(
-  index: number,
-  metadata: Partial<Track>
-): Promise<void> {
-  return _native.updateTrack(index, metadata);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STATE GETTERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returns the full queue.
- * Mirrors RNTP's getQueue().
- */
-export async function getQueue(): Promise<Track[]> {
-  return _native.getQueue();
-}
-
-/**
- * Get a single track by index.
- * Mirrors RNTP's getTrack(index).
- */
-export async function getTrack(index: number): Promise<Track | undefined> {
-  const t = await _native.getTrack(index);
-  return t ?? undefined;
-}
-
-/**
- * Get the currently active track object.
- * Mirrors RNTP's getActiveTrack().
- */
-export async function getActiveTrack(): Promise<Track | undefined> {
-  const info = await _native.getActiveTrack();
-  return info ?? undefined;
-}
-
-/**
- * Get the index of the currently active track.
- * Mirrors RNTP's getActiveTrackIndex().
- */
-export async function getActiveTrackIndex(): Promise<number | undefined> {
-  const idx = await _native.getActiveTrackIndex();
-  return idx ?? undefined;
-}
-
-/** @deprecated Use getActiveTrack() */
-export async function getCurrentTrack(): Promise<Track | undefined> {
-  return getActiveTrack();
-}
-
-/**
- * Returns { position, duration, buffered } snapshot in milliseconds.
- * Mirrors RNTP's getProgress().
- */
-export async function getProgress(): Promise<Progress> {
-  return _native.getProgress();
-}
-
-/**
- * Returns the current playback state.
- * Mirrors RNTP's getPlaybackState().
- */
-export async function getPlaybackState(): Promise<PlaybackState> {
-  const result = await _native.getPlaybackState() as { state: string };
-  const stateValues = Object.values(State) as string[];
-  const state = stateValues.includes(result.state) ? (result.state as State) : State.None;
-  return { state };
-}
-
-/** @deprecated Use getPlaybackState() */
-export async function getState(): Promise<State> {
-  const { state } = await getPlaybackState();
-  return state ?? State.None;
-}
-
-/** Current position in milliseconds. */
-export async function getPosition(): Promise<number>       { return _native.getPosition(); }
-/** Total duration in milliseconds. */
-export async function getDuration(): Promise<number>       { return _native.getDuration(); }
-/** Buffered position in milliseconds. */
-export async function getBufferedPosition(): Promise<number>{ return _native.getBufferedPosition(); }
-
-export async function getVolume(): Promise<number>         { return _native.getVolume(); }
-export async function getRepeatMode(): Promise<RepeatMode> { return _native.getRepeatMode(); }
-export async function getShuffleMode(): Promise<boolean>   { return _native.getShuffleMode(); }
-export async function isPlaying(): Promise<boolean>        { return _native.isPlaying(); }
-export async function getQueueSize(): Promise<number>      { return _native.getQueueSize(); }
-export async function getAudioFocus(): Promise<boolean>    { return _native.getAudioFocus(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CONFIGURATION / OPTIONS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function updateOptions(options: Record<string, unknown>): Promise<void> {
-  return _native.updateOptions(options);
-}
-export async function setProgressUpdateEventInterval(ms: number): Promise<void> {
-  return _native.setProgressUpdateInterval(ms);
-}
-export async function setCacheConfig(options: { sizeMB?: number; sizeBytes?: number }): Promise<void> {
-  return _native.setCacheConfig(options);
-}
-export async function setAudioAttributes(options: { usage?: string; contentType?: string }): Promise<void> {
-  return _native.setAudioAttributes(options);
-}
-export async function setWakeMode(mode: number): Promise<void> {
-  return _native.setWakeMode(mode);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SPEED / PITCH
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setPlaybackSpeed(speed: number): Promise<void>              { return _native.setPlaybackSpeed(speed); }
-export async function getPlaybackSpeed(): Promise<number>                          { return _native.getPlaybackSpeed(); }
-export async function setPlaybackPitch(pitch: number): Promise<void>              { return _native.setPlaybackPitch(pitch); }
-export async function getPlaybackPitch(): Promise<number>                          { return _native.getPlaybackPitch(); }
-export async function setPlaybackParameters(speed: number, pitch: number): Promise<void> {
-  return _native.setPlaybackParameters(speed, pitch);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EQ
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setEQEnabled(enabled: boolean): Promise<void>                         { return _native.setEQEnabled(enabled); }
-export async function isEQEnabled(): Promise<boolean>                                        { return _native.isEQEnabled(); }
-export async function setEQBand(band: number, gainDb: number): Promise<void>                { return _native.setEQBand(band, gainDb); }
-export async function applyEQBands(gains: number[]): Promise<void>                         { return _native.applyEQBands(gains); }
-export async function setEQPreamp(gainDb: number): Promise<void>                           { return _native.setEQPreamp(gainDb); }
-export async function setEQBandQ(band: number, q: number): Promise<void>                   { return _native.setEQBandQ(band, q); }
-export async function resetEQ(): Promise<void>                                              { return _native.resetEQ(); }
-export async function getEQGains(): Promise<Array<{ band: number; gain: number }>>          { return _native.getEQGains(); }
-export async function getEQPreamp(): Promise<number>                                        { return _native.getEQPreamp(); }
-export async function getEQQValues(): Promise<Array<{ band: number; q: number }>>           { return _native.getEQQValues(); }
-export async function setEQMode(mode: 'GRAPHIC' | 'PARAMETRIC' | 'PARALLEL'): Promise<void>{ return _native.setEQMode(mode); }
-export async function getEQMode(): Promise<string>                                          { return _native.getEQMode(); }
-export async function getLoudnessDb(): Promise<number>                                      { return _native.getLoudnessDb(); }
-
-// Parametric EQ
-export async function setParametricBandGain(band: number, gainDb: number): Promise<void>    { return _native.setParametricBandGain(band, gainDb); }
-export async function applyParametricBands(gains: number[]): Promise<void>                  { return _native.applyParametricBands(gains); }
-export async function setParametricBandFreq(band: number, freqHz: number): Promise<void>    { return _native.setParametricBandFreq(band, freqHz); }
-export async function resetParametric(): Promise<void>                                       { return _native.resetParametric(); }
-export async function getParametricGains(): Promise<Array<{ band: number; gain: number }>>  { return _native.getParametricGains(); }
-export async function getParametricFreqs(): Promise<Array<{ band: number; freqHz: number }>>{ return _native.getParametricFreqs(); }
-
-// Dither / smoothing
-export async function setDitherMode(mode: string): Promise<void>  { return _native.setDitherMode(mode); }
-export async function getDitherMode(): Promise<string>            { return _native.getDitherMode(); }
-export async function setSmoothingRamp(ms: number): Promise<void> { return _native.setSmoothingRamp(ms); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COMPRESSOR
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setCompressorEnabled(enabled: boolean): Promise<void>  { return _native.setCompressorEnabled(enabled); }
-export async function isCompressorEnabled(): Promise<boolean>                { return _native.isCompressorEnabled(); }
-export async function setCompressorThreshold(db: number): Promise<void>     { return _native.setCompressorThreshold(db); }
-export async function setCompressorRatio(ratio: number): Promise<void>      { return _native.setCompressorRatio(ratio); }
-export async function setCompressorAttack(ms: number): Promise<void>        { return _native.setCompressorAttack(ms); }
-export async function setCompressorRelease(ms: number): Promise<void>       { return _native.setCompressorRelease(ms); }
-export async function setCompressorKnee(db: number): Promise<void>          { return _native.setCompressorKnee(db); }
-export async function setCompressorMakeupGain(db: number): Promise<void>    { return _native.setCompressorMakeupGain(db); }
-export async function getCompressorReduction(): Promise<number>             { return _native.getCompressorReduction(); }
-export async function getCompressorThreshold(): Promise<number>             { return _native.getCompressorThreshold(); }
-export async function getCompressorRatio(): Promise<number>                 { return _native.getCompressorRatio(); }
-export async function getCompressorAttack(): Promise<number>                { return _native.getCompressorAttack(); }
-export async function getCompressorRelease(): Promise<number>               { return _native.getCompressorRelease(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CROSSFADE
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setCrossfadeEnabled(enabled: boolean): Promise<void>   { return _native.setCrossfadeEnabled(enabled); }
-export async function isCrossfadeEnabled(): Promise<boolean>                 { return _native.isCrossfadeEnabled(); }
-export async function setCrossfadeDuration(ms: number): Promise<void>        { return _native.setCrossfadeDuration(ms); }
-export async function getCrossfadeDuration(): Promise<number>                { return _native.getCrossfadeDuration(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CROSSFEED
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setCrossfeedEnabled(enabled: boolean): Promise<void>   { return _native.setCrossfeedEnabled(enabled); }
-export async function isCrossfeedEnabled(): Promise<boolean>                 { return _native.isCrossfeedEnabled(); }
-export async function setCrossfeedStrength(strength: number): Promise<void>  { return _native.setCrossfeedStrength(strength); }
-export async function setCrossfeedCutoff(hz: number): Promise<void>          { return _native.setCrossfeedCutoff(hz); }
-export async function getCrossfeedStrength(): Promise<number>                { return _native.getCrossfeedStrength(); }
-export async function getCrossfeedCutoff(): Promise<number>                  { return _native.getCrossfeedCutoff(); }
-export async function setCrossfeedDelayMs(ms: number): Promise<void>        { return _native.setCrossfeedDelayMs(ms); }
-export async function getCrossfeedDelayMs(): Promise<number>                { return _native.getCrossfeedDelayMs(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// REPLAY GAIN
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setReplayGainMode(mode: string): Promise<void>                     { return _native.setReplayGainMode(mode); }
-export async function setReplayGainPreamp(gainDb: number): Promise<void>                { return _native.setReplayGainPreamp(gainDb); }
-export async function setReplayGainFromMap(tags: Record<string, string>): Promise<void> { return _native.setReplayGainFromMap(tags); }
-export async function getReplayGainInfo(): Promise<unknown>                              { return _native.getReplayGainInfo(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PEAK METER
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setPeakHoldMs(ms: number): Promise<void>                  { return _native.setPeakHoldMs(ms); }
-export async function setPeakReleaseMs(ms: number): Promise<void>               { return _native.setPeakReleaseMs(ms); }
-export async function getCurrentPeaks(): Promise<{ left: number; right: number }>{ return _native.getCurrentPeaks(); }
-export async function getHeldPeaks(): Promise<{ left: number; right: number }>   { return _native.getHeldPeaks(); }
-export async function resetPeaks(): Promise<void>                               { return _native.resetPeaks(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CONVOLUTION
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function loadImpulseResponse(filePath: string): Promise<void>   { return _native.loadImpulseResponse(filePath); }
-export async function clearImpulseResponse(): Promise<void>                  { return _native.clearImpulseResponse(); }
-export async function isImpulseResponseLoaded(): Promise<boolean>            { return _native.isImpulseResponseLoaded(); }
-export async function getIrLength(): Promise<number>                         { return _native.getIrLength(); }
-export async function setConvolutionEnabled(enabled: boolean): Promise<void> { return _native.setConvolutionEnabled(enabled); }
-export async function isConvolutionEnabled(): Promise<boolean>               { return _native.isConvolutionEnabled(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FX (Reverb / Delay / Mod)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setFxEnabled(enabled: boolean): Promise<void>   { return _native.setFxEnabled(enabled); }
-export async function isFxEnabled(): Promise<boolean>                 { return _native.isFxEnabled(); }
-export async function setFxMode(mode: string): Promise<void>          { return _native.setFxMode(mode); }
-export async function getFxMode(): Promise<string>                    { return _native.getFxMode(); }
-export async function setFxMix(mix: number): Promise<void>            { return _native.setFxMix(mix); }
-export async function getFxMix(): Promise<number>                     { return _native.getFxMix(); }
-export async function setFxBypass(bypass: boolean): Promise<void>    { return _native.setFxBypass(bypass); }
-export async function isFxBypassed(): Promise<boolean>               { return _native.isFxBypassed(); }
-
-export async function setReverbRoomSize(value: number): Promise<void> { return _native.setReverbRoomSize(value); }
-export async function setReverbDecay(value: number): Promise<void>    { return _native.setReverbDecay(value); }
-export async function setReverbPreDelay(value: number): Promise<void> { return _native.setReverbPreDelay(value); }
-export async function setReverbDamping(value: number): Promise<void>  { return _native.setReverbDamping(value); }
-export async function setDelayTime(value: number): Promise<void>      { return _native.setDelayTime(value); }
-export async function setDelayFeedback(value: number): Promise<void>  { return _native.setDelayFeedback(value); }
-export async function setDelayLowCut(value: number): Promise<void>    { return _native.setDelayLowCut(value); }
-export async function setDelayHighCut(value: number): Promise<void>   { return _native.setDelayHighCut(value); }
-export async function setModRate(value: number): Promise<void>        { return _native.setModRate(value); }
-export async function setModDepth(value: number): Promise<void>       { return _native.setModDepth(value); }
-export async function setModPhase(value: number): Promise<void>       { return _native.setModPhase(value); }
-export async function setModFeedback(value: number): Promise<void>    { return _native.setModFeedback(value); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PRESETS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function applyPreset(name: string): Promise<void>                                          { return _native.applyPreset(name); }
-export async function savePreset(name: string): Promise<void>                                           { return _native.savePreset(name); }
-export async function listPresets(): Promise<string[]>                                                  { return _native.listPresets(); }
-export async function deletePreset(name: string): Promise<boolean>                                      { return _native.deletePreset(name); }
-export async function exportPreset(name: string): Promise<string>                                       { return _native.exportPreset(name); }
-export async function importPreset(json: string): Promise<void>                                         { return _native.importPreset(json); }
-export async function assignTrackPreset(mediaId: string, presetName: string | null): Promise<void>      { return _native.assignTrackPreset(mediaId, presetName); }
-export async function getTrackPreset(mediaId: string): Promise<string | null>                           { return _native.getTrackPreset(mediaId); }
-export async function setAutoSwitchPresets(enabled: boolean): Promise<void>                             { return _native.setAutoSwitchPresets(enabled); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SPECTRUM / AUTO-EQ
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function getSpectrumMagnitudes(): Promise<Array<{ bin: number; magnitude: number }>> {
-  return _native.getSpectrumMagnitudes();
-}
-export async function computeAutoEQ(): Promise<Array<{ band: number; gain: number; freqHz: number }>> {
-  return _native.computeAutoEQ();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// USB DAC
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function isUsbDacConnected(): Promise<boolean>                       { return _native.isUsbDacConnected(); }
-export async function getCurrentDacInfo(): Promise<unknown>                       { return _native.getCurrentDacInfo(); }
-export async function getDacCapabilities(): Promise<unknown>                      { return _native.getDacCapabilities(); }
-export async function enableDirectUsbRouting(enabled: boolean): Promise<boolean>  { return _native.enableDirectUsbRouting(enabled); }
-export async function isDirectUsbRoutingEnabled(): Promise<boolean>               { return _native.isDirectUsbRoutingEnabled(); }
-export async function setPreferredDacSampleRate(rate: number): Promise<boolean>   { return _native.setPreferredDacSampleRate(rate); }
-export async function setPreferredDacBitDepth(depth: number): Promise<boolean>    { return _native.setPreferredDacBitDepth(depth); }
-export async function rescanUsbDevices(): Promise<void>                           { return _native.rescanUsbDevices(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUDIO FORMAT DETECTION
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function getAudioCapabilities(): Promise<unknown>  { return _native.getAudioCapabilities(); }
-export async function getOptimalAudioFormat(): Promise<unknown> { return _native.getOptimalAudioFormat(); }
-export async function isHiResAudioCapable(): Promise<boolean>  { return _native.isHiResAudioCapable(); }
-export async function getMaxSampleRate(): Promise<number>       { return _native.getMaxSampleRate(); }
-export async function getMaxBitDepth(): Promise<number>         { return _native.getMaxBitDepth(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OFFLINE / 64-BIT
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function setOfflineMode(enabled: boolean): Promise<void>             { return _native.setOfflineMode(enabled); }
-export async function isOfflineMode(): Promise<boolean>                           { return _native.isOfflineMode(); }
-export async function set64BitProcessingEnabled(enabled: boolean): Promise<void>  { return _native.set64BitProcessingEnabled(enabled); }
-export async function is64BitProcessingEnabled(): Promise<boolean>                { return _native.is64BitProcessingEnabled(); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NOW-PLAYING METADATA
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function updateNowPlayingMetadata(track: Partial<Track>): Promise<void> {
-  return _native.updateNowPlayingMetadata(track);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EVENT SUBSCRIPTION  (mirrors RNTP's addEventListener)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function addEventListener(
-  event: Event | string,
-  listener: (data: EventPayload) => void
-): { remove: () => void } {
-  const subscription = _emitter.addListener(event as string, listener);
+export function addEventListener<K extends EventName>(
+  event: K,
+  listener: K extends keyof MavinPlayerEvents 
+    ? MavinPlayerEvents[K] 
+    : (data: any) => void
+): EventSubscription {
+  // Type assertion to satisfy expo-modules-core EventEmitter
+  const subscription = eventEmitter.addListener(event as keyof MavinPlayerEvents, listener as any);
   return { remove: () => subscription.remove() };
 }
 
+/**
+ * Remove an event listener.
+ * 
+ * @param event - Event name string
+ * @param listener - Optional specific listener to remove. If omitted, removes all listeners for the event.
+ */
+export function removeEventListener(
+  event: EventName,
+  listener?: (data: any) => void
+): void {
+  if (listener) {
+    eventEmitter.removeListener(event as any, listener);
+  } else {
+    eventEmitter.removeAllListeners(event as any);
+  }
+}
+
+/**
+ * Subscribe to multiple events with a single handler.
+ * RNTP parity: useTrackPlayerEvents equivalent.
+ * 
+ * @example
+ * ```ts
+ * subscribeToEvents(
+ *   [MavinEvent.PlaybackStateChanged, MavinEvent.PlaybackProgress],
+ *   (event, data) => {
+ *     console.log(`${event}:`, data);
+ *   }
+ * );
+ * ```
+ */
+export function subscribeToEvents(
+  events: EventName[],
+  handler: (event: EventName, data: any) => void
+): EventSubscription {
+  const subscriptions = events.map((evt) =>
+    eventEmitter.addListener(evt as any, (data: any) => handler(evt, data))
+  );
+  return {
+    remove: () => subscriptions.forEach((sub) => sub.remove()),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// HOOKS
+// DEFAULT EXPORT — raw native module for advanced use
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default MavinPlayer;
+
+// Re-export all types for convenience
+export type {
+  Nullable,
+  Optional,
+  Track,
+  State,
+  PlaybackState,
+  Progress,
+  PeakMeter,
+  RepeatMode,
+  ShuffleMode,
+  ISO_FREQ_CENTERS,
+  IsoFreqIndex,
+  EQGains,
+  EqBandGains,
+  EqBandInfo,
+  EqMode,
+  DitherMode,
+  EqBiquadFilter,
+  CompressorSettings,
+  CrossfeedSettings,
+  ReplayGainMode,
+  ReplayGainInfo,
+  FxMode,
+  FxState,
+  ConvolutionState,
+  DacInfo,
+  DacCapabilities,
+  AudioCapabilities,
+  OptimalAudioFormat,
+  CacheStats,
+  PreloadStrategy,
+  AndroidOptions,
+  BufferConfig,
+  SetupOptions,
+  Capability,
+  UpdateOptions,
+  MavinEvent,
+  RNTPEvent,
+  EventName,
+  PlaybackStateChangedEvent,
+  TrackChangedEvent,
+  PlaybackActiveTrackChangedEvent,
+  PlaybackQueueEndedEvent,
+  PlaybackErrorEvent,
+  ProgressEvent,
+  SpectrumEvent,
+  PeakMeterEvent,
+  ReplayGainAppliedEvent,
+  AudioFocusEvent,
+  RemoteSeekEvent,
+  RemoteSkipEvent,
+  RemoteSetRatingEvent,
+  RemoteJumpEvent,
+  RemoteDuckEvent,
+  MetadataEvent,
+  PresetCategory,
+  PresetTag,
+  EqPreset,
+  PresetGroup,
+  UseProgressOptions,
+  UsePlaybackStateResult,
+  UseActiveTrackResult,
+  UseSpectrumOptions,
+  PresetStorageAdapter,
+  SupabasePresetRow,
+  MavinPlayerNativeModule,
+  MavinPlayerEvents,
+};
+
+// Re-export enums for convenience
+export { MavinEvent, RNTPEvent, State, RepeatMode };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIFECYCLE FUNCTIONS (Mavin + RNTP Aliases)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Poll for playback progress at the given interval (ms).
- * Returns { position, duration, buffered } in milliseconds.
- * Mirrors RNTP's useProgress(interval?).
+ * Initialize the player. (Mavin name)
+ * @param options - Optional configuration
  */
-export function useProgress(intervalMs = 1000): Progress {
+export const initPlayer = (options?: SetupOptions | null): Promise<void> =>
+  MavinPlayer.initPlayer(options ?? null);
+
+/**
+ * Initialize the player. (RNTP alias for initPlayer)
+ * @param options - Optional configuration
+ */
+export const setupPlayer = (options?: SetupOptions | null): Promise<void> =>
+  MavinPlayer.setupPlayer(options ?? null);
+
+/**
+ * Release all resources and stop playback. (Mavin name)
+ */
+export const release = (): Promise<void> => MavinPlayer.release();
+
+/**
+ * Release all resources and stop playback. (RNTP alias for release)
+ */
+export const destroy = (): Promise<void> => MavinPlayer.destroy();
+
+/**
+ * Stop the foreground service explicitly.
+ */
+export const stopService = (): Promise<void> => MavinPlayer.stopService();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK CONTROL FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const play = (): Promise<void> => MavinPlayer.play();
+export const pause = (): Promise<void> => MavinPlayer.pause();
+export const stop = (): Promise<void> => MavinPlayer.stop();
+export const reset = (): Promise<void> => MavinPlayer.reset();
+
+/**
+ * Seek to absolute position.
+ * @param ms - Position in **milliseconds** (Mavin native precision)
+ */
+export const seekTo = (ms: number): Promise<void> => MavinPlayer.seekTo(ms);
+
+/**
+ * Seek relative to current position. (RNTP parity)
+ * @param offsetMs - Offset in **milliseconds**
+ */
+export const seekBy = (offsetMs: number): Promise<void> => MavinPlayer.seekBy(offsetMs);
+
+export const skipToNext = (): Promise<void> => MavinPlayer.skipToNext();
+export const skipToPrevious = (): Promise<void> => MavinPlayer.skipToPrevious();
+
+/**
+ * Skip to track at index with optional initial position.
+ * @param index - Track index in queue
+ * @param initialPositionMs - Optional start position in milliseconds (RNTP v5)
+ */
+export const skipToIndex = (index: number, initialPositionMs?: number): Promise<void> =>
+  MavinPlayer.skipToIndex(index, initialPositionMs);
+
+/**
+ * Skip forward/backward by seconds. (RNTP parity)
+ * @param seconds - Relative skip in seconds
+ */
+export const skip = (seconds: number): Promise<void> => MavinPlayer.skip(seconds);
+
+export const setVolume = (vol: number): Promise<void> => MavinPlayer.setVolume(vol);
+export const setRepeatMode = (mode: RepeatMode | number): Promise<void> => MavinPlayer.setRepeatMode(mode);
+export const setShuffleMode = (enabled: boolean): Promise<void> => MavinPlayer.setShuffleMode(enabled);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERROR RECOVERY (RNTP Missing — Mavin Addition)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Retry the current track after an error. (RNTP parity)
+ */
+export const retry = (): Promise<void> => MavinPlayer.retry();
+
+/**
+ * Retry with an alternative URI if the current track fails. (Mavin enhancement)
+ * @param fallbackUri - Alternative stream URL
+ */
+export const retryWithFallback = (fallbackUri: string): Promise<void> =>
+  MavinPlayer.retryWithFallback(fallbackUri);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QUEUE MANAGEMENT FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const load = (track: Track): Promise<void> => MavinPlayer.load(track);
+
+/**
+ * Replace the entire queue.
+ * @param tracks - Array of track objects
+ * @param startIndex - Optional index to start playback from
+ */
+export const setQueue = (tracks: Track[], startIndex?: number): Promise<void> =>
+  MavinPlayer.setQueue(tracks, startIndex ?? 0);
+
+/**
+ * Add track(s) to queue. (RNTP parity: supports single track or array)
+ * @param tracks - Single track object or array of tracks
+ * @param insertBeforeIndex - Optional index to insert before (RNTP v5)
+ */
+export const add = (
+  tracks: Track | Track[],
+  insertBeforeIndex?: number
+): Promise<void> => MavinPlayer.add(tracks, insertBeforeIndex);
+
+/**
+ * Add single track to queue end. (Mavin name)
+ */
+export const addToQueue = (track: Track): Promise<void> => MavinPlayer.addToQueue(track);
+
+/**
+ * Insert track at specific queue position.
+ */
+export const addToQueueAt = (track: Track, index: number): Promise<void> =>
+  MavinPlayer.addToQueueAt(track, index);
+
+/**
+ * Remove track(s) from queue. (RNTP parity: supports single index or array)
+ * @param indices - Single index number or array of indices
+ */
+export const remove = (indices: number | number[]): Promise<void> =>
+  MavinPlayer.remove(indices);
+
+/**
+ * Remove single track by index. (Mavin name)
+ */
+export const removeTrack = (index: number): Promise<void> => MavinPlayer.removeTrack(index);
+
+export const removeUpcomingTracks = (): Promise<void> => MavinPlayer.removeUpcomingTracks();
+export const moveTrack = (fromIndex: number, toIndex: number): Promise<void> =>
+  MavinPlayer.moveTrack(fromIndex, toIndex);
+
+/**
+ * Update metadata for track at index. (RNTP alias)
+ */
+export const updateMetadataForTrack = (index: number, track: Partial<Track>): Promise<void> =>
+  MavinPlayer.updateMetadataForTrack(index, track);
+
+/**
+ * Update metadata for track at index. (Mavin name)
+ */
+export const updateTrack = (index: number, track: Partial<Track>): Promise<void> =>
+  MavinPlayer.updateTrack(index, track);
+
+export const getTrack = (index: number): Promise<Nullable<Track>> => MavinPlayer.getTrack(index);
+export const getQueue = (): Promise<Track[]> => MavinPlayer.getQueue();
+
+/**
+ * Update now playing metadata without changing queue.
+ */
+export const updateNowPlayingMetadata = (track: Partial<Track>): Promise<void> =>
+  MavinPlayer.updateNowPlayingMetadata(track);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE GETTER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getPosition = (): Promise<number> => MavinPlayer.getPosition(); // milliseconds
+export const getDuration = (): Promise<number> => MavinPlayer.getDuration(); // milliseconds
+export const getBufferedPosition = (): Promise<number> => MavinPlayer.getBufferedPosition(); // milliseconds
+
+export const getCurrentTrack = (): Promise<Nullable<Track>> => MavinPlayer.getCurrentTrack();
+
+/**
+ * Get currently active track. (RNTP v4 name)
+ */
+export const getActiveTrack = (): Promise<Nullable<Track>> => MavinPlayer.getActiveTrack();
+
+/**
+ * Get index of currently active track. (RNTP v4)
+ */
+export const getActiveTrackIndex = (): Promise<Nullable<number>> => MavinPlayer.getActiveTrackIndex();
+
+export const isPlaying = (): Promise<boolean> => MavinPlayer.isPlaying();
+export const getQueueSize = (): Promise<number> => MavinPlayer.getQueueSize();
+
+/**
+ * Get playback progress. All values in **milliseconds**.
+ */
+export const getProgress = (): Promise<Progress> => MavinPlayer.getProgress();
+
+/**
+ * Get playback state with error details.
+ */
+export const getPlaybackState = (): Promise<PlaybackState> => MavinPlayer.getPlaybackState();
+
+export const getVolume = (): Promise<number> => MavinPlayer.getVolume();
+export const getRepeatMode = (): Promise<RepeatMode> => MavinPlayer.getRepeatMode();
+export const getShuffleMode = (): Promise<boolean> => MavinPlayer.getShuffleMode();
+export const getAudioFocus = (): Promise<boolean> => MavinPlayer.getAudioFocus();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAY-WHEN-READY (RNTP 4.x Parity)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setPlayWhenReady = (playWhenReady: boolean): Promise<void> =>
+  MavinPlayer.setPlayWhenReady(playWhenReady);
+
+export const getPlayWhenReady = (): Promise<boolean> => MavinPlayer.getPlayWhenReady();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEED / PITCH FUNCTIONS (Independent Control — Mavin Enhancement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setPlaybackSpeed = (speed: number): Promise<void> =>
+  MavinPlayer.setPlaybackSpeed(speed);
+
+export const getPlaybackSpeed = (): Promise<number> => MavinPlayer.getPlaybackSpeed();
+
+export const setPlaybackPitch = (pitch: number): Promise<void> =>
+  MavinPlayer.setPlaybackPitch(pitch);
+
+export const getPlaybackPitch = (): Promise<number> => MavinPlayer.getPlaybackPitch();
+
+export const setPlaybackParameters = (speed: number, pitch: number): Promise<void> =>
+  MavinPlayer.setPlaybackParameters(speed, pitch);
+
+/**
+ * Get playback rate. (RNTP alias for getPlaybackSpeed)
+ */
+export const getRate = (): Promise<number> => MavinPlayer.getRate();
+
+/**
+ * Set playback rate. (RNTP alias for setPlaybackSpeed)
+ */
+export const setRate = (rate: number): Promise<void> => MavinPlayer.setRate(rate);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRELOADING (RNTP v5 Feature — Mavin Implementation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Preload a track for faster playback.
+ * @param track - Track to preload
+ */
+export const preload = (track: Track): Promise<void> => MavinPlayer.preload(track);
+
+/**
+ * Set preload strategy for queue items.
+ * @param strategy - 'none' | 'current' | 'upcoming' | 'all'
+ */
+export const setPreloadStrategy = (strategy: PreloadStrategy): Promise<void> =>
+  MavinPlayer.setPreloadStrategy(strategy);
+
+/**
+ * Get cache usage statistics.
+ */
+export const getCacheStats = (): Promise<CacheStats> => MavinPlayer.getCacheStats();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EQ FUNCTIONS (Graphic EQ)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setEQEnabled = (enabled: boolean): Promise<void> => MavinPlayer.setEQEnabled(enabled);
+export const isEQEnabled = (): Promise<boolean> => MavinPlayer.isEQEnabled();
+
+export const setEQBand = (band: number, gainDb: number): Promise<void> =>
+  MavinPlayer.setEQBand(band, gainDb);
+
+export const applyEQBands = (gains: number[]): Promise<void> => MavinPlayer.applyEQBands(gains);
+export const setEQPreamp = (gainDb: number): Promise<void> => MavinPlayer.setEQPreamp(gainDb);
+export const setEQBandQ = (band: number, q: number): Promise<void> => MavinPlayer.setEQBandQ(band, q);
+export const resetEQ = (): Promise<void> => MavinPlayer.resetEQ();
+
+export const getEQGains = (): Promise<EqBandInfo[]> => MavinPlayer.getEQGains();
+export const getEQPreamp = (): Promise<number> => MavinPlayer.getEQPreamp();
+export const getEQQValues = (): Promise<Array<{ band: number; q: number }>> => MavinPlayer.getEQQValues();
+
+export const setEQMode = (mode: EqMode): Promise<void> => MavinPlayer.setEQMode(mode);
+export const getEQMode = (): Promise<EqMode> => MavinPlayer.getEQMode();
+export const getLoudnessDb = (): Promise<number> => MavinPlayer.getLoudnessDb();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PARAMETRIC EQ FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setParametricBandGain = (band: number, gainDb: number): Promise<void> =>
+  MavinPlayer.setParametricBandGain(band, gainDb);
+
+export const applyParametricBands = (gains: number[]): Promise<void> =>
+  MavinPlayer.applyParametricBands(gains);
+
+export const setParametricBandFreq = (band: number, freqHz: number): Promise<void> =>
+  MavinPlayer.setParametricBandFreq(band, freqHz);
+
+export const resetParametric = (): Promise<void> => MavinPlayer.resetParametric();
+
+export const getParametricGains = (): Promise<EqBandInfo[]> => MavinPlayer.getParametricGains();
+export const getParametricFreqs = (): Promise<Array<{ band: number; freqHz: number }>> =>
+  MavinPlayer.getParametricFreqs();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DITHER / SMOOTHING FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setDitherMode = (mode: DitherMode): Promise<void> =>
+  MavinPlayer.setDitherMode(mode);
+
+export const getDitherMode = (): Promise<DitherMode> => MavinPlayer.getDitherMode();
+export const setSmoothingRamp = (ms: number): Promise<void> => MavinPlayer.setSmoothingRamp(ms);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPRESSOR (DRC) FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setCompressorEnabled = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setCompressorEnabled(enabled);
+
+export const isCompressorEnabled = (): Promise<boolean> => MavinPlayer.isCompressorEnabled();
+
+export const setCompressorThreshold = (db: number): Promise<void> =>
+  MavinPlayer.setCompressorThreshold(db);
+
+export const setCompressorRatio = (ratio: number): Promise<void> =>
+  MavinPlayer.setCompressorRatio(ratio);
+
+export const setCompressorAttack = (ms: number): Promise<void> =>
+  MavinPlayer.setCompressorAttack(ms);
+
+export const setCompressorRelease = (ms: number): Promise<void> =>
+  MavinPlayer.setCompressorRelease(ms);
+
+export const setCompressorKnee = (db: number): Promise<void> =>
+  MavinPlayer.setCompressorKnee(db);
+
+export const setCompressorMakeupGain = (db: number): Promise<void> =>
+  MavinPlayer.setCompressorMakeupGain(db);
+
+export const getCompressorReduction = (): Promise<number> => MavinPlayer.getCompressorReduction();
+export const getCompressorThreshold = (): Promise<number> => MavinPlayer.getCompressorThreshold();
+export const getCompressorRatio = (): Promise<number> => MavinPlayer.getCompressorRatio();
+export const getCompressorAttack = (): Promise<number> => MavinPlayer.getCompressorAttack();
+export const getCompressorRelease = (): Promise<number> => MavinPlayer.getCompressorRelease();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFADE FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setCrossfadeEnabled = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setCrossfadeEnabled(enabled);
+
+export const isCrossfadeEnabled = (): Promise<boolean> => MavinPlayer.isCrossfadeEnabled();
+
+export const setCrossfadeDuration = (ms: number): Promise<void> =>
+  MavinPlayer.setCrossfadeDuration(ms);
+
+export const getCrossfadeDuration = (): Promise<number> => MavinPlayer.getCrossfadeDuration();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROSSFEED FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setCrossfeedEnabled = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setCrossfeedEnabled(enabled);
+
+export const isCrossfeedEnabled = (): Promise<boolean> => MavinPlayer.isCrossfeedEnabled();
+
+export const setCrossfeedStrength = (strength: number): Promise<void> =>
+  MavinPlayer.setCrossfeedStrength(strength);
+
+export const setCrossfeedCutoff = (hz: number): Promise<void> =>
+  MavinPlayer.setCrossfeedCutoff(hz);
+
+export const getCrossfeedStrength = (): Promise<number> => MavinPlayer.getCrossfeedStrength();
+export const getCrossfeedCutoff = (): Promise<number> => MavinPlayer.getCrossfeedCutoff();
+
+export const setCrossfeedDelayMs = (ms: number): Promise<void> =>
+  MavinPlayer.setCrossfeedDelayMs(ms);
+
+export const getCrossfeedDelayMs = (): Promise<number> => MavinPlayer.getCrossfeedDelayMs();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REPLAY GAIN FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setReplayGainMode = (mode: ReplayGainMode): Promise<void> =>
+  MavinPlayer.setReplayGainMode(mode);
+
+export const setReplayGainPreamp = (gainDb: number): Promise<void> =>
+  MavinPlayer.setReplayGainPreamp(gainDb);
+
+export const setReplayGainFromMap = (tags: Record<string, string>): Promise<void> =>
+  MavinPlayer.setReplayGainFromMap(tags);
+
+export const getReplayGainInfo = (): Promise<ReplayGainInfo> =>
+  MavinPlayer.getReplayGainInfo();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEAK METER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setPeakHoldMs = (ms: number): Promise<void> => MavinPlayer.setPeakHoldMs(ms);
+export const setPeakReleaseMs = (ms: number): Promise<void> => MavinPlayer.setPeakReleaseMs(ms);
+
+export const getCurrentPeaks = (): Promise<PeakMeter> => MavinPlayer.getCurrentPeaks();
+export const getHeldPeaks = (): Promise<PeakMeter> => MavinPlayer.getHeldPeaks();
+export const resetPeaks = (): Promise<void> => MavinPlayer.resetPeaks();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVOLUTION (Impulse Response) FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const loadImpulseResponse = (filePath: string): Promise<void> =>
+  MavinPlayer.loadImpulseResponse(filePath);
+
+export const clearImpulseResponse = (): Promise<void> => MavinPlayer.clearImpulseResponse();
+export const isImpulseResponseLoaded = (): Promise<boolean> => MavinPlayer.isImpulseResponseLoaded();
+export const getIrLength = (): Promise<number> => MavinPlayer.getIrLength();
+
+export const setConvolutionEnabled = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setConvolutionEnabled(enabled);
+
+export const isConvolutionEnabled = (): Promise<boolean> => MavinPlayer.isConvolutionEnabled();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FX PROCESSOR FUNCTIONS (Reverb, Delay, Modulation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setFxEnabled = (enabled: boolean): Promise<void> => MavinPlayer.setFxEnabled(enabled);
+export const isFxEnabled = (): Promise<boolean> => MavinPlayer.isFxEnabled();
+
+export const setFxMode = (mode: FxMode): Promise<void> => MavinPlayer.setFxMode(mode);
+export const getFxMode = (): Promise<FxMode> => MavinPlayer.getFxMode();
+export const setFxMix = (mix: number): Promise<void> => MavinPlayer.setFxMix(mix); // 0-100
+export const getFxMix = (): Promise<number> => MavinPlayer.getFxMix();
+
+export const setFxBypass = (bypass: boolean): Promise<void> => MavinPlayer.setFxBypass(bypass);
+export const isFxBypassed = (): Promise<boolean> => MavinPlayer.isFxBypassed();
+
+// ── Reverb Parameters ──
+export const setReverbRoomSize = (value: number): Promise<void> =>
+  MavinPlayer.setReverbRoomSize(value); // 0-100
+
+export const setReverbDecay = (value: number): Promise<void> =>
+  MavinPlayer.setReverbDecay(value); // 0-100
+
+export const setReverbPreDelay = (value: number): Promise<void> =>
+  MavinPlayer.setReverbPreDelay(value); // 0-100
+
+export const setReverbDamping = (value: number): Promise<void> =>
+  MavinPlayer.setReverbDamping(value); // 0-100
+
+// ── Delay Parameters ──
+export const setDelayTime = (value: number): Promise<void> => MavinPlayer.setDelayTime(value); // 0-100
+export const setDelayFeedback = (value: number): Promise<void> => MavinPlayer.setDelayFeedback(value); // 0-100
+export const setDelayLowCut = (value: number): Promise<void> => MavinPlayer.setDelayLowCut(value); // 0-100
+export const setDelayHighCut = (value: number): Promise<void> => MavinPlayer.setDelayHighCut(value); // 0-100
+
+// ── Modulation Parameters ──
+export const setModRate = (value: number): Promise<void> => MavinPlayer.setModRate(value); // 0-100
+export const setModDepth = (value: number): Promise<void> => MavinPlayer.setModDepth(value); // 0-100
+export const setModPhase = (value: number): Promise<void> => MavinPlayer.setModPhase(value); // 0-100
+export const setModFeedback = (value: number): Promise<void> => MavinPlayer.setModFeedback(value); // 0-100
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRESET FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const applyPreset = (name: string): Promise<void> => MavinPlayer.applyPreset(name);
+export const savePreset = (name: string): Promise<void> => MavinPlayer.savePreset(name);
+export const listPresets = (): Promise<string[]> => MavinPlayer.listPresets();
+export const deletePreset = (name: string): Promise<boolean> => MavinPlayer.deletePreset(name);
+export const exportPreset = (name: string): Promise<Nullable<string>> => MavinPlayer.exportPreset(name);
+export const importPreset = (json: string): Promise<void> => MavinPlayer.importPreset(json);
+
+export const assignTrackPreset = (mediaId: string, presetName: string | null): Promise<void> =>
+  MavinPlayer.assignTrackPreset(mediaId, presetName);
+
+export const getTrackPreset = (mediaId: string): Promise<Nullable<string>> =>
+  MavinPlayer.getTrackPreset(mediaId);
+
+export const setAutoSwitchPresets = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setAutoSwitchPresets(enabled);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPECTRUM / AUTO-EQ FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getSpectrumMagnitudes = (): Promise<Array<{ bin: number; magnitude: number }>> =>
+  MavinPlayer.getSpectrumMagnitudes();
+
+export const computeAutoEQ = (): Promise<Array<{ band: number; gain: number; freqHz: number }>> =>
+  MavinPlayer.computeAutoEQ();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USB DAC FUNCTIONS (Mavin Exclusive)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const isUsbDacConnected = (): Promise<boolean> => MavinPlayer.isUsbDacConnected();
+export const getCurrentDacInfo = (): Promise<Nullable<DacInfo>> => MavinPlayer.getCurrentDacInfo();
+export const getDacCapabilities = (): Promise<Nullable<DacCapabilities>> => MavinPlayer.getDacCapabilities();
+
+export const enableDirectUsbRouting = (enabled: boolean): Promise<boolean> =>
+  MavinPlayer.enableDirectUsbRouting(enabled);
+
+export const isDirectUsbRoutingEnabled = (): Promise<boolean> =>
+  MavinPlayer.isDirectUsbRoutingEnabled();
+
+export const setPreferredDacSampleRate = (rate: number): Promise<boolean> =>
+  MavinPlayer.setPreferredDacSampleRate(rate);
+
+export const setPreferredDacBitDepth = (depth: number): Promise<boolean> =>
+  MavinPlayer.setPreferredDacBitDepth(depth);
+
+export const rescanUsbDevices = (): Promise<void> => MavinPlayer.rescanUsbDevices();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIO FORMAT DETECTION (Mavin Exclusive)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getAudioCapabilities = (): Promise<Nullable<AudioCapabilities>> =>
+  MavinPlayer.getAudioCapabilities();
+
+export const getOptimalAudioFormat = (): Promise<Nullable<OptimalAudioFormat>> =>
+  MavinPlayer.getOptimalAudioFormat();
+
+export const isHiResAudioCapable = (): Promise<boolean> => MavinPlayer.isHiResAudioCapable();
+export const getMaxSampleRate = (): Promise<number> => MavinPlayer.getMaxSampleRate();
+export const getMaxBitDepth = (): Promise<number> => MavinPlayer.getMaxBitDepth();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE / 64-BIT PROCESSING
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const setOfflineMode = (enabled: boolean): Promise<void> =>
+  MavinPlayer.setOfflineMode(enabled);
+
+export const isOfflineMode = (): Promise<boolean> => MavinPlayer.isOfflineMode();
+
+export const set64BitProcessingEnabled = (enabled: boolean): Promise<void> =>
+  MavinPlayer.set64BitProcessingEnabled(enabled);
+
+export const is64BitProcessingEnabled = (): Promise<boolean> =>
+  MavinPlayer.is64BitProcessingEnabled();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Update player options dynamically. (Full RNTP parity implementation)
+ */
+export const updateOptions = (options: UpdateOptions): Promise<void> =>
+  MavinPlayer.updateOptions(options);
+
+export const setProgressUpdateInterval = (ms: number): Promise<void> =>
+  MavinPlayer.setProgressUpdateInterval(ms);
+
+export const getProgressUpdateInterval = (): Promise<number> =>
+  MavinPlayer.getProgressUpdateInterval();
+
+export const setCacheConfig = (options: { sizeMB?: number; sizeBytes?: number }): Promise<void> =>
+  MavinPlayer.setCacheConfig(options);
+
+export const setAudioAttributes = (options: { usage?: string; contentType?: string }): Promise<void> =>
+  MavinPlayer.setAudioAttributes(options);
+
+export const setWakeMode = (mode: number): Promise<void> => MavinPlayer.setWakeMode(mode);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REACT HOOKS — Type-safe, memoized, cleanup-aware
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Poll for playback progress. All values in **milliseconds**.
+ * @param options - Polling options (interval, enabled)
+ */
+export function useProgress(options: UseProgressOptions = {}): Progress {
+  const { intervalMs = 1000, enabled = true } = options;
   const [progress, setProgress] = useState<Progress>({ position: 0, duration: 0, buffered: 0 });
+  const isActive = useRef(enabled);
 
   useEffect(() => {
-    let active = true;
+    isActive.current = enabled;
+    if (!enabled) return;
+    
+    let mounted = true;
 
     const sync = async () => {
+      if (!mounted || !isActive.current) return;
       try {
         const p = await getProgress();
-        if (active) setProgress(p);
-      } catch { /* player not ready yet */ }
+        if (mounted && isActive.current) setProgress(p);
+      } catch {
+        // Player not ready — ignore
+      }
     };
 
     sync();
     const id = setInterval(sync, intervalMs);
-    return () => { active = false; clearInterval(id); };
-  }, [intervalMs]);
+
+    return () => {
+      mounted = false;
+      isActive.current = false;
+      clearInterval(id);
+    };
+  }, [intervalMs, enabled]);
 
   return progress;
 }
 
 /**
- * Keeps track of the current playback state.
- * Mirrors RNTP's usePlaybackState().
+ * Subscribe to playback state changes via native events.
  */
-export function usePlaybackState(): PlaybackState {
-  const [ps, setPs] = useState<PlaybackState>({ state: undefined });
+export function usePlaybackState(): UsePlaybackStateResult {
+  const [state, setState] = useState<PlaybackState>({ state: State.None });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    getPlaybackState().then(setPs).catch(() => {});
+    let mounted = true;
+    setIsLoading(true);
 
-    const sub = addEventListener(Event.PlaybackState, (data) => {
-      const raw = (data as { state?: string }).state ?? '';
-      const stateValues = Object.values(State) as string[];
-      setPs({ state: stateValues.includes(raw) ? (raw as State) : State.None });
+    // Initial fetch
+    getPlaybackState()
+      .then((s) => {
+        if (mounted) {
+          setState({ ...s, state: (s?.state ?? State.None) as State });
+          setIsLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setError(err);
+          setIsLoading(false);
+        }
+      });
+
+    // Subscribe to state changes (both Mavin and RNTP events)
+    const sub1 = addEventListener(MavinEvent.PlaybackStateChanged, (data: PlaybackStateChangedEvent) => {
+      if (!mounted) return;
+      setState({ state: (data?.state ?? State.None) as State });
+      setIsLoading(false);
+    });
+
+    const sub2 = addEventListener(RNTPEvent.PlaybackState, (data: any) => {
+      if (!mounted) return;
+      setState({ ...data, state: (data?.state ?? State.None) as State });
+      setIsLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      sub1.remove();
+      sub2.remove();
+    };
+  }, []);
+
+  return { state, isLoading, error };
+}
+
+/**
+ * Subscribe to the currently active track via native events.
+ */
+export function useActiveTrack(): UseActiveTrackResult {
+  const [track, setTrack] = useState<Nullable<Track>>(null);
+  const [index, setIndex] = useState<Nullable<number>>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    setIsLoading(true);
+
+    // Initial fetch
+    Promise.all([getActiveTrack(), getActiveTrackIndex()])
+      .then(([t, i]) => {
+        if (mounted) {
+          setTrack(t);
+          setIndex(i);
+          setIsLoading(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) setIsLoading(false);
+      });
+
+    // Subscribe to track changes
+    const sub = addEventListener(MavinEvent.PlaybackActiveTrackChanged, (data: PlaybackActiveTrackChangedEvent) => {
+      if (!mounted) return;
+      setTrack(data.track);
+      setIndex(data.index);
+      setIsLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
+  return { track, index, isLoading };
+}
+
+/**
+ * Subscribe to play/pause state via native events.
+ */
+export function useIsPlaying(): boolean {
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Initial fetch
+    isPlaying().then((p) => {
+      if (mounted) setPlaying(p);
+    });
+
+    // Subscribe to state changes
+    const sub = addEventListener(MavinEvent.PlaybackStateChanged, (data: PlaybackStateChangedEvent) => {
+      if (!mounted) return;
+      setPlaying(data?.state === State.Playing);
+    });
+
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
+  return playing;
+}
+
+/**
+ * Subscribe to volume changes with polling fallback.
+ */
+export function useVolume(): number {
+  const [volume, setVolume] = useState(1.0);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Initial fetch
+    getVolume().then((v) => {
+      if (mounted) setVolume(v);
+    });
+
+    // Poll for changes (native volume events not exposed)
+    const id = setInterval(() => {
+      if (!mounted) return;
+      getVolume().then(setVolume).catch(() => {});
+    }, 1000);
+
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  return volume;
+}
+
+/**
+ * Subscribe to repeat mode changes.
+ */
+export function useRepeatMode(): RepeatMode {
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>(RepeatMode.Off);
+
+  useEffect(() => {
+    let mounted = true;
+
+    getRepeatMode()
+      .then((mode) => {
+        if (mounted) setRepeatMode(mode);
+      })
+      .catch(() => {});
+
+    // Note: No native event for repeat mode changes — poll if needed
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return repeatMode;
+}
+
+/**
+ * Subscribe to shuffle mode changes.
+ */
+export function useShuffleMode(): boolean {
+  const [shuffle, setShuffle] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    getShuffleMode()
+      .then((s) => {
+        if (mounted) setShuffle(s);
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return shuffle;
+}
+
+/**
+ * Subscribe to queue-ended events.
+ * @param onEnded - Callback fired when queue finishes playing
+ */
+export function useQueueEnded(onEnded: (position: number) => void): void {
+  const callbackRef = useRef(onEnded);
+
+  useEffect(() => {
+    callbackRef.current = onEnded;
+  }, [onEnded]);
+
+  useEffect(() => {
+    const sub = addEventListener(MavinEvent.PlaybackQueueEnded, (data: PlaybackQueueEndedEvent) => {
+      callbackRef.current?.(data?.position ?? 0);
     });
     return () => sub.remove();
   }, []);
-
-  return ps;
 }
 
 /**
- * Returns the currently active track, updating whenever it changes.
- * Mirrors RNTP's useActiveTrack().
+ * Subscribe to error events.
+ * @param onError - Callback fired on playback errors
  */
-export function useActiveTrack(): Track | undefined {
-  const [track, setTrack] = useState<Track | undefined>(undefined);
+export function useOnError(onError: (error: PlaybackErrorEvent) => void): void {
+  const callbackRef = useRef(onError);
 
   useEffect(() => {
-    getActiveTrack().then(setTrack).catch(() => {});
+    callbackRef.current = onError;
+  }, [onError]);
 
-    const refresh = () => { getActiveTrack().then(setTrack).catch(() => {}); };
-    const s1 = addEventListener(Event.PlaybackActiveTrackChanged, refresh);
-    const s2 = addEventListener(Event.PlaybackTrackChanged, refresh);  // compat
-    return () => { s1.remove(); s2.remove(); };
+  useEffect(() => {
+    const sub = addEventListener(MavinEvent.PlaybackError, (data: PlaybackErrorEvent) => {
+      callbackRef.current?.(data);
+    });
+    return () => sub.remove();
   }, []);
-
-  return track;
 }
 
 /**
- * Returns { playing, bufferingDuringPlay }.
- * Mirrors RNTP's useIsPlaying().
+ * Subscribe to USB DAC connection events.
  */
-export function useIsPlaying(): { playing: boolean; bufferingDuringPlay: boolean } {
-  const { state } = usePlaybackState();
-  return {
-    playing: state === State.Playing,
-    bufferingDuringPlay: state === State.Buffering,
+export function useUsbDacConnection(): { connected: boolean; info: Nullable<DacInfo> } {
+  const [state, setState] = useState<{ connected: boolean; info: Nullable<DacInfo> }>({
+    connected: false,
+    info: null,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Initial check
+    isUsbDacConnected()
+      .then((connected) => {
+        if (!mounted) return;
+        if (connected) {
+          getCurrentDacInfo().then((info) => {
+            if (mounted) setState({ connected: true, info });
+          });
+        } else {
+          setState({ connected: false, info: null });
+        }
+      })
+      .catch(() => {});
+
+    // Subscribe to connection events
+    const sub1 = addEventListener(MavinEvent.UsbDacConnected, (data: DacInfo) => {
+      if (!mounted) return;
+      setState({ connected: true, info: data });
+    });
+
+    const sub2 = addEventListener(MavinEvent.UsbDacDisconnected, () => {
+      if (!mounted) return;
+      setState({ connected: false, info: null });
+    });
+
+    return () => {
+      mounted = false;
+      sub1.remove();
+      sub2.remove();
+    };
+  }, []);
+
+  return state;
+}
+
+/**
+ * Subscribe to spectrum data for visualizers.
+ * @param options - Spectrum polling options
+ */
+export function useSpectrum(options: UseSpectrumOptions = {}): Array<{ bin: number; magnitude: number }> {
+  const { enabled = true, intervalMs = 100, useAnimationFrame = false } = options;
+  const [magnitudes, setMagnitudes] = useState<Array<{ bin: number; magnitude: number }>>([]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setMagnitudes([]);
+      return;
+    }
+
+    let mounted = true;
+    let animationFrame: number;
+    let intervalId: NodeJS.Timeout;
+
+    const poll = async () => {
+      if (!mounted) return;
+      try {
+        const data = await getSpectrumMagnitudes();
+        if (mounted) setMagnitudes(data);
+      } catch {
+        // Ignore errors
+      }
+      if (useAnimationFrame) {
+        animationFrame = requestAnimationFrame(poll);
+      }
+    };
+
+    if (useAnimationFrame) {
+      poll();
+    } else {
+      poll();
+      intervalId = setInterval(poll, intervalMs);
+    }
+
+    return () => {
+      mounted = false;
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [enabled, intervalMs, useAnimationFrame]);
+
+  return magnitudes;
+}
+
+/**
+ * Subscribe to peak meter data for VU meters.
+ * @param enabled - Whether to enable peak meter subscription
+ */
+export function usePeakMeter(enabled = true): PeakMeter {
+  const [peaks, setPeaks] = useState<PeakMeter>({ left: 0, right: 0 });
+
+  useEffect(() => {
+    if (!enabled) {
+      setPeaks({ left: 0, right: 0 });
+      return;
+    }
+
+    let mounted = true;
+
+    const sub = addEventListener(MavinEvent.PeakMeter, (data: PeakMeterEvent) => {
+      if (!mounted) return;
+      setPeaks({ left: data?.left ?? 0, right: data?.right ?? 0 });
+    });
+
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, [enabled]);
+
+  return peaks;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Convert milliseconds to seconds (for RNTP compatibility layer).
+ */
+export const msToSeconds = (ms: number): number => ms / 1000;
+
+/**
+ * Convert seconds to milliseconds (for Mavin native precision).
+ */
+export const secondsToMs = (seconds: number): number => seconds * 1000;
+
+/**
+ * Format duration as MM:SS or HH:MM:SS.
+ */
+export const formatDuration = (ms: number): string => {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+};
+
+/**
+ * Check if a track object is valid for playback.
+ */
+export const isValidTrack = (track: Nullable<Track>): boolean => {
+  if (!track) return false;
+  return !!(track.uri || track.url);
+};
+
+/**
+ * Merge default track properties with user-provided values.
+ */
+export const createTrack = (overrides: Partial<Track>): Track => ({
+  id: `track_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+  uri: '',
+  ...overrides,
+});
+
+/**
+ * Deep clone a track object to avoid reference issues.
+ */
+export const cloneTrack = (track: Track): Track => JSON.parse(JSON.stringify(track));
+
+/**
+ * Validate EQ gains array length for 31-band EQ.
+ */
+export const validateEQGains = (gains: number[]): gains is EQGains => {
+  return gains.length === ISO_FREQ_CENTERS.length;
+};
+
+/**
+ * Clamp a value to a range.
+ */
+export const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
+
+/**
+ * Debounce a function call.
+ */
+export const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
   };
-}
+};
 
 /**
- * Keeps track of the playWhenReady flag.
- * Mirrors RNTP's usePlayWhenReady().
+ * Throttle a function call.
  */
-export function usePlayWhenReady(): boolean {
-  const [pwr, setPwr] = useState(true);
-
-  useEffect(() => {
-    getPlayWhenReady().then(setPwr).catch(() => {});
-
-    const sub = addEventListener(Event.PlaybackPlayWhenReadyChanged, (data) => {
-      setPwr(!!(data as { playWhenReady?: boolean }).playWhenReady);
-    });
-    return () => sub.remove();
-  }, []);
-
-  return pwr;
-}
-
-/**
- * Returns the full queue and keeps it fresh.
- * Mirrors RNTP's useQueue().
- */
-export function useQueue(): Track[] {
-  const [queue, setQueue] = useState<Track[]>([]);
-
-  const refresh = useCallback(() => {
-    getQueue().then(setQueue).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const subs = [
-      addEventListener(Event.PlaybackActiveTrackChanged, refresh),
-      addEventListener(Event.PlaybackTrackChanged, refresh),
-      addEventListener(Event.PlaybackQueueEnded, refresh),
-    ];
-    return () => subs.forEach(s => s.remove());
-  }, [refresh]);
-
-  return queue;
-}
-
-/**
- * Subscribe to one or more events and call the handler when they fire.
- * Mirrors RNTP's useTrackPlayerEvents(events, handler).
- */
-export function useTrackPlayerEvents(
-  events: (Event | string)[],
-  handler: EventHandler
-): void {
-  const handlerRef = useRef(handler);
-  handlerRef.current = handler;
-
-  // Stringify events array for stable dep comparison
-  const eventsKey = events.join(',');
-
-  useEffect(() => {
-    const subs = events.map((event) =>
-      addEventListener(event, (data) =>
-        handlerRef.current({ ...data, type: event })
-      )
-    );
-    return () => subs.forEach(s => s.remove());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsKey]);
-}
+export const throttle = <T extends (...args: any[]) => any>(
+  func: T,
+  limit: number
+): ((...args: Parameters<T>) => void) => {
+  let inThrottle: boolean;
+  return (...args: Parameters<T>) => {
+    if (!inThrottle) {
+      func(...args);
+      inThrottle = true;
+      setTimeout(() => (inThrottle = false), limit);
+    }
+  };
+};

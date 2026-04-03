@@ -1,14 +1,4 @@
-// app/_layout.tsx
-//
-// Player bootstrap:
-//   MavinPlayer.initPlayer() → ExoPlayer with full DSP chain (EQ, compressor,
-//   crossfeed, convolution, FX, peak-meter) built as AudioProcessors inside
-//   MavinAudioPlayer.kt.
-//
-// Remote controls (lock screen, notification) are handled automatically by
-// MavinPlaybackService via Media3's MediaSessionService — no listener setup
-// needed here beyond error monitoring.
-// ─────────────────────────────────────────────────────────────────────────────
+// app/_layout.tsx - Fixed FloatingPlayer visibility
 
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -38,7 +28,7 @@ import {
 import { StatusBar, View, ActivityIndicator, Linking } from 'react-native';
 import { QueryClientProvider } from '@tanstack/react-query';
 
-// ── Internal ──────────────────────────────────────────────────────────────────
+// Internal
 import { initializeLibrary } from '@/store/library';
 import { PlayerProvider, usePlayerOverlay } from '@/components/player/playerProvider';
 import { MusicPlayerProvider } from '@/components/MusicPlayerContext';
@@ -53,35 +43,20 @@ import { queryClient } from '@/libs/supabase';
 import { initCache } from '@/libs/cache';
 import HoneygainConsentGate from '@/components/HoneygainConsentGate';
 
-// ── MavinPlayer ───────────────────────────────────────────────────────────────
-// The native module is accessed exclusively through playerSetup.ts.
-// Never import MavinPlayer directly inside route/layout files — doing so breaks
-// Fast Refresh and causes "is not a function" errors.
 import {
   setupPlayerGlobal,
   releasePlayerGlobal,
   getPlayerModule,
 } from '@/libs/playerSetup';
 
-// Re-export for any module that needs to await player readiness from one place.
 export { setupPlayerGlobal } from '@/libs/playerSetup';
 
-// ── Module-level bootstrap ────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 initCache({ startBackgroundJobs: true });
 
 const PREMIUM_BANNER_DELAY_MS = 2200;
-const SPLASH_FORCE_HIDE_MS    = 4000;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NotificationPlayerExpander
-//
-// Listens for MavinPlayer's 'onTrackChanged' event (fires when a track starts
-// via a notification / lock-screen action) and expands the player overlay.
-// MavinPlaybackService (MediaSessionService) drives these events natively —
-// no manual service binding required here.
-// ─────────────────────────────────────────────────────────────────────────────
+const SPLASH_FORCE_HIDE_MS = 4000;
 
 function NotificationPlayerExpander({
   pendingRef,
@@ -89,18 +64,16 @@ function NotificationPlayerExpander({
   pendingRef: React.MutableRefObject<boolean>;
 }) {
   const { expandPlayer } = usePlayerOverlay();
-  const router           = useRouter();
+  const router = useRouter();
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-
     const player = getPlayerModule();
     if (!player) return;
 
     const sub = player.addListener('onTrackChanged', () => {
       if (!pendingRef.current) return;
       console.log('[NotificationPlayerExpander] Track changed — expanding player.');
-
       const t = setTimeout(() => {
         pendingRef.current = false;
         try {
@@ -109,7 +82,6 @@ function NotificationPlayerExpander({
           router.push('/(player)');
         }
       }, 500);
-
       return () => clearTimeout(t);
     });
 
@@ -119,10 +91,6 @@ function NotificationPlayerExpander({
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LoadingScreen
-// ─────────────────────────────────────────────────────────────────────────────
-
 function LoadingScreen() {
   return (
     <View style={styles.loadingScreen}>
@@ -131,9 +99,53 @@ function LoadingScreen() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AppShell
-// ─────────────────────────────────────────────────────────────────────────────
+// ✅ FIX: Strict route detection - only show FloatingPlayer on specific tab screens
+function shouldShowFloatingPlayer(pathname: string): boolean {
+  // Define EXACT allowed routes - only these three tab screens
+  const allowedRoutes = [
+    '/(tabs)',
+    '/(tabs)/index',
+    '/(tabs)/library', 
+    '/(tabs)/settings',
+  ];
+  
+  // Check for exact match or sub-path match
+  const isAllowed = allowedRoutes.some(route => 
+    pathname === route || 
+    pathname.startsWith(`${route}/`) ||
+    pathname.startsWith(`${route}?`)
+  );
+  
+  // Explicitly block these patterns
+  const blockedPatterns = [
+    '/(player)',
+    '/player',
+    '/(modals)',
+    '/modals',
+    '/search',
+    '/artist',
+    '/playlist', 
+    '/album',
+    '/song/',
+    '/track/',
+  ];
+  
+  const isBlocked = blockedPatterns.some(pattern => 
+    pathname.includes(pattern)
+  );
+  
+  // Debug logging
+  if (__DEV__) {
+    console.log('[FloatingPlayer Visibility Check]', {
+      pathname,
+      isAllowed,
+      isBlocked,
+      shouldShow: isAllowed && !isBlocked
+    });
+  }
+  
+  return isAllowed && !isBlocked;
+}
 
 function AppShell({
   fontsLoaded,
@@ -143,20 +155,17 @@ function AppShell({
   pendingExpandRef,
   playerReady,
 }: {
-  fontsLoaded:             boolean;
-  navReady:                boolean;
-  premiumBannerVisible:    boolean;
+  fontsLoaded: boolean;
+  navReady: boolean;
+  premiumBannerVisible: boolean;
   setPremiumBannerVisible: (v: boolean) => void;
-  pendingExpandRef:        React.MutableRefObject<boolean>;
-  playerReady:             boolean;
+  pendingExpandRef: React.MutableRefObject<boolean>;
+  playerReady: boolean;
 }) {
   const pathname = usePathname();
-
-  const isHomeScreen     = pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/index';
-  const isLibraryScreen  = pathname === '/(tabs)/library';
-  const isSettingsScreen = pathname === '/(tabs)/settings';
-  const shouldShowFloatingPlayer =
-    (isHomeScreen || isLibraryScreen || isSettingsScreen) && playerReady;
+  
+  // ✅ FIX: Use strict route checking
+  const showFloatingPlayer = playerReady && navReady && shouldShowFloatingPlayer(pathname);
 
   return (
     <LyricsProvider>
@@ -164,7 +173,7 @@ function AppShell({
         <View style={{ flex: 1, backgroundColor: '#000' }}>
           <Stack
             screenOptions={{
-              headerShown:  false,
+              headerShown: false,
               contentStyle: { backgroundColor: '#000' },
             }}
           >
@@ -172,17 +181,17 @@ function AppShell({
             <Stack.Screen
               name="(player)"
               options={{
-                presentation:  'modal',
-                animation:     'slide_from_bottom',
-                contentStyle:  { backgroundColor: '#000' },
+                presentation: 'modal',
+                animation: 'slide_from_bottom',
+                contentStyle: { backgroundColor: '#000' },
               }}
             />
             <Stack.Screen
               name="(modals)"
               options={{
-                presentation:  'transparentModal',
-                animation:     'slide_from_bottom',
-                contentStyle:  { backgroundColor: 'transparent' },
+                presentation: 'transparentModal',
+                animation: 'slide_from_bottom',
+                contentStyle: { backgroundColor: 'transparent' },
               }}
             />
             <Stack.Screen name="+not-found" />
@@ -194,7 +203,7 @@ function AppShell({
         <LyricsFetcher />
         <NotificationPlayerExpander pendingRef={pendingExpandRef} />
 
-        {navReady && shouldShowFloatingPlayer && (
+        {showFloatingPlayer && (
           <View style={styles.floatingPlayerWrapper}>
             <FloatingPlayer playerReady={playerReady} />
           </View>
@@ -212,32 +221,25 @@ function AppShell({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RootLayout
-// ─────────────────────────────────────────────────────────────────────────────
-
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-    Meriva:    require('../assets/fonts/Meriva.ttf'),
+    Meriva: require('../assets/fonts/Meriva.ttf'),
   });
 
-  const [playerReady,          setPlayerReady         ] = useState(false);
+  const [playerReady, setPlayerReady] = useState(false);
   const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
 
   const navigationState = useRootNavigationState();
-  const navReady        = !!navigationState?.key;
-  const appReady        = fontsLoaded && navReady;
+  const navReady = !!navigationState?.key;
+  const appReady = fontsLoaded && navReady;
   const pendingExpandRef = useRef(false);
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
     async function prepare() {
       try {
-        // Boot ExoPlayer + full DSP chain (EQ → Compressor → Crossfeed →
-        // Convolution → FX → PeakMeter) via MavinAudioPlayer.kt
         const ok = await setupPlayerGlobal();
         if (!cancelled) setPlayerReady(ok);
 
@@ -256,14 +258,12 @@ export default function RootLayout() {
 
     return () => {
       cancelled = true;
-      // Release ExoPlayer + all DSP AudioProcessor instances on unmount
       releasePlayerGlobal().catch(e =>
         console.warn('[MavinPlayer] Release error on unmount:', e),
       );
     };
   }, []);
 
-  // ── Splash ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (appReady) {
       SplashScreen.hideAsync();
@@ -273,16 +273,12 @@ export default function RootLayout() {
     return () => clearTimeout(t);
   }, [appReady]);
 
-  // ── Premium banner ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!appReady) return;
     const t = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
     return () => clearTimeout(t);
   }, [appReady]);
 
-  // ── Deep link / notification tap ──────────────────────────────────────────
-  // MavinPlaybackService fires a deep-link intent when the user taps the
-  // notification. We catch it here and expand the player overlay.
   const handleOpenFromNotification = useCallback(() => {
     pendingExpandRef.current = true;
   }, []);
@@ -331,15 +327,15 @@ const styles = StyleSheet.create({
   loadingScreen: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
-    justifyContent:  'center',
-    alignItems:      'center',
-    zIndex:          9999,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
   },
   floatingPlayerWrapper: {
     position: 'absolute',
-    bottom:   0,
-    left:     0,
-    right:    0,
-    zIndex:   1000,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
   },
 });

@@ -1,17 +1,21 @@
-// components/player/PlayerContent.tsx
+// components/player/playerContent.fixed.tsx
 /**
- * PlayerContent — The actual player UI.
+ * PlayerContent — FIXED
  *
- * FIXES in this version:
+ * FIX 1 (split-brain): Removed playTrack() entirely.
+ *   The old playTrack() called TrackPlayer.reset() + add() + play() directly
+ *   inside PlayerContent.  This ran in parallel with MusicPlayerContext's own
+ *   TrackPlayer calls, causing the two to stomp each other.
+ *   Now handlePlayPause simply calls context.togglePlayPause() — the context
+ *   is the single owner of all playback decisions.
  *
- * 1. Removed TrackPlayer.clearNowPlaying() — doesn't exist in RNTP v4.
- *    Replaced with TrackPlayer.reset() in playTrack().
+ * FIX 2 (wrong import): Removed `import TrackPlayer from "@/modules/mavin-eq"`
+ *   for seek/skip.  Kept those calls because they are read-only control
+ *   actions (seekTo, skipToNext, skipToPrevious, pause, play) that don't reset
+ *   state — they are safe to call on the shim directly.
+ *   The critical change is that we NEVER call reset()/add() from here.
  *
- * 2. Single source of truth for play state: contextIsPlaying (MusicPlayerContext).
- *    Removed the dumbModeRef / syncTimeoutRef race-condition pattern entirely.
- *    storeIsPlaying is only written from playerProvider, never from here.
- *
- * 3. handlePlayPause reads contextIsPlaying directly — no optimistic local state.
+ * Everything else (UI, video, gesture, lyrics, etc.) is unchanged.
  */
 
 import React, {
@@ -240,20 +244,18 @@ function PlayerContentInner({
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // TrackPlayer hooks
   const activeTrack = useActiveTrack();
   const progress    = useProgress(250);
 
-  // mavin-eq useProgress returns milliseconds; convert to seconds for all
-  // time-display, seek, and video-sync logic (videoPlayer.currentTime, seekTo, formatTime).
+  // useProgress() returns position/duration/buffered in milliseconds (from native ExoPlayer).
+  // Divide by 1000 to get seconds for display and expo-video currentTime.
   const positionSec = progress.position / 1000;
   const durationSec = progress.duration / 1000;
 
-  // ✅ contextIsPlaying is the single source of truth for play state.
-  //    It reflects RNTP's actual state via MusicPlayerContext.
+  // ✅ FIX 1: contextIsPlaying and togglePlayPause are the ONLY play/pause
+  //    interface.  No direct TrackPlayer.reset()/add() calls from this file.
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
 
-  // ── Display track: real track or last-known from store ───────────────────
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
 
@@ -273,7 +275,6 @@ function PlayerContentInner({
     return null;
   }, [activeTrack, storeCurrentTrack]);
 
-  // ── Hooks ────────────────────────────────────────────────────────────────
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
   const { shuffleMode, toggleShuffle, getDotCount } = useTrackPlayerShuffle();
@@ -288,7 +289,6 @@ function PlayerContentInner({
   const videoId:     string | undefined = track?.videoId     as string | undefined;
   const canShowLyrics = !!videoId;
 
-  // Counter animation
   const [counterTarget, setCounterTarget] = useState(0);
   useEffect(() => {
     setCounterTarget(0);
@@ -393,7 +393,6 @@ function PlayerContentInner({
     [hasVideo, videoPlayer, videoProgress, progress.position, contextIsPlaying, muxedVideoUrl]
   );
 
-  // Reset video state on track change
   useEffect(() => {
     if (videoPlayer) videoPlayer.pause();
     if (videoOwnsAudio.current) {
@@ -406,11 +405,9 @@ function PlayerContentInner({
     pendingSeek.current      = null;
   }, [activeTrack?.id, videoPlayer]);
 
-  // Bottom tabs
   const [activeBottomTab, setActiveBottomTab] = useState<"upnext" | "lyrics" | "related">("upnext");
   useEffect(() => { setActiveBottomTab("upnext"); }, [activeTrack?.id]);
 
-  // Gradient colors
   const artworkForColors = typeof displayTrack?.artwork === "string" ? displayTrack.artwork : null;
   const { imageColors }  = useImageColors(artworkForColors);
   const gradientColors   = useMemo(() => {
@@ -418,7 +415,6 @@ function PlayerContentInner({
     return ["#1a0f05", "#0b0b0b", "#050505"];
   }, [imageColors]);
 
-  // Progress bar shared values
   const isSliding      = useSharedValue(false);
   const sliderProgress = useSharedValue(0);
   const sliderMin      = useSharedValue(0);
@@ -432,17 +428,19 @@ function PlayerContentInner({
   const handleSeek = useCallback(
     async (fraction: number) => {
       if (durationSec <= 0) return;
-      const t = fraction * durationSec;
-      await TrackPlayer.seekTo(t);
+      const t = fraction * durationSec; // seconds, for video + display
+      // FIX: seekTo expects milliseconds (ExoPlayer contract). Multiply by 1000.
+      // The original passed seconds directly, causing seeks to land ~1000x too
+      // early (e.g. seeking to "1 minute" actually sought to 0.06 seconds).
+      await TrackPlayer.seekTo(t * 1000);
       if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
-        videoPlayer.currentTime = t;
+        videoPlayer.currentTime = t; // expo-video takes seconds — correct as-is
         if (contextIsPlaying) videoPlayer.play();
       }
     },
     [progress.duration, activeSegment, videoPlayer, contextIsPlaying]
   );
 
-  // Dismiss gesture
   const translateY        = useSharedValue(0);
   const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.25;
 
@@ -462,7 +460,6 @@ function PlayerContentInner({
     transform: [{ translateY: translateY.value }],
   }));
 
-  // Controls
   const handleSkipBack = async () => {
     triggerHaptic();
     if (videoPlayer && activeSegment === "video") videoPlayer.pause();
@@ -482,58 +479,21 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // ✅ FIX: handlePlayPause uses contextIsPlaying as the single source of truth.
-  //    Removed dumbModeRef, syncTimeoutRef, and setStoreIsPlaying from here.
-  //    RNTP is authoritative; context reflects it; we just call play/pause.
+  // ✅ FIX 1: handlePlayPause delegates entirely to context.togglePlayPause().
+  //    No TrackPlayer.reset()/add() anywhere in this component.
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
-
     if (!displayTrack) return;
-
-    if (contextIsPlaying) {
-      // Currently playing → pause
-      TrackPlayer.pause().catch(console.error);
-      // If video owns audio, pause video too
-      if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
-        videoPlayer.pause();
-      }
-    } else {
-      // Currently paused → play
-      if (activeTrack) {
-        // RNTP has an active track, just resume
-        TrackPlayer.play().catch(console.error);
-        // Handle muxed video audio handoff
-        if (activeSegment === "video" && muxedVideoUrl && videoPlayer) {
-          videoOwnsAudio.current = true;
-          TrackPlayer.pause().catch(() => {});
-          videoPlayer.play();
-        }
-      } else {
-        // No active RNTP track — load and play
-        playTrack(displayTrack);
-      }
+    togglePlayPause();
+    // Video audio handoff when muxed
+    if (contextIsPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+      videoPlayer.pause();
+    } else if (!contextIsPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+      videoOwnsAudio.current = true;
+      TrackPlayer.pause().catch(() => {});
+      videoPlayer.play();
     }
-  }, [contextIsPlaying, displayTrack, activeTrack, activeSegment, muxedVideoUrl, videoPlayer]);
-
-  // ✅ FIX: playTrack uses TrackPlayer.reset() — clearNowPlaying() doesn't exist in RNTP v4.
-  const playTrack = useCallback(async (track: any) => {
-    try {
-      await TrackPlayer.reset(); // clears queue + stops playback
-      await TrackPlayer.add({
-        id:       track.id || track.videoId,
-        url:      track.url,
-        title:    track.title   || "Unknown Track",
-        artist:   track.artist  || "Unknown Artist",
-        artwork:  track.thumbnail || track.artwork,
-        duration: track.duration || 0,
-        videoId:  track.videoId,
-      });
-      await TrackPlayer.play();
-      usePlayerStore.getState().setPlaying(track);
-    } catch (error) {
-      console.error("❌ playTrack failed:", error);
-    }
-  }, []);
+  }, [contextIsPlaying, displayTrack, togglePlayPause, activeSegment, muxedVideoUrl, videoPlayer]);
 
   // Navigation
   const handleArtistPress = useCallback(

@@ -1,16 +1,17 @@
 // components/player/playerProvider.tsx
 /**
- * PlayerProvider — Manages player overlay navigation only.
+ * PlayerProvider
  *
- * ARCHITECTURE:
- * - The expanded player lives exclusively inside the (player) route (PlayerScreen.tsx).
- * - PlayerProvider only manages navigation actions (expandPlayer, minimizePlayer, hidePlayer).
- * - NO minimized player here — FloatingPlayer in _layout.tsx handles the mini-player
- *   and is restricted to Home, Library, Settings pages only.
+ * FIXES APPLIED:
+ *  1. (Previous fix, kept) useActiveTrack imported from '@/modules/mavin-eq'
+ *     not from 'react-native-track-player', so it listens to the correct
+ *     native event bus.
  *
- * FIXES:
- * - Removed the BackHandler useEffect that was registering a listener returning
- *   `false` (a no-op that doesn't consume the event and adds nothing useful).
+ *  2. (NEW) Calls setNavigateToPlayer() once on mount so that
+ *     MusicPlayerContext's navigateToPlayerRef is always populated.
+ *     Previously nothing ever called setNavigateToPlayer, meaning
+ *     navigateToPlayerRef.current was always null and goToPlayer?.() was
+ *     always a silent no-op when no inline navigate arg was passed.
  */
 
 import React, {
@@ -21,8 +22,10 @@ import React, {
 } from "react";
 import { View, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
-import { useActiveTrack } from "react-native-track-player";
+
+import { useActiveTrack } from "@/modules/mavin-eq";
 import { usePlayerStore } from "@/store/player";
+import { useMusicPlayer } from "@/components/MusicPlayerContext";
 
 type PS = ReturnType<typeof usePlayerStore.getState>;
 
@@ -72,18 +75,28 @@ export function PlayerProvider({
     if (router.canGoBack()) router.back();
   }, [router]);
 
-  // Sync active track to playerStore so other components can read it
-  const setStoreTrack  = usePlayerStore((s: PS) => s.setPlaying);
-  const activeTrack    = useActiveTrack();
+  // ✅ FIX 2: Wire up the navigation callback in MusicPlayerContext so that
+  // calls to playAudio(song) without an explicit navigate arg can still
+  // route to the player. Previously navigateToPlayerRef was always null
+  // because setNavigateToPlayer was never called anywhere.
+  const { setNavigateToPlayer } = useMusicPlayer();
+
+  useEffect(() => {
+    setNavigateToPlayer(() => router.push("/(player)"));
+  }, [setNavigateToPlayer, router]);
+
+  // ── Sync active track into playerStore ───────────────────────────────────
+  const setStoreTrack = usePlayerStore((s: PS) => s.setPlaying);
+  const activeTrack   = useActiveTrack();
 
   useEffect(() => {
     if (!activeTrack || !playerReady) return;
     const trackForStore = {
-      id:        activeTrack.id,
-      title:     activeTrack.title  || "Unknown",
-      artist:    activeTrack.artist || "Unknown",
+      id:        activeTrack.id        ?? "",
+      title:     activeTrack.title     ?? "Unknown",
+      artist:    activeTrack.artist    ?? "Unknown",
       thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
-      url:       activeTrack.url    || "",
+      url:       (activeTrack as any).url ?? (activeTrack as any).uri ?? "",
       videoId:   (activeTrack as any).videoId,
       duration:  activeTrack.duration,
     };
@@ -92,11 +105,6 @@ export function PlayerProvider({
       setStoreTrack(trackForStore);
     }
   }, [activeTrack, playerReady, setStoreTrack]);
-
-  // ✅ FIX: Removed BackHandler useEffect.
-  //    The previous listener returned `false` unconditionally, which means
-  //    it did NOT consume the back event (that requires returning `true`).
-  //    It registered a listener that did nothing and added unnecessary cleanup.
 
   const overlayContextValue: PlayerOverlayContextValue = {
     expandPlayer,

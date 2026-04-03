@@ -1,10 +1,9 @@
 /**
- * Search Screen — app/(tabs)/search/index.tsx  v12
+ * Search Screen — app/(tabs)/search/index.tsx  v13
  *
- * Changes from v11:
- *   [C] Genre-based folders — replaced history list with a grid of genre folders.
- *       Each folder shows the last played song's cover art and top 3 artists.
- *       Only non-empty folders are displayed.
+ * Changes from v12:
+ *   [F] Fixed ReferenceError: Property 'setQuery' doesn't exist.
+ *       GenreFolderGrid now receives setQuery and performSearch as props.
  */
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
@@ -404,8 +403,14 @@ const folderStyles = StyleSheet.create({
 });
 
 // ─── Genre Folder Grid Component ───────────────────────────────────────────────
+// [F] Fixed: Added props interface to receive setQuery and performSearch
 
-const GenreFolderGrid = () => {
+interface GenreFolderGridProps {
+  setQuery: (query: string) => void;
+  performSearch: (query: string) => Promise<void>;
+}
+
+const GenreFolderGrid = ({ setQuery, performSearch }: GenreFolderGridProps) => {
   const [folders, setFolders] = useState<DynamicFolder[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -761,10 +766,11 @@ export default function SearchScreen() {
       )}
 
       {/* ── Genre Folders ────────────────────────────────────────────────────── */}
+      {/* [F] Fixed: Pass setQuery and performSearch as props */}
       {showHistory && (
         <View style={styles.historySection}>
           <Text style={styles.sectionLabel}>Browse by Genre</Text>
-          <GenreFolderGrid />
+          <GenreFolderGrid setQuery={setQuery} performSearch={performSearch} />
         </View>
       )}
 

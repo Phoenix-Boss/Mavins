@@ -1,373 +1,415 @@
-/**
- * FloatingPlayer — v5
- *
- * Changes from v4:
- *
- * 1. Route detection removed - parent _layout.tsx now controls visibility.
- *    FloatingPlayer only renders when explicitly mounted by AppShell.
- *
- * 2. All previous fixes preserved (pending track, singleton guard, expo-image).
- */
+// app/_layout.tsx
+//
+// Player bootstrap:
+//   MavinPlayer.initPlayer() → ExoPlayer with full DSP chain (EQ, compressor,
+//   crossfeed, convolution, FX, peak-meter) built as AudioProcessors inside
+//   MavinAudioPlayer.kt.
+//
+// Remote controls (lock screen, notification) are handled automatically by
+// MavinPlaybackService via Media3's MediaSessionService — no listener setup
+// needed here beyond error monitoring.
+// ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useEffect, useRef, useState } from 'react';
+import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Platform,
-} from 'react-native';
-import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
-import { triggerHaptic } from '@/helpers/haptics';
-import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
-import { useActiveTrack, usePlaybackState, State } from '@/modules/mavin-eq';
-import TrackPlayer from '@/modules/mavin-eq';
-import { useMusicPlayer } from '@/components/MusicPlayerContext';
+  Stack,
+  useRootNavigationState,
+  useRouter,
+  usePathname,
+} from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from 'react';
+import { StyleSheet, Platform } from 'react-native';
 import {
-  getPendingTrack,
-  clearPendingTrack,
-  subscribePendingTrack,
-  type PendingTrackInfo,
-} from '@/helpers/pendingTrack';
-import { usePlayerOverlay } from '@/components/player/playerProvider';
+  configureReanimatedLogger,
+  ReanimatedLogLevel,
+} from 'react-native-reanimated';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  SafeAreaProvider,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context';
+import { StatusBar, View, ActivityIndicator, Linking } from 'react-native';
+import { QueryClientProvider } from '@tanstack/react-query';
 
-// ─── Singleton guard ──────────────────────────────────────────────────────────
-let _floatingPlayerMountCount = 0;
+// ── Internal ──────────────────────────────────────────────────────────────────
+import { initializeLibrary } from '@/store/library';
+import { PlayerProvider, usePlayerOverlay } from '@/components/player/playerProvider';
+import { MusicPlayerProvider } from '@/components/MusicPlayerContext';
+import { LyricsProvider, LyricsFetcher } from '@/hooks/useLyricsContext';
+import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
+import FloatingPlayer from '@/components/FloatingPlayer';
+import { UpdateModal } from '@/components/UpdateModal';
+import { MessageModal } from '@/components/MessageModal';
+import PremiumBanner from '@/components/ads/banner/premium';
+import { HomePreloader } from '@/components/HomePreloader';
+import { queryClient } from '@/libs/supabase';
+import { initCache } from '@/libs/cache';
+import HoneygainConsentGate from '@/components/HoneygainConsentGate';
 
-// ─── Props ────────────────────────────────────────────────────────────────────
+// ── MavinPlayer ───────────────────────────────────────────────────────────────
+// The native module is accessed exclusively through playerSetup.ts.
+// Never import MavinPlayer directly inside route/layout files — doing so breaks
+// Fast Refresh and causes "is not a function" errors.
+import {
+  setupPlayerGlobal,
+  releasePlayerGlobal,
+  getPlayerModule,
+} from '@/libs/playerSetup';
 
-interface FloatingPlayerProps {
-  tabHeight?: number;
-  playerReady: boolean;
+// Re-export for any module that needs to await player readiness from one place.
+export { setupPlayerGlobal } from '@/libs/playerSetup';
+
+// ── Module-level bootstrap ────────────────────────────────────────────────────
+SplashScreen.preventAutoHideAsync();
+configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
+initCache({ startBackgroundJobs: true });
+
+const PREMIUM_BANNER_DELAY_MS = 2200;
+const SPLASH_FORCE_HIDE_MS    = 4000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NotificationPlayerExpander
+//
+// Listens for MavinPlayer's 'onTrackChanged' event (fires when a track starts
+// via a notification / lock-screen action) and expands the player overlay.
+// MavinPlaybackService (MediaSessionService) drives these events natively —
+// no manual service binding required here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function NotificationPlayerExpander({
+  pendingRef,
+}: {
+  pendingRef: React.MutableRefObject<boolean>;
+}) {
+  const { expandPlayer } = usePlayerOverlay();
+  const router           = useRouter();
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const player = getPlayerModule();
+    if (!player) return;
+
+    const sub = player.addListener('onTrackChanged', () => {
+      if (!pendingRef.current) return;
+      console.log('[NotificationPlayerExpander] Track changed — expanding player.');
+
+      const t = setTimeout(() => {
+        pendingRef.current = false;
+        try {
+          expandPlayer();
+        } catch {
+          router.push('/(player)');
+        }
+      }, 500);
+
+      return () => clearTimeout(t);
+    });
+
+    return () => sub.remove();
+  }, [expandPlayer, pendingRef, router]);
+
+  return null;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadingScreen
+// ─────────────────────────────────────────────────────────────────────────────
 
-const FloatingPlayer: React.FC<FloatingPlayerProps> = ({
-  tabHeight = 56,
-  playerReady,
-}) => {
-  const activeTrack   = useActiveTrack();
-  const playbackState = usePlaybackState();
-  const { togglePlayPause, isLoading } = useMusicPlayer();
-  const { expandPlayer } = usePlayerOverlay();
-
-  // ── Pending track signal ───────────────────────────────────────────────────
-  const [pendingTrack, setPendingTrackState] = useState<PendingTrackInfo | null>(
-    getPendingTrack,
+function LoadingScreen() {
+  return (
+    <View style={styles.loadingScreen}>
+      <ActivityIndicator size="large" color="#D4AF37" />
+    </View>
   );
+}
 
-  useEffect(() => {
-    setPendingTrackState(getPendingTrack());
-    return subscribePendingTrack((t) => setPendingTrackState(t));
-  }, []);
+// ─────────────────────────────────────────────────────────────────────────────
+// AppShell
+// ─────────────────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (activeTrack) clearPendingTrack();
-  }, [activeTrack?.id]);
+function AppShell({
+  fontsLoaded,
+  navReady,
+  premiumBannerVisible,
+  setPremiumBannerVisible,
+  pendingExpandRef,
+  playerReady,
+}: {
+  fontsLoaded:             boolean;
+  navReady:                boolean;
+  premiumBannerVisible:    boolean;
+  setPremiumBannerVisible: (v: boolean) => void;
+  pendingExpandRef:        React.MutableRefObject<boolean>;
+  playerReady:             boolean;
+}) {
+  const pathname = usePathname();
 
-  // ── Singleton guard ─────────────────────────────────────────────────────────
-  const isOwnerRef = useRef(false);
+  // ✅ FIX 4: Proper route detection for FloatingPlayer visibility
+  // FloatingPlayer should ONLY show on:
+  // - Home screen (tabs/index)
+  // - Library screen (tabs/library)
+  // - Settings screen (tabs/settings)
+  // It should NOT show on:
+  // - Player screen (player)
+  // - Any modal screens (modals/*)
+  // - Search screens
+  // - Any other nested routes
+  
+  const isHomeScreen = pathname === '/' || 
+                       pathname === '/(tabs)' || 
+                       pathname === '/(tabs)/index' ||
+                       pathname === '/(tabs)/index/' ||
+                       pathname.startsWith('/(tabs)/index?');
+  
+  const isLibraryScreen = pathname === '/(tabs)/library' || 
+                          pathname === '/(tabs)/library/' ||
+                          pathname.startsWith('/(tabs)/library?');
+  
+  const isSettingsScreen = pathname === '/(tabs)/settings' || 
+                           pathname === '/(tabs)/settings/' ||
+                           pathname.startsWith('/(tabs)/settings?');
+  
+  // Exclude player and modals completely
+  const isPlayerScreen = pathname === '/(player)' || 
+                         pathname === '/(player)/' ||
+                         pathname.startsWith('/(player)/') ||
+                         pathname.includes('/(player)');
+  
+  const isModalScreen = pathname === '/(modals)' || 
+                        pathname.startsWith('/(modals)/') ||
+                        pathname.includes('/(modals)');
+  
+  const isSearchScreen = pathname === '/(tabs)/search' || 
+                         pathname.startsWith('/(tabs)/search/') ||
+                         pathname.includes('/search/');
+  
+  const isArtistScreen = pathname.includes('/artist') || 
+                         pathname.includes('artist?');
+  
+  const isPlaylistScreen = pathname.includes('/playlist') || 
+                           pathname.includes('playlist?');
+  
+  const isAlbumScreen = pathname.includes('/album') || 
+                        pathname.includes('album?');
+  
+  // Determine if FloatingPlayer should be visible
+  const shouldShowFloatingPlayer = 
+    playerReady && 
+    !isPlayerScreen && 
+    !isModalScreen && 
+    !isSearchScreen &&
+    !isArtistScreen &&
+    !isPlaylistScreen &&
+    !isAlbumScreen &&
+    (isHomeScreen || isLibraryScreen || isSettingsScreen);
+  
+  // Debug logging to help diagnose visibility issues
   useEffect(() => {
-    _floatingPlayerMountCount += 1;
-    isOwnerRef.current = _floatingPlayerMountCount === 1;
+    if (__DEV__) {
+      console.log('[FloatingPlayer Visibility]', {
+        pathname,
+        playerReady,
+        isHomeScreen,
+        isLibraryScreen,
+        isSettingsScreen,
+        isPlayerScreen,
+        isModalScreen,
+        isSearchScreen,
+        shouldShowFloatingPlayer
+      });
+    }
+  }, [pathname, playerReady, shouldShowFloatingPlayer]);
+
+  return (
+    <LyricsProvider>
+      <GlobalUIStateProvider>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          <Stack
+            screenOptions={{
+              headerShown:  false,
+              contentStyle: { backgroundColor: '#000' },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="(player)"
+              options={{
+                presentation:  'modal',
+                animation:     'slide_from_bottom',
+                contentStyle:  { backgroundColor: '#000' },
+              }}
+            />
+            <Stack.Screen
+              name="(modals)"
+              options={{
+                presentation:  'transparentModal',
+                animation:     'slide_from_bottom',
+                contentStyle:  { backgroundColor: 'transparent' },
+              }}
+            />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+
+          {!fontsLoaded && <LoadingScreen />}
+        </View>
+
+        <LyricsFetcher />
+        <NotificationPlayerExpander pendingRef={pendingExpandRef} />
+
+        {navReady && shouldShowFloatingPlayer && (
+          <View style={styles.floatingPlayerWrapper}>
+            <FloatingPlayer playerReady={playerReady} />
+          </View>
+        )}
+
+        <UpdateModal />
+        <MessageModal />
+
+        <PremiumBanner
+          visible={premiumBannerVisible}
+          onDismiss={() => setPremiumBannerVisible(false)}
+        />
+      </GlobalUIStateProvider>
+    </LyricsProvider>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RootLayout
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    Meriva:    require('../assets/fonts/Meriva.ttf'),
+  });
+
+  const [playerReady,          setPlayerReady         ] = useState(false);
+  const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
+
+  const navigationState = useRootNavigationState();
+  const navReady        = !!navigationState?.key;
+  const appReady        = fontsLoaded && navReady;
+  const pendingExpandRef = useRef(false);
+
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function prepare() {
+      try {
+        // Boot ExoPlayer + full DSP chain (EQ → Compressor → Crossfeed →
+        // Convolution → FX → PeakMeter) via MavinAudioPlayer.kt
+        const ok = await setupPlayerGlobal();
+        if (!cancelled) setPlayerReady(ok);
+
+        try {
+          await initializeLibrary();
+        } catch (e) {
+          console.warn('[Library] Initialization failed:', e);
+        }
+      } catch (e) {
+        console.warn('[Player] Setup error:', e);
+        if (!cancelled) setPlayerReady(false);
+      }
+    }
+
+    prepare();
+
     return () => {
-      if (isOwnerRef.current) _floatingPlayerMountCount = 0;
-      else _floatingPlayerMountCount -= 1;
+      cancelled = true;
+      // Release ExoPlayer + all DSP AudioProcessor instances on unmount
+      releasePlayerGlobal().catch(e =>
+        console.warn('[MavinPlayer] Release error on unmount:', e),
+      );
     };
   }, []);
 
-  // ── Playback state ─────────────────────────────────────────────────────────
-  const currentState: State = (() => {
-    if (!playbackState) return State.None;
-    if (typeof playbackState === 'object' && 'state' in playbackState) {
-      return (playbackState as { state: State }).state ?? State.None;
+  // ── Splash ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (appReady) {
+      SplashScreen.hideAsync();
+      return;
     }
-    return playbackState as unknown as State;
-  })();
+    const t = setTimeout(() => SplashScreen.hideAsync(), SPLASH_FORCE_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [appReady]);
 
-  const isPlaying =
-    currentState === State.Playing ||
-    currentState === State.Buffering;
+  // ── Premium banner ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!appReady) return;
+    const t = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [appReady]);
 
-  // ── Decide what to display ─────────────────────────────────────────────────
-  const displayTrack = activeTrack
-    ? {
-        title:   activeTrack.title   ?? 'Unknown Title',
-        artist:  activeTrack.artist  ?? 'Unknown Artist',
-        artwork: typeof activeTrack.artwork === 'string' ? activeTrack.artwork : null,
-        isReal:  true,
-      }
-    : pendingTrack
-    ? {
-        title:   pendingTrack.title,
-        artist:  pendingTrack.artist,
-        artwork: pendingTrack.artwork || null,
-        isReal:  false,
-      }
-    : null;
+  // ── Deep link / notification tap ──────────────────────────────────────────
+  // MavinPlaybackService fires a deep-link intent when the user taps the
+  // notification. We catch it here and expand the player overlay.
+  const handleOpenFromNotification = useCallback(() => {
+    pendingExpandRef.current = true;
+  }, []);
 
-  // ── Animated bottom position ────────────────────────────────────────────────
-  const floatingBottom = tabHeight + 4;
-  const animatedStyle = useAnimatedStyle(
-    () => ({ bottom: withTiming(floatingBottom, { duration: 300 }) }),
-    [floatingBottom],
-  );
-
-  // ── Guards ─────────────────────────────────────────────────────────────────
-  // Note: Route visibility is controlled by parent _layout.tsx
-  // We only check for track data and singleton ownership here
-  if (!displayTrack || !isOwnerRef.current || !playerReady) {
-    return null;
-  }
-
-  // ── Handlers ────────────────────────────────────────────────────────────────
-
-  const openPlayer = () => {
-    if (!activeTrack) return;
-    triggerHaptic();
-    expandPlayer();
-  };
-
-  const handleTogglePlay = async (e: any) => {
-    e.stopPropagation();
-    if (!activeTrack) return;
-    triggerHaptic();
-    await togglePlayPause();
-  };
-
-  const handleSkipNext = async (e: any) => {
-    e.stopPropagation();
-    if (!activeTrack) return;
-    triggerHaptic();
-    try { await TrackPlayer.skipToNext(); } catch {}
-  };
-
-  const handleSkipPrev = async (e: any) => {
-    e.stopPropagation();
-    if (!activeTrack) return;
-    triggerHaptic();
-    try { await TrackPlayer.skipToPrevious(); } catch {}
-  };
-
-  // ── Shared card content ──────────────────────────────────────────────────
-  const isPending = !displayTrack.isReal;
+  useEffect(() => {
+    Linking.getInitialURL().then(url => {
+      if (url === null || url?.startsWith('mavins-player'))
+        handleOpenFromNotification();
+    });
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      if (url?.startsWith('mavins-player') || url === '')
+        handleOpenFromNotification();
+    });
+    return () => sub.remove();
+  }, [handleOpenFromNotification]);
 
   return (
-    <Animated.View style={[styles.wrapper, { left: 8, right: 8 }, animatedStyle]}>
-      <View style={styles.glassBase} />
-      <View style={[styles.card, isPending && styles.cardLoading]}>
-        <TouchableOpacity
-          style={styles.content}
-          onPress={openPlayer}
-          activeOpacity={isPending ? 1 : 0.88}
-        >
-          {/* Artwork */}
-          <View style={styles.artWrap}>
-            {displayTrack.artwork ? (
-              <Image
-                source={{ uri: displayTrack.artwork }}
-                style={styles.art}
-                contentFit="cover"
-                transition={200}
-              />
-            ) : (
-              <View style={[styles.art, styles.artPlaceholder, isPending && styles.artPending]}>
-                <Ionicons
-                  name={isPending ? 'hourglass-outline' : 'musical-notes'}
-                  size={20}
-                  color="rgba(255,255,255,0.5)"
-                />
-              </View>
-            )}
-            {/* Playing indicator dot */}
-            {isPlaying && !isPending && (
-              <View style={styles.playingDot}>
-                <View style={styles.playingDotInner} />
-              </View>
-            )}
-          </View>
-
-          {/* Track info */}
-          <View style={styles.info}>
-            <Text style={styles.title} numberOfLines={1}>{displayTrack.title}</Text>
-            <Text style={styles.artist} numberOfLines={1}>
-              {isPending ? 'Loading…' : displayTrack.artist}
-            </Text>
-          </View>
-
-          {/* Controls */}
-          <View style={[styles.controls, isPending && styles.controlsPending]}>
-            <TouchableOpacity
-              style={styles.controlBtn}
-              onPress={handleSkipPrev}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              disabled={isPending}
-            >
-              <Ionicons
-                name="play-skip-back"
-                size={18}
-                color={isPending ? 'rgba(255,255,255,0.25)' : '#fff'}
-              />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.controlBtn, styles.playBtn, isPending && styles.playBtnPending]}
-              onPress={handleTogglePlay}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              disabled={isLoading || isPending}
-            >
-              <Ionicons
-                name={isPending || isLoading ? 'hourglass-outline' : isPlaying ? 'pause' : 'play'}
-                size={22}
-                color={isPending ? 'rgba(255,255,255,0.35)' : '#fff'}
-              />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.controlBtn}
-              onPress={handleSkipNext}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              disabled={isPending}
-            >
-              <Ionicons
-                name="play-skip-forward"
-                size={18}
-                color={isPending ? 'rgba(255,255,255,0.25)' : '#fff'}
-              />
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </View>
-    </Animated.View>
+    <HoneygainConsentGate>
+      <QueryClientProvider client={queryClient}>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <ThemeProvider value={DarkTheme}>
+              <StatusBar hidden />
+              <MusicPlayerProvider>
+                <PlayerProvider playerReady={playerReady}>
+                  <HomePreloader />
+                  <AppShell
+                    fontsLoaded={fontsLoaded}
+                    navReady={navReady}
+                    premiumBannerVisible={premiumBannerVisible}
+                    setPremiumBannerVisible={setPremiumBannerVisible}
+                    pendingExpandRef={pendingExpandRef}
+                    playerReady={playerReady}
+                  />
+                </PlayerProvider>
+              </MusicPlayerProvider>
+            </ThemeProvider>
+          </GestureHandlerRootView>
+        </SafeAreaProvider>
+      </QueryClientProvider>
+    </HoneygainConsentGate>
   );
-};
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
+}
 
 const styles = StyleSheet.create({
-  wrapper: {
-    position: 'absolute',
-    zIndex: 999,
-  },
-  card: {
-    height: 64,
-    borderRadius: 16,
-    backgroundColor: 'transparent',
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  cardLoading: {
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  glassBase: {
+  loadingScreen: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Platform.select({
-      ios:     'rgba(20,20,25,0.85)',
-      android: 'rgba(18,18,23,0.95)',
-      default: 'rgba(18,18,23,0.9)',
-    }),
-    borderRadius: 16,
-  },
-  content: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    zIndex: 1,
-  },
-  artWrap: {
-    marginRight: 12,
-    position: 'relative',
-  },
-  art: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  artPlaceholder: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  artPending: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  playingDot: {
-    position: 'absolute',
-    top: -3,
-    right: -3,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
     backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#fff',
+    justifyContent:  'center',
+    alignItems:      'center',
+    zIndex:          9999,
   },
-  playingDotInner: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: 'rgba(139,115,85,1)',
-  },
-  info: {
-    flex: 1,
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  title: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-    marginBottom: 2,
-  },
-  artist: {
-    color: 'rgba(255,255,255,0.65)',
-    fontSize: 12,
-    letterSpacing: 0.2,
-  },
-  controls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  controlsPending: {
-    opacity: 0.35,
-  },
-  controlBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  playBtn: {
-    backgroundColor: 'rgba(139,115,85,0.8)',
-    borderColor: 'rgba(255,255,255,0.25)',
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-  },
-  playBtnPending: {
-    backgroundColor: 'rgba(139,115,85,0.3)',
-    borderColor: 'rgba(255,255,255,0.08)',
+  floatingPlayerWrapper: {
+    position: 'absolute',
+    bottom:   0,
+    left:     0,
+    right:    0,
+    zIndex:   1000,
   },
 });
-
-export default FloatingPlayer;

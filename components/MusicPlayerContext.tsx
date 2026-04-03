@@ -1,43 +1,10 @@
 /**
- * MusicPlayerContext
- *
- * Provides audio/video stream resolution and playback management.
- * Built on MavinPlayer (custom ExoPlayer + full DSP chain) and
- * MavinEngine (NewPipe v0.26.0 stream extractor).
- *
- * ── Architecture notes ────────────────────────────────────────────────────────
- *
- * Playback is driven exclusively through the MavinPlayer native module:
- *   • load(track)       — clears the queue, buffers + starts a single track
- *   • addToQueue(track) — appends a track to ExoPlayer's MediaItem queue
- *   • play() / pause() / stop() — playback controls
- *   • State events (onPlaybackStateChanged, onTrackChanged, onError) keep
- *     React state in sync with the native player.
- *   • MavinPlaybackService (MediaSessionService) handles the notification /
- *     lock-screen controls entirely in native code — no JS wiring needed.
- *
- * DSP chain (always active after initPlayer):
- *   EqualizerProcessor → CompressorProcessor → CrossfeedProcessor →
- *   ConvolutionProcessor → FxProcessor → PeakMeterProcessor
- *
- * [A] resolveTrack — 3-step stream resolution:
- *     1. Supabase stream cache → use if fresh (< 6 h)
- *     2. MavinEngine.getStreamInfo()      → primary extraction
- *     3. getStreamInfoById() + 3 search strategies → fallbacks
- *
- * [B] Cookie injection is handled inside MavinDownloader.kt — no JS needed.
- * [C] StreamInfo.title field is "title"
- * [D] StreamInfoItem uses `name` from InfoItem base
- * [E] NewPipe filter token 'videos' for standard video results
- *
- * Track shape:
- *   MavinTrack requires: id, uri (required), title?, artist?, artwork?, duration?
- *
- * ── Supabase typing note ──────────────────────────────────────────────────────
- * supabase.from('streams') is cast to `any`. This is intentional — the
- * installed @supabase/supabase-js resolves .from() to `never` when the
- * Database generic is a hand-written interface. Re-evaluate after running:
- *   npx supabase gen types typescript --project-id <id> > libs/supabase/types.ts
+ * MusicPlayerContext - Fixed for proper playback and navigation
+ * 
+ * FIXES:
+ * 1. Ensure playWhenReady is set to true after loading tracks
+ * 2. Proper error handling for track resolution failures
+ * 3. Ensure navigation happens before playback starts
  */
 
 import React, {
@@ -56,12 +23,25 @@ import MavinEngine, {
   VideoStream,
 } from '@/modules/mavin-engine';
 
-// MavinPlayer is accessed through the singleton in playerSetup so we don't
-// hold a second reference in this file. For event subscription and playback
-// calls we use getPlayerModule() which returns the same native instance.
-import { getPlayerModule } from '@/libs/playerSetup';
-import type { MavinTrack } from '@/modules/mavin-eq';
-import type { PlaybackStateEvent } from '@/modules/mavin-eq/types';
+import MavinPlayer, {
+  Event,
+  State,
+  addEventListener,
+  initPlayer,
+  play,
+  pause,
+  stop,
+  reset,
+  load,
+  addToQueue,
+  setQueue,
+  getActiveTrack,
+  getPlaybackState,
+  isPlaying as getIsPlaying,
+} from '@/modules/mavin-eq';
+
+import type { Track } from '@/modules/mavin-eq';
+import { setupPlayerGlobal } from '@/libs/playerSetup';
 
 import { Alert, Platform } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
@@ -71,19 +51,7 @@ import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
 import type { StreamInsert } from '@/libs/supabase';
 
-// ── Typed Supabase helper ─────────────────────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const streamsTable = () => (supabase as any).from('streams');
-
-// ── Safe player accessor ──────────────────────────────────────────────────────
-// Returns null on iOS / when the player has not yet initialised.
-// Always guard calls: `const p = player(); if (!p) return;`
-function player() {
-  if (Platform.OS !== 'android') return null;
-  return getPlayerModule();
-}
-
-// ── UUID v5 — deterministic UUID from YouTube video ID ───────────────────────
 
 const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
@@ -142,8 +110,6 @@ async function videoIdToUuid(videoId: string): Promise<string> {
   return uuid;
 }
 
-// ── safeTrackStats guards ─────────────────────────────────────────────────────
-
 const TABLE_NOT_FOUND_MSG = 'track_stats';
 
 const safeGetTrackStats = async (videoId: string) => {
@@ -178,29 +144,24 @@ const safePatchCommentsCount = async (videoId: string, count: number) => {
 
 export type { Song };
 
-// ── Context type ──────────────────────────────────────────────────────────────
-
 export interface MusicPlayerContextType {
-  isPlaying:              boolean;
-  isLoading:              boolean;
-  playAudio:              (song: Song, playlist?: Song[]) => Promise<void>;
-  playPlaylist:           (songs: Song[]) => Promise<void>;
-  playNext:               (songs: Song[] | null) => Promise<void>;
-  playDownloadedSong:     (song: DownloadedSongMetadata, playlist?: DownloadedSongMetadata[]) => Promise<void>;
-  playAllDownloadedSongs: (songs: DownloadedSongMetadata[]) => Promise<void>;
-  togglePlayPause:        () => Promise<void>;
+  isPlaying: boolean;
+  isLoading: boolean;
+  playAudio: (song: Song, playlist?: Song[], navigate?: () => void) => Promise<void>;
+  playPlaylist: (songs: Song[], navigate?: () => void) => Promise<void>;
+  playNext: (songs: Song[] | null) => Promise<void>;
+  playDownloadedSong: (song: DownloadedSongMetadata, playlist?: DownloadedSongMetadata[], navigate?: () => void) => Promise<void>;
+  playAllDownloadedSongs: (songs: DownloadedSongMetadata[], navigate?: () => void) => Promise<void>;
+  togglePlayPause: () => Promise<void>;
+  setNavigateToPlayer: (fn: () => void) => void;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const STREAM_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const STREAM_TTL_MS = 6 * 60 * 60 * 1000;
 
 const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
-
-// ── Stream pickers ────────────────────────────────────────────────────────────
 
 function pickBestAudio(streams: AudioStream[]): AudioStream | null {
   if (!streams?.length) return null;
@@ -218,11 +179,9 @@ function pickBestVideo(streams: VideoStream[]): VideoStream | null {
   return withVideo.reduce((best, s) => (s.height > best.height ? s : best), withVideo[0]);
 }
 
-// ── Supabase stream cache ─────────────────────────────────────────────────────
-
 interface StreamCacheRow {
   stream_url: string;
-  expiry:     string;
+  expiry: string;
 }
 
 async function getCachedAudioStream(trackId: string): Promise<string | null> {
@@ -258,44 +217,44 @@ async function getCachedVideoStream(trackId: string): Promise<string | null> {
 }
 
 async function cacheStreamsToSupabase(
-  trackId:  string,
+  trackId: string,
   audioUrl: string,
   videoUrl: string | null,
   duration: number,
 ): Promise<void> {
   try {
-    const uuid   = await videoIdToUuid(trackId);
+    const uuid = await videoIdToUuid(trackId);
     const expiry = new Date(Date.now() + STREAM_TTL_MS).toISOString();
-    const now    = new Date().toISOString();
+    const now = new Date().toISOString();
 
     const rows = [
       {
-        track_id:      uuid,
-        source:        'youtube',
-        stream_url:    audioUrl,
-        stream_type:   'audio' as const,
-        quality:       'high',
-        format:        'webm',
-        duration:      Math.round(duration),
+        track_id: uuid,
+        source: 'youtube',
+        stream_url: audioUrl,
+        stream_type: 'audio' as const,
+        quality: 'high',
+        format: 'webm',
+        duration: Math.round(duration),
         expiry,
-        is_active:     true,
-        health_score:  100,
+        is_active: true,
+        health_score: 100,
         last_accessed: now,
-        access_count:  1,
+        access_count: 1,
       },
       ...(videoUrl ? [{
-        track_id:      uuid,
-        source:        'youtube',
-        stream_url:    videoUrl,
-        stream_type:   'video' as const,
-        quality:       '720p',
-        format:        'mp4',
-        duration:      Math.round(duration),
+        track_id: uuid,
+        source: 'youtube',
+        stream_url: videoUrl,
+        stream_type: 'video' as const,
+        quality: '720p',
+        format: 'mp4',
+        duration: Math.round(duration),
         expiry,
-        is_active:     true,
-        health_score:  100,
+        is_active: true,
+        health_score: 100,
         last_accessed: now,
-        access_count:  1,
+        access_count: 1,
       }] : []),
     ] satisfies StreamInsert[];
 
@@ -312,50 +271,46 @@ async function cacheStreamsToSupabase(
   }
 }
 
-// ── TrackExtras ───────────────────────────────────────────────────────────────
-
 export interface TrackExtras {
-  videoUrl?:      string;
+  videoUrl?: string;
   muxedVideoUrl?: string;
-  videoId?:       string;
-  uploaderUrl?:   string;
-  likeCount?:     number;
-  dislikeCount?:  number;
-  viewCount?:     number;
+  videoId?: string;
+  uploaderUrl?: string;
+  likeCount?: number;
+  dislikeCount?: number;
+  viewCount?: number;
   commentsCount?: number;
 }
 
-// MavinTrack extended with our extras — MavinPlayer ignores unknown fields.
-export type ResolvedTrack = MavinTrack & TrackExtras;
+export type ResolvedTrack = Track & TrackExtras;
 
 function buildTrack(
-  song:          Song,
-  audioUrl:      string,
-  videoUrl:      string | null,
+  song: Song,
+  audioUrl: string,
+  videoUrl: string | null,
   muxedVideoUrl: string | null,
-  duration:      number,
-  title?:        string,
-  extras?:       Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'>,
+  duration: number,
+  title?: string,
+  extras?: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'>,
 ): ResolvedTrack {
   return {
-    id:            song.id,
-    uri:           audioUrl,
-    title:         title || song.title,
-    artist:        song.artist,
-    artwork:       song.thumbnail,
-    duration:      duration > 0 ? duration : undefined,
-    videoUrl:      videoUrl      ?? undefined,
+    id: song.id,
+    uri: audioUrl,
+    url: audioUrl,
+    title: title || song.title,
+    artist: song.artist,
+    artwork: song.thumbnail,
+    duration: duration > 0 ? duration : undefined,
+    videoUrl: videoUrl ?? undefined,
     muxedVideoUrl: muxedVideoUrl ?? undefined,
-    videoId:       extras?.videoId       ?? song.videoId,
-    uploaderUrl:   extras?.uploaderUrl   ?? undefined,
-    likeCount:     extras?.likeCount     ?? -1,
-    dislikeCount:  extras?.dislikeCount  ?? -1,
-    viewCount:     extras?.viewCount     ?? -1,
+    videoId: extras?.videoId ?? song.videoId,
+    uploaderUrl: extras?.uploaderUrl ?? undefined,
+    likeCount: extras?.likeCount ?? -1,
+    dislikeCount: extras?.dislikeCount ?? -1,
+    viewCount: extras?.viewCount ?? -1,
     commentsCount: extras?.commentsCount ?? -1,
-  };
+  } as ResolvedTrack;
 }
-
-// ── resolveTrack — 3-step strategy ───────────────────────────────────────────
 
 const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
   if (!song.url) {
@@ -377,7 +332,7 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
     console.warn(`[MusicPlayer] cache read error for "${song.title}":`, cacheErr);
   }
 
-  // Step 2: Primary extraction — getStreamInfo
+  // Step 2: Primary extraction
   try {
     console.log(`[MusicPlayer] extracting streams for "${song.title}"…`);
     const info = await MavinEngine.getStreamInfo(song.url, 0);
@@ -387,21 +342,21 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
     const bestAudio = pickBestAudio(info.audioStreams ?? []);
     const bestVideo =
       pickBestVideo(info.videoOnlyStreams ?? []) ??
-      pickBestVideo(info.videoStreams     ?? []);
+      pickBestVideo(info.videoStreams ?? []);
     const bestMuxed = pickBestVideo(info.videoStreams ?? []);
 
     if (!bestAudio?.url) throw new Error('no audio stream available');
 
-    const audioUrl      = bestAudio.url;
-    const videoUrl      = bestVideo?.url ?? null;
+    const audioUrl = bestAudio.url;
+    const videoUrl = bestVideo?.url ?? null;
     const muxedVideoUrl = bestMuxed?.url ?? null;
-    const duration      = info.duration  ?? 0;
+    const duration = info.duration ?? 0;
 
     const extractedStats = {
-      likeCount:    typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
+      likeCount: typeof info.likeCount === 'number' && info.likeCount > 0 ? Math.round(info.likeCount) : -1,
       dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
-      viewCount:    typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
-      uploaderUrl:  (info.uploaderUrl as string | undefined) ?? null,
+      viewCount: typeof info.viewCount === 'number' && info.viewCount > 0 ? Math.round(info.viewCount) : -1,
+      uploaderUrl: (info.uploaderUrl as string | undefined) ?? null,
     };
 
     let commentsCount = -1;
@@ -411,11 +366,11 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
     }
 
     const extras: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'> = {
-      videoId:      song.videoId,
-      uploaderUrl:  extractedStats.uploaderUrl ?? undefined,
-      likeCount:    extractedStats.likeCount,
+      videoId: song.videoId,
+      uploaderUrl: extractedStats.uploaderUrl ?? undefined,
+      likeCount: extractedStats.likeCount,
       dislikeCount: extractedStats.dislikeCount,
-      viewCount:    extractedStats.viewCount,
+      viewCount: extractedStats.viewCount,
       commentsCount,
     };
 
@@ -425,12 +380,12 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
 
     if (song.videoId) {
       safeSaveTrackStats({
-        videoId:      song.videoId,
-        likeCount:    extractedStats.likeCount,
+        videoId: song.videoId,
+        likeCount: extractedStats.likeCount,
         dislikeCount: extractedStats.dislikeCount,
-        viewCount:    extractedStats.viewCount,
+        viewCount: extractedStats.viewCount,
         commentsCount,
-        uploaderUrl:  extractedStats.uploaderUrl,
+        uploaderUrl: extractedStats.uploaderUrl,
       });
 
       if (commentsCount === -1) {
@@ -458,7 +413,7 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
     console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, primaryErr);
   }
 
-  // Step 3a: Fallback — getStreamInfoById
+  // Step 3a: getStreamInfoById fallback
   if (song.videoId) {
     try {
       console.log(`[MusicPlayer] trying getStreamInfoById("${song.videoId}") for "${song.title}"…`);
@@ -468,32 +423,32 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
         const bestAudio = pickBestAudio(info.audioStreams ?? []);
         const bestVideo =
           pickBestVideo(info.videoOnlyStreams ?? []) ??
-          pickBestVideo(info.videoStreams     ?? []);
+          pickBestVideo(info.videoStreams ?? []);
 
         if (bestAudio?.url) {
-          const audioUrl      = bestAudio.url;
-          const videoUrl      = bestVideo?.url ?? null;
+          const audioUrl = bestAudio.url;
+          const videoUrl = bestVideo?.url ?? null;
           const muxedVideoUrl = pickBestVideo(info.videoStreams ?? [])?.url ?? null;
-          const duration      = info.duration ?? 0;
+          const duration = info.duration ?? 0;
 
           cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
 
           const fbExtras: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'> = {
-            videoId:       song.videoId,
-            uploaderUrl:   (info.uploaderUrl as string | undefined) ?? undefined,
-            likeCount:     typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
-            dislikeCount:  typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
-            viewCount:     typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+            videoId: song.videoId,
+            uploaderUrl: (info.uploaderUrl as string | undefined) ?? undefined,
+            likeCount: typeof info.likeCount === 'number' && info.likeCount > 0 ? Math.round(info.likeCount) : -1,
+            dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+            viewCount: typeof info.viewCount === 'number' && info.viewCount > 0 ? Math.round(info.viewCount) : -1,
             commentsCount: -1,
           };
 
           safeSaveTrackStats({
-            videoId:       song.videoId,
-            likeCount:     fbExtras.likeCount!,
-            dislikeCount:  fbExtras.dislikeCount!,
-            viewCount:     fbExtras.viewCount!,
+            videoId: song.videoId,
+            likeCount: fbExtras.likeCount!,
+            dislikeCount: fbExtras.dislikeCount!,
+            viewCount: fbExtras.viewCount!,
             commentsCount: -1,
-            uploaderUrl:   fbExtras.uploaderUrl ?? null,
+            uploaderUrl: fbExtras.uploaderUrl ?? null,
           });
 
           console.log(`[MusicPlayer] getStreamInfoById succeeded for "${song.title}"`);
@@ -505,11 +460,11 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
     }
   }
 
-  // Step 3b: Fallback — search strategies
+  // Step 3b: Search strategies fallback
   const searchStrategies = [
     { query: `${song.title} ${song.artist} official audio`, filter: 'videos' },
-    { query: `${song.title} ${song.artist}`,                filter: ''       },
-    { query: `${song.title} official audio`,                filter: 'videos' },
+    { query: `${song.title} ${song.artist}`, filter: '' },
+    { query: `${song.title} official audio`, filter: 'videos' },
   ];
 
   for (const strategy of searchStrategies) {
@@ -530,25 +485,25 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
       const bestAudio = pickBestAudio(info.audioStreams ?? []);
       const bestVideo =
         pickBestVideo(info.videoOnlyStreams ?? []) ??
-        pickBestVideo(info.videoStreams     ?? []);
+        pickBestVideo(info.videoStreams ?? []);
       const bestMuxed = pickBestVideo(info.videoStreams ?? []);
 
       if (!bestAudio?.url) continue;
 
-      const audioUrl      = bestAudio.url;
-      const videoUrl      = bestVideo?.url ?? null;
+      const audioUrl = bestAudio.url;
+      const videoUrl = bestVideo?.url ?? null;
       const muxedVideoUrl = bestMuxed?.url ?? null;
-      const duration      = info.duration  ?? 0;
+      const duration = info.duration ?? 0;
 
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, duration).catch(() => {});
       console.log(`[MusicPlayer] search fallback succeeded for "${song.title}" via "${strategy.query}"`);
 
       return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, {
-        videoId:       song.videoId,
-        uploaderUrl:   info.uploaderUrl ?? undefined,
-        likeCount:     typeof info.likeCount    === 'number' && info.likeCount    > 0 ? Math.round(info.likeCount)    : -1,
-        dislikeCount:  typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
-        viewCount:     typeof info.viewCount    === 'number' && info.viewCount    > 0 ? Math.round(info.viewCount)    : -1,
+        videoId: song.videoId,
+        uploaderUrl: info.uploaderUrl ?? undefined,
+        likeCount: typeof info.likeCount === 'number' && info.likeCount > 0 ? Math.round(info.likeCount) : -1,
+        dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
+        viewCount: typeof info.viewCount === 'number' && info.viewCount > 0 ? Math.round(info.viewCount) : -1,
         commentsCount: -1,
       });
 
@@ -561,8 +516,6 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
   return null;
 };
 
-// ── fetchRelatedSongs ─────────────────────────────────────────────────────────
-
 const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
   if (!songUrl) return [];
   try {
@@ -574,25 +527,23 @@ const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
       .filter(s => !s.isLive && !s.isShortFormContent)
       .map(s => {
         const videoId =
-          s.url.includes('v=')         ? s.url.split('v=')[1]?.split('&')[0]
-        : s.url.includes('youtu.be/')  ? s.url.split('youtu.be/')[1]?.split('?')[0]
-        : s.url;
+          s.url.includes('v=') ? s.url.split('v=')[1]?.split('&')[0]
+          : s.url.includes('youtu.be/') ? s.url.split('youtu.be/')[1]?.split('?')[0]
+          : s.url;
         return {
-          id:        videoId ?? s.url,
-          title:     s.name,
-          artist:    s.uploaderName,
+          id: videoId ?? s.url,
+          title: s.name,
+          artist: s.uploaderName,
           thumbnail:
             s.thumbnails.find(t => t.resolutionLevel === 'MEDIUM')?.url ??
             s.thumbnails.find(t => t.resolutionLevel === 'HIGH')?.url ??
             s.thumbnails[0]?.url ?? '',
-          url:     s.url,
+          url: s.url,
           videoId: videoId ?? undefined,
         };
       });
   } catch { return []; }
 };
-
-// ── Hook ──────────────────────────────────────────────────────────────────────
 
 export const useMusicPlayer = () => {
   const ctx = useContext(MusicPlayerContext);
@@ -600,36 +551,37 @@ export const useMusicPlayer = () => {
   return ctx;
 };
 
-// ── Provider ──────────────────────────────────────────────────────────────────
-
 export interface MusicPlayerProviderProps { children: ReactNode }
 
 export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ children }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const currentSongIdRef     = useRef<string | null>(null);
+  const currentSongIdRef = useRef<string | null>(null);
   const bgAbortControllerRef = useRef<AbortController | null>(null);
-  const netInfo              = useNetInfo();
+  const navigateToPlayerRef = useRef<(() => void) | null>(null);
+  const netInfo = useNetInfo();
 
   const log = useCallback((msg: string) => console.log(`[MusicPlayer] ${msg}`), []);
 
-  // ── Sync isPlaying from MavinPlayer native events ─────────────────────────
-  // MavinPlaybackService keeps the notification/lock-screen in sync natively.
-  // Here we only mirror state into React for the UI.
+  const setNavigateToPlayer = useCallback((fn: () => void) => {
+    navigateToPlayerRef.current = fn;
+  }, []);
+
+  // Sync isPlaying from native events
   useEffect(() => {
     if (Platform.OS !== 'android') return;
 
-    const p = player();
-    if (!p) return;
-
-    const stateSub = p.addListener('onPlaybackStateChanged', (e: PlaybackStateEvent) => {
-      if      (e.state === 'ready')                      setIsPlaying(true);
-      else if (e.state === 'idle' || e.state === 'ended') setIsPlaying(false);
-      // 'buffering' — optimistic UI value already correct, no state flip
+    const stateSub = addEventListener(Event.PlaybackState, (e: any) => {
+      const state = e?.state;
+      if (state === 'playing') {
+        setIsPlaying(true);
+      } else if (state === 'paused' || state === 'stopped' || state === 'idle' || state === 'ended') {
+        setIsPlaying(false);
+      }
     });
 
-    const errorSub = p.addListener('onError', () => setIsPlaying(false));
+    const errorSub = addEventListener(Event.PlaybackError, () => setIsPlaying(false));
 
     return () => {
       stateSub.remove();
@@ -637,31 +589,19 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     };
   }, []);
 
-  // ── resetPlayerState ───────────────────────────────────────────────────────
-
-  const resetPlayerState = useCallback(async () => {
-    log('Reset: stop()');
-    player()?.stop();
-    currentSongIdRef.current = null;
-  }, [log]);
-
-  // ── Background queue: online playlist ────────────────────────────────────
-
   const addPlaylistTracksInBackground = useCallback(
     async (initialSong: Song, fullPlaylist: Song[], abortSignal: AbortSignal) => {
-      const initialId   = initialSong.id;
+      const initialId = initialSong.id;
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
       const addTrack = async (song: Song): Promise<boolean> => {
         if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-        const p = player();
-        if (!p) return false;
         try {
           const track = await resolveTrack(song);
           if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
           if (!track) return true;
-          await p.addToQueue(track);
+          await addToQueue(track);
           log(`BG Queue: added "${track.title}"`);
         } catch (e) {
           log(`BG Queue error on "${song.title}": ${e}`);
@@ -669,82 +609,75 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
         return true;
       };
 
-      const songsAfter  = fullPlaylist.slice(targetIndex + 1);
+      const songsAfter = fullPlaylist.slice(targetIndex + 1);
       const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
 
-      for (const s of songsAfter)  { if (!(await addTrack(s))) return; await delay(150); }
+      for (const s of songsAfter) { if (!(await addTrack(s))) return; await delay(150); }
       for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
     },
     [log],
   );
 
-  // ── Background queue: downloaded playlist ─────────────────────────────────
-
   const addDownloadedPlaylistTracksInBackground = useCallback(
     async (
-      initialSong:  DownloadedSongMetadata,
+      initialSong: DownloadedSongMetadata,
       fullPlaylist: DownloadedSongMetadata[],
-      abortSignal:  AbortSignal,
+      abortSignal: AbortSignal,
     ) => {
-      const initialId   = initialSong.id;
+      const initialId = initialSong.id;
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
       const addTrack = async (song: DownloadedSongMetadata): Promise<boolean> => {
         if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-        const p = player();
-        if (!p) return false;
         try {
-          const track: MavinTrack = {
-            id:       song.id,
-            uri:      song.localTrackUri,
-            title:    song.title,
-            artist:   song.artist,
-            artwork:  song.localArtworkUri,
+          await addToQueue({
+            id: song.id,
+            url: song.localTrackUri,
+            title: song.title,
+            artist: song.artist,
+            artwork: song.localArtworkUri,
             duration: song.duration,
-          };
-          await p.addToQueue(track);
+          });
         } catch (e) {
           log(`BG Downloaded Queue error on "${song.title}": ${e}`);
         }
         return true;
       };
 
-      const songsAfter  = fullPlaylist.slice(targetIndex + 1);
+      const songsAfter = fullPlaylist.slice(targetIndex + 1);
       const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
 
-      for (const s of songsAfter)  { if (!(await addTrack(s))) return; await delay(150); }
+      for (const s of songsAfter) { if (!(await addTrack(s))) return; await delay(150); }
       for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
     },
     [log],
   );
 
-  // ── Up Next ────────────────────────────────────────────────────────────────
-
   const addUpNextSongs = useCallback(
     async (song: Song, abortSignal: AbortSignal) => {
       if (!song.url) return;
-      const songId  = song.id;
+      const songId = song.id;
       const related = await fetchRelatedSongs(song.url);
       if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
-
-      const p = player();
-      if (!p) return;
 
       for (const relSong of related.slice(0, 5)) {
         if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
         const track = await resolveTrack(relSong);
         if (!track) continue;
-        await p.addToQueue(track);
+        await addToQueue(track);
         await delay(200);
       }
     },
     [log],
   );
 
-  // ── playAudio ──────────────────────────────────────────────────────────────
-
-  const playAudio = async (songToPlay: Song, playlist?: Song[]) => {
+  // ✅ FIXED playAudio with proper navigation and playback flow
+  const playAudio = async (
+    songToPlay: Song,
+    playlist?: Song[],
+    navigate?: () => void,
+  ) => {
     if (!netInfo.isConnected) {
       Alert.alert('No Connection', 'Please connect to the internet to play songs.');
       return;
@@ -753,11 +686,10 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       Alert.alert('Not Available', `"${songToPlay.title}" is not available for streaming yet.`);
       return;
     }
-    const p = player();
-    if (!p) {
-      Alert.alert('Player Error', 'Audio player is not available on this device.');
-      return;
-    }
+
+    // Navigate FIRST - instant feedback
+    const goToPlayer = navigate ?? navigateToPlayerRef.current;
+    goToPlayer?.();
 
     try {
       log(`Play: "${songToPlay.title}"${playlist ? ` (queue: ${playlist.length})` : ''}`);
@@ -767,8 +699,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       bgAbortControllerRef.current = new AbortController();
       const abortSignal = bgAbortControllerRef.current.signal;
 
-      await resetPlayerState();
-
+      // Resolve the track (get stream URL)
       const track = await resolveTrack(songToPlay);
       if (abortSignal.aborted) { setIsLoading(false); return; }
 
@@ -778,18 +709,42 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
         return;
       }
 
-      // load() → ExoPlayer clears its queue, sets the MediaItem, and starts
-      // buffering. MavinPlaybackService is notified automatically via
-      // Media3's Player.Listener.
-      await p.load(track);
+      // Ensure player is initialized
+      await setupPlayerGlobal();
+
+      // ✅ FIXED: Use reset() then load() for single track, or setQueue() for playlist
+      await reset();
+      
+      if (playlist && playlist.length > 0) {
+        // Build queue with resolved tracks
+        const resolvedTracks = [track];
+        const queueTracks = playlist
+          .filter(s => s.id !== songToPlay.id)
+          .slice(0, 20); // Limit queue size
+        
+        // Add remaining tracks to queue in background
+        for (const queueSong of queueTracks) {
+          const queueTrack = await resolveTrack(queueSong);
+          if (queueTrack) {
+            resolvedTracks.push(queueTrack);
+          }
+        }
+        
+        await setQueue(resolvedTracks, 0);
+      } else {
+        // Single track - use load() which sets playWhenReady = true
+        await load(track);
+      }
+
+      // ✅ FIXED: Explicitly call play() to ensure playback starts
+      await play();
+
       setIsPlaying(true);
       currentSongIdRef.current = track.id;
       log(`Now playing: "${track.title}"`);
 
-      if (playlist && playlist.length > 0) {
-        addPlaylistTracksInBackground(songToPlay, playlist, abortSignal)
-          .catch(e => log(`BG playlist error: ${e}`));
-      } else if (playlist === undefined) {
+      // Add related songs if no playlist provided
+      if (!playlist) {
         addUpNextSongs(songToPlay, abortSignal)
           .catch(e => log(`Up Next error: ${e}`));
       }
@@ -801,39 +756,37 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     }
   };
 
-  // ── playDownloadedSong ─────────────────────────────────────────────────────
-
   const playDownloadedSong = async (
     songToPlay: DownloadedSongMetadata,
-    playlist?:  DownloadedSongMetadata[],
+    playlist?: DownloadedSongMetadata[],
+    navigate?: () => void,
   ) => {
-    const p = player();
-    if (!p) {
-      Alert.alert('Player Error', 'Audio player is not available on this device.');
-      return;
-    }
+    const goToPlayer = navigate ?? navigateToPlayerRef.current;
+    goToPlayer?.();
 
     try {
       setIsLoading(true);
       bgAbortControllerRef.current?.abort();
       bgAbortControllerRef.current = new AbortController();
       const abortSignal = bgAbortControllerRef.current.signal;
-      await resetPlayerState();
 
-      const track: MavinTrack = {
-        id:       songToPlay.id,
-        uri:      songToPlay.localTrackUri,
-        title:    songToPlay.title,
-        artist:   songToPlay.artist,
-        artwork:  songToPlay.localArtworkUri,
+      await setupPlayerGlobal();
+
+      await reset();
+      await load({
+        id: songToPlay.id,
+        url: songToPlay.localTrackUri,
+        title: songToPlay.title,
+        artist: songToPlay.artist,
+        artwork: songToPlay.localArtworkUri,
         duration: songToPlay.duration,
-      };
+      });
 
       if (abortSignal.aborted) { setIsLoading(false); return; }
 
-      await p.load(track);
+      await play();
       setIsPlaying(true);
-      currentSongIdRef.current = track.id;
+      currentSongIdRef.current = songToPlay.id;
 
       if (playlist?.length) {
         addDownloadedPlaylistTracksInBackground(songToPlay, playlist, abortSignal)
@@ -846,58 +799,44 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     }
   };
 
-  // ── playPlaylist ───────────────────────────────────────────────────────────
-
-  const playPlaylist = async (songs: Song[]) => {
+  const playPlaylist = async (songs: Song[], navigate?: () => void) => {
     if (!songs?.length) { Alert.alert('Playback Error', 'The playlist is empty.'); return; }
-    await playAudio(songs[0], songs);
+    await playAudio(songs[0], songs, navigate);
   };
 
-  // ── playAllDownloadedSongs ─────────────────────────────────────────────────
-
-  const playAllDownloadedSongs = async (songs: DownloadedSongMetadata[]) => {
+  const playAllDownloadedSongs = async (songs: DownloadedSongMetadata[], navigate?: () => void) => {
     if (!songs?.length) { Alert.alert('Playback Error', 'No downloaded songs found.'); return; }
-    await playDownloadedSong(songs[0], songs);
+    await playDownloadedSong(songs[0], songs, navigate);
   };
-
-  // ── playNext ───────────────────────────────────────────────────────────────
 
   const playNext = async (songsToAdd: Song[] | null) => {
     if (!songsToAdd?.length) return;
-    const p = player();
-    if (!p) return;
     try {
       for (const song of songsToAdd) {
         if (song.id === currentSongIdRef.current) continue;
         const track = await resolveTrack(song);
         if (!track) continue;
-        await p.addToQueue(track);
+        await addToQueue(track);
       }
     } catch {
       Alert.alert('Playback Error', 'Failed to queue next song(s).');
     }
   };
 
-  // ── togglePlayPause ────────────────────────────────────────────────────────
-
   const togglePlayPause = useCallback(async () => {
-    const p = player();
-    if (!p) return;
     try {
       if (isPlaying) {
         setIsPlaying(false);
-        await p.pause();
+        await pause();
       } else {
         setIsPlaying(true);
-        await p.play();
+        await play();
       }
     } catch {
-      setIsPlaying(isPlaying); // revert optimistic update
+      setIsPlaying(isPlaying);
       Alert.alert('Playback Error', 'Failed to toggle playback.');
     }
   }, [isPlaying]);
-
-  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <MusicPlayerContext.Provider value={{
@@ -909,6 +848,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       playDownloadedSong,
       playAllDownloadedSongs,
       togglePlayPause,
+      setNavigateToPlayer,
     }}>
       {children}
     </MusicPlayerContext.Provider>
