@@ -29,7 +29,7 @@ import { moderateScale } from "react-native-size-matters/extend";
 import TrackPlayer, {
   RepeatMode,
   useActiveTrack,
-} from "react-native-track-player";
+} from "@/modules/mavin-eq";
 import { match } from "ts-pattern";
 
 export type PlayerControlsProps = {

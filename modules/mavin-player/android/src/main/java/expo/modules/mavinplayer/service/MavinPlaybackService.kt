@@ -1,11 +1,14 @@
 package expo.modules.mavinplayer.service
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
@@ -21,19 +24,14 @@ import expo.modules.mavinplayer.MavinPlayerModule
 class MavinPlaybackService : MediaSessionService() {
 
     companion object {
-        private const val TAG = "MavinPlaybackService"
+        private const val TAG                     = "MavinPlaybackService"
         private const val NOTIFICATION_CHANNEL_ID = "mavin_playback_channel"
+        private const val NOTIFICATION_ID         = 1001
 
         /**
          * Stable, non-empty session ID.
-         *
-         * Media3 requires every MediaSession in the process to have a globally-unique ID.
-         * Using the default (empty string "") causes an IllegalStateException when the
-         * service is recreated before the previous instance fully tears down — e.g. on
-         * hot reload, Fast Refresh, or system-initiated service restart.
-         *
-         * A hardcoded non-empty constant is safe as long as only one MavinPlaybackService
-         * instance exists at a time, which onDestroy() + the guard in onCreate() guarantee.
+         * Must differ from MavinPlayerModule's "mavin-module-session" — Media3 requires
+         * all MediaSession IDs in the process to be globally unique.
          */
         private const val MEDIA_SESSION_ID = "mavin-playback-session"
 
@@ -71,8 +69,8 @@ class MavinPlaybackService : MediaSessionService() {
         private const val COMMAND_CYCLE_FX_MODE       = "mavin.action.CYCLE_FX_MODE"
     }
 
-    private var mediaSession: MediaSession? = null
-    private var playerListener: Player.Listener? = null
+    private var mediaSession   : MediaSession?    = null
+    private var playerListener : Player.Listener? = null
     private var presetIndex = 0
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -82,17 +80,35 @@ class MavinPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
+
+        // ── STEP 1: Create notification channel (must happen before posting) ──
         createNotificationChannel()
 
-        // ── Guard: release any stale session that survived a previous instance ──
-        // This happens when the service is restarted by the system (or via hot
-        // reload) before the prior onDestroy() fully ran. Without this guard,
-        // MediaSession.Builder.build() throws:
+        // ── STEP 2: Call startForeground() IMMEDIATELY ────────────────────────
+        //
+        // Android 8+ (API 26+) enforces a hard 5-second deadline: if a service
+        // started with startForegroundService() does not call startForeground()
+        // within 5 seconds, the OS throws:
+        //   ForegroundServiceDidNotStartInTimeException
+        //
+        // Media3's MediaSessionService posts its own styled notification once a
+        // MediaSession and controller are connected — but that wiring takes longer
+        // than 5 seconds on cold start. We must call startForeground() with a
+        // minimal placeholder notification RIGHT HERE, before any async work.
+        // Media3 will replace it automatically once playback begins.
+        startForeground(NOTIFICATION_ID, buildBootNotification())
+        Log.i(TAG, "startForeground() called — 5-second deadline satisfied")
+
+        // ── STEP 3: Guard against stale session from a previous instance ──────
+        //
+        // On hot-reload or system restart the service can be recreated before the
+        // prior onDestroy() runs. Without this guard MediaSession.Builder throws:
         //   IllegalStateException: Session ID must be unique. ID=mavin-playback-session
         releaseMediaSessionIfNeeded()
 
+        // ── STEP 4: Wire up MediaSession ──────────────────────────────────────
         val exoPlayer = MavinPlayerModule.playerInstance?.player ?: run {
-            Log.w(TAG, "⚠️ ExoPlayer not ready — MediaSession skipped")
+            Log.w(TAG, "ExoPlayer not ready — MediaSession skipped (service is already foreground)")
             return
         }
 
@@ -110,7 +126,7 @@ class MavinPlaybackService : MediaSessionService() {
         }
         exoPlayer.addListener(playerListener!!)
 
-        Log.i(TAG, "✅ MediaSession ready (id=$MEDIA_SESSION_ID) — full DSP command surface wired")
+        Log.i(TAG, "MediaSession ready (id=$MEDIA_SESSION_ID) — full DSP command surface wired")
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = mediaSession
@@ -135,11 +151,7 @@ class MavinPlaybackService : MediaSessionService() {
 
     /**
      * Safely tears down the MediaSession and its player listener.
-     * Idempotent — safe to call multiple times.
-     *
-     * Separating this from onDestroy() lets onCreate() call it as a pre-flight
-     * guard before building a new session, preventing the duplicate-ID crash
-     * caused by rapid service restarts (hot reload, system restart, etc.).
+     * Idempotent — safe to call from both the onCreate() guard and onDestroy().
      */
     private fun releaseMediaSessionIfNeeded() {
         playerListener?.let { mediaSession?.player?.removeListener(it) }
@@ -149,6 +161,43 @@ class MavinPlaybackService : MediaSessionService() {
             Log.i(TAG, "MediaSession released (id=$MEDIA_SESSION_ID)")
         }
         mediaSession = null
+    }
+
+    /**
+     * Minimal silent notification that satisfies Android's 5-second
+     * startForeground() deadline on cold start.
+     *
+     * Media3's DefaultMediaNotificationProvider replaces this with a full
+     * media-style notification (with playback controls) once a MediaController
+     * connects and playback begins. The user typically never sees this placeholder.
+     */
+    private fun buildBootNotification(): Notification {
+        val launchIntent = packageManager
+            .getLaunchIntentForPackage(packageName)
+            ?.apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP }
+
+        val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+
+        val pendingIntent = launchIntent?.let {
+            PendingIntent.getActivity(this, 0, it, pendingFlags)
+        }
+
+        val iconResId = resources.getIdentifier(
+            "notification_icon", "drawable", packageName
+        ).takeIf { it != 0 } ?: android.R.drawable.ic_media_play
+
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(iconResId)
+            .setContentTitle("Mavin Player")
+            .setContentText("Starting…")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .apply { pendingIntent?.let { setContentIntent(it) } }
+            .build()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -164,6 +213,7 @@ class MavinPlaybackService : MediaSessionService() {
             ).apply {
                 description = "Background audio with EQ, Compressor, Crossfeed, Convolution, USB DAC"
                 setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
@@ -201,29 +251,29 @@ class MavinPlaybackService : MediaSessionService() {
         ): MediaSession.ConnectionResult {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                 .buildUpon()
-                .add(SessionCommand(COMMAND_TOGGLE_EQ,           Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_RESET_EQ,            Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_MODE,         Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_NEXT_PRESET,         Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_PREV_PRESET,         Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_APPLY_PRESET,        Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_RG_TOGGLE,           Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_COMPRESSOR,   Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_INCREASE_COMPRESSION,Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_DECREASE_COMPRESSION,Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_CROSSFEED,    Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_SPEED_UP,            Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_SLOW_DOWN,           Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_RESET_SPEED,         Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_CROSSFADE,    Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_INCREASE_CROSSFADE,  Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_DECREASE_CROSSFADE,  Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_OFFLINE,      Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_64BIT,        Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_CONVOLUTION,  Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_USB_DIRECT,   Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_TOGGLE_FX,           Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_CYCLE_FX_MODE,       Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_EQ,            Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_RESET_EQ,             Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_MODE,          Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_NEXT_PRESET,          Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_PREV_PRESET,          Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_APPLY_PRESET,         Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_RG_TOGGLE,            Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_COMPRESSOR,    Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_INCREASE_COMPRESSION, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_DECREASE_COMPRESSION, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_CROSSFEED,     Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_SPEED_UP,             Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_SLOW_DOWN,            Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_RESET_SPEED,          Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_CROSSFADE,     Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_INCREASE_CROSSFADE,   Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_DECREASE_CROSSFADE,   Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_OFFLINE,       Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_64BIT,         Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_CONVOLUTION,   Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_USB_DIRECT,    Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TOGGLE_FX,            Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_CYCLE_FX_MODE,        Bundle.EMPTY))
                 .build()
 
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -240,16 +290,15 @@ class MavinPlaybackService : MediaSessionService() {
             val p = MavinPlayerModule.playerInstance
 
             when (customCommand.customAction) {
-                COMMAND_TOGGLE_EQ    -> { val s = !(p?.equalizerProcessor?.isEnabled ?: false); p?.setEQEnabled(s); Log.i(TAG, "EQ → $s") }
-                COMMAND_RESET_EQ     -> { p?.resetEQ(); Log.i(TAG, "EQ reset") }
-                COMMAND_TOGGLE_MODE  -> {
+                COMMAND_TOGGLE_EQ   -> { val s = !(p?.equalizerProcessor?.isEnabled ?: false); p?.setEQEnabled(s); Log.i(TAG, "EQ → $s") }
+                COMMAND_RESET_EQ    -> { p?.resetEQ(); Log.i(TAG, "EQ reset") }
+                COMMAND_TOGGLE_MODE -> {
                     val next = when (p?.equalizerProcessor?.getCurrentEqMode()) {
                         EqualizerProcessor.EqMode.GRAPHIC    -> "PARAMETRIC"
                         EqualizerProcessor.EqMode.PARAMETRIC -> "PARALLEL"
                         else -> "GRAPHIC"
                     }
-                    p?.setEQMode(next)
-                    Log.i(TAG, "EQ mode → $next")
+                    p?.setEQMode(next); Log.i(TAG, "EQ mode → $next")
                 }
                 COMMAND_NEXT_PRESET -> {
                     val presets = p?.listPresets() ?: return ok()
@@ -265,15 +314,13 @@ class MavinPlaybackService : MediaSessionService() {
                 }
                 COMMAND_APPLY_PRESET -> {
                     args.getString("preset_name")?.let { name ->
-                        p?.applyPresetByName(name)
-                        Log.i(TAG, "Applied preset: $name")
+                        p?.applyPresetByName(name); Log.i(TAG, "Applied preset: $name")
                     }
                 }
                 COMMAND_RG_TOGGLE -> {
                     val current = p?.getReplayGainInfo()?.get("mode") as? String ?: "TRACK"
                     val next = when (current) { "TRACK" -> "ALBUM"; "ALBUM" -> "OFF"; else -> "TRACK" }
-                    p?.setReplayGainMode(next)
-                    Log.i(TAG, "ReplayGain → $next")
+                    p?.setReplayGainMode(next); Log.i(TAG, "ReplayGain → $next")
                 }
                 COMMAND_TOGGLE_COMPRESSOR    -> { val s = !(p?.isCompressorEnabled() ?: false); p?.setCompressorEnabled(s); Log.i(TAG, "Compressor → $s") }
                 COMMAND_INCREASE_COMPRESSION -> { val r = ((p?.getCompressorRatio() ?: 4.0) + 1.0).coerceAtMost(20.0); p?.setCompressorRatio(r); Log.i(TAG, "Ratio → $r") }
@@ -283,8 +330,8 @@ class MavinPlaybackService : MediaSessionService() {
                 COMMAND_SLOW_DOWN            -> { val s = ((p?.getPlaybackSpeed() ?: 1f) - 0.1f).coerceAtLeast(0.5f); p?.setPlaybackSpeed(s); Log.i(TAG, "Speed → $s") }
                 COMMAND_RESET_SPEED          -> { p?.setPlaybackSpeed(1f); Log.i(TAG, "Speed reset") }
                 COMMAND_TOGGLE_CROSSFADE     -> { val s = !(p?.isCrossfadeEnabled() ?: false); p?.setCrossfadeEnabled(s); Log.i(TAG, "Crossfade → $s") }
-                COMMAND_INCREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) + 500L).coerceAtMost(10_000L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
-                COMMAND_DECREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) - 500L).coerceAtLeast(500L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade duration → $d") }
+                COMMAND_INCREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) + 500L).coerceAtMost(10_000L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade → $d") }
+                COMMAND_DECREASE_CROSSFADE   -> { val d = ((p?.getCrossfadeDurationMs() ?: 2000L) - 500L).coerceAtLeast(500L); p?.setCrossfadeDurationMs(d); Log.i(TAG, "Crossfade → $d") }
                 COMMAND_TOGGLE_OFFLINE       -> { val s = !(p?.isOfflineMode() ?: false); p?.setOfflineMode(s); Log.i(TAG, "Offline → $s") }
                 COMMAND_TOGGLE_64BIT         -> { val s = !(p?.is64BitProcessingEnabled() ?: false); p?.set64BitProcessingEnabled(s); Log.i(TAG, "64-bit → $s") }
                 COMMAND_TOGGLE_CONVOLUTION   -> { val s = !(p?.isConvolutionEnabled() ?: false); p?.setConvolutionEnabled(s); Log.i(TAG, "Convolution → $s") }
@@ -292,11 +339,8 @@ class MavinPlaybackService : MediaSessionService() {
                 COMMAND_TOGGLE_FX            -> { val s = !(p?.isFxEnabled() ?: false); p?.setFxEnabled(s); Log.i(TAG, "FX → $s") }
                 COMMAND_CYCLE_FX_MODE -> {
                     val next = when (p?.getFxMode()) {
-                        "REVERB"  -> "DELAY"
-                        "DELAY"   -> "CHORUS"
-                        "CHORUS"  -> "FLANGER"
-                        "FLANGER" -> "PHASER"
-                        else      -> "REVERB"
+                        "REVERB" -> "DELAY"; "DELAY" -> "CHORUS"; "CHORUS" -> "FLANGER"
+                        "FLANGER" -> "PHASER"; else -> "REVERB"
                     }
                     p?.setFxMode(next); Log.i(TAG, "FX mode → $next")
                 }
@@ -318,53 +362,53 @@ class MavinPlaybackService : MediaSessionService() {
         val p  = MavinPlayerModule.playerInstance ?: return emptyMap()
         val eq = p.equalizerProcessor
         return mapOf(
-            "enabled"              to eq.isEnabled,
-            "mode"                 to eq.getCurrentEqMode().name,
-            "gains"                to eq.getCurrentGains().toList(),
-            "preamp"               to eq.getCurrentPreamp(),
-            "q_values"             to eq.getCurrentQValues().toList(),
-            "parametric_gains"     to eq.getParametricGains().toList(),
-            "parametric_freqs"     to eq.getParametricFreqs().toList(),
-            "loudness_db"          to eq.getCurrentLoudnessDb(),
-            "dither_mode"          to eq.getDitherMode().name,
-            "compressor_enabled"   to p.isCompressorEnabled(),
-            "compressor_threshold" to p.getCompressorThreshold(),
-            "compressor_ratio"     to p.getCompressorRatio(),
-            "compressor_attack_ms" to p.getCompressorAttackMs(),
-            "compressor_release_ms" to p.getCompressorReleaseMs(),
+            "enabled"                 to eq.isEnabled,
+            "mode"                    to eq.getCurrentEqMode().name,
+            "gains"                   to eq.getCurrentGains().toList(),
+            "preamp"                  to eq.getCurrentPreamp(),
+            "q_values"                to eq.getCurrentQValues().toList(),
+            "parametric_gains"        to eq.getParametricGains().toList(),
+            "parametric_freqs"        to eq.getParametricFreqs().toList(),
+            "loudness_db"             to eq.getCurrentLoudnessDb(),
+            "dither_mode"             to eq.getDitherMode().name,
+            "compressor_enabled"      to p.isCompressorEnabled(),
+            "compressor_threshold"    to p.getCompressorThreshold(),
+            "compressor_ratio"        to p.getCompressorRatio(),
+            "compressor_attack_ms"    to p.getCompressorAttackMs(),
+            "compressor_release_ms"   to p.getCompressorReleaseMs(),
             "compressor_reduction_db" to p.getCompressorReductionDb(),
-            "crossfeed_enabled"    to p.isCrossfeedEnabled(),
-            "crossfeed_strength"   to p.getCrossfeedStrength(),
-            "crossfeed_cutoff"     to p.getCrossfeedCutoff(),
-            "convolution_enabled"  to p.isConvolutionEnabled(),
-            "ir_loaded"            to p.isImpulseResponseLoaded(),
-            "ir_length"            to p.getIrLength(),
-            "usb_dac_connected"    to p.isUsbDacConnected(),
-            "usb_direct_routing"   to p.isDirectUsbRoutingEnabled(),
-            "crossfade_enabled"    to p.isCrossfadeEnabled(),
-            "crossfade_duration_ms" to p.getCrossfadeDurationMs(),
-            "offline_mode"         to p.isOfflineMode(),
-            "fx_enabled"           to p.isFxEnabled(),
-            "fx_mode"              to p.getFxMode(),
-            "fx_mix"               to p.getFxMix(),
-            "is_64bit_enabled"     to p.is64BitProcessingEnabled(),
-            "playback_speed"       to p.getPlaybackSpeed(),
-            "replay_gain"          to p.getReplayGainInfo(),
-            "presets"              to p.listPresets(),
-            "preset_index"         to presetIndex
+            "crossfeed_enabled"       to p.isCrossfeedEnabled(),
+            "crossfeed_strength"      to p.getCrossfeedStrength(),
+            "crossfeed_cutoff"        to p.getCrossfeedCutoff(),
+            "convolution_enabled"     to p.isConvolutionEnabled(),
+            "ir_loaded"               to p.isImpulseResponseLoaded(),
+            "ir_length"               to p.getIrLength(),
+            "usb_dac_connected"       to p.isUsbDacConnected(),
+            "usb_direct_routing"      to p.isDirectUsbRoutingEnabled(),
+            "crossfade_enabled"       to p.isCrossfadeEnabled(),
+            "crossfade_duration_ms"   to p.getCrossfadeDurationMs(),
+            "offline_mode"            to p.isOfflineMode(),
+            "fx_enabled"              to p.isFxEnabled(),
+            "fx_mode"                 to p.getFxMode(),
+            "fx_mix"                  to p.getFxMix(),
+            "is_64bit_enabled"        to p.is64BitProcessingEnabled(),
+            "playback_speed"          to p.getPlaybackSpeed(),
+            "replay_gain"             to p.getReplayGainInfo(),
+            "presets"                 to p.listPresets(),
+            "preset_index"            to presetIndex
         )
     }
 
-    fun toggleFX(): Boolean              { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isFxEnabled(); p.setFxEnabled(s); logDspState(); return s }
-    fun toggleEQ(): Boolean              { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.equalizerProcessor.isEnabled; p.setEQEnabled(s); logDspState(); return s }
-    fun toggleCompressor(): Boolean      { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCompressorEnabled(); p.setCompressorEnabled(s); logDspState(); return s }
-    fun toggleCrossfeed(): Boolean       { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCrossfeedEnabled(); p.setCrossfeedEnabled(s); logDspState(); return s }
-    fun toggleConvolution(): Boolean     { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isConvolutionEnabled(); p.setConvolutionEnabled(s); logDspState(); return s }
-    fun toggleCrossfade(): Boolean       { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCrossfadeEnabled(); p.setCrossfadeEnabled(s); logDspState(); return s }
-    fun toggleOfflineMode(): Boolean     { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isOfflineMode(); p.setOfflineMode(s); logDspState(); return s }
-    fun toggle64BitProcessing(): Boolean { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.is64BitProcessingEnabled(); p.set64BitProcessingEnabled(s); logDspState(); return s }
-    fun toggleUsbDirectRouting(): Boolean{ val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isDirectUsbRoutingEnabled(); p.enableDirectUsbRouting(s); logDspState(); return s }
-    fun speedUp(): Float                 { val p = MavinPlayerModule.playerInstance ?: return 1f; val s = (p.getPlaybackSpeed() + 0.1f).coerceAtMost(3f); p.setPlaybackSpeed(s); logDspState(); return s }
-    fun slowDown(): Float                { val p = MavinPlayerModule.playerInstance ?: return 1f; val s = (p.getPlaybackSpeed() - 0.1f).coerceAtLeast(0.5f); p.setPlaybackSpeed(s); logDspState(); return s }
-    fun resetSpeed(): Float              { val p = MavinPlayerModule.playerInstance ?: return 1f; p.setPlaybackSpeed(1f); logDspState(); return 1f }
+    fun toggleFX(): Boolean               { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isFxEnabled(); p.setFxEnabled(s); logDspState(); return s }
+    fun toggleEQ(): Boolean               { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.equalizerProcessor.isEnabled; p.setEQEnabled(s); logDspState(); return s }
+    fun toggleCompressor(): Boolean       { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCompressorEnabled(); p.setCompressorEnabled(s); logDspState(); return s }
+    fun toggleCrossfeed(): Boolean        { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCrossfeedEnabled(); p.setCrossfeedEnabled(s); logDspState(); return s }
+    fun toggleConvolution(): Boolean      { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isConvolutionEnabled(); p.setConvolutionEnabled(s); logDspState(); return s }
+    fun toggleCrossfade(): Boolean        { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isCrossfadeEnabled(); p.setCrossfadeEnabled(s); logDspState(); return s }
+    fun toggleOfflineMode(): Boolean      { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isOfflineMode(); p.setOfflineMode(s); logDspState(); return s }
+    fun toggle64BitProcessing(): Boolean  { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.is64BitProcessingEnabled(); p.set64BitProcessingEnabled(s); logDspState(); return s }
+    fun toggleUsbDirectRouting(): Boolean { val p = MavinPlayerModule.playerInstance ?: return false; val s = !p.isDirectUsbRoutingEnabled(); p.enableDirectUsbRouting(s); logDspState(); return s }
+    fun speedUp(): Float                  { val p = MavinPlayerModule.playerInstance ?: return 1f; val s = (p.getPlaybackSpeed() + 0.1f).coerceAtMost(3f); p.setPlaybackSpeed(s); logDspState(); return s }
+    fun slowDown(): Float                 { val p = MavinPlayerModule.playerInstance ?: return 1f; val s = (p.getPlaybackSpeed() - 0.1f).coerceAtLeast(0.5f); p.setPlaybackSpeed(s); logDspState(); return s }
+    fun resetSpeed(): Float               { val p = MavinPlayerModule.playerInstance ?: return 1f; p.setPlaybackSpeed(1f); logDspState(); return 1f }
 }

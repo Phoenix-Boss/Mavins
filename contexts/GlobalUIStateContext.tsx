@@ -8,7 +8,7 @@ import React, {
   useEffect,
   useMemo,
 } from "react";
-import { usePlaybackState, State } from "react-native-track-player";
+import { usePlaybackState, State } from "@/modules/mavin-eq";
 import { triggerHaptic } from "@/helpers/haptics";
 
 // ─────────────────────────────────────────────

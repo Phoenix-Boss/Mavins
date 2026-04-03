@@ -52,12 +52,11 @@ import Animated, {
   runOnJS,
 } from "react-native-reanimated";
 import { Slider } from "react-native-awesome-slider";
-import {
+import TrackPlayer, {
   useActiveTrack,
   useProgress,
   RepeatMode,
-} from "react-native-track-player";
-import TrackPlayer from "react-native-track-player";
+} from "@/modules/mavin-eq";
 import { useRouter } from "expo-router";
 import {
   moderateScale,
@@ -245,6 +244,11 @@ function PlayerContentInner({
   const activeTrack = useActiveTrack();
   const progress    = useProgress(250);
 
+  // mavin-eq useProgress returns milliseconds; convert to seconds for all
+  // time-display, seek, and video-sync logic (videoPlayer.currentTime, seekTo, formatTime).
+  const positionSec = progress.position / 1000;
+  const durationSec = progress.duration / 1000;
+
   // ✅ contextIsPlaying is the single source of truth for play state.
   //    It reflects RNTP's actual state via MusicPlayerContext.
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
@@ -359,18 +363,18 @@ function PlayerContentInner({
         if (muxedVideoUrl) {
           TrackPlayer.getProgress().then(({ position }) => {
             if (videoPlayerReady.current) {
-              videoPlayer.currentTime = position;
+              videoPlayer.currentTime = position / 1000;
               if (contextIsPlaying) {
                 videoOwnsAudio.current = true;
                 TrackPlayer.pause().catch(() => {});
                 videoPlayer.play();
               }
             } else {
-              pendingSeek.current = position;
+              pendingSeek.current = position / 1000;
             }
           }).catch(() => {});
         } else {
-          const seekTo = progress.position;
+          const seekTo = positionSec;
           if (videoPlayerReady.current) {
             videoPlayer.currentTime = seekTo;
             if (contextIsPlaying) videoPlayer.play();
@@ -427,8 +431,8 @@ function PlayerContentInner({
 
   const handleSeek = useCallback(
     async (fraction: number) => {
-      if (progress.duration <= 0) return;
-      const t = fraction * progress.duration;
+      if (durationSec <= 0) return;
+      const t = fraction * durationSec;
       await TrackPlayer.seekTo(t);
       if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
         videoPlayer.currentTime = t;
@@ -775,7 +779,7 @@ function PlayerContentInner({
                 renderBubble={() => (
                   <View style={styles.bubbleContainer}>
                     <Text style={styles.bubbleText}>
-                      {formatTime(slidingValue.value * progress.duration)}
+                      {formatTime(slidingValue.value * durationSec)}
                     </Text>
                   </View>
                 )}
@@ -796,8 +800,8 @@ function PlayerContentInner({
                 }}
               />
               <View style={styles.timeRow}>
-                <Text style={styles.timeText}>{formatTime(progress.position)}</Text>
-                <Text style={styles.timeText}>{formatTime(progress.duration)}</Text>
+                <Text style={styles.timeText}>{formatTime(positionSec)}</Text>
+                <Text style={styles.timeText}>{formatTime(durationSec)}</Text>
               </View>
             </View>
 

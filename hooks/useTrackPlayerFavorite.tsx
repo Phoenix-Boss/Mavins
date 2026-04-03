@@ -17,7 +17,7 @@
  */
 
 import { useCallback } from "react";
-import TrackPlayer, { useActiveTrack } from "react-native-track-player";
+import TrackPlayer, { useActiveTrack } from "@/modules/mavin-eq";
 import { useIsSongFavorite, useFavorites, useLibraryStore } from "@/store/library";
 
 export const useTrackPlayerFavorite = () => {

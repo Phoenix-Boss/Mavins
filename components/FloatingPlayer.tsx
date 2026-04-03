@@ -21,8 +21,8 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { triggerHaptic } from '@/helpers/haptics';
 import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
-import { useActiveTrack, usePlaybackState, State } from 'react-native-track-player';
-import TrackPlayer from 'react-native-track-player';
+import { useActiveTrack, usePlaybackState, State } from '@/modules/mavin-eq';
+import TrackPlayer from '@/modules/mavin-eq';
 import { useMusicPlayer } from '@/components/MusicPlayerContext';
 import {
   getPendingTrack,

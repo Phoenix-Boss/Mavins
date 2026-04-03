@@ -1,7 +1,14 @@
 /**
- * This file defines the `PlayerProgressBar` component, which displays the current
- * playback progress of a song using a seekable slider. It also shows the elapsed, remaining,
- * and total time of the track.
+ * PlayerProgressBar
+ *
+ * NOTE — unit contract:
+ *   mavin-eq's useProgress() returns { position, duration, buffered } in MILLISECONDS.
+ *   mavin-eq's seekTo(seconds) expects SECONDS.
+ *   formatSecondsToMinutes() expects SECONDS.
+ *
+ *   We divide position/duration by 1000 once here (positionSec / durationSec) and use
+ *   those throughout. The slider ratio (position/duration) is unit-agnostic so we
+ *   compute it from raw ms values — the units cancel out.
  */
 
 import { fontSize } from "@/constants/tokens";
@@ -11,21 +18,17 @@ import { defaultStyles } from "@/styles";
 import { Text, View, ViewProps } from "react-native";
 import { Slider } from "react-native-awesome-slider";
 import { useSharedValue, runOnJS } from "react-native-reanimated";
-import TrackPlayer, { useProgress } from "react-native-track-player";
+import TrackPlayer, { useProgress } from "@/modules/mavin-eq";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { useRef, useCallback } from "react";
 
-/**
- * `PlayerProgressBar` component.
- * Displays a seekable progress bar for the current track, along with time information.
- * @param {ViewProps} { style } Props for the container View.
- */
 export const PlayerProgressBar = ({ style }: ViewProps) => {
-  // useProgress reads from TrackPlayer — correct for audio mode and also
-  // for muxed video mode because playerContent keeps TrackPlayer seeked to
-  // the same position before handing control to the video player.
-  // 250ms interval matches playerContent's own useProgress interval.
-  const { duration, position } = useProgress(250);
+  // position and duration arrive in MILLISECONDS from mavin-eq.
+  const { duration: durationMs, position: positionMs } = useProgress(250);
+
+  // Convert to seconds for all time-display and seekTo calls.
+  const positionSec = positionMs / 1000;
+  const durationSec = durationMs / 1000;
 
   // All shared values live on the UI thread — zero JS bridge for slider motion.
   const isSliding    = useSharedValue(false);
@@ -34,42 +37,44 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const min = useSharedValue(0);
   const max = useSharedValue(1);
 
-  // 80ms debounce: rapid drags batch into one seek instead of hammering TrackPlayer.
+  // 80ms debounce: rapid drags batch into one seek instead of hammering the player.
+  // seekTo() expects seconds — fraction * durationSec gives the correct value.
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitSeek = useCallback((fraction: number) => {
     if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
     seekDebounceRef.current = setTimeout(() => {
-      TrackPlayer.seekTo(fraction * duration);
+      TrackPlayer.seekTo(fraction * durationSec);
     }, 80);
-  }, [duration]);
+  }, [durationSec]);
 
-  const trackElapsedTime   = formatSecondsToMinutes(position);
-  const trackRemainingTime = formatSecondsToMinutes(duration - position);
-  const trackDuration      = formatSecondsToMinutes(duration);
+  // Time labels — all in seconds.
+  const trackElapsedTime   = formatSecondsToMinutes(positionSec);
+  const trackRemainingTime = formatSecondsToMinutes(durationSec - positionSec);
+  const trackDuration      = formatSecondsToMinutes(durationSec);
 
+  // Slider ratio is unit-agnostic (ms/ms = sec/sec) — leave raw ms values here.
   if (!isSliding.value) {
-    progress.value = duration > 0 ? position / duration : 0;
+    progress.value = durationMs > 0 ? positionMs / durationMs : 0;
   }
 
   return (
     <View style={style}>
       <Slider
-        progress={progress} // Current playback progress (0-1).
-        minimumValue={min} // Minimum value of the slider (0).
-        maximumValue={max} // Maximum value of the slider (1).
+        progress={progress}
+        minimumValue={min}
+        maximumValue={max}
         containerStyle={{
           height: moderateScale(5),
           borderRadius: 16,
         }}
-        // Custom bubble to display the time when sliding.
         renderBubble={() => (
           <View style={styles.bubbleContainer}>
             <Text style={styles.bubbleText}>
-              {formatSecondsToMinutes(slidingValue.value * duration)}
+              {/* slidingValue is a 0-1 fraction; multiply by durationSec for seconds */}
+              {formatSecondsToMinutes(slidingValue.value * durationSec)}
             </Text>
           </View>
         )}
-        // Custom thumb for the slider.
         renderThumb={() => (
           <View
             style={{
@@ -85,7 +90,6 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           maximumTrackTintColor: Colors.maximumTrackTintColor,
         }}
         onSlidingStart={() => { isSliding.value = true; }}
-        // Time bubble updates on UI thread; seek is debounced to avoid buffer thrash.
         onValueChange={(value) => {
           slidingValue.value = value;
           runOnJS(commitSeek)(value);
@@ -94,14 +98,13 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           if (!isSliding.value) return;
           isSliding.value = false;
           if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
-          TrackPlayer.seekTo(value * duration);
+          // seekTo expects seconds.
+          TrackPlayer.seekTo(value * durationSec);
         }}
       />
 
-      {/* Display elapsed, remaining, and total time */}
       <View style={styles.timeRow}>
         <Text style={styles.timeText}>{trackElapsedTime}</Text>
-
         <Text style={styles.timeText}>
           {"-"} {trackRemainingTime} {"/"} {trackDuration}
         </Text>
@@ -110,7 +113,6 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   );
 };
 
-// Styles for the PlayerProgressBar component.
 const styles = ScaledSheet.create({
   timeRow: {
     flexDirection: "row",

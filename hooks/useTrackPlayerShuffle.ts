@@ -20,7 +20,7 @@
  */
 
 import { useState, useRef, useCallback } from "react";
-import TrackPlayer, { useActiveTrack } from "react-native-track-player";
+import TrackPlayer, { useActiveTrack } from "@/modules/mavin-eq";
 
 export type ShuffleMode = "off" | "on";
 

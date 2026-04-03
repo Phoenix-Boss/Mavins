@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import TrackPlayer, { RepeatMode } from "react-native-track-player";
+import TrackPlayer, { RepeatMode } from "@/modules/mavin-eq";
 
 /**
  * A custom hook that manages the repeat mode of the track player.
