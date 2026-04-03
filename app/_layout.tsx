@@ -2,49 +2,69 @@
 //
 // Player bootstrap:
 //   MavinPlayer.initPlayer() → ExoPlayer with full DSP chain (EQ, compressor,
-//   crossfeed, FX) built in as AudioProcessors.
+//   crossfeed, convolution, FX, peak-meter) built as AudioProcessors inside
+//   MavinAudioPlayer.kt.
 //
 // Remote controls (lock screen, notification) are handled automatically by
 // MavinPlaybackService via Media3's MediaSessionService — no listener setup
 // needed here beyond error monitoring.
+// ─────────────────────────────────────────────────────────────────────────────
 
-import { DarkTheme, ThemeProvider } from "@react-navigation/native";
-import { useFonts } from "expo-font";
-import { Stack, useRootNavigationState, useRouter, usePathname } from "expo-router";
-import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect, useState, useCallback, useRef } from "react";
-import { StyleSheet } from "react-native";
-import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
-import { StatusBar, View, ActivityIndicator, Linking, Platform } from "react-native";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
+import {
+  Stack,
+  useRootNavigationState,
+  useRouter,
+  usePathname,
+} from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from 'react';
+import { StyleSheet, Platform } from 'react-native';
+import {
+  configureReanimatedLogger,
+  ReanimatedLogLevel,
+} from 'react-native-reanimated';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  SafeAreaProvider,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context';
+import { StatusBar, View, ActivityIndicator, Linking } from 'react-native';
+import { QueryClientProvider } from '@tanstack/react-query';
 
 // ── Internal ──────────────────────────────────────────────────────────────────
-import { initializeLibrary } from "@/store/library";
-import { PlayerProvider, usePlayerOverlay } from "@/components/player/playerProvider";
-import { MusicPlayerProvider } from "@/components/MusicPlayerContext";
-import { LyricsProvider, LyricsFetcher } from "@/hooks/useLyricsContext";
-import { GlobalUIStateProvider } from "@/contexts/GlobalUIStateContext";
-import FloatingPlayer from "@/components/FloatingPlayer";
-import { UpdateModal } from "@/components/UpdateModal";
-import { MessageModal } from "@/components/MessageModal";
-import PremiumBanner from "@/components/ads/banner/premium";
-import { HomePreloader } from "@/components/HomePreloader";
-import { queryClient } from "@/libs/supabase";
-import { initCache } from "@/libs/cache";
-import HoneygainConsentGate from "@/components/HoneygainConsentGate";
+import { initializeLibrary } from '@/store/library';
+import { PlayerProvider, usePlayerOverlay } from '@/components/player/playerProvider';
+import { MusicPlayerProvider } from '@/components/MusicPlayerContext';
+import { LyricsProvider, LyricsFetcher } from '@/hooks/useLyricsContext';
+import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
+import FloatingPlayer from '@/components/FloatingPlayer';
+import { UpdateModal } from '@/components/UpdateModal';
+import { MessageModal } from '@/components/MessageModal';
+import PremiumBanner from '@/components/ads/banner/premium';
+import { HomePreloader } from '@/components/HomePreloader';
+import { queryClient } from '@/libs/supabase';
+import { initCache } from '@/libs/cache';
+import HoneygainConsentGate from '@/components/HoneygainConsentGate';
 
 // ── MavinPlayer ───────────────────────────────────────────────────────────────
-// ✅ FIX: Import the player instance directly from mavin-eq (which exports the native module)
-// This ensures we get the actual native module, not a getter function.
-import MavinPlayer from "@/modules/mavin-eq";
-import type { MavinPlayerNativeModule } from "@/modules/mavin-eq/types";
+// The native module is accessed exclusively through playerSetup.ts.
+// Never import MavinPlayer directly inside route/layout files — doing so breaks
+// Fast Refresh and causes "is not a function" errors.
+import {
+  setupPlayerGlobal,
+  releasePlayerGlobal,
+  getPlayerModule,
+} from '@/libs/playerSetup';
 
-// ── Shared player bootstrap ───────────────────────────────────────────────────
-// Import (and re-export) from libs/playerSetup so any component that needs to
-// await player readiness imports from ONE place — never from a route file.
-export { setupPlayerGlobal } from "@/libs/playerSetup";
+// Re-export for any module that needs to await player readiness from one place.
+export { setupPlayerGlobal } from '@/libs/playerSetup';
 
 // ── Module-level bootstrap ────────────────────────────────────────────────────
 SplashScreen.preventAutoHideAsync();
@@ -54,24 +74,13 @@ initCache({ startBackgroundJobs: true });
 const PREMIUM_BANNER_DELAY_MS = 2200;
 const SPLASH_FORCE_HIDE_MS    = 4000;
 
-// Helper to check if player is available (Android-only)
-const isPlayerAvailable = (): boolean => {
-  return Platform.OS === "android" && MavinPlayer !== null;
-};
-
-// Helper to safely get the player module (throws if not available)
-const getPlayerModule = (): MavinPlayerNativeModule => {
-  if (!isPlayerAvailable()) {
-    throw new Error("[MavinPlayer] Player module not available on this platform or not initialized");
-  }
-  return MavinPlayer as MavinPlayerNativeModule;
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // NotificationPlayerExpander
 //
 // Listens for MavinPlayer's 'onTrackChanged' event (fires when a track starts
-// via a notification action) and expands the player overlay.
+// via a notification / lock-screen action) and expands the player overlay.
+// MavinPlaybackService (MediaSessionService) drives these events natively —
+// no manual service binding required here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function NotificationPlayerExpander({
@@ -83,28 +92,28 @@ function NotificationPlayerExpander({
   const router           = useRouter();
 
   useEffect(() => {
-    // ✅ FIX: guard against null — module is Android-only
-    if (!isPlayerAvailable()) return;
+    if (Platform.OS !== 'android') return;
 
     const player = getPlayerModule();
-    const subscription = player.addListener("onTrackChanged", () => {
-      if (!pendingRef.current) return;
+    if (!player) return;
 
-      console.log("[NotificationPlayerExpander] Track changed, expanding player");
+    const sub = player.addListener('onTrackChanged', () => {
+      if (!pendingRef.current) return;
+      console.log('[NotificationPlayerExpander] Track changed — expanding player.');
 
       const t = setTimeout(() => {
         pendingRef.current = false;
         try {
           expandPlayer();
         } catch {
-          router.push("/(player)");
+          router.push('/(player)');
         }
       }, 500);
 
       return () => clearTimeout(t);
     });
 
-    return () => subscription.remove();
+    return () => sub.remove();
   }, [expandPlayer, pendingRef, router]);
 
   return null;
@@ -134,46 +143,46 @@ function AppShell({
   pendingExpandRef,
   playerReady,
 }: {
-  fontsLoaded: boolean;
-  navReady: boolean;
-  premiumBannerVisible: boolean;
+  fontsLoaded:             boolean;
+  navReady:                boolean;
+  premiumBannerVisible:    boolean;
   setPremiumBannerVisible: (v: boolean) => void;
-  pendingExpandRef: React.MutableRefObject<boolean>;
-  playerReady: boolean;
+  pendingExpandRef:        React.MutableRefObject<boolean>;
+  playerReady:             boolean;
 }) {
   const pathname = usePathname();
 
-  const isHomeScreen     = pathname === "/" || pathname === "/(tabs)" || pathname === "/(tabs)/index";
-  const isLibraryScreen  = pathname === "/(tabs)/library";
-  const isSettingsScreen = pathname === "/(tabs)/settings";
+  const isHomeScreen     = pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/index';
+  const isLibraryScreen  = pathname === '/(tabs)/library';
+  const isSettingsScreen = pathname === '/(tabs)/settings';
   const shouldShowFloatingPlayer =
     (isHomeScreen || isLibraryScreen || isSettingsScreen) && playerReady;
 
   return (
     <LyricsProvider>
       <GlobalUIStateProvider>
-        <View style={{ flex: 1, backgroundColor: "#000" }}>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
           <Stack
             screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: "#000" },
+              headerShown:  false,
+              contentStyle: { backgroundColor: '#000' },
             }}
           >
             <Stack.Screen name="(tabs)" />
             <Stack.Screen
               name="(player)"
               options={{
-                presentation: "modal",
-                animation: "slide_from_bottom",
-                contentStyle: { backgroundColor: "#000" },
+                presentation:  'modal',
+                animation:     'slide_from_bottom',
+                contentStyle:  { backgroundColor: '#000' },
               }}
             />
             <Stack.Screen
               name="(modals)"
               options={{
-                presentation: "transparentModal",
-                animation: "slide_from_bottom",
-                contentStyle: { backgroundColor: "transparent" },
+                presentation:  'transparentModal',
+                animation:     'slide_from_bottom',
+                contentStyle:  { backgroundColor: 'transparent' },
               }}
             />
             <Stack.Screen name="+not-found" />
@@ -209,8 +218,8 @@ function AppShell({
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
-    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
-    Meriva:    require("../assets/fonts/Meriva.ttf"),
+    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    Meriva:    require('../assets/fonts/Meriva.ttf'),
   });
 
   const [playerReady,          setPlayerReady         ] = useState(false);
@@ -223,42 +232,42 @@ export default function RootLayout() {
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
+
     async function prepare() {
       try {
-        // ✅ FIX: Import setupPlayerGlobal from libs (which now uses MavinPlayer directly)
-        const { setupPlayerGlobal } = await import("@/libs/playerSetup");
+        // Boot ExoPlayer + full DSP chain (EQ → Compressor → Crossfeed →
+        // Convolution → FX → PeakMeter) via MavinAudioPlayer.kt
         const ok = await setupPlayerGlobal();
-        setPlayerReady(ok);
-        
-        try { 
-          await initializeLibrary(); 
-        } catch (e) { 
-          console.warn("[Library] initialization failed:", e); 
+        if (!cancelled) setPlayerReady(ok);
+
+        try {
+          await initializeLibrary();
+        } catch (e) {
+          console.warn('[Library] Initialization failed:', e);
         }
       } catch (e) {
-        console.warn("[Player] setup error:", e);
-        setPlayerReady(false);
+        console.warn('[Player] Setup error:', e);
+        if (!cancelled) setPlayerReady(false);
       }
     }
+
     prepare();
 
-    // ✅ FIX: Clean up on unmount with null check
     return () => {
-      if (isPlayerAvailable()) {
-        try {
-          getPlayerModule().release();
-        } catch (e) {
-          console.warn("[MavinPlayer] release error on unmount:", e);
-        }
-      }
+      cancelled = true;
+      // Release ExoPlayer + all DSP AudioProcessor instances on unmount
+      releasePlayerGlobal().catch(e =>
+        console.warn('[MavinPlayer] Release error on unmount:', e),
+      );
     };
   }, []);
 
   // ── Splash ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (appReady) { 
-      SplashScreen.hideAsync(); 
-      return; 
+    if (appReady) {
+      SplashScreen.hideAsync();
+      return;
     }
     const t = setTimeout(() => SplashScreen.hideAsync(), SPLASH_FORCE_HIDE_MS);
     return () => clearTimeout(t);
@@ -272,16 +281,20 @@ export default function RootLayout() {
   }, [appReady]);
 
   // ── Deep link / notification tap ──────────────────────────────────────────
+  // MavinPlaybackService fires a deep-link intent when the user taps the
+  // notification. We catch it here and expand the player overlay.
   const handleOpenFromNotification = useCallback(() => {
     pendingExpandRef.current = true;
   }, []);
 
   useEffect(() => {
-    Linking.getInitialURL().then((url) => {
-      if (url === null || url?.startsWith("mavins-player")) handleOpenFromNotification();
+    Linking.getInitialURL().then(url => {
+      if (url === null || url?.startsWith('mavins-player'))
+        handleOpenFromNotification();
     });
-    const sub = Linking.addEventListener("url", ({ url }) => {
-      if (url?.startsWith("mavins-player") || url === "") handleOpenFromNotification();
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      if (url?.startsWith('mavins-player') || url === '')
+        handleOpenFromNotification();
     });
     return () => sub.remove();
   }, [handleOpenFromNotification]);
@@ -317,16 +330,16 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loadingScreen: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#000",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 9999,
+    backgroundColor: '#000',
+    justifyContent:  'center',
+    alignItems:      'center',
+    zIndex:          9999,
   },
   floatingPlayerWrapper: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
+    position: 'absolute',
+    bottom:   0,
+    left:     0,
+    right:    0,
+    zIndex:   1000,
   },
 });

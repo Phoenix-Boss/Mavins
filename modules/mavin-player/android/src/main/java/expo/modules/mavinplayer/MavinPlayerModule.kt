@@ -46,8 +46,8 @@ private object PlaybackState {
 class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
     companion object {
-        private const val TAG                    = "MavinPlayerModule"
-        private const val SPECTRUM_INTERVAL_MS   = 100L
+        private const val TAG                     = "MavinPlayerModule"
+        private const val SPECTRUM_INTERVAL_MS    = 100L
         private const val NOTIFICATION_CHANNEL_ID = "mavin_player_channel"
         private const val NOTIFICATION_ID         = 1
         private const val QUEUE_PREFS             = "mavin_queue_prefs"
@@ -55,8 +55,26 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         private const val POSITION_KEY            = "last_position"
         private const val TRACK_INDEX_KEY         = "current_track_index"
 
+        /**
+         * Stable, non-empty MediaSession ID — matches the constant in MavinPlaybackService.
+         *
+         * IMPORTANT: Both this module and MavinPlaybackService build a MediaSession
+         * against the SAME ExoPlayer instance.  They must use different IDs or Media3
+         * will throw "Session ID must be unique" when the service starts.
+         *
+         * • MavinPlayerModule  → "mavin-module-session"   (used for remote-control wiring)
+         * • MavinPlaybackService → "mavin-playback-session" (used for lock-screen / notification)
+         *
+         * Using distinct non-empty IDs eliminates the duplicate-ID crash that happens
+         * when either component is recreated before the previous instance tears down.
+         */
+        private const val MEDIA_SESSION_ID = "mavin-module-session"
+
         @Volatile var playerInstance: MavinAudioPlayer? = null
 
+        // FIX: mediaSession was in companion, which means it leaks across module instances
+        // (hot-reload, re-mount). Keeping it here is fine because setupMediaSession()
+        // explicitly releases the old one before building a new one.
         private var mediaSession       : MediaSession?      = null
         private var audioManager       : AudioManager?      = null
         private var audioFocusRequest  : AudioFocusRequest? = null
@@ -65,7 +83,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         private val eventDebouncers    = ConcurrentHashMap<String, Debouncer>()
     }
 
-    private val mainHandler  = Handler(Looper.getMainLooper())
+    private val mainHandler   = Handler(Looper.getMainLooper())
     private var progressRunnable : Runnable? = null
     private var spectrumRunnable : Runnable? = null
     private var currentTrackIndex = 0
@@ -84,9 +102,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             // ── Playback ────────────────────────────────────────────────────
             "onPlaybackStateChanged",
             "onTrackChanged",                    // deprecated — kept for compat
-            "onPlaybackActiveTrackChanged",      // NEW: RNTP PlaybackActiveTrackChanged
-            "onPlaybackQueueEnded",              // NEW: RNTP PlaybackQueueEnded
-            "onPlaybackPlayWhenReadyChanged",    // NEW: RNTP PlaybackPlayWhenReadyChanged
+            "onPlaybackActiveTrackChanged",      // RNTP PlaybackActiveTrackChanged
+            "onPlaybackQueueEnded",              // RNTP PlaybackQueueEnded
+            "onPlaybackPlayWhenReadyChanged",    // RNTP PlaybackPlayWhenReadyChanged
             "onError",
             "onProgress",
             // ── DSP / hardware ──────────────────────────────────────────────
@@ -101,20 +119,20 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             // ── Remote controls ─────────────────────────────────────────────
             "onRemotePlay",
             "onRemotePause",
-            "onRemoteStop",                      // NEW
+            "onRemoteStop",
             "onRemoteNext",
             "onRemotePrevious",
             "onRemoteSeek",
-            "onRemoteSkip",                      // NEW: Android Auto skip-to-index
-            "onRemotePlayId",                    // NEW: Android Auto play-by-id
-            "onRemotePlaySearch",                // NEW: Android Auto voice search
-            "onRemoteSetRating",                 // NEW: rating change
-            "onRemoteJumpForward",               // NEW
-            "onRemoteJumpBackward",              // NEW
-            "onRemoteDuck",                      // NEW: audio interruption / ducking
+            "onRemoteSkip",
+            "onRemotePlayId",
+            "onRemotePlaySearch",
+            "onRemoteSetRating",
+            "onRemoteJumpForward",
+            "onRemoteJumpBackward",
+            "onRemoteDuck",
             // ── Metadata ────────────────────────────────────────────────────
-            "onAudioCommonMetadataReceived",     // NEW: ID3 / Vorbis / QT metadata
-            "onAudioTimedMetadataReceived"       // NEW: Icy / timed metadata
+            "onAudioCommonMetadataReceived",
+            "onAudioTimedMetadataReceived"
         )
 
         // ─────────────────────────────────────────────────────────────────────
@@ -132,8 +150,8 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                     val ctx = appContext.reactContext
                         ?: return@runOnMain promise.reject("NO_CONTEXT", "ReactContext not available", null)
 
-                    audioManager = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                    val player   = MavinAudioPlayer(ctx)
+                    audioManager   = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    val player     = MavinAudioPlayer(ctx)
                     playerInstance = player
 
                     if (options != null) {
@@ -165,17 +183,40 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 stopAllTimers()
                 playerInstance?.let { saveState(it); it.release() }
                 playerInstance = null
+                // FIX: release module-owned MediaSession before stopping the service,
+                // so its ID is freed independently of MavinPlaybackService's session.
                 mediaSession?.release()
                 mediaSession = null
                 abandonAudioFocus()
                 appContext.reactContext?.let { ctx ->
                     ctx.stopService(Intent(ctx, MavinPlaybackService::class.java))
                     if (isForegroundService) {
-                        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
+                        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                            .cancel(NOTIFICATION_ID)
                         isForegroundService = false
                     }
                 }
                 promise.resolve(null)
+            }
+        }
+
+        // ── NEW: stopService — called from JS releasePlayerGlobal() ─────────
+        // Stops MavinPlaybackService so its MediaSession is released and its
+        // session ID ("mavin-playback-session") is freed before any potential
+        // hot-reload re-creation. Called by playerSetup.ts before player.release().
+        AsyncFunction("stopService") { promise: Promise ->
+            runOnMain {
+                try {
+                    appContext.reactContext?.let { ctx ->
+                        ctx.stopService(Intent(ctx, MavinPlaybackService::class.java))
+                        Log.i(TAG, "MavinPlaybackService stopped via stopService()")
+                    }
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    // Non-fatal: log and resolve so JS side doesn't hang.
+                    Log.w(TAG, "stopService error (non-fatal): ${e.message}")
+                    promise.resolve(null)
+                }
             }
         }
 
@@ -218,7 +259,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // NEW: insert at specific index (RNTP add(tracks, insertBeforeIndex))
         AsyncFunction("addToQueueAt") { trackMap: Map<String, Any?>, index: Int, promise: Promise ->
             runOnMain {
                 val p = requirePlayer(promise) ?: return@runOnMain
@@ -240,7 +280,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             runOnMain { requirePlayer(promise)?.removeUpcomingTracks(); promise.resolve(null) }
         }
 
-        // NEW: move a track from one position to another (RNTP move())
         AsyncFunction("moveTrack") { fromIndex: Int, toIndex: Int, promise: Promise ->
             runOnMain {
                 val p = requirePlayer(promise) ?: return@runOnMain
@@ -268,7 +307,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // NEW: return entire queue as list (RNTP getQueue())
         AsyncFunction("getQueue") { promise: Promise ->
             runOnMain {
                 val p = requirePlayer(promise) ?: return@runOnMain
@@ -365,12 +403,10 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         AsyncFunction("getShuffleMode")      { promise: Promise -> runOnMain { promise.resolve(playerInstance?.getShuffleMode() ?: false) } }
         AsyncFunction("getAudioFocus")       { promise: Promise -> promise.resolve(hasAudioFocus) }
 
-        // NEW: RNTP getActiveTrack() — full track object
         AsyncFunction("getActiveTrack") { promise: Promise ->
             runOnMain { promise.resolve(playerInstance?.getCurrentTrackInfo()) }
         }
 
-        // NEW: RNTP getActiveTrackIndex() — just the index
         AsyncFunction("getActiveTrackIndex") { promise: Promise ->
             runOnMain {
                 val info = playerInstance?.getCurrentTrackInfo()
@@ -378,7 +414,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // NEW: RNTP getProgress() — { position, duration, buffered } in ms
         AsyncFunction("getProgress") { promise: Promise ->
             runOnMain {
                 val p = playerInstance
@@ -390,7 +425,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             }
         }
 
-        // NEW: RNTP getPlaybackState() — { state: string }
         AsyncFunction("getPlaybackState") { promise: Promise ->
             runOnMain {
                 val state = playerInstance?.getPlaybackStateString() ?: "none"
@@ -441,13 +475,11 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                     val ctx = appContext.reactContext
                         ?: return@runOnMain promise.reject("NO_CONTEXT", "ReactContext not available", null)
                     val p = playerInstance
-                    if (p != null && mediaSession == null) {
-                        setupMediaSession(ctx, p, options)
-                    } else {
-                        mediaSession?.release()
-                        mediaSession = null
-                        if (p != null) setupMediaSession(ctx, p, options)
-                    }
+                    // FIX: always release the old session before rebuilding to prevent
+                    // duplicate-ID crash when updateOptions is called more than once.
+                    mediaSession?.release()
+                    mediaSession = null
+                    if (p != null) setupMediaSession(ctx, p, options)
                     promise.resolve(null)
                 } catch (e: Exception) { promise.reject("UPDATE_OPTIONS_ERROR", e.message, e) }
             }
@@ -600,8 +632,8 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         // EQ — DITHER / SMOOTHING
         // ─────────────────────────────────────────────────────────────────────
 
-        AsyncFunction("setDitherMode")   { mode: String, promise: Promise -> playerInstance?.setDitherMode(mode); promise.resolve(null) }
-        AsyncFunction("getDitherMode")   { promise: Promise -> promise.resolve(playerInstance?.getDitherMode() ?: "E_WEIGHTED") }
+        AsyncFunction("setDitherMode")    { mode: String, promise: Promise -> playerInstance?.setDitherMode(mode); promise.resolve(null) }
+        AsyncFunction("getDitherMode")    { promise: Promise -> promise.resolve(playerInstance?.getDitherMode() ?: "E_WEIGHTED") }
         AsyncFunction("setSmoothingRamp") { ms: Double, promise: Promise -> playerInstance?.setSmoothingRamp(ms); promise.resolve(null) }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -773,45 +805,62 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             else         -> Rating.RATING_NONE
         }
 
+        // FIX: always release any existing session before building a new one.
+        // Without this, calling setupMediaSession() twice (e.g. via updateOptions)
+        // throws "Session ID must be unique" for the same MEDIA_SESSION_ID.
+        mediaSession?.release()
+        mediaSession = null
+
         val sessionBuilder = MediaSession.Builder(context, player.player)
+            .setId(MEDIA_SESSION_ID)
             .setCallback(object : MediaSession.Callback {
                 override fun onConnect(
                     session: MediaSession,
                     controller: MediaSession.ControllerInfo
                 ): MediaSession.ConnectionResult {
-                    val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+                    // FIX: use DEFAULT_SESSION_AND_LIBRARY_COMMANDS instead of
+                    // DEFAULT_SESSION_COMMANDS to include all standard commands
+                    // including library-browsing commands needed for Android Auto.
+                    val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                         .buildUpon()
                         .apply {
-                            add(SessionCommand("mavin.action.TOGGLE_EQ",          Bundle()))
-                            add(SessionCommand("mavin.action.RESET_EQ",           Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_COMPRESSOR",  Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_CROSSFEED",   Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_FX",          Bundle()))
-                            add(SessionCommand("mavin.action.CYCLE_FX_MODE",      Bundle()))
-                            add(SessionCommand("mavin.action.NEXT_PRESET",        Bundle()))
-                            add(SessionCommand("mavin.action.PREV_PRESET",        Bundle()))
-                            add(SessionCommand("mavin.action.APPLY_PRESET",       Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_REPLAY_GAIN", Bundle()))
-                            add(SessionCommand("mavin.action.SPEED_UP",           Bundle()))
-                            add(SessionCommand("mavin.action.SLOW_DOWN",          Bundle()))
-                            add(SessionCommand("mavin.action.RESET_SPEED",        Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_CROSSFADE",   Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_OFFLINE",     Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_64BIT",       Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_CONVOLUTION", Bundle()))
-                            add(SessionCommand("mavin.action.TOGGLE_USB_DIRECT",  Bundle()))
+                            add(SessionCommand("mavin.action.TOGGLE_EQ",            Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.RESET_EQ",             Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_EQ_MODE",       Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_COMPRESSOR",    Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.INCREASE_COMPRESSION", Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.DECREASE_COMPRESSION", Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_CROSSFEED",     Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_FX",            Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.CYCLE_FX_MODE",        Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.NEXT_PRESET",          Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.PREV_PRESET",          Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.APPLY_PRESET",         Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_REPLAY_GAIN",   Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.SPEED_UP",             Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.SLOW_DOWN",            Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.RESET_SPEED",          Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_CROSSFADE",     Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.INCREASE_CROSSFADE",   Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.DECREASE_CROSSFADE",   Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_OFFLINE",       Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_64BIT",         Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_CONVOLUTION",   Bundle.EMPTY))
+                            add(SessionCommand("mavin.action.TOGGLE_USB_DIRECT",    Bundle.EMPTY))
                         }
                         .build()
 
-                    return MediaSession.ConnectionResult.accept(
-                        sessionCommands,
-                        MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
-                    )
+                    // FIX: use AcceptedResultBuilder (Media3 ≥ 1.1) instead of the
+                    // deprecated MediaSession.ConnectionResult.accept(). The old form
+                    // silently discards player commands on newer Media3 versions.
+                    return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                        .setAvailableSessionCommands(sessionCommands)
+                        .build()
                 }
             })
 
         mediaSession = sessionBuilder.build()
-        Log.i(TAG, "Media3 MediaSession created / rebuilt (ratingType=$ratingType)")
+        Log.i(TAG, "Media3 MediaSession created (id=$MEDIA_SESSION_ID, ratingType=$ratingType)")
     }
 
     private fun updateMediaMetadata(track: TrackData, index: Int) {
@@ -869,6 +918,9 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     override fun onAudioFocusChange(focusChange: Int) {
         when (focusChange) {
             AudioManager.AUDIOFOCUS_GAIN -> {
+                // FIX: restore volume to 1.0 when focus is regained after a duck.
+                // Without this, volume stays at 0.3 after the interruption ends.
+                playerInstance?.setVolume(1.0f)
                 sendEvent("onAudioFocusGranted", emptyMap<String, Any>())
                 hasAudioFocus = true
             }
@@ -876,7 +928,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                 playerInstance?.pause()
                 currentPlaybackState = PlaybackState.STATE_PAUSED
                 sendEvent("onAudioFocusLost", mapOf("type" to "loss"))
-                // Also fire onRemoteDuck for RNTP compatibility
                 sendEvent("onRemoteDuck", mapOf("permanent" to true, "paused" to true))
                 hasAudioFocus = false
             }
@@ -995,9 +1046,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
 
         player.onTrackChanged = { index ->
             currentTrackIndex = index
-            // Fire legacy event (RNTP PlaybackTrackChanged — deprecated)
             sendDebouncedEvent("onTrackChanged", mapOf("index" to index), 100)
-            // Fire modern event (RNTP PlaybackActiveTrackChanged)
             val trackInfo = playerInstance?.getCurrentTrackInfo() ?: emptyMap<String, Any?>()
             sendDebouncedEvent(
                 "onPlaybackActiveTrackChanged",
@@ -1011,17 +1060,14 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             currentPlaybackState = PlaybackState.STATE_ERROR
         }
 
-        // Queue ended
         player.onQueueEnded = { position ->
             sendEvent("onPlaybackQueueEnded", mapOf("position" to position.toDouble()))
         }
 
-        // playWhenReady changed
         player.onPlayWhenReadyChanged = { playWhenReady ->
             sendEvent("onPlaybackPlayWhenReadyChanged", mapOf("playWhenReady" to playWhenReady))
         }
 
-        // ReplayGain
         player.onReplayGainApplied = { trackGain, albumGain, appliedDb ->
             val payload = mutableMapOf<String, Any>()
             trackGain?.let  { payload["trackGain"]  = it }
@@ -1030,7 +1076,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
             sendDebouncedEvent("onReplayGainApplied", payload, 200)
         }
 
-        // USB DAC
         player.onUsbDacConnected = { dacInfo ->
             sendEvent("onUsbDacConnected", mapOf(
                 "name"                    to dacInfo.name,
@@ -1047,11 +1092,6 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         player.onUsbDacDisconnected = {
             sendEvent("onUsbDacDisconnected", emptyMap<String, Any>())
         }
-
-        // ── New RNTP-parity remote callbacks ──────────────────────────────────
-        // These are fired from the MediaSession callback in MavinPlaybackService
-        // when remote commands arrive.  We wire them here so the JS layer
-        // receives them identically to RNTP.
 
         player.onRemoteStop = {
             sendEvent("onRemoteStop", emptyMap<String, Any>())
