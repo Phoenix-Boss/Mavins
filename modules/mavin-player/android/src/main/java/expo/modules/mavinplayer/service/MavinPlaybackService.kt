@@ -562,7 +562,10 @@ class MavinPlaybackService : MediaSessionService() {
             builder.setStyle(
                 androidx.media.app.NotificationCompat.MediaStyle()
                     .setShowActionsInCompactView(*finalCompactIndices)
-                    .setMediaSession(session.sessionCompatToken)
+                    .setMediaSession(
+                        android.support.v4.media.session.MediaSessionCompat.Token
+                            .fromToken(session.platformToken)
+                    )
             )
         } ?: run {
             builder.setStyle(
@@ -960,8 +963,8 @@ class MavinPlaybackService : MediaSessionService() {
         ): ListenableFuture<SessionResult> {
             val ratingValue: Float = when (rating) {
                 is HeartRating -> if (rating.isHeart) 1.0f else 0.0f
-                // isThumb is the correct property name in Media3 1.3+ (was isThumbUp before)
-                is ThumbRating -> if (rating.isThumb) 1.0f else 0.0f
+                // isThumbsUp is the correct property name in Media3 1.4+ (was isThumb before)
+                is ThumbRating -> if (rating.isThumbsUp) 1.0f else 0.0f
                 is PercentageRating -> rating.percent / 100.0f
                 is StarRating -> rating.starRating / rating.maxStars
                 else -> 0.0f
