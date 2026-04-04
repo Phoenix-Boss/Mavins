@@ -1,4 +1,4 @@
-﻿// modules/mavin-player/index.ts
+// modules/mavin-player/index.ts
 // Complete JS wrapper for MavinPlayer — imports types from types.ts
 
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';

@@ -106,6 +106,10 @@ class MavinAudioPlayer(private val context: Context) {
     // RNTP Parity Callbacks
     var onQueueEnded: ((position: Long) -> Unit)? = null
     var onRemoteStop: (() -> Unit)? = null
+    var onRemotePlay: (() -> Unit)? = null          // FIX: was missing — fired by notification play button
+    var onRemotePause: (() -> Unit)? = null         // FIX: was missing — fired by notification pause button
+    var onRemoteNext: (() -> Unit)? = null          // FIX: was missing — fired by notification next button
+    var onRemotePrevious: (() -> Unit)? = null      // FIX: was missing — fired by notification previous button
     var onRemoteSkip: ((index: Int) -> Unit)? = null
     var onRemotePlayId: ((id: String) -> Unit)? = null
     var onRemotePlaySearch: ((query: String, extras: Map<String, Any?>) -> Unit)? = null

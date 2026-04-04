@@ -74,7 +74,12 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         private val pendingNotificationUpdates = mutableListOf<Pair<String, Any?>>()
         
         // RNTP Parity: Dynamic capabilities
+        // activeCapabilities  → advertised to MediaSession controllers (Bluetooth/Auto/lock-screen)
+        // activeNotificationCapabilities → shown in the notification shade (separate per RNTP)
         private var activeCapabilities = setOf(
+            "play", "pause", "stop", "skipToNext", "skipToPrevious", "seekTo"
+        )
+        private var activeNotificationCapabilities = setOf(
             "play", "pause", "stop", "skipToNext", "skipToPrevious", "seekTo"
         )
         
@@ -180,6 +185,11 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
     private fun applyCapabilitiesToSession() {
         playbackService?.let { service ->
             service.updateMediaSessionCapabilities(activeCapabilities)
+            // Also sync notification capabilities unless they've been set independently
+            if (activeNotificationCapabilities == activeCapabilities ||
+                activeNotificationCapabilities == setOf("play", "pause", "stop", "skipToNext", "skipToPrevious", "seekTo")) {
+                service.updateNotificationCapabilities(activeCapabilities)
+            }
             Log.i(TAG, "Applied capabilities to MediaSession: $activeCapabilities")
         }
     }
@@ -725,56 +735,60 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                             p.applyAudioAttributes()
                         }
                     }
-                    
-                    // RNTP Parity: Capabilities (actually applied to MediaSession)
+
+                    // ── RNTP Parity: capabilities → advertised to MediaSession controllers ──
+                    // FIX: capabilities and notificationCapabilities are kept SEPARATE.
+                    // Previously notificationCapabilities silently overwrote capabilities.
                     val capabilities = options["capabilities"] as? List<String>
                     capabilities?.let { caps ->
                         activeCapabilities = caps.toSet()
                         applyCapabilitiesToSession()
-                        Log.i(TAG, "Capabilities updated: $activeCapabilities")
+                        Log.i(TAG, "MediaSession capabilities updated: $activeCapabilities")
                     }
-                    
-                    // RNTP Parity: Notification capabilities (Android-specific subset)
+
+                    // ── RNTP Parity: notificationCapabilities → notification shade buttons ──
+                    // FIX: Now stored separately and forwarded to the service independently
+                    // so the notification can show a subset without affecting controller commands.
                     val notificationCapabilities = options["notificationCapabilities"] as? List<String>
                     notificationCapabilities?.let { caps ->
-                        // Use notification capabilities if provided, otherwise use main capabilities
-                        activeCapabilities = caps.toSet()
-                        applyCapabilitiesToSession()
+                        activeNotificationCapabilities = caps.toSet()
+                        playbackService?.updateNotificationCapabilities(activeNotificationCapabilities)
+                        Log.i(TAG, "Notification capabilities updated: $activeNotificationCapabilities")
                     }
-                    
-                    // RNTP Parity: Compact capabilities (collapsed notification buttons)
+
+                    // ── RNTP Parity: compactCapabilities → collapsed notification (max 3) ──
                     val compactCapabilities = options["compactCapabilities"] as? List<String>
                     compactCapabilities?.let { caps ->
                         playbackService?.updateCompactCapabilities(caps)
                         Log.i(TAG, "Compact capabilities updated: $caps")
                     }
-                    
-                    // RNTP Parity: Android lifecycle options
+
+                    // ── RNTP Parity: Android lifecycle options ──
                     val androidOptions = options["android"] as? Map<String, Any?>
                     androidOptions?.let { android ->
-                        // appKilledPlaybackBehavior
                         val appKilledBehavior = android["appKilledPlaybackBehavior"] as? String
-                        appKilledBehavior?.let { 
+                        appKilledBehavior?.let {
                             appKilledPlaybackBehavior = it
                             Log.i(TAG, "App killed behavior set to: $it")
                         }
-                        
-                        // alwaysPauseOnInterruption
+
                         val alwaysPause = android["alwaysPauseOnInterruption"] as? Boolean
-                        alwaysPause?.let { 
+                        alwaysPause?.let {
                             alwaysPauseOnInterruption = it
                             Log.i(TAG, "Always pause on interruption: $it")
                         }
-                        
-                        // stopForegroundGracePeriod
+
+                        // FIX: stopForegroundGracePeriod now forwarded to service so it
+                        // actually schedules the foreground demotion after pause.
                         val gracePeriod = android["stopForegroundGracePeriod"] as? Number
-                        gracePeriod?.let { 
+                        gracePeriod?.let {
                             stopForegroundGracePeriod = it.toLong()
+                            playbackService?.updateStopForegroundGracePeriod(it.toLong())
                             Log.i(TAG, "Stop foreground grace period: ${it}ms")
                         }
                     }
-                    
-                    // RNTP Parity: Notification styling
+
+                    // ── RNTP Parity: Notification styling ──
                     val color = options["color"] as? String
                     color?.let {
                         try {
@@ -785,7 +799,7 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                             Log.w(TAG, "Invalid color format: $it")
                         }
                     }
-                    
+
                     val icon = options["icon"] as? String
                     icon?.let {
                         appContext.reactContext?.let { ctx ->
@@ -797,28 +811,45 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
                             }
                         }
                     }
-                    
-                    // RNTP Parity: Rating type
+
+                    // ── RNTP Parity: ratingType → forwarded to service for onSetRating ──
+                    // FIX: Was logged only, never forwarded to the service.
                     val ratingType = options["ratingType"] as? String
-                    ratingType?.let { Log.i(TAG, "Rating type set to: $it") }
-                    
-                    // RNTP Parity: Jump intervals
-                    val forwardJump = options["forwardJumpInterval"] as? Number
-                    forwardJump?.let { Log.i(TAG, "Forward jump interval: ${it}s") }
-                    
+                    ratingType?.let { rt ->
+                        val typeCode = when (rt) {
+                            "heart"      -> 1
+                            "thumbs"     -> 2
+                            "percentage" -> 3
+                            "star3"      -> 4
+                            "star4"      -> 5
+                            "star5"      -> 6
+                            else         -> 0
+                        }
+                        playbackService?.updateRatingType(typeCode)
+                        Log.i(TAG, "Rating type set to: $rt ($typeCode)")
+                    }
+
+                    // ── RNTP Parity: jump intervals → forwarded to service ──
+                    // FIX: Were logged only, never forwarded to the service.
+                    val forwardJump  = options["forwardJumpInterval"] as? Number
                     val backwardJump = options["backwardJumpInterval"] as? Number
-                    backwardJump?.let { Log.i(TAG, "Backward jump interval: ${it}s") }
-                    
-                    // RNTP Parity: Progress update event interval
+                    if (forwardJump != null || backwardJump != null) {
+                        val fwd = forwardJump?.toInt()  ?: 15
+                        val bwd = backwardJump?.toInt() ?: 15
+                        playbackService?.updateJumpIntervals(fwd, bwd)
+                        Log.i(TAG, "Jump intervals updated: forward=${fwd}s, backward=${bwd}s")
+                    }
+
+                    // ── RNTP Parity: progressUpdateEventInterval ──
                     val progressInterval = options["progressUpdateEventInterval"] as? Number
                     progressInterval?.let {
                         playerInstance?.setProgressIntervalMs(it.toLong())
                         Log.i(TAG, "Progress update interval: ${it}ms")
                     }
-                    
+
                     promise.resolve(null)
-                } catch (e: Exception) { 
-                    promise.reject("UPDATE_OPTIONS_ERROR", e.message, e) 
+                } catch (e: Exception) {
+                    promise.reject("UPDATE_OPTIONS_ERROR", e.message, e)
                 }
             }
         }
@@ -1807,6 +1838,28 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         player.onRemoteStop = {
             sendEvent("onRemoteStop", emptyMap<String, Any>())
             sendEvent("remote-stop", emptyMap<String, Any>())
+        }
+
+        // FIX: These four callbacks were declared in Events() but never wired up.
+        // The service now invokes them via MavinAudioPlayer; here we forward to JS.
+        player.onRemotePlay = {
+            sendEvent("onRemotePlay", emptyMap<String, Any>())
+            sendEvent("remote-play", emptyMap<String, Any>())
+        }
+
+        player.onRemotePause = {
+            sendEvent("onRemotePause", emptyMap<String, Any>())
+            sendEvent("remote-pause", emptyMap<String, Any>())
+        }
+
+        player.onRemoteNext = {
+            sendEvent("onRemoteNext", emptyMap<String, Any>())
+            sendEvent("remote-next", emptyMap<String, Any>())
+        }
+
+        player.onRemotePrevious = {
+            sendEvent("onRemotePrevious", emptyMap<String, Any>())
+            sendEvent("remote-previous", emptyMap<String, Any>())
         }
 
         player.onRemoteSkip = { index ->
