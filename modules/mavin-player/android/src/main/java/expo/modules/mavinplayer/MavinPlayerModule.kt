@@ -79,7 +79,11 @@ class MavinPlayerModule : Module(), AudioManager.OnAudioFocusChangeListener {
         )
         
         // RNTP Parity: Android lifecycle options
-        private var appKilledPlaybackBehavior = "ContinuePlayback"
+        // Not private so MavinPlaybackService (same module) can read it.
+        internal var appKilledPlaybackBehavior = "ContinuePlayback"
+
+        /** Accessor for MavinPlaybackService which lives in a sub-package. */
+        fun getAppKilledPlaybackBehavior(): String = appKilledPlaybackBehavior
         private var alwaysPauseOnInterruption = false
         private var stopForegroundGracePeriod = 0L
         private var notificationColor: Int? = null

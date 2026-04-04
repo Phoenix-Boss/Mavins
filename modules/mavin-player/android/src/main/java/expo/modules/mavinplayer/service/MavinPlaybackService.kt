@@ -13,6 +13,11 @@ import android.os.IBinder
 import android.util.Log
 import androidx.annotation.DrawableRes
 import androidx.core.app.NotificationCompat
+import androidx.media3.common.HeartRating
+import androidx.media3.common.PercentageRating
+import androidx.media3.common.Rating
+import androidx.media3.common.StarRating
+import androidx.media3.common.ThumbRating
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
@@ -108,7 +113,7 @@ class MavinPlaybackService : MediaSessionService() {
     private var notificationIcon: Int? = null
     private var forwardJumpInterval: Int = 15 // seconds (RNTP default)
     private var backwardJumpInterval: Int = 15 // seconds (RNTP default)
-    private var ratingType: Int = RatingCompat.RATING_NONE
+    private var ratingType: Int = 0 // 0 = no rating (media3 has no RatingCompat equivalent)
 
     // LocalBinder for module connection
     inner class LocalBinder : android.os.Binder() {
@@ -178,7 +183,7 @@ class MavinPlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val p = mediaSession?.player
-        val appKilledBehavior = MavinPlayerModule.appKilledPlaybackBehavior
+        val appKilledBehavior = MavinPlayerModule.getAppKilledPlaybackBehavior()
 
         Log.i(TAG, "onTaskRemoved — appKilledPlaybackBehavior=$appKilledBehavior")
 
@@ -328,16 +333,21 @@ class MavinPlaybackService : MediaSessionService() {
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.notify(NOTIFICATION_ID, notification)
 
-        // Update MediaSession metadata
+        // Update the player's current media item metadata so the session reflects it
         mediaSession?.let { session ->
-            val metadata = androidx.media3.common.MediaMetadata.Builder()
-                .setTitle(currentTitle)
-                .setArtist(currentArtist)
-                .apply {
-                    currentArtworkUri?.let { setArtworkUri(android.net.Uri.parse(it)) }
-                }
-                .build()
-            session.setMediaMetadata(metadata)
+            val currentIndex = session.player.currentMediaItemIndex
+            if (currentIndex >= 0 && currentIndex < session.player.mediaItemCount) {
+                val currentItem = session.player.getMediaItemAt(currentIndex)
+                val updatedMetadata = androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(currentTitle)
+                    .setArtist(currentArtist)
+                    .apply {
+                        currentArtworkUri?.let { setArtworkUri(android.net.Uri.parse(it)) }
+                    }
+                    .build()
+                val updatedItem = currentItem.buildUpon().setMediaMetadata(updatedMetadata).build()
+                session.player.replaceMediaItem(currentIndex, updatedItem)
+            }
         }
     }
 
@@ -734,7 +744,7 @@ class MavinPlaybackService : MediaSessionService() {
 
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
-                .setAvailableCommandButtons(commandButtons)
+                .setMediaButtonPreferences(commandButtons)
                 .build()
         }
 
@@ -922,58 +932,31 @@ class MavinPlaybackService : MediaSessionService() {
         override fun onSetRating(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
-            rating: androidx.media3.common.Rating
-        ) {
-            val ratingValue = when {
-                rating.isHeart -> if (rating.hasHeart) 1.0f else 0.0f
-                rating.isThumbUp -> if (rating.isThumbUp) 1.0f else 0.0f
-                rating.isPercentage -> rating.percentValue / 100.0f
-                rating.isStar -> rating.starRating / 5.0f
-                else -> rating.heartValue?.toFloat() ?: 0.0f
+            rating: Rating
+        ): ListenableFuture<SessionResult> {
+            val ratingValue: Float = when (rating) {
+                is HeartRating -> if (rating.isHeart) 1.0f else 0.0f
+                is ThumbRating -> if (rating.isThumbUp) 1.0f else 0.0f
+                is PercentageRating -> rating.percent / 100.0f
+                is StarRating -> rating.starRating / rating.maxStars
+                else -> 0.0f
             }
 
             MavinPlayerModule.playerInstance?.onRemoteSetRating?.invoke(ratingValue)
             Log.i(TAG, "Rating received: $ratingValue")
+            return ok()
         }
 
-        // RNTP Parity: Handle seek commands
-        override fun onSeekTo(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            positionMs: Long
-        ) {
-            session.player.seekTo(positionMs)
-            MavinPlayerModule.playerInstance?.onRemoteSeek?.invoke(positionMs.toDouble())
-            Log.i(TAG, "Seek to: $positionMs ms")
-        }
+        // RNTP Parity: Handle seek — media3 handles this natively via the player,
+        // but we also propagate it to JS if needed via onPositionDiscontinuity.
+        // NOTE: onSeekTo does not exist in media3 MediaSession.Callback.
+        // Seek events arrive via Player.Listener.onPositionDiscontinuity on the player.
 
-        // RNTP Parity: Handle play from search (Android Auto voice search)
-        override fun onPlayFromSearch(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            query: String,
-            extras: Bundle
-        ) {
-            val extrasMap = extras.keySet().associateWith { key ->
-                when (val v = extras.get(key)) {
-                    is Bundle -> v.toMap()
-                    else -> v
-                }
-            }
-            MavinPlayerModule.playerInstance?.onRemotePlaySearch?.invoke(query, extrasMap)
-            Log.i(TAG, "Play from search: $query")
-        }
-
-        // RNTP Parity: Handle play from media ID
-        override fun onPlayFromMediaId(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            mediaId: String,
-            extras: Bundle?
-        ) {
-            MavinPlayerModule.playerInstance?.onRemotePlayId?.invoke(mediaId)
-            Log.i(TAG, "Play from media ID: $mediaId")
-        }
+        // RNTP Parity: Play-from-search and play-from-media-id are legacy MediaBrowserService
+        // callbacks that do NOT exist in media3's MediaSession.Callback.
+        // Instead, handle via onCustomCommand or MediaLibraryService.Callback.onSearch.
+        // The JS callbacks (onRemotePlaySearch, onRemotePlayId) can be triggered via
+        // custom session commands if Android Auto integration is needed.
     }
 
     private fun ok() = Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
