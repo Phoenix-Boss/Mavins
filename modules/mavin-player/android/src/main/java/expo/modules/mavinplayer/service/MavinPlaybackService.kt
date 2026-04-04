@@ -22,8 +22,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionCompat
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
@@ -466,8 +466,9 @@ class MavinPlaybackService : MediaSessionService() {
      * notification shade can show a different subset from what's advertised to
      * Bluetooth/Auto controllers — matching RNTP's notificationCapabilities behaviour.
      *
-     * FIX: session.sessionCompatToken was removed in Media3 1.4+.
-     * The correct API is MediaSessionCompat.Token.fromToken(session.token).
+     * FIX: In Media3 1.6.x, getSessionCompatToken() was removed entirely.
+     * Use MediaStyleNotificationHelper.MediaStyle(session) which takes the
+     * MediaSession object directly — no token conversion needed.
      */
     private fun buildMediaNotification(): Notification {
         val launchIntent = packageManager
@@ -560,15 +561,16 @@ class MavinPlaybackService : MediaSessionService() {
 
         actions.forEach { builder.addAction(it) }
 
-        // FIX: Use MediaSessionCompat.Token.fromToken(session.token) —
-        // session.sessionCompatToken was removed in Media3 1.4+.
+        // FIX: In Media3 1.6.x, getSessionCompatToken() was fully removed.
+        // The correct API is MediaStyleNotificationHelper.MediaStyle(session) which
+        // accepts the MediaSession object directly — no token conversion required.
         mediaSession?.let { session ->
             builder.setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
+                MediaStyleNotificationHelper.MediaStyle(session)
                     .setShowActionsInCompactView(*finalCompactIndices)
-                    .setMediaSession(MediaSessionCompat.Token.fromToken(session.token))
             )
         } ?: run {
+            // No active session — fall back to legacy MediaStyle without a session token
             builder.setStyle(
                 androidx.media.app.NotificationCompat.MediaStyle()
                     .setShowActionsInCompactView(*finalCompactIndices)
@@ -957,7 +959,7 @@ class MavinPlaybackService : MediaSessionService() {
 
         /**
          * FIX: ThumbRating.isThumb does not exist in Media3 1.6.1.
-         * The correct property is isThumbUp.
+         * The correct property per the official Media3 release API is isThumbsUp() (with 's').
          */
         override fun onSetRating(
             session: MediaSession,
@@ -966,7 +968,7 @@ class MavinPlaybackService : MediaSessionService() {
         ): ListenableFuture<SessionResult> {
             val ratingValue: Float = when (rating) {
                 is HeartRating      -> if (rating.isHeart) 1.0f else 0.0f
-                is ThumbRating      -> if (rating.isThumbUp) 1.0f else 0.0f  // FIX: isThumb → isThumbUp
+                is ThumbRating      -> if (rating.isThumbsUp) 1.0f else 0.0f  // FIX: isThumbsUp
                 is PercentageRating -> rating.percent / 100.0f
                 is StarRating       -> rating.starRating / rating.maxStars
                 else                -> 0.0f
