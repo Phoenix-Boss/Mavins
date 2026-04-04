@@ -25,6 +25,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import expo.modules.mavinplayer.MavinPlayerModule
@@ -113,7 +114,7 @@ class MavinPlaybackService : MediaSessionService() {
     private var notificationIcon: Int? = null
     private var forwardJumpInterval: Int = 15 // seconds (RNTP default)
     private var backwardJumpInterval: Int = 15 // seconds (RNTP default)
-    private var ratingType: Int = 0 // 0 = no rating (media3 has no RatingCompat equivalent)
+    private var ratingType: Int = 0
 
     // LocalBinder for module connection
     inner class LocalBinder : android.os.Binder() {
@@ -155,26 +156,7 @@ class MavinPlaybackService : MediaSessionService() {
             .setCallback(MediaSessionCallback())
             .build()
 
-        playerListener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                isCurrentlyPlaying = isPlaying
-                updateNotification()
-                logDspState()
-            }
-
-            override fun onMediaItemTransition(
-                mediaItem: androidx.media3.common.MediaItem?,
-                reason: Int
-            ) {
-                updateNotification()
-                logDspState()
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                updateNotification()
-            }
-        }
-        exoPlayer.addListener(playerListener!!)
+        attachPlayerListener(exoPlayer)
 
         Log.i(TAG, "MediaSession ready (id=$MEDIA_SESSION_ID) — full DSP command surface wired")
     }
@@ -242,24 +224,35 @@ class MavinPlaybackService : MediaSessionService() {
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Update MediaSession capabilities dynamically (called from MavinPlayerModule.updateOptions)
+     * Update MediaSession capabilities dynamically (called from MavinPlayerModule.updateOptions).
+     *
+     * FIX: After releasing and rebuilding the session, the player listener is
+     * re-attached to the new session's underlying player so state callbacks
+     * remain connected. Previously the listener silently detached on every
+     * capabilities update.
      */
     fun updateMediaSessionCapabilities(capabilities: Set<String>) {
         activeCapabilities = capabilities
         Log.i(TAG, "Capabilities updated: $activeCapabilities")
 
-        // Rebuild MediaSession with new capabilities
         mediaSession?.let { session ->
             val exoPlayer = session.player
+
+            // Detach listener before releasing old session
+            playerListener?.let { exoPlayer.removeListener(it) }
+            playerListener = null
+
             session.release()
 
             mediaSession = MediaSession.Builder(this, exoPlayer)
                 .setId(MEDIA_SESSION_ID)
                 .setCallback(MediaSessionCallback())
                 .build()
+
+            // FIX: Re-attach listener to the player after rebuilding the session
+            attachPlayerListener(exoPlayer)
         }
 
-        // Update notification with new actions
         updateNotification()
     }
 
@@ -312,6 +305,34 @@ class MavinPlaybackService : MediaSessionService() {
     // ─────────────────────────────────────────────────────────────────────
 
     /**
+     * Attaches the state-tracking player listener to the given ExoPlayer instance.
+     * Extracted so both onCreate() and updateMediaSessionCapabilities() use the same path.
+     */
+    private fun attachPlayerListener(player: Player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                isCurrentlyPlaying = isPlaying
+                updateNotification()
+                logDspState()
+            }
+
+            override fun onMediaItemTransition(
+                mediaItem: androidx.media3.common.MediaItem?,
+                reason: Int
+            ) {
+                updateNotification()
+                logDspState()
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                updateNotification()
+            }
+        }
+        playerListener = listener
+        player.addListener(listener)
+    }
+
+    /**
      * Safely tears down the MediaSession and its player listener.
      * Idempotent — safe to call from both the onCreate() guard and onDestroy().
      */
@@ -326,14 +347,16 @@ class MavinPlaybackService : MediaSessionService() {
     }
 
     /**
-     * Updates the notification with current track info and playing state
+     * Updates the notification with current track info and playing state.
+     * Uses NotificationManager directly because we build our own MediaStyle
+     * notification (gives us full control over actions and compact view).
      */
     private fun updateNotification() {
         val notification = buildMediaNotification()
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.notify(NOTIFICATION_ID, notification)
 
-        // Update the player's current media item metadata so the session reflects it
+        // Keep MediaSession metadata in sync
         mediaSession?.let { session ->
             val currentIndex = session.player.currentMediaItemIndex
             if (currentIndex >= 0 && currentIndex < session.player.mediaItemCount) {
@@ -388,8 +411,8 @@ class MavinPlaybackService : MediaSessionService() {
     }
 
     /**
-     * Builds the full media notification with play/pause controls
-     * Supports dynamic capabilities from updateOptions()
+     * Builds the full media notification with play/pause controls.
+     * Supports dynamic capabilities from updateOptions().
      */
     private fun buildMediaNotification(): Notification {
         val launchIntent = packageManager
@@ -408,7 +431,6 @@ class MavinPlaybackService : MediaSessionService() {
         // Build actions based on active capabilities
         val actions = mutableListOf<NotificationCompat.Action>()
 
-        // Previous track
         if (activeCapabilities.contains("skipToPrevious")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -419,7 +441,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Play/Pause
         if (activeCapabilities.contains("play") || activeCapabilities.contains("pause")) {
             val playPauseAction = if (isCurrentlyPlaying) {
                 NotificationCompat.Action.Builder(
@@ -437,7 +458,6 @@ class MavinPlaybackService : MediaSessionService() {
             actions.add(playPauseAction)
         }
 
-        // Next track
         if (activeCapabilities.contains("skipToNext")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -448,7 +468,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Stop
         if (activeCapabilities.contains("stop")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -459,7 +478,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Skip forward (RNTP parity)
         if (activeCapabilities.contains("jumpForward")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -470,7 +488,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Skip backward (RNTP parity)
         if (activeCapabilities.contains("jumpBackward")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -481,7 +498,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Like (RNTP parity)
         if (activeCapabilities.contains("like")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -492,7 +508,6 @@ class MavinPlaybackService : MediaSessionService() {
             )
         }
 
-        // Dislike (RNTP parity)
         if (activeCapabilities.contains("dislike")) {
             actions.add(
                 NotificationCompat.Action.Builder(
@@ -528,7 +543,6 @@ class MavinPlaybackService : MediaSessionService() {
             if (compactActionIndices.size >= 3) break
         }
 
-        // Ensure we have at most 3 compact actions
         val finalCompactIndices = compactActionIndices.take(3).toIntArray()
 
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
@@ -541,17 +555,22 @@ class MavinPlaybackService : MediaSessionService() {
             .setOngoing(isCurrentlyPlaying)
             .setOnlyAlertOnce(true)
 
-        // Add all actions
         actions.forEach { builder.addAction(it) }
 
-        // Apply MediaStyle with compact view configuration
-        builder.setStyle(
-            androidx.media.app.NotificationCompat.MediaStyle()
-                .setShowActionsInCompactView(*finalCompactIndices)
-                .setMediaSession(mediaSession?.sessionCompatToken)
-        )
+        // Apply MediaStyle — null-safe: only attach compat token when session exists
+        mediaSession?.let { session ->
+            builder.setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setShowActionsInCompactView(*finalCompactIndices)
+                    .setMediaSession(session.sessionCompatToken)
+            )
+        } ?: run {
+            builder.setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setShowActionsInCompactView(*finalCompactIndices)
+            )
+        }
 
-        // Apply custom color if set
         notificationColor?.let { builder.setColor(it) }
 
         return builder.build()
@@ -598,23 +617,19 @@ class MavinPlaybackService : MediaSessionService() {
                 val newPos = (p.getCurrentPosition() + (forwardJumpInterval * 1000L))
                     .coerceIn(0, p.getDuration())
                 p.seekTo(newPos)
-                // Fire RNTP parity event
                 MavinPlayerModule.playerInstance?.onRemoteJumpForward?.invoke(forwardJumpInterval.toDouble())
             }
             "jumpBackward" -> {
                 val newPos = (p.getCurrentPosition() - (backwardJumpInterval * 1000L))
                     .coerceIn(0, p.getDuration())
                 p.seekTo(newPos)
-                // Fire RNTP parity event
                 MavinPlayerModule.playerInstance?.onRemoteJumpBackward?.invoke(backwardJumpInterval.toDouble())
             }
             "like" -> {
-                // Fire RNTP parity event
                 MavinPlayerModule.playerInstance?.onRemoteSetRating?.invoke(1.0f)
                 MavinPlayerModule.playerInstance?.onRemoteLike?.invoke()
             }
             "dislike" -> {
-                // Fire RNTP parity event
                 MavinPlayerModule.playerInstance?.onRemoteSetRating?.invoke(0.0f)
                 MavinPlayerModule.playerInstance?.onRemoteDislike?.invoke()
             }
@@ -669,11 +684,9 @@ class MavinPlaybackService : MediaSessionService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo
         ): MediaSession.ConnectionResult {
-            // Start with default session commands
             val sessionCommandsBuilder = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                 .buildUpon()
 
-            // Add RNTP standard commands based on active capabilities
             if (activeCapabilities.contains("like")) {
                 sessionCommandsBuilder.add(SessionCommand(COMMAND_LIKE, Bundle.EMPTY))
             }
@@ -690,7 +703,6 @@ class MavinPlaybackService : MediaSessionService() {
                 sessionCommandsBuilder.add(SessionCommand(COMMAND_JUMP_BACKWARD, Bundle.EMPTY))
             }
 
-            // Add all Mavin DSP commands
             sessionCommandsBuilder
                 .add(SessionCommand(COMMAND_TOGGLE_EQ, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_RESET_EQ, Bundle.EMPTY))
@@ -718,33 +730,46 @@ class MavinPlaybackService : MediaSessionService() {
 
             val sessionCommands = sessionCommandsBuilder.build()
 
-            // Build custom command buttons for Android Auto
+            // Build custom command buttons for Android Auto / System UI.
+            // CommandButton.Builder(icon) constructor is required in Media3 1.4+.
+            // FIX: Use semantically correct icons:
+            //   - Like   → ICON_HEART_UNFILLED  (tap to "heart" a track)
+            //   - Dislike → ICON_THUMB_DOWN_UNFILLED  (corrected from ICON_HEART_FILLED)
             val commandButtons = mutableListOf<CommandButton>()
 
-            // Add RNTP feedback buttons if enabled
             if (activeCapabilities.contains("like")) {
                 commandButtons.add(
-                    CommandButton.Builder()
+                    CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED)
                         .setDisplayName("Like")
                         .setSessionCommand(SessionCommand(COMMAND_LIKE, Bundle.EMPTY))
-                        .setIconResId(android.R.drawable.btn_star_big_on)
                         .build()
                 )
             }
 
             if (activeCapabilities.contains("dislike")) {
+                // FIX: Was ICON_HEART_FILLED — semantically wrong for "dislike".
+                // ICON_THUMB_DOWN_UNFILLED is the correct icon for a dislike action.
                 commandButtons.add(
-                    CommandButton.Builder()
+                    CommandButton.Builder(CommandButton.ICON_THUMB_DOWN_UNFILLED)
                         .setDisplayName("Dislike")
                         .setSessionCommand(SessionCommand(COMMAND_DISLIKE, Bundle.EMPTY))
-                        .setIconResId(android.R.drawable.btn_star_big_off)
                         .build()
                 )
             }
 
+            if (activeCapabilities.contains("bookmark")) {
+                commandButtons.add(
+                    CommandButton.Builder(CommandButton.ICON_BOOKMARK_UNFILLED)
+                        .setDisplayName("Bookmark")
+                        .setSessionCommand(SessionCommand(COMMAND_BOOKMARK, Bundle.EMPTY))
+                        .build()
+                )
+            }
+
+            // setCustomLayout() is the correct API on AcceptedResultBuilder
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
-                .setMediaButtonPreferences(commandButtons)
+                .setCustomLayout(ImmutableList.copyOf(commandButtons))
                 .build()
         }
 
@@ -928,7 +953,6 @@ class MavinPlaybackService : MediaSessionService() {
             return ok()
         }
 
-        // RNTP Parity: Handle rating changes from Android Auto / wearables
         override fun onSetRating(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -936,7 +960,8 @@ class MavinPlaybackService : MediaSessionService() {
         ): ListenableFuture<SessionResult> {
             val ratingValue: Float = when (rating) {
                 is HeartRating -> if (rating.isHeart) 1.0f else 0.0f
-                is ThumbRating -> if (rating.isThumbUp) 1.0f else 0.0f
+                // isThumb is the correct property name in Media3 1.3+ (was isThumbUp before)
+                is ThumbRating -> if (rating.isThumb) 1.0f else 0.0f
                 is PercentageRating -> rating.percent / 100.0f
                 is StarRating -> rating.starRating / rating.maxStars
                 else -> 0.0f
@@ -946,17 +971,6 @@ class MavinPlaybackService : MediaSessionService() {
             Log.i(TAG, "Rating received: $ratingValue")
             return ok()
         }
-
-        // RNTP Parity: Handle seek — media3 handles this natively via the player,
-        // but we also propagate it to JS if needed via onPositionDiscontinuity.
-        // NOTE: onSeekTo does not exist in media3 MediaSession.Callback.
-        // Seek events arrive via Player.Listener.onPositionDiscontinuity on the player.
-
-        // RNTP Parity: Play-from-search and play-from-media-id are legacy MediaBrowserService
-        // callbacks that do NOT exist in media3's MediaSession.Callback.
-        // Instead, handle via onCustomCommand or MediaLibraryService.Callback.onSearch.
-        // The JS callbacks (onRemotePlaySearch, onRemotePlayId) can be triggered via
-        // custom session commands if Android Auto integration is needed.
     }
 
     private fun ok() = Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -998,12 +1012,12 @@ class MavinPlaybackService : MediaSessionService() {
             "fx_enabled" to p.isFxEnabled(),
             "fx_mode" to p.getFxMode(),
             "fx_mix" to p.getFxMix(),
+            "fx_bypass" to p.isFxBypassed(),
             "is_64bit_enabled" to p.is64BitProcessingEnabled(),
             "playback_speed" to p.getPlaybackSpeed(),
             "replay_gain" to p.getReplayGainInfo(),
             "presets" to p.listPresets(),
             "preset_index" to presetIndex,
-            // RNTP Parity: Add capability state
             "activeCapabilities" to activeCapabilities.toList(),
             "compactCapabilities" to compactCapabilities.toList(),
             "notificationColor" to notificationColor,
@@ -1013,7 +1027,6 @@ class MavinPlaybackService : MediaSessionService() {
         )
     }
 
-    // DSP Toggle Functions (keep all existing)
     fun toggleFX(): Boolean {
         val p = MavinPlayerModule.playerInstance ?: return false
         val s = !p.isFxEnabled()

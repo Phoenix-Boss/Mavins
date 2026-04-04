@@ -2,11 +2,12 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdk 34
+    compileSdk 36
     namespace "expo.modules.mavinplayer"
 
     defaultConfig {
         minSdk 24
+        targetSdk 36
         versionName "1.0"
     }
 
@@ -19,11 +20,13 @@ android {
         jvmTarget = '17'
     }
 
-    packagingOptions {
-        pickFirsts += [
-            "**/libc++_shared.so",
-            "**/libjsc.so"
-        ]
+    packaging {
+        resources {
+            pickFirsts += [
+                "**/libc++_shared.so",
+                "**/libjsc.so"
+            ]
+        }
     }
 }
 
@@ -39,27 +42,33 @@ dependencies {
     // mavin-eq provides EqualizerProcessor, CompressorProcessor, etc.
     implementation project(':mavin-eq')
 
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    // kotlin-stdlib is a transitive dependency — implementation not compileOnly
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.20"
 
-    // Media3 (ExoPlayer) - Full playback engine
-    implementation "androidx.media3:media3-exoplayer:1.4.1"
-    implementation "androidx.media3:media3-exoplayer-hls:1.4.1"
-    implementation "androidx.media3:media3-exoplayer-dash:1.4.1"
-    implementation "androidx.media3:media3-datasource-okhttp:1.4.1"
-    implementation "androidx.media3:media3-session:1.4.1"
-    implementation "androidx.media3:media3-ui:1.4.1"
-    implementation "androidx.media3:media3-common:1.4.1"
+    // ── Media3 (ExoPlayer) ────────────────────────────────────────────────────
+    // 1.6.1 is the latest stable release (1.7.0 was accidentally tagged stable — skip it).
+    // All sub-artifacts must use the exact same version string to avoid classpath conflicts.
+    def media3_version = "1.6.1"
+    implementation "androidx.media3:media3-exoplayer:$media3_version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3_version"
+    implementation "androidx.media3:media3-exoplayer-dash:$media3_version"
+    implementation "androidx.media3:media3-datasource-okhttp:$media3_version"
+    implementation "androidx.media3:media3-session:$media3_version"
+    implementation "androidx.media3:media3-ui:$media3_version"
+    implementation "androidx.media3:media3-common:$media3_version"
 
-    // Coroutines for async operations
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    // Coroutines — latest stable
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
 
     // AndroidX Lifecycle for service
-    implementation "androidx.lifecycle:lifecycle-service:2.8.0"
-    implementation "androidx.core:core-ktx:1.12.0"
+    implementation "androidx.lifecycle:lifecycle-service:2.8.7"
+
+    // AndroidX Core KTX — latest stable
+    implementation "androidx.core:core-ktx:1.16.0"
 
     // USB DAC support
     implementation 'com.github.mik3y:usb-serial-for-android:3.7.0'
 
-    // Audio processing utilities
+    // AndroidX Media (legacy compat layer — needed for MediaStyle notification compat token)
     implementation "androidx.media:media:1.7.0"
 }
