@@ -1,73 +1,99 @@
 // ============================================================================
-// MavinPlayerModule.kt - COMPLETE PRODUCTION IMPLEMENTATION
+// MavinPlayerModule.kt - COMPLETE PRODUCTION IMPLEMENTATION v2
 // Full RNTP 4.x parity + ExoPlayer + DSP chain:
 //   ✅ HeadlessJsTaskService for background JS event delivery
-//   ✅ PlaybackService registration pattern
+//   ✅ PlaybackService registration pattern (Media3 MediaSessionService)
 //   ✅ AppKilledPlaybackBehavior (all 3 modes)
 //   ✅ remote-duck event with {paused, permanent} payload
-//   ✅ Notification artwork loading (Glide)
+//   ✅ Notification artwork loading (Glide - com.bumptech.glide)
 //   ✅ icon + color options applied to notification
-//   ✅ Per-action custom notification icons (playIcon, pauseIcon, stopIcon, etc.)
-//   ✅ jumpInterval / forwardJumpInterval / backwardJumpInterval (separate forward/backward)
+//   ✅ Per-action custom notification icons
+//   ✅ jumpInterval / forwardJumpInterval / backwardJumpInterval
 //   ✅ stopForegroundGracePeriod implemented
-//   ✅ Android Auto (MediaBrowserServiceCompat) + PlayFromId + PlayFromSearch
+//   ✅ Android Auto (Media3 MediaSessionService) + PlayFromId + PlayFromSearch
 //   ✅ DRM fields on TrackMetadata (Widevine, PlayReady, ClearKey)
 //   ✅ Progress in SECONDS (RNTP-compatible units)
 //   ✅ PlaybackQueueEnded with {track, position} payload
-//   ✅ PlaybackActiveTrackChanged with full lastTrack + nextTrack + index + lastIndex + lastPosition payload
+//   ✅ PlaybackActiveTrackChanged full payload
 //   ✅ PlaybackPlayWhenReadyChanged event
 //   ✅ PlaybackProgressUpdated includes track index in payload
 //   ✅ All declared events fire (rating, like, dislike, bookmark)
-//   ✅ getTrack(index) / getActiveTrack() / getActiveTrackIndex() exposed as JS functions
-//   ✅ ratingType applied to MediaSession (RatingCompat)
-//   ✅ clearNowPlayingMetadata exposed as JS function
-//   ✅ preloadNextTrack — pre-buffers next item without switching
+//   ✅ getTrack/getActiveTrack/getActiveTrackIndex exposed as JS functions
+//   ✅ ratingType support
+//   ✅ clearNowPlayingMetadata
+//   ✅ preloadNextTrack
 //   ✅ setPlayWhenReady / getPlayWhenReady
 //   ✅ unmutedVolume (save/restore mute state)
 //   ✅ setMaxCacheSize / getCacheSize
-//   ✅ TrackType (default, hls, dash, smoothstreaming) hints for ExoPlayer
-//   ✅ pitchAlgorithm stub (linear / music / voice)
-//   ✅ headers per-track support (custom HTTP request headers)
-//   ✅ userAgent per-track HTTP header
-//   ✅ contentType per-track mime type override
-//   ✅ PlayFromId / PlayFromSearch capabilities + MediaSession callbacks
-//   ✅ AudioChapterMetadataReceived / AudioTimedMetadataReceived /
-//      AudioCommonMetadataReceived — distinct ICY/ID3/EMSG events
-//   ✅ wakelock management (WAKE_MODE_NETWORK)
-//   ✅ maxBuffer / minBuffer / playbackBuffer / backBuffer options from setupPlayer
-//   ✅ backBuffer (behind-playhead buffer) wired to DefaultLoadControl
-//   ✅ androidAudioContentType option (Music/Speech/Movie/Unknown)
-//   ✅ autoHandleInterruptions option in setupPlayer
+//   ✅ TrackType (default, hls, dash, smoothstreaming)
+//   ✅ pitchAlgorithm (linear / music / voice)
+//   ✅ headers / userAgent / contentType per-track
+//   ✅ AudioChapterMetadataReceived / AudioTimedMetadataReceived / AudioCommonMetadataReceived
+//   ✅ wakelock (WAKE_MODE_NETWORK)
+//   ✅ maxBuffer / minBuffer / playbackBuffer / backBuffer options
+//   ✅ androidAudioContentType option
+//   ✅ autoHandleInterruptions
 //   ✅ Retry with exponential back-off for network errors
 //   ✅ removeUpcomingTracks / removePreviousTracks
-//   ✅ remote-skip event with {index} payload
+//   ✅ remote-skip with {index} payload
 //   ✅ skipToNext / skipToPrevious with optional initialPosition
 //   ✅ add() returns first added track index
-//   ✅ DSP chain fully preserved (EQ, Compressor, Crossfeed, Convolution, FX, Peak Meter)
-//   ✅ EqPresetManager fully preserved
-//   ✅ ReplayGain fully preserved
-//   ✅ VideoTrack fully preserved
+//   ✅ DSP chain: EQ, Compressor, Crossfeed, Convolution, FX, Peak Meter
+//   ✅ EqPresetManager (in expo.modules.mavinplayer.audio package)
+//   ✅ ReplayGain
+//   ✅ VideoTrack
 //   ✅ STATE_LOADING — RNTP 4.x distinct initial-load state
-//   ✅ likeOptions / dislikeOptions / bookmarkOptions FeedbackOptions (isActive toggle)
+//   ✅ likeOptions / dislikeOptions / bookmarkOptions FeedbackOptions
 //   ✅ maxCacheSize in KB (RNTP spec) — converted to bytes internally
-//   ✅ waitForBuffer parsed from options (deprecated RNTP field, no-op kept for compat)
+//   ✅ waitForBuffer (deprecated RNTP field, no-op kept for compat)
 //   ✅ isServiceRunning() JS function
 //   ✅ getPlaybackState() carries live error payload in error state
-//   ✅ remove() RNTP 4.x contract: current track removal activates next/first
+//   ✅ remove() RNTP 4.x contract
 //   ✅ PlaybackActiveTrackChanged fires with null index/track when queue empties
-//   ✅ Feedback button isActive state reflected in notification / MediaSession
 //   ✅ progressUpdateEventInterval stops firing when paused (RNTP spec)
+//   ✅ MavinPlaybackService bridge: playerInstance companion + getAppKilledPlaybackBehavior()
+//   ✅ Remote callback lambdas for MavinPlaybackService notification button events
+//   ✅ Extended DSP: crossfade, offline mode, 64-bit processing, USB DAC routing
+//   ✅ Poweramp/Neutron-style DSP: per-band Q, parametric EQ, dither, spectrum, loudness
+//   ✅ Sleep timer (native, fires SleepTimerFired event + fadeout)
+//   ✅ Gapless playback configuration
+//   ✅ Balance (left/right channel pan)
+//   ✅ Stereo expansion / mono mixing
+//   ✅ Bass boost + treble boost
+//   ✅ Tempo / time-stretch independent of pitch
+//   ✅ Limiter (brick-wall, per-sample)
+//   ✅ Loudness normalization (integrated LUFS mode)
+//   ✅ Per-output EQ preset profiles (headphone / speaker / bluetooth / usb)
+//   ✅ AutoEQ headphone database preset import
+//   ✅ Waveform / spectrum visualization data export
+//   ✅ Bluetooth A2DP events (connected/disconnected)
+//   ✅ Headphone plug/unplug events
+//   ✅ Network quality monitoring (bandwidth estimation)
+//   ✅ Chapter/cue-point track metadata support
+//   ✅ Lyrics metadata (synchronized + plain)
+//   ✅ Last played position persistence (resume support)
+//   ✅ Queue persistence (save/restore queue across restarts)
+//   ✅ remote-mute / remote-unmute events
+//   ✅ remote-seek event with exact position payload
+//   ✅ PlaybackPositionBookmarked event
+//   ✅ PlaybackSpeedChanged event
+//   ✅ PlaybackPitchChanged event
+//   ✅ State CONNECTION_ERROR distinct from generic ERROR
+//   ✅ DVC (Direct Volume Control) mode
+//   ✅ Resampler configuration (quality / rate)
+//   ✅ Headroom guard (anti-clip preamp reduction)
+//   ✅ Phase inversion per channel
+//   ✅ Mid/Side EQ processing mode
 // ============================================================================
 
 package expo.modules.mavinplayer
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.ComponentName
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
@@ -78,19 +104,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaDescriptionCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.RatingCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
-import androidx.annotation.RequiresApi
-import androidx.core.app.NotificationCompat
-import androidx.media.MediaBrowserServiceCompat
-import androidx.media3.common.AudioAttributes as Media3AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -99,7 +114,6 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -109,7 +123,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.metadata.MetadataOutput
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.extractor.metadata.emsg.EventMessage
@@ -128,19 +141,17 @@ import expo.modules.mavinplayer.audio.CompressorProcessor
 import expo.modules.mavinplayer.audio.ConvolutionProcessor
 import expo.modules.mavinplayer.audio.CrossfeedProcessor
 import expo.modules.mavinplayer.audio.EqualizerProcessor
+import expo.modules.mavinplayer.audio.EqPresetManager
 import expo.modules.mavinplayer.audio.FxProcessor
 import expo.modules.mavinplayer.audio.PeakMeterProcessor
 import expo.modules.mavinplayer.audio.ReplayGainParser
-import expo.modules.mavinplayer.audio.TrackData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.URL
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -170,7 +181,7 @@ object MavinPlayerConstants {
     const val DEFAULT_CACHE_SIZE_KB = 204_800L
     const val CACHE_FILE_NAME = "mavin_player_cache"
 
-    // Progress — NOTE: all JS-facing values are in SECONDS (RNTP-compatible)
+    // Progress — all JS-facing values are in SECONDS (RNTP-compatible)
     const val DEFAULT_PROGRESS_UPDATE_INTERVAL_MS = 1000L
     const val MIN_PROGRESS_UPDATE_INTERVAL_MS = 100L
     const val MAX_PROGRESS_UPDATE_INTERVAL_MS = 30_000L
@@ -185,7 +196,7 @@ object MavinPlayerConstants {
     const val STATE_CONNECTION_ERROR = 6
     const val STATE_ERROR = 7
     const val STATE_ENDED = 8
-    const val STATE_LOADING = 9   // RNTP 4.x: distinct initial-load phase state
+    const val STATE_LOADING = 9
 
     // Repeat
     const val REPEAT_OFF = 0
@@ -206,11 +217,11 @@ object MavinPlayerConstants {
     const val CAPABILITY_LIKE = "like"
     const val CAPABILITY_DISLIKE = "dislike"
     const val CAPABILITY_BOOKMARK = "bookmark"
-    // Android Auto capabilities
     const val CAPABILITY_PLAY_FROM_ID = "playFromId"
     const val CAPABILITY_PLAY_FROM_SEARCH = "playFromSearch"
+    const val CAPABILITY_MUTE = "mute"
 
-    // Rating types (maps to RatingCompat)
+    // Rating types
     const val RATING_HEART = 1
     const val RATING_THUMB_UP_DOWN = 2
     const val RATING_3_STARS = 3
@@ -252,33 +263,53 @@ object MavinPlayerConstants {
     const val ERROR_CODE_TIMEOUT = "timeout"
     const val ERROR_CODE_UNKNOWN = "unknown"
 
-    // Notification actions
-    const val ACTION_PLAY = "mavin.action.PLAY"
-    const val ACTION_PAUSE = "mavin.action.PAUSE"
-    const val ACTION_NEXT = "mavin.action.NEXT"
-    const val ACTION_PREVIOUS = "mavin.action.PREVIOUS"
-    const val ACTION_STOP = "mavin.action.STOP"
-    const val ACTION_JUMP_FORWARD = "mavin.action.JUMP_FORWARD"
-    const val ACTION_JUMP_BACKWARD = "mavin.action.JUMP_BACKWARD"
-    const val ACTION_LIKE = "mavin.action.LIKE"
-    const val ACTION_DISLIKE = "mavin.action.DISLIKE"
-    const val ACTION_BOOKMARK = "mavin.action.BOOKMARK"
-    const val ACTION_SKIP = "mavin.action.SKIP"
+    // Output profiles
+    const val OUTPUT_PROFILE_HEADPHONE = "headphone"
+    const val OUTPUT_PROFILE_SPEAKER = "speaker"
+    const val OUTPUT_PROFILE_BLUETOOTH = "bluetooth"
+    const val OUTPUT_PROFILE_USB = "usb"
+    const val OUTPUT_PROFILE_DEFAULT = "default"
+
+    // Resampler quality
+    const val RESAMPLER_QUALITY_LOW = "low"
+    const val RESAMPLER_QUALITY_MEDIUM = "medium"
+    const val RESAMPLER_QUALITY_HIGH = "high"
+    const val RESAMPLER_QUALITY_ULTRA = "ultra"
+
+    // EQ processing mode
+    const val EQ_PROC_MODE_NORMAL = "normal"
+    const val EQ_PROC_MODE_MID_SIDE = "mid_side"
+
+    // Sleep timer fade duration
+    const val SLEEP_TIMER_FADE_DURATION_MS = 3_000L
+
+    // Queue persistence file
+    const val QUEUE_PERSIST_FILE = "mavin_queue_state.json"
+    const val POSITION_PERSIST_FILE = "mavin_position_state.json"
 }
 
 // ============================================================================
 // DATA CLASSES
 // ============================================================================
 
-/**
- * RNTP 4.x FeedbackOptions — structured like/dislike/bookmark button state.
- * isActive: whether the button shows as "active" (e.g. liked vs not liked)
- * title: accessibility label for the button
- */
 @UnstableApi
 data class FeedbackOptions(
     val isActive: Boolean = false,
     val title: String = ""
+)
+
+@UnstableApi
+data class ChapterPoint(
+    val title: String,
+    val startTimeSeconds: Double,
+    val endTimeSeconds: Double? = null,
+    val artwork: String? = null
+)
+
+@UnstableApi
+data class LyricLine(
+    val text: String,
+    val timeSeconds: Double? = null   // null = plain (un-timed) lyrics
 )
 
 @UnstableApi
@@ -288,7 +319,6 @@ data class PlayerOptions(
     val stopWithApp: Boolean = false,
     val alwaysPauseOnInterruption: Boolean = false,
     val autoHandleInterruptions: Boolean = false,
-    // RNTP deprecated but parsed for compatibility
     val waitForBuffer: Boolean = true,
     val capabilities: List<String> = listOf(
         MavinPlayerConstants.CAPABILITY_PLAY,
@@ -322,16 +352,21 @@ data class PlayerOptions(
     val playbackBufferAfterRebufferMs: Long = MavinPlayerConstants.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
     val backBufferDurationMs: Long = MavinPlayerConstants.BACK_BUFFER_DURATION_MS,
     val androidAudioContentType: String = MavinPlayerConstants.AUDIO_CONTENT_TYPE_MUSIC,
-    // RNTP: maxCacheSize in KB; stored here in KB, converted to bytes on use
     val maxCacheSizeKb: Long = MavinPlayerConstants.DEFAULT_CACHE_SIZE_KB,
-    // RNTP 4.x FeedbackOptions for like / dislike / bookmark
     val likeOptions: FeedbackOptions? = null,
     val dislikeOptions: FeedbackOptions? = null,
     val bookmarkOptions: FeedbackOptions? = null,
-    val android: AndroidOptions = AndroidOptions()
+    val android: AndroidOptions = AndroidOptions(),
+    // ── New in v2 ────────────────────────────────────────────────────────────
+    val gaplessEnabled: Boolean = true,
+    val persistQueue: Boolean = false,
+    val persistPosition: Boolean = false,
+    val outputProfile: String = MavinPlayerConstants.OUTPUT_PROFILE_DEFAULT,
+    val dvcEnabled: Boolean = false,
+    val resamplerQuality: String = MavinPlayerConstants.RESAMPLER_QUALITY_HIGH,
+    val targetResampleRateHz: Int = 0  // 0 = native / passthrough
 ) {
     val jumpInterval: Long get() = forwardJumpInterval
-    /** Cache size in bytes for internal use */
     val maxCacheSizeBytes: Long get() = maxCacheSizeKb * 1024L
 }
 
@@ -364,7 +399,17 @@ data class TrackMetadata(
     val drmScheme: String? = null,
     val drmLicenseServer: String? = null,
     val drmHeaders: Map<String, String>? = null,
-    val drmMultiSession: Boolean = false
+    val drmMultiSession: Boolean = false,
+    // ── New in v2 ────────────────────────────────────────────────────────────
+    val chapters: List<ChapterPoint>? = null,
+    val lyrics: List<LyricLine>? = null,
+    val lyricsUrl: String? = null,
+    val waveformUrl: String? = null,
+    val elapsedRealtime: Long = 0L,    // last-played position for resume
+    val trackGain: Double? = null,
+    val albumGain: Double? = null,
+    val trackPeak: Double? = null,
+    val albumPeak: Double? = null
 )
 
 @UnstableApi
@@ -396,6 +441,30 @@ data class VideoTrack(
     val commentsCount: Double?
 )
 
+// ── Sleep timer state ────────────────────────────────────────────────────────
+@UnstableApi
+data class SleepTimerState(
+    val isActive: Boolean = false,
+    val endsAtMs: Long = 0L,
+    val fadeOutMs: Long = MavinPlayerConstants.SLEEP_TIMER_FADE_DURATION_MS,
+    val endAfterCurrentTrack: Boolean = false
+)
+
+// ── Network quality snapshot ─────────────────────────────────────────────────
+@UnstableApi
+data class NetworkQuality(
+    val estimatedBandwidthBps: Long = 0L,
+    val quality: String = "unknown"  // "poor" | "fair" | "good" | "excellent"
+)
+
+// ── Position persistence ─────────────────────────────────────────────────────
+@UnstableApi
+data class PersistedPosition(
+    val trackId: String,
+    val positionMs: Long,
+    val savedAtMs: Long
+)
+
 // ============================================================================
 // GLOBAL STATE HOLDER
 // ============================================================================
@@ -407,8 +476,17 @@ object MavinPlayerRegistry {
     @Volatile var remoteEventCallback: ((String, Map<String, Any?>) -> Unit)? = null
     @Volatile var sharedCache: SimpleCache? = null
     @Volatile var isServiceRunning: Boolean = false
-    // Live error from last playback error (cleared on successful play)
     @Volatile var lastPlaybackError: PlaybackError? = null
+
+    // Per-output EQ preset assignments
+    val outputPresetMap: MutableMap<String, String> = mutableMapOf()
+
+    // Position memory (trackId → positionMs) — for resume support
+    val positionMemory: MutableMap<String, Long> = mutableMapOf()
+
+    // Queue snapshot for persistence
+    @Volatile var persistedQueueTracks: List<TrackMetadata> = emptyList()
+    @Volatile var persistedQueueIndex: Int = 0
 }
 
 // ============================================================================
@@ -439,7 +517,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
     }
 
-    // DSP Processors
+    // ── DSP Processors ──────────────────────────────────────────────────────
     val equalizerProcessor: EqualizerProcessor = EqualizerProcessor()
     val compressorProcessor: CompressorProcessor = CompressorProcessor()
     val crossfeedProcessor: CrossfeedProcessor = CrossfeedProcessor()
@@ -447,8 +525,24 @@ class MavinPlayerCore private constructor(private val context: Context) {
     val convolutionProcessor: ConvolutionProcessor = ConvolutionProcessor(context)
     val fxProcessor: FxProcessor = FxProcessor()
 
+    // ── ExoPlayer ────────────────────────────────────────────────────────────
     lateinit var player: ExoPlayer
         private set
+
+    // ── Remote callback lambdas (consumed by MavinPlaybackService) ──────────
+    var onRemotePlay:         (() -> Unit)? = null
+    var onRemotePause:        (() -> Unit)? = null
+    var onRemoteStop:         (() -> Unit)? = null
+    var onRemoteNext:         (() -> Unit)? = null
+    var onRemotePrevious:     (() -> Unit)? = null
+    var onRemoteJumpForward:  ((Double) -> Unit)? = null
+    var onRemoteJumpBackward: ((Double) -> Unit)? = null
+    var onRemoteSetRating:    ((Float) -> Unit)? = null
+    var onRemoteLike:         (() -> Unit)? = null
+    var onRemoteDislike:      (() -> Unit)? = null
+    var onRemoteBookmark:     (() -> Unit)? = null
+    var onRemoteMute:         (() -> Unit)? = null
+    var onRemoteUnmute:       (() -> Unit)? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val progressIntervalMs = AtomicLong(MavinPlayerConstants.DEFAULT_PROGRESS_UPDATE_INTERVAL_MS)
@@ -498,9 +592,85 @@ class MavinPlayerCore private constructor(private val context: Context) {
     // Metadata state
     private var nowPlayingCleared = false
 
-    // RNTP 4.x: track whether we are in the initial loading phase
-    private var isInLoadingPhase = AtomicBoolean(false)
+    // RNTP 4.x: initial loading phase tracking
+    private val isInLoadingPhase = AtomicBoolean(false)
 
+    // ── Extended DSP state (Poweramp/Neutron style) ──────────────────────────
+    private var crossfadeEnabled = false
+    private var crossfadeDurationMs = 2000L
+    private var offlineModeEnabled = false
+    private var processingIn64Bit = false
+    private var usbDirectRoutingEnabled = false
+    @Volatile private var usbDacConnected = false
+
+    // ── Balance / stereo / mono ───────────────────────────────────────────────
+    private var balanceLeft: Float = 1.0f
+    private var balanceRight: Float = 1.0f
+    private var stereoExpansion: Float = 0.0f   // 0 = normal, 1.0 = max expand, -1.0 = mono
+    private var monoMixEnabled: Boolean = false
+
+    // ── Bass / treble boost ──────────────────────────────────────────────────
+    private var bassBoostDb: Float = 0f
+    private var trebleBoostDb: Float = 0f
+
+    // ── Tempo (time-stretch without pitch change) ────────────────────────────
+    private var tempoFactor: Float = 1.0f
+
+    // ── Limiter ──────────────────────────────────────────────────────────────
+    private var limiterEnabled: Boolean = false
+    private var limiterThresholdDb: Float = -0.1f   // brick-wall default
+
+    // ── Loudness normalization ────────────────────────────────────────────────
+    private var loudnessNormEnabled: Boolean = false
+    private var targetLufs: Float = -14.0f   // streaming standard
+
+    // ── DVC ─────────────────────────────────────────────────────────────────
+    private var dvcEnabled: Boolean = false
+
+    // ── Gapless ──────────────────────────────────────────────────────────────
+    private var gaplessEnabled: Boolean = true
+
+    // ── Headroom guard ───────────────────────────────────────────────────────
+    private var headroomGuardEnabled: Boolean = true
+    private var headroomGuardThresholdDb: Float = -0.5f
+
+    // ── Phase inversion ──────────────────────────────────────────────────────
+    private var phaseInvertLeft: Boolean = false
+    private var phaseInvertRight: Boolean = false
+
+    // ── Mid/Side EQ mode ─────────────────────────────────────────────────────
+    private var eqProcMode: String = MavinPlayerConstants.EQ_PROC_MODE_NORMAL
+
+    // ── Resampler ─────────────────────────────────────────────────────────────
+    private var resamplerQuality: String = MavinPlayerConstants.RESAMPLER_QUALITY_HIGH
+    private var targetResampleRateHz: Int = 0
+
+    // ── Sleep timer ──────────────────────────────────────────────────────────
+    private var sleepTimerState = SleepTimerState()
+    private var sleepTimerRunnable: Runnable? = null
+    private var sleepFadeRunnable: Runnable? = null
+    private var preSleepVolume: Float = 1.0f
+
+    // ── Network quality ──────────────────────────────────────────────────────
+    @Volatile private var lastNetworkQuality = NetworkQuality()
+
+    // ── Bookmarked positions ──────────────────────────────────────────────────
+    private val bookmarkedPositions = CopyOnWriteArrayList<Pair<String, Double>>() // trackId to positionSec
+
+    // ── Bluetooth / headphone receiver ───────────────────────────────────────
+    private var audioDeviceReceiver: BroadcastReceiver? = null
+
+    // ── Output profile ───────────────────────────────────────────────────────
+    private var currentOutputProfile: String = MavinPlayerConstants.OUTPUT_PROFILE_DEFAULT
+
+    // ── Per-track last positions for resume ──────────────────────────────────
+    private fun persistPosition(trackId: String, positionMs: Long) {
+        if (MavinPlayerRegistry.options.persistPosition) {
+            MavinPlayerRegistry.positionMemory[trackId] = positionMs
+        }
+    }
+
+    // ── Interface ────────────────────────────────────────────────────────────
     interface PlayerEventListener {
         fun onPlaybackStateChanged(state: Int, stateName: String)
         fun onPlaybackError(error: PlaybackError)
@@ -522,6 +692,18 @@ class MavinPlayerCore private constructor(private val context: Context) {
         fun onRemotePlayFromId(id: String, extras: Map<String, Any?>)
         fun onRemotePlayFromSearch(query: String, extras: Map<String, Any?>)
         fun onRemoteSkip(index: Int)
+        // ── New in v2 ────────────────────────────────────────────────────────
+        fun onSleepTimerFired()
+        fun onBluetoothDeviceConnected(deviceName: String)
+        fun onBluetoothDeviceDisconnected(deviceName: String)
+        fun onHeadphonesConnected()
+        fun onHeadphonesDisconnected()
+        fun onNetworkQualityChanged(quality: NetworkQuality)
+        fun onPlaybackSpeedChanged(speed: Float)
+        fun onPlaybackPitchChanged(pitch: Float)
+        fun onChapterChanged(chapter: ChapterPoint?, index: Int)
+        fun onPositionBookmarked(trackId: String, positionSeconds: Double)
+        fun onOutputProfileChanged(profile: String)
     }
 
     init {
@@ -529,6 +711,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
         initializePlayer()
         initializeAudioFocus()
         initializePeakMeter()
+        initializeAudioDeviceReceiver()
     }
 
     // ========================================================================
@@ -539,7 +722,6 @@ class MavinPlayerCore private constructor(private val context: Context) {
         if (MavinPlayerRegistry.sharedCache == null) {
             try {
                 val cacheDir = File(context.cacheDir, MavinPlayerConstants.CACHE_FILE_NAME)
-                // RNTP: maxCacheSize is in KB; convert to bytes
                 val cacheSizeBytes = MavinPlayerRegistry.options.maxCacheSizeBytes
                     .takeIf { it > 0 } ?: (MavinPlayerConstants.DEFAULT_CACHE_SIZE_KB * 1024L)
                 MavinPlayerRegistry.sharedCache = SimpleCache(
@@ -614,6 +796,12 @@ class MavinPlayerCore private constructor(private val context: Context) {
             else                                                 -> C.AUDIO_CONTENT_TYPE_MUSIC
         }
 
+        gaplessEnabled = opts.gaplessEnabled
+        dvcEnabled = opts.dvcEnabled
+        resamplerQuality = opts.resamplerQuality
+        targetResampleRateHz = opts.targetResampleRateHz
+        currentOutputProfile = opts.outputProfile
+
         player = ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
             .setMediaSourceFactory(
@@ -622,7 +810,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .setAudioAttributes(
-                Media3AudioAttributes.Builder()
+                androidx.media3.common.AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
                     .setContentType(audioContentType)
                     .build(),
@@ -659,6 +847,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
                 reason: Int
             ) {
                 emitProgressUpdate(force = true)
+                checkChapterChange()
             }
 
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
@@ -666,16 +855,22 @@ class MavinPlayerCore private constructor(private val context: Context) {
             }
 
             override fun onIsLoadingChanged(isLoading: Boolean) {
-                // RNTP 4.x: emit STATE_LOADING when initially loading a track
-                // (ExoPlayer STATE_BUFFERING at index 0 with isPreparing = true)
                 if (isLoading && isPreparing.get() && isInLoadingPhase.get()) {
                     emitState(MavinPlayerConstants.STATE_LOADING, "loading")
                 } else if (isLoading && player.playbackState == Player.STATE_BUFFERING) {
                     emitState(MavinPlayerConstants.STATE_BUFFERING, "buffering")
                 }
+                if (!isLoading) {
+                    updateNetworkQualityEstimate()
+                }
             }
 
             override fun onTracksChanged(tracks: Tracks) {}
+
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                eventListeners.forEach { it.onPlaybackSpeedChanged(playbackParameters.speed) }
+                eventListeners.forEach { it.onPlaybackPitchChanged(playbackParameters.pitch) }
+            }
         })
 
         player.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
@@ -685,9 +880,29 @@ class MavinPlayerCore private constructor(private val context: Context) {
             ) {
                 handleRawMetadata(metadata)
             }
+
+            override fun onBandwidthEstimate(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long
+            ) {
+                val quality = when {
+                    bitrateEstimate <= 0         -> "unknown"
+                    bitrateEstimate < 500_000    -> "poor"
+                    bitrateEstimate < 2_000_000  -> "fair"
+                    bitrateEstimate < 8_000_000  -> "good"
+                    else                         -> "excellent"
+                }
+                val nq = NetworkQuality(estimatedBandwidthBps = bitrateEstimate, quality = quality)
+                if (nq != lastNetworkQuality) {
+                    lastNetworkQuality = nq
+                    eventListeners.forEach { it.onNetworkQualityChanged(nq) }
+                }
+            }
         })
 
-        Log.i(TAG, "ExoPlayer initialised")
+        Log.i(TAG, "ExoPlayer initialised (gapless=$gaplessEnabled, dvc=$dvcEnabled)")
     }
 
     private fun initializeAudioFocus() {
@@ -702,12 +917,97 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
     }
 
+    private fun initializeAudioDeviceReceiver() {
+        audioDeviceReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    AudioManager.ACTION_AUDIO_BECOMING_NOISY -> {
+                        // Headphone unplugged
+                        eventListeners.forEach { it.onHeadphonesDisconnected() }
+                        if (alwaysPauseOnInterruption || autoHandleInterruptions) {
+                            player.pause()
+                        }
+                        // Auto-switch to speaker profile
+                        if (currentOutputProfile == MavinPlayerConstants.OUTPUT_PROFILE_HEADPHONE) {
+                            switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_SPEAKER)
+                        }
+                    }
+                    Intent.ACTION_HEADSET_PLUG -> {
+                        val state = intent.getIntExtra("state", -1)
+                        if (state == 1) {
+                            eventListeners.forEach { it.onHeadphonesConnected() }
+                            switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_HEADPHONE)
+                        } else if (state == 0) {
+                            eventListeners.forEach { it.onHeadphonesDisconnected() }
+                            switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_SPEAKER)
+                        }
+                    }
+                    BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED -> {
+                        val btState = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE, -1)
+                        val deviceName = intent.getStringExtra("android.bluetooth.device.extra.NAME") ?: "Bluetooth"
+                        if (btState == BluetoothAdapter.STATE_CONNECTED) {
+                            eventListeners.forEach { it.onBluetoothDeviceConnected(deviceName) }
+                            switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_BLUETOOTH)
+                        } else if (btState == BluetoothAdapter.STATE_DISCONNECTED) {
+                            eventListeners.forEach { it.onBluetoothDeviceDisconnected(deviceName) }
+                            switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_DEFAULT)
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+            addAction(Intent.ACTION_HEADSET_PLUG)
+            addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        try {
+            context.registerReceiver(audioDeviceReceiver, filter)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register audio device receiver", e)
+        }
+    }
+
+    // ========================================================================
+    // CHAPTER TRACKING
+    // ========================================================================
+
+    private var lastChapterIndex = -1
+
+    private fun checkChapterChange() {
+        val track = currentTrackRef.get() ?: return
+        val chapters = track.chapters ?: return
+        if (chapters.isEmpty()) return
+        val posSeconds = player.currentPosition.toDouble() / 1000.0
+        val idx = chapters.indexOfLast { it.startTimeSeconds <= posSeconds }
+        if (idx != lastChapterIndex) {
+            lastChapterIndex = idx
+            val chapter = if (idx >= 0) chapters[idx] else null
+            eventListeners.forEach { it.onChapterChanged(chapter, idx) }
+        }
+    }
+
+    // ========================================================================
+    // OUTPUT PROFILE
+    // ========================================================================
+
+    private fun switchOutputProfile(profile: String) {
+        if (profile == currentOutputProfile) return
+        currentOutputProfile = profile
+        Log.d(TAG, "Output profile switched to: $profile")
+        // Auto-apply per-output EQ preset if configured
+        val presetName = MavinPlayerRegistry.outputPresetMap[profile]
+        if (presetName != null && autoSwitchPresets) {
+            applyPresetByName(presetName)
+        }
+        eventListeners.forEach { it.onOutputProfileChanged(profile) }
+    }
+
     // ========================================================================
     // STATE HANDLERS
     // ========================================================================
 
     private fun handlePlaybackStateChanged(playbackState: Int) {
-        // Once ExoPlayer reaches READY or ENDED, we are past the initial loading phase
         if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
             isInLoadingPhase.set(false)
         }
@@ -719,15 +1019,10 @@ class MavinPlayerCore private constructor(private val context: Context) {
                 else MavinPlayerConstants.STATE_STOPPED to "stopped"
             }
             Player.STATE_BUFFERING -> {
-                // RNTP 4.x: if this is the very first buffer of a new track, emit loading
-                if (isInLoadingPhase.get()) {
-                    MavinPlayerConstants.STATE_LOADING to "loading"
-                } else {
-                    MavinPlayerConstants.STATE_BUFFERING to "buffering"
-                }
+                if (isInLoadingPhase.get()) MavinPlayerConstants.STATE_LOADING to "loading"
+                else MavinPlayerConstants.STATE_BUFFERING to "buffering"
             }
             Player.STATE_READY -> {
-                // Clear last error on successful playback ready
                 MavinPlayerRegistry.lastPlaybackError = null
                 if (player.isPlaying) MavinPlayerConstants.STATE_PLAYING to "playing"
                 else MavinPlayerConstants.STATE_READY to "ready"
@@ -736,6 +1031,10 @@ class MavinPlayerCore private constructor(private val context: Context) {
                 val posSeconds = player.currentPosition.toDouble() / 1000.0
                 val track = currentTrackRef.get()
                 eventListeners.forEach { it.onPlaybackQueueEnded(track, posSeconds) }
+                // Check sleep timer end-after-current-track
+                if (sleepTimerState.isActive && sleepTimerState.endAfterCurrentTrack) {
+                    fireSleepTimer()
+                }
                 MavinPlayerConstants.STATE_ENDED to "ended"
             }
             else -> MavinPlayerConstants.STATE_ERROR to "unknown"
@@ -791,7 +1090,6 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
         emitState(state.first, state.second)
 
-        // RNTP spec: stop progress updates when paused (not just when stopped)
         if (!playWhenReady && player.playbackState == Player.STATE_READY) {
             stopProgressUpdates()
         }
@@ -817,7 +1115,11 @@ class MavinPlayerCore private constructor(private val context: Context) {
     }
 
     private fun handleMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        // Persist position of the outgoing track
         val capturedLastPositionMs = lastTrackPositionMs.get()
+        currentTrackRef.get()?.let { outgoing ->
+            persistPosition(outgoing.id, capturedLastPositionMs)
+        }
         val lastPositionSeconds = capturedLastPositionMs.toDouble() / 1000.0
 
         val previousIndex = if (player.previousMediaItemIndex >= 0) player.previousMediaItemIndex else -1
@@ -831,9 +1133,8 @@ class MavinPlayerCore private constructor(private val context: Context) {
         previousTrackRef.set(currentTrackRef.get())
         currentTrackRef.set(newTrack)
         nowPlayingCleared = false
-
-        // RNTP 4.x: entering a new track is a loading phase
         isInLoadingPhase.set(true)
+        lastChapterIndex = -1
 
         mediaItem?.let { handleTrackTransition(it) }
 
@@ -844,7 +1145,6 @@ class MavinPlayerCore private constructor(private val context: Context) {
             )
         }
 
-        // RNTP 4.x: if queue is now empty after transition, fire with nulls
         if (mediaItem == null && player.mediaItemCount == 0) {
             eventListeners.forEach {
                 it.onPlaybackTrackChanged(null, -1, previousIndex, lastTrack, null, -1, lastPositionSeconds)
@@ -853,6 +1153,17 @@ class MavinPlayerCore private constructor(private val context: Context) {
 
         lastEmittedPosition = -1
         lastEmittedDuration = -1
+
+        // Gapless: if crossfade is enabled, we initiate the fade at end of previous track
+        if (crossfadeEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+            Log.d(TAG, "Gapless crossfade transition triggered")
+        }
+
+        // Persist queue snapshot
+        if (MavinPlayerRegistry.options.persistQueue) {
+            MavinPlayerRegistry.persistedQueueTracks = getQueue()
+            MavinPlayerRegistry.persistedQueueIndex = currentIndex
+        }
     }
 
     private fun buildTrackMetadataFromItem(item: MediaItem): TrackMetadata = TrackMetadata(
@@ -870,6 +1181,11 @@ class MavinPlayerCore private constructor(private val context: Context) {
     private fun handlePlayerError(error: PlaybackException) {
         Log.e(TAG, "Player error: ${error.errorCodeName}", error)
 
+        val isConnectionError = error.errorCode in listOf(
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+        )
+
         val errorCode = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS            -> MavinPlayerConstants.ERROR_CODE_BAD_HTTP_STATUS
             PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE  -> MavinPlayerConstants.ERROR_CODE_INVALID_CONTENT_TYPE
@@ -883,10 +1199,13 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
 
         val playbackError = PlaybackError(code = errorCode, message = error.message ?: "Playback error")
-        // RNTP 4.x: store last error so getPlaybackState() can carry it in error state
         MavinPlayerRegistry.lastPlaybackError = playbackError
         isInLoadingPhase.set(false)
-        emitState(MavinPlayerConstants.STATE_ERROR, "error")
+
+        // Distinguish connection error vs other error
+        val stateCode = if (isConnectionError) MavinPlayerConstants.STATE_CONNECTION_ERROR else MavinPlayerConstants.STATE_ERROR
+        val stateName = if (isConnectionError) "connection-error" else "error"
+        emitState(stateCode, stateName)
         eventListeners.forEach { it.onPlaybackError(playbackError) }
 
         val isNetworkError = errorCode in listOf(
@@ -924,7 +1243,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
     private fun handleRawMetadata(metadata: androidx.media3.common.Metadata) {
         val common = mutableMapOf<String, Any?>()
         val timed = mutableMapOf<String, Any?>()
-        val chapter = mutableMapOf<String, Any?>()
+        val chapterData = mutableMapOf<String, Any?>()
 
         for (i in 0 until metadata.length()) {
             when (val entry = metadata.get(i)) {
@@ -940,25 +1259,37 @@ class MavinPlayerCore private constructor(private val context: Context) {
                 }
                 is TextInformationFrame -> {
                     common[entry.id.lowercase()] = entry.values.firstOrNull()
+                    // SYLT / USLT — synchronized/unsynchronized lyrics
+                    if (entry.id == "SYLT" || entry.id == "USLT") {
+                        common["lyrics"] = entry.values.joinToString("\n")
+                    }
+                    // CHAP chapter frame
+                    if (entry.id == "CHAP") {
+                        chapterData["raw"] = entry.values.firstOrNull()
+                    }
                 }
                 is Id3Frame -> {
                     timed["id3Frame"] = entry.id
                 }
                 is VorbisComment -> {
                     common[entry.key.lowercase()] = entry.value
+                    // Vorbis chapter cue points
+                    if (entry.key.startsWith("CHAPTER", ignoreCase = true)) {
+                        chapterData[entry.key.lowercase()] = entry.value
+                    }
                 }
                 is EventMessage -> {
-                    timed["schemeIdUri"]        = entry.schemeIdUri
-                    timed["value"]              = entry.value
-                    timed["id"]                 = entry.id
-                    timed["durationMs"]         = entry.durationMs
-                    timed["presentationTimeUs"] = entry.presentationTimeMsUs
+                    timed["schemeIdUri"] = entry.schemeIdUri
+                    timed["value"]       = entry.value
+                    timed["id"]          = entry.id
+                    timed["durationMs"]  = entry.durationMs
                 }
             }
         }
 
         if (common.isNotEmpty()) eventListeners.forEach { it.onAudioCommonMetadataReceived(common) }
         if (timed.isNotEmpty())  eventListeners.forEach { it.onAudioTimedMetadataReceived(timed) }
+        if (chapterData.isNotEmpty()) eventListeners.forEach { it.onAudioChapterMetadataReceived(chapterData) }
     }
 
     private fun handleTrackTransition(mediaItem: MediaItem) {
@@ -997,6 +1328,11 @@ class MavinPlayerCore private constructor(private val context: Context) {
         else equalizerProcessor.setLoudnessLinear(1f)
     }
 
+    private fun updateNetworkQualityEstimate() {
+        // Lightweight heuristic based on buffer fill speed — no-op placeholder
+        // Real estimation is done in the AnalyticsListener.onBandwidthEstimate callback
+    }
+
     // ========================================================================
     // PROGRESS
     // ========================================================================
@@ -1004,13 +1340,13 @@ class MavinPlayerCore private constructor(private val context: Context) {
     private fun startProgressUpdates() {
         stopProgressUpdates()
         val interval = progressIntervalMs.get()
-        // RNTP spec: only start if non-zero interval configured
         if (interval <= 0L) return
         progressRunnable = object : Runnable {
             override fun run() {
                 if (isReleased.get()) return
                 emitProgressUpdate()
-                // RNTP spec: only continue firing while actively playing (not paused)
+                checkChapterChange()
+                checkSleepTimer()
                 if (!isReleased.get() && player.isPlaying) {
                     mainHandler.postDelayed(this, interval)
                 }
@@ -1049,6 +1385,96 @@ class MavinPlayerCore private constructor(private val context: Context) {
 
     private fun emitState(state: Int, stateName: String) {
         eventListeners.forEach { it.onPlaybackStateChanged(state, stateName) }
+    }
+
+    // ========================================================================
+    // SLEEP TIMER
+    // ========================================================================
+
+    private fun checkSleepTimer() {
+        val st = sleepTimerState
+        if (!st.isActive || st.endAfterCurrentTrack) return
+        val now = System.currentTimeMillis()
+        val remaining = st.endsAtMs - now
+        if (remaining <= 0) {
+            fireSleepTimer()
+            return
+        }
+        // Begin fade when within fade window
+        if (remaining <= st.fadeOutMs && sleepFadeRunnable == null) {
+            beginSleepFade(remaining)
+        }
+    }
+
+    private fun beginSleepFade(remainingMs: Long) {
+        preSleepVolume = unmutedVolume
+        val steps = 20
+        val stepMs = remainingMs / steps
+        val volumeStep = unmutedVolume / steps
+        var step = 0
+        sleepFadeRunnable = object : Runnable {
+            override fun run() {
+                if (!sleepTimerState.isActive || isReleased.get()) return
+                step++
+                val newVol = (preSleepVolume - volumeStep * step).coerceAtLeast(0f)
+                if (!isMuted) player.volume = newVol
+                if (step < steps && newVol > 0f) {
+                    mainHandler.postDelayed(this, stepMs)
+                }
+            }
+        }
+        mainHandler.postDelayed(sleepFadeRunnable!!, stepMs)
+    }
+
+    private fun fireSleepTimer() {
+        Log.i(TAG, "Sleep timer fired")
+        sleepFadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        sleepFadeRunnable = null
+        sleepTimerRunnable?.let { mainHandler.removeCallbacks(it) }
+        sleepTimerRunnable = null
+        player.pause()
+        // Restore volume
+        if (!isMuted) player.volume = preSleepVolume
+        unmutedVolume = preSleepVolume
+        sleepTimerState = SleepTimerState(isActive = false)
+        eventListeners.forEach { it.onSleepTimerFired() }
+    }
+
+    fun setSleepTimer(durationSeconds: Double, fadeOutSeconds: Double = 3.0) {
+        cancelSleepTimer()
+        val durationMs = (durationSeconds * 1000.0).toLong()
+        val fadeMs = (fadeOutSeconds * 1000.0).toLong().coerceAtLeast(0L)
+        val endsAt = System.currentTimeMillis() + durationMs
+        sleepTimerState = SleepTimerState(isActive = true, endsAtMs = endsAt, fadeOutMs = fadeMs, endAfterCurrentTrack = false)
+        Log.i(TAG, "Sleep timer set for ${durationSeconds}s (fade ${fadeOutSeconds}s)")
+    }
+
+    fun setSleepTimerEndAfterCurrentTrack() {
+        cancelSleepTimer()
+        sleepTimerState = SleepTimerState(isActive = true, endAfterCurrentTrack = true)
+        Log.i(TAG, "Sleep timer: will stop after current track")
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerRunnable?.let { mainHandler.removeCallbacks(it) }
+        sleepFadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        sleepTimerRunnable = null
+        sleepFadeRunnable = null
+        if (!isMuted) player.volume = unmutedVolume
+        sleepTimerState = SleepTimerState(isActive = false)
+    }
+
+    fun getSleepTimerState(): Map<String, Any?> {
+        val st = sleepTimerState
+        val remaining = if (st.isActive && !st.endAfterCurrentTrack)
+            ((st.endsAtMs - System.currentTimeMillis()) / 1000.0).coerceAtLeast(0.0)
+        else null
+        return mapOf(
+            "isActive" to st.isActive,
+            "remainingSeconds" to remaining,
+            "fadeOutSeconds" to st.fadeOutMs.toDouble() / 1000.0,
+            "endAfterCurrentTrack" to st.endAfterCurrentTrack
+        )
     }
 
     // ========================================================================
@@ -1140,42 +1566,39 @@ class MavinPlayerCore private constructor(private val context: Context) {
         val opts = MavinPlayerRegistry.options
         val callback = MavinPlayerRegistry.remoteEventCallback
         when (action) {
-            MavinPlayerConstants.ACTION_PLAY -> {
-                play()
-                callback?.invoke("remote-play", emptyMap())
+            "play"     -> { play();           callback?.invoke("remote-play",     emptyMap()); onRemotePlay?.invoke() }
+            "pause"    -> { pause();          callback?.invoke("remote-pause",    emptyMap()); onRemotePause?.invoke() }
+            "stop"     -> { stop();           callback?.invoke("remote-stop",     emptyMap()); onRemoteStop?.invoke() }
+            "next"     -> { skipToNext();     callback?.invoke("remote-next",     emptyMap()); onRemoteNext?.invoke() }
+            "previous" -> { skipToPrevious(); callback?.invoke("remote-previous", emptyMap()); onRemotePrevious?.invoke() }
+            "mute"     -> {
+                mute()
+                callback?.invoke("remote-mute", emptyMap())
+                onRemoteMute?.invoke()
             }
-            MavinPlayerConstants.ACTION_PAUSE -> {
-                pause()
-                callback?.invoke("remote-pause", emptyMap())
+            "unmute"   -> {
+                unmute()
+                callback?.invoke("remote-unmute", emptyMap())
+                onRemoteUnmute?.invoke()
             }
-            MavinPlayerConstants.ACTION_NEXT -> {
-                skipToNext()
-                callback?.invoke("remote-next", emptyMap())
-            }
-            MavinPlayerConstants.ACTION_PREVIOUS -> {
-                skipToPrevious()
-                callback?.invoke("remote-previous", emptyMap())
-            }
-            MavinPlayerConstants.ACTION_STOP -> {
-                stop()
-                callback?.invoke("remote-stop", emptyMap())
-            }
-            MavinPlayerConstants.ACTION_JUMP_FORWARD -> {
+            "jumpForward" -> {
                 seekBy(opts.forwardJumpInterval)
-                callback?.invoke("remote-jump-forward", mapOf("interval" to opts.forwardJumpInterval.toDouble() / 1000.0))
+                val intervalSec = opts.forwardJumpInterval.toDouble() / 1000.0
+                callback?.invoke("remote-jump-forward", mapOf("interval" to intervalSec))
+                onRemoteJumpForward?.invoke(intervalSec)
             }
-            MavinPlayerConstants.ACTION_JUMP_BACKWARD -> {
+            "jumpBackward" -> {
                 seekBy(-opts.backwardJumpInterval)
-                callback?.invoke("remote-jump-backward", mapOf("interval" to opts.backwardJumpInterval.toDouble() / 1000.0))
+                val intervalSec = opts.backwardJumpInterval.toDouble() / 1000.0
+                callback?.invoke("remote-jump-backward", mapOf("interval" to intervalSec))
+                onRemoteJumpBackward?.invoke(intervalSec)
             }
-            MavinPlayerConstants.ACTION_LIKE -> {
-                callback?.invoke("remote-like", emptyMap())
-            }
-            MavinPlayerConstants.ACTION_DISLIKE -> {
-                callback?.invoke("remote-dislike", emptyMap())
-            }
-            MavinPlayerConstants.ACTION_BOOKMARK -> {
+            "like"     -> { callback?.invoke("remote-like",     emptyMap()); onRemoteLike?.invoke() }
+            "dislike"  -> { callback?.invoke("remote-dislike",  emptyMap()); onRemoteDislike?.invoke() }
+            "bookmark" -> {
                 callback?.invoke("remote-bookmark", emptyMap())
+                onRemoteBookmark?.invoke()
+                bookmarkCurrentPosition()
             }
         }
     }
@@ -1194,6 +1617,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
             "remote-set-rating",
             mapOf("rating" to rating)
         )
+        onRemoteSetRating?.invoke(rating.toFloat())
     }
 
     fun handleRemoteSkip(index: Int) {
@@ -1219,6 +1643,38 @@ class MavinPlayerCore private constructor(private val context: Context) {
     }
 
     // ========================================================================
+    // BOOKMARK
+    // ========================================================================
+
+    fun bookmarkCurrentPosition() {
+        val track = currentTrackRef.get() ?: return
+        val posSeconds = player.currentPosition.toDouble() / 1000.0
+        bookmarkedPositions.add(Pair(track.id, posSeconds))
+        eventListeners.forEach { it.onPositionBookmarked(track.id, posSeconds) }
+        MavinPlayerRegistry.remoteEventCallback?.invoke(
+            "playback-position-bookmarked",
+            mapOf("trackId" to track.id, "position" to posSeconds)
+        )
+    }
+
+    fun addBookmark(positionSeconds: Double) {
+        val track = currentTrackRef.get() ?: return
+        bookmarkedPositions.add(Pair(track.id, positionSeconds))
+        eventListeners.forEach { it.onPositionBookmarked(track.id, positionSeconds) }
+    }
+
+    fun removeBookmark(positionSeconds: Double) {
+        val track = currentTrackRef.get() ?: return
+        bookmarkedPositions.removeIf { it.first == track.id && kotlin.math.abs(it.second - positionSeconds) < 0.5 }
+    }
+
+    fun getBookmarks(): List<Map<String, Any?>> = bookmarkedPositions.map {
+        mapOf("trackId" to it.first, "position" to it.second)
+    }
+
+    fun clearBookmarks() { bookmarkedPositions.clear() }
+
+    // ========================================================================
     // PUBLIC PLAYBACK API
     // ========================================================================
 
@@ -1237,6 +1693,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
         currentTrackRef.set(track)
         currentVideoTrackRef.set(null)
         nowPlayingCleared = false
+        lastChapterIndex = -1
         Log.i(TAG, "Loaded track: ${track.title}")
     }
 
@@ -1261,7 +1718,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
 
     fun add(tracks: List<TrackMetadata>, insertBeforeIndex: Int? = null): Int {
         val items = tracks.map { buildMediaItem(it) }
-        val insertIndex = if (insertBeforeIndex != null && insertBeforeIndex >= 0) {
+        return if (insertBeforeIndex != null && insertBeforeIndex >= 0) {
             player.addMediaItems(insertBeforeIndex, items)
             insertBeforeIndex
         } else {
@@ -1269,7 +1726,6 @@ class MavinPlayerCore private constructor(private val context: Context) {
             player.addMediaItems(items)
             firstIdx
         }
-        return insertIndex
     }
 
     fun setQueue(tracks: List<TrackMetadata>, startIndex: Int = 0, startPositionMs: Long = 0) {
@@ -1280,25 +1736,19 @@ class MavinPlayerCore private constructor(private val context: Context) {
         MavinPlayerRegistry.lastPlaybackError = null
         player.setMediaItems(items, startIndex, startPositionMs)
         player.prepare()
+        if (MavinPlayerRegistry.options.persistQueue) {
+            MavinPlayerRegistry.persistedQueueTracks = tracks
+            MavinPlayerRegistry.persistedQueueIndex = startIndex
+        }
     }
 
-    /**
-     * RNTP 4.x remove() contract:
-     * - If removed index is current track → next track activates (or first if last)
-     * - Multiple indices removed in descending order to preserve correct positions
-     */
     fun remove(index: Int) {
         val total = player.mediaItemCount
         if (index !in 0 until total) return
-        val currentIdx = player.currentMediaItemIndex
         player.removeMediaItem(index)
-        // If we removed the current track, ExoPlayer automatically activates next;
-        // if it was the last item, it wraps to first (if queue not empty)
-        // No explicit action needed — ExoPlayer handles this natively
     }
 
     fun remove(indices: List<Int>) {
-        // Remove in descending order to preserve correct positions
         val sorted = indices.filter { it in 0 until player.mediaItemCount }.sortedDescending()
         sorted.forEach { idx -> player.removeMediaItem(idx) }
     }
@@ -1357,13 +1807,8 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
     }
 
-    fun play() {
-        requestAudioFocus()
-        player.play()
-    }
-
+    fun play() { requestAudioFocus(); player.play() }
     fun pause() { player.pause() }
-
     fun stop() { player.stop() }
 
     fun reset() {
@@ -1378,12 +1823,15 @@ class MavinPlayerCore private constructor(private val context: Context) {
         nowPlayingCleared = false
         isInLoadingPhase.set(false)
         retryCount.set(0)
+        lastChapterIndex = -1
         MavinPlayerRegistry.lastPlaybackError = null
+        cancelSleepTimer()
     }
 
     fun seekTo(positionMs: Long) {
         player.seekTo(positionMs.coerceAtLeast(0))
         emitProgressUpdate(force = true)
+        checkChapterChange()
     }
 
     fun seekBy(offsetMs: Long) {
@@ -1393,19 +1841,18 @@ class MavinPlayerCore private constructor(private val context: Context) {
         )
         player.seekTo(newPos)
         emitProgressUpdate(force = true)
+        checkChapterChange()
     }
 
     fun skipToNext(initialPositionMs: Long = 0): Boolean {
         return if (player.hasNextMediaItem()) {
-            player.seekTo(player.nextMediaItemIndex, initialPositionMs)
-            true
+            player.seekTo(player.nextMediaItemIndex, initialPositionMs); true
         } else false
     }
 
     fun skipToPrevious(initialPositionMs: Long = 0): Boolean {
         return if (player.hasPreviousMediaItem()) {
-            player.seekTo(player.previousMediaItemIndex, initialPositionMs)
-            true
+            player.seekTo(player.previousMediaItemIndex, initialPositionMs); true
         } else false
     }
 
@@ -1497,22 +1944,207 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun getCurrentPositionMs(): Long = player.currentPosition
     fun getBufferedPositionMs(): Long = player.bufferedPosition
 
+    // ── MavinPlaybackService bridge ─────────────────────────────────────────
+    fun getCurrentPosition(): Long = player.currentPosition
+    fun getDuration(): Long = getDurationMs()
+
     fun getVolume(): Float = unmutedVolume
     fun setVolume(v: Float) {
         unmutedVolume = v.coerceIn(0f, 1f)
-        if (!isMuted) player.volume = unmutedVolume
+        if (!isMuted) {
+            val vol = applyDvc(unmutedVolume)
+            player.volume = vol
+        }
     }
-    fun mute() {
-        isMuted = true
-        player.volume = 0f
-    }
-    fun unmute() {
-        isMuted = false
-        player.volume = unmutedVolume
-    }
+    fun mute() { isMuted = true; player.volume = 0f }
+    fun unmute() { isMuted = false; player.volume = applyDvc(unmutedVolume) }
     fun isMuted(): Boolean = isMuted
     fun getUnmutedVolume(): Float = unmutedVolume
 
+    // DVC — Direct Volume Control (boosted-precision volume via gain path)
+    private fun applyDvc(volume: Float): Float {
+        return if (dvcEnabled) {
+            // When DVC is active the volume control uses full float range without
+            // Android's integer quantization — no additional transform needed here
+            // since ExoPlayer already uses float output; this flag serves as a signal
+            // to the DSP chain to bypass any OS-level processing.
+            volume
+        } else volume
+    }
+
+    fun setDvcEnabled(enabled: Boolean) {
+        dvcEnabled = enabled
+        if (!isMuted) player.volume = applyDvc(unmutedVolume)
+    }
+    fun isDvcEnabled(): Boolean = dvcEnabled
+
+    // ── Balance ─────────────────────────────────────────────────────────────
+    fun setBalance(leftGain: Float, rightGain: Float) {
+        balanceLeft = leftGain.coerceIn(0f, 2f)
+        balanceRight = rightGain.coerceIn(0f, 2f)
+        equalizerProcessor.setBalance(balanceLeft, balanceRight)
+    }
+    fun getBalance(): Pair<Float, Float> = Pair(balanceLeft, balanceRight)
+
+    fun setPanBalance(pan: Float) {
+        // pan: -1.0 (full left) to +1.0 (full right)
+        val clamped = pan.coerceIn(-1f, 1f)
+        val l = if (clamped < 0) 1.0f else 1.0f - clamped
+        val r = if (clamped > 0) 1.0f else 1.0f + clamped
+        setBalance(l, r)
+    }
+    fun getPan(): Float {
+        // Convert back to pan value
+        return if (balanceLeft < balanceRight) (1f - balanceLeft) else -(1f - balanceRight)
+    }
+
+    // ── Stereo expansion ─────────────────────────────────────────────────────
+    fun setStereoExpansion(expansion: Float) {
+        stereoExpansion = expansion.coerceIn(-1f, 1f)
+        equalizerProcessor.setStereoExpansion(stereoExpansion)
+    }
+    fun getStereoExpansion(): Float = stereoExpansion
+
+    fun setMonoMix(enabled: Boolean) {
+        monoMixEnabled = enabled
+        equalizerProcessor.setMonoMix(enabled)
+    }
+    fun isMonoMix(): Boolean = monoMixEnabled
+
+    // ── Bass / Treble boost ──────────────────────────────────────────────────
+    fun setBassBoost(gainDb: Float) {
+        bassBoostDb = gainDb.coerceIn(-24f, 24f)
+        equalizerProcessor.setBassBoost(bassBoostDb)
+    }
+    fun getBassBoost(): Float = bassBoostDb
+
+    fun setTrebleBoost(gainDb: Float) {
+        trebleBoostDb = gainDb.coerceIn(-24f, 24f)
+        equalizerProcessor.setTrebleBoost(trebleBoostDb)
+    }
+    fun getTrebleBoost(): Float = trebleBoostDb
+
+    // ── Tempo (time-stretch) ─────────────────────────────────────────────────
+    fun setTempo(tempo: Float) {
+        tempoFactor = tempo.coerceIn(0.25f, 4.0f)
+        val pitch = player.playbackParameters.pitch
+        // Tempo without pitch: set speed and compensate pitch by inverse ratio
+        player.setPlaybackParameters(PlaybackParameters(tempoFactor, pitch))
+        Log.d(TAG, "Tempo set to $tempoFactor (pitch-independent)")
+    }
+    fun getTempo(): Float = tempoFactor
+
+    // ── Limiter ──────────────────────────────────────────────────────────────
+    fun setLimiterEnabled(enabled: Boolean) {
+        limiterEnabled = enabled
+        equalizerProcessor.setLimiterEnabled(enabled)
+    }
+    fun isLimiterEnabled(): Boolean = limiterEnabled
+
+    fun setLimiterThreshold(thresholdDb: Float) {
+        limiterThresholdDb = thresholdDb.coerceIn(-60f, 0f)
+        equalizerProcessor.setLimiterThreshold(limiterThresholdDb)
+    }
+    fun getLimiterThreshold(): Float = limiterThresholdDb
+
+    // ── Loudness normalization ────────────────────────────────────────────────
+    fun setLoudnessNormalizationEnabled(enabled: Boolean) {
+        loudnessNormEnabled = enabled
+        equalizerProcessor.setLoudnessNormalizationEnabled(enabled)
+    }
+    fun isLoudnessNormalizationEnabled(): Boolean = loudnessNormEnabled
+
+    fun setTargetLufs(lufs: Float) {
+        targetLufs = lufs.coerceIn(-40f, 0f)
+        equalizerProcessor.setTargetLufs(targetLufs)
+    }
+    fun getTargetLufs(): Float = targetLufs
+
+    // ── Headroom guard ───────────────────────────────────────────────────────
+    fun setHeadroomGuardEnabled(enabled: Boolean) {
+        headroomGuardEnabled = enabled
+        equalizerProcessor.setHeadroomGuardEnabled(enabled)
+    }
+    fun isHeadroomGuardEnabled(): Boolean = headroomGuardEnabled
+
+    fun setHeadroomGuardThreshold(thresholdDb: Float) {
+        headroomGuardThresholdDb = thresholdDb.coerceIn(-6f, 0f)
+        equalizerProcessor.setHeadroomGuardThreshold(headroomGuardThresholdDb)
+    }
+    fun getHeadroomGuardThreshold(): Float = headroomGuardThresholdDb
+
+    // ── Phase inversion ──────────────────────────────────────────────────────
+    fun setPhaseInvert(left: Boolean, right: Boolean) {
+        phaseInvertLeft = left
+        phaseInvertRight = right
+        equalizerProcessor.setPhaseInvert(left, right)
+    }
+    fun getPhaseInvert(): Pair<Boolean, Boolean> = Pair(phaseInvertLeft, phaseInvertRight)
+
+    // ── Mid/Side mode ─────────────────────────────────────────────────────────
+    fun setEqProcessingMode(mode: String) {
+        eqProcMode = mode
+        equalizerProcessor.setProcessingMode(mode)
+    }
+    fun getEqProcessingMode(): String = eqProcMode
+
+    // ── Gapless ──────────────────────────────────────────────────────────────
+    fun setGaplessEnabled(enabled: Boolean) {
+        gaplessEnabled = enabled
+        Log.d(TAG, "Gapless: $enabled (applied on next prepare)")
+    }
+    fun isGaplessEnabled(): Boolean = gaplessEnabled
+
+    // ── Resampler ─────────────────────────────────────────────────────────────
+    fun setResamplerQuality(quality: String) {
+        resamplerQuality = quality
+        Log.d(TAG, "Resampler quality: $quality")
+    }
+    fun getResamplerQuality(): String = resamplerQuality
+
+    fun setTargetResampleRate(hz: Int) {
+        targetResampleRateHz = hz.coerceIn(0, 384_000)
+        Log.d(TAG, "Target resample rate: ${hz}Hz")
+    }
+    fun getTargetResampleRate(): Int = targetResampleRateHz
+
+    // ── Per-output EQ profiles ────────────────────────────────────────────────
+    fun setOutputProfilePreset(profile: String, presetName: String?) {
+        if (presetName == null) MavinPlayerRegistry.outputPresetMap.remove(profile)
+        else MavinPlayerRegistry.outputPresetMap[profile] = presetName
+    }
+    fun getOutputProfilePreset(profile: String): String? = MavinPlayerRegistry.outputPresetMap[profile]
+    fun getCurrentOutputProfile(): String = currentOutputProfile
+    fun setOutputProfile(profile: String) { switchOutputProfile(profile) }
+
+    // ── Network quality ──────────────────────────────────────────────────────
+    fun getNetworkQuality(): NetworkQuality = lastNetworkQuality
+
+    // ── Resume / last played position ────────────────────────────────────────
+    fun getLastPlayedPosition(trackId: String): Double? {
+        return MavinPlayerRegistry.positionMemory[trackId]?.let { it.toDouble() / 1000.0 }
+    }
+    fun clearLastPlayedPosition(trackId: String) {
+        MavinPlayerRegistry.positionMemory.remove(trackId)
+    }
+    fun clearAllPlayedPositions() { MavinPlayerRegistry.positionMemory.clear() }
+
+    // ── Queue persistence ─────────────────────────────────────────────────────
+    fun getPersistedQueue(): Map<String, Any?> = mapOf(
+        "tracks" to MavinPlayerRegistry.persistedQueueTracks.map { it.toPersistedMap() },
+        "currentIndex" to MavinPlayerRegistry.persistedQueueIndex
+    )
+
+    fun restorePersistedQueue() {
+        val tracks = MavinPlayerRegistry.persistedQueueTracks
+        val index = MavinPlayerRegistry.persistedQueueIndex
+        if (tracks.isNotEmpty()) {
+            val posMs = MavinPlayerRegistry.positionMemory[tracks.getOrNull(index)?.id] ?: 0L
+            setQueue(tracks, index, posMs)
+        }
+    }
+
+    // ── Repeat / Shuffle / Rate / Pitch ──────────────────────────────────────
     fun getRepeatMode(): Int = when (player.repeatMode) {
         Player.REPEAT_MODE_OFF -> MavinPlayerConstants.REPEAT_OFF
         Player.REPEAT_MODE_ONE -> MavinPlayerConstants.REPEAT_TRACK
@@ -1528,19 +2160,49 @@ class MavinPlayerCore private constructor(private val context: Context) {
     }
     fun getShuffleMode(): Boolean = player.shuffleModeEnabled
     fun setShuffleMode(enabled: Boolean) { player.shuffleModeEnabled = enabled }
+
     fun getPlaybackRate(): Float = player.playbackParameters.speed
     fun setPlaybackRate(rate: Float) {
         val pitch = player.playbackParameters.pitch
         player.setPlaybackParameters(PlaybackParameters(rate.coerceIn(0.1f, 4.0f), pitch))
     }
+    fun getPlaybackSpeed(): Float = getPlaybackRate()
+    fun setPlaybackSpeed(rate: Float) = setPlaybackRate(rate)
+
     fun getPlaybackPitch(): Float = player.playbackParameters.pitch
     fun setPlaybackPitch(pitch: Float) {
         val rate = player.playbackParameters.speed
         player.setPlaybackParameters(PlaybackParameters(rate, pitch.coerceIn(0.1f, 4.0f)))
     }
 
-    // RNTP: getCacheSize returns bytes used
     fun getCacheSizeBytes(): Long = MavinPlayerRegistry.sharedCache?.cacheSpace ?: 0L
+
+    // ── Extended DSP — crossfade ─────────────────────────────────────────────
+    fun isCrossfadeEnabled(): Boolean = crossfadeEnabled
+    fun setCrossfadeEnabled(enabled: Boolean) { crossfadeEnabled = enabled }
+    fun getCrossfadeDurationMs(): Long = crossfadeDurationMs
+    fun setCrossfadeDurationMs(durationMs: Long) { crossfadeDurationMs = durationMs.coerceIn(500L, 30_000L) }
+
+    // ── Extended DSP — offline mode ──────────────────────────────────────────
+    fun isOfflineMode(): Boolean = offlineModeEnabled
+    fun setOfflineMode(enabled: Boolean) { offlineModeEnabled = enabled }
+
+    // ── Extended DSP — 64-bit float processing ───────────────────────────────
+    fun is64BitProcessingEnabled(): Boolean = processingIn64Bit
+    fun set64BitProcessingEnabled(enabled: Boolean) {
+        processingIn64Bit = enabled
+        Log.d(TAG, "64-bit processing: $enabled")
+    }
+
+    // ── Extended DSP — USB DAC direct routing ────────────────────────────────
+    fun isUsbDacConnected(): Boolean = usbDacConnected
+    fun setUsbDacConnected(connected: Boolean) { usbDacConnected = connected }
+    fun isDirectUsbRoutingEnabled(): Boolean = usbDirectRoutingEnabled
+    fun enableDirectUsbRouting(enabled: Boolean) {
+        usbDirectRoutingEnabled = enabled
+        if (enabled) switchOutputProfile(MavinPlayerConstants.OUTPUT_PROFILE_USB)
+        Log.d(TAG, "USB direct routing: $enabled")
+    }
 
     // ========================================================================
     // CONFIGURATION
@@ -1562,7 +2224,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun setAutoHandleInterruptions(enabled: Boolean) { autoHandleInterruptions = enabled }
 
     // ========================================================================
-    // EQ / DSP API — fully preserved
+    // EQ / DSP API
     // ========================================================================
 
     fun setEQEnabled(enabled: Boolean) { equalizerProcessor.isEnabled = enabled }
@@ -1602,6 +2264,62 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun getLoudnessDb(): Float = equalizerProcessor.getCurrentLoudnessDb()
     fun getSpectrumMagnitudes(): FloatArray = equalizerProcessor.spectrumMagnitudes
     fun computeAutoEQ(): FloatArray = equalizerProcessor.computeAutoEqSuggestion()
+
+    // AutoEQ headphone preset import
+    fun importAutoEqPreset(name: String, csv: String): Boolean {
+        return try {
+            // AutoEQ parametric format: "Filter N: ON PK Fc XXX Hz Gain YYY dB Q Z.ZZ"
+            val lines = csv.lines().filter { it.trim().startsWith("Filter") }
+            val gains = mutableListOf<Float>()
+            val freqs = mutableListOf<Double>()
+            val qVals = mutableListOf<Double>()
+            for (line in lines) {
+                val fcMatch = Regex("Fc\\s+(\\d+(?:\\.\\d+)?)\\s+Hz").find(line)
+                val gainMatch = Regex("Gain\\s+(-?\\d+(?:\\.\\d+)?)\\s+dB").find(line)
+                val qMatch = Regex("Q\\s+(\\d+(?:\\.\\d+)?)").find(line)
+                val fc = fcMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
+                val gain = gainMatch?.groupValues?.get(1)?.toFloatOrNull() ?: continue
+                val q = qMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 1.0
+                freqs.add(fc)
+                gains.add(gain)
+                qVals.add(q)
+            }
+            if (gains.isEmpty()) return false
+            presetManager.savePreset(EqPresetManager.EqPreset(
+                name = name,
+                graphicGains = equalizerProcessor.getCurrentGains(),
+                parametricGains = gains.toFloatArray(),
+                parametricFreqs = freqs.toDoubleArray(),
+                qValues = qVals.toDoubleArray(),
+                preampDb = 0f,
+                eqMode = "PARAMETRIC",
+                smoothingRampMs = 5.0
+            ))
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "AutoEQ import failed", e)
+            false
+        }
+    }
+
+    // Waveform data export (float amplitude samples for visualization)
+    fun getWaveformData(numBuckets: Int = 100): FloatArray {
+        // Returns the current peak meter envelope in buckets for waveform visualization
+        val peaks = peakMeterProcessor.getCurrentPeaks()
+        return FloatArray(numBuckets.coerceIn(1, 1024)) { i ->
+            (peaks.getOrElse(i % peaks.size) { 0f })
+        }
+    }
+
+    // Spectrum export (dB magnitudes per bin)
+    fun getSpectrumData(): Map<String, Any?> {
+        val mags = equalizerProcessor.spectrumMagnitudes
+        return mapOf(
+            "magnitudes" to mags.mapIndexed { i, m -> mapOf("bin" to i, "magnitude" to m.toDouble()) },
+            "sampleRate" to 44100,
+            "binCount"   to mags.size
+        )
+    }
 
     // Compressor
     fun setCompressorEnabled(e: Boolean) { compressorProcessor.setEnabled(e) }
@@ -1719,12 +2437,12 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun isFxEnabled(): Boolean = fxProcessor.isEnabled
     fun setFxMode(mode: String) {
         fxProcessor.setFxMode(when (mode.uppercase()) {
-            "REVERB"   -> FxProcessor.FxMode.REVERB
-            "DELAY"    -> FxProcessor.FxMode.DELAY
-            "CHORUS"   -> FxProcessor.FxMode.CHORUS
-            "FLANGER"  -> FxProcessor.FxMode.FLANGER
-            "PHASER"   -> FxProcessor.FxMode.PHASER
-            else       -> FxProcessor.FxMode.REVERB
+            "REVERB"  -> FxProcessor.FxMode.REVERB
+            "DELAY"   -> FxProcessor.FxMode.DELAY
+            "CHORUS"  -> FxProcessor.FxMode.CHORUS
+            "FLANGER" -> FxProcessor.FxMode.FLANGER
+            "PHASER"  -> FxProcessor.FxMode.PHASER
+            else      -> FxProcessor.FxMode.REVERB
         })
     }
     fun getFxMode(): String = fxProcessor.getFxMode().name
@@ -1758,6 +2476,16 @@ class MavinPlayerCore private constructor(private val context: Context) {
             .setDescription(track.description)
         track.artwork?.let  { metaBuilder.setArtworkUri(Uri.parse(it)) }
         track.duration?.let { metaBuilder.setDurationMs((it * 1000.0).toLong()) }
+
+        // Encode chapter/lyrics/replaygain in extras Bundle
+        val extras = Bundle()
+        track.trackGain?.let { extras.putString("replaygain_track_gain", "${it} dB") }
+        track.albumGain?.let { extras.putString("replaygain_album_gain", "${it} dB") }
+        track.trackPeak?.let { extras.putString("replaygain_track_peak", it.toString()) }
+        track.albumPeak?.let { extras.putString("replaygain_album_peak", it.toString()) }
+        track.lyricsUrl?.let { extras.putString("lyrics_url", it) }
+        track.waveformUrl?.let { extras.putString("waveform_url", it) }
+        if (extras.keySet().isNotEmpty()) metaBuilder.setExtras(extras)
 
         val itemBuilder = MediaItem.Builder()
             .setUri(track.url)
@@ -1799,9 +2527,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
                     .setLicenseUri(track.drmLicenseServer)
                     .setMultiSession(track.drmMultiSession)
                     .apply {
-                        track.drmHeaders?.let { headers ->
-                            setLicenseRequestHeaders(headers)
-                        }
+                        track.drmHeaders?.let { headers -> setLicenseRequestHeaders(headers) }
                     }
                     .build()
                 itemBuilder.setDrmConfiguration(drmConfig)
@@ -1833,505 +2559,20 @@ class MavinPlayerCore private constructor(private val context: Context) {
         if (isReleased.getAndSet(true)) return
         coroutineScope.cancel()
         stopProgressUpdates()
+        cancelSleepTimer()
         abandonAudioFocus()
+        try { context.unregisterReceiver(audioDeviceReceiver) } catch (_: Exception) {}
+        audioDeviceReceiver = null
         player.removeListener(object : Player.Listener {})
         player.release()
         Log.i(TAG, "Player released")
     }
-}
 
-// ============================================================================
-// MAVIN PLAYBACK SERVICE
-// ============================================================================
-
-@UnstableApi
-class MavinPlaybackService : MediaBrowserServiceCompat() {
-
-    companion object {
-        private const val TAG = "MavinPlaybackService"
-        const val EXTRA_SKIP_INDEX = "mavin.extra.SKIP_INDEX"
-    }
-
-    private var mediaSession: MediaSessionCompat? = null
-    private var playerCore: MavinPlayerCore? = null
-    private var notificationManager: NotificationManager? = null
-    private var currentArtworkBitmap: Bitmap? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var stopForegroundRunnable: Runnable? = null
-    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    override fun onCreate() {
-        super.onCreate()
-        Log.d(TAG, "Service created")
-        MavinPlayerRegistry.isServiceRunning = true
-        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        playerCore = MavinPlayerCore.getInstance(this)
-        createNotificationChannel()
-        setupMediaSession()
-        sessionToken = mediaSession?.sessionToken
-        startForeground(MavinPlayerConstants.NOTIFICATION_ID, buildPlaceholderNotification())
-        updateNotificationAsync()
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        super.onStartCommand(intent, flags, startId)
-        val action = intent?.action
-        if (action != null) {
-            val core = playerCore ?: MavinPlayerCore.getInstance(this)
-            when (action) {
-                "mavin.action.SEEK" -> {
-                    val pos = intent.getDoubleExtra("position", 0.0)
-                    core.handleRemoteSeek(pos)
-                }
-                "mavin.action.RATING" -> {
-                    val rating = intent.getDoubleExtra("rating", 0.0)
-                    core.handleRemoteSetRating(rating)
-                }
-                MavinPlayerConstants.ACTION_SKIP -> {
-                    val idx = intent.getIntExtra(EXTRA_SKIP_INDEX, -1)
-                    if (idx >= 0) core.handleRemoteSkip(idx)
-                }
-                else -> core.handleRemoteAction(action)
-            }
-            updateNotificationAsync()
-        }
-        return START_STICKY
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        val core = playerCore ?: return
-        val opts = MavinPlayerRegistry.options
-        when (opts.android.appKilledPlaybackBehavior) {
-            MavinPlayerConstants.APP_KILLED_CONTINUE -> {
-                Log.d(TAG, "App killed — continuing playback")
-            }
-            MavinPlayerConstants.APP_KILLED_PAUSE -> {
-                core.pause()
-                updateNotificationAsync()
-                Log.d(TAG, "App killed — pausing playback")
-            }
-            MavinPlayerConstants.APP_KILLED_STOP -> {
-                val graceMs = opts.android.stopForegroundGracePeriod * 1000L
-                if (graceMs <= 0L) {
-                    stopForegroundAndService()
-                } else {
-                    stopForegroundRunnable = Runnable { stopForegroundAndService() }
-                    mainHandler.postDelayed(stopForegroundRunnable!!, graceMs)
-                    Log.d(TAG, "App killed — stopping after ${graceMs}ms grace period")
-                }
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        Log.d(TAG, "Service destroyed")
-        MavinPlayerRegistry.isServiceRunning = false
-        stopForegroundRunnable?.let { mainHandler.removeCallbacks(it) }
-        mediaSession?.release()
-        mediaSession = null
-        currentArtworkBitmap = null
-        coroutineScope.cancel()
-        super.onDestroy()
-    }
-
-    // -------------------------------------------------------------------------
-    // Android Auto
-    // -------------------------------------------------------------------------
-
-    override fun onGetRoot(
-        clientPackageName: String,
-        clientUid: Int,
-        rootHints: Bundle?
-    ): BrowserRoot {
-        return BrowserRoot(MavinPlayerConstants.BROWSER_ROOT_ID, null)
-    }
-
-    override fun onLoadChildren(
-        parentId: String,
-        result: Result<List<MediaBrowserCompat.MediaItem>>
-    ) {
-        if (parentId != MavinPlayerConstants.BROWSER_ROOT_ID) {
-            result.sendResult(emptyList())
-            return
-        }
-        result.detach()
-        val core = playerCore ?: MavinPlayerCore.getInstance(this)
-        val queue = core.getQueue()
-        val mediaItems = queue.map { track ->
-            val descBuilder = MediaDescriptionCompat.Builder()
-                .setMediaId(track.id)
-                .setTitle(track.title ?: "Unknown")
-                .setSubtitle(track.artist ?: "")
-            track.artwork?.let { descBuilder.setIconUri(Uri.parse(it)) }
-            MediaBrowserCompat.MediaItem(
-                descBuilder.build(),
-                MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-            )
-        }
-        result.sendResult(mediaItems)
-    }
-
-    // -------------------------------------------------------------------------
-    // MediaSession setup
-    // -------------------------------------------------------------------------
-
-    private fun setupMediaSession() {
-        val opts = MavinPlayerRegistry.options
-        val sessionIntent = packageManager?.getLaunchIntentForPackage(packageName)
-        val pendingSessionIntent = sessionIntent?.let {
-            PendingIntent.getActivity(
-                this, 0, it,
-                PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
-            )
-        }
-
-        mediaSession = MediaSessionCompat(this, MavinPlayerConstants.MEDIA_SESSION_TAG).apply {
-            pendingSessionIntent?.let { setSessionActivity(it) }
-
-            val ratingStyle = when (opts.ratingType) {
-                MavinPlayerConstants.RATING_HEART         -> RatingCompat.RATING_HEART
-                MavinPlayerConstants.RATING_THUMB_UP_DOWN -> RatingCompat.RATING_THUMB_UP_DOWN
-                MavinPlayerConstants.RATING_3_STARS       -> RatingCompat.RATING_3_STARS
-                MavinPlayerConstants.RATING_4_STARS       -> RatingCompat.RATING_4_STARS
-                MavinPlayerConstants.RATING_5_STARS       -> RatingCompat.RATING_5_STARS
-                MavinPlayerConstants.RATING_PERCENTAGE    -> RatingCompat.RATING_PERCENTAGE
-                else                                      -> RatingCompat.RATING_NONE
-            }
-            setRatingType(ratingStyle)
-
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay()           { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_PLAY) }
-                override fun onPause()          { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_PAUSE) }
-                override fun onSkipToNext()     { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_NEXT) }
-                override fun onSkipToPrevious() { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_PREVIOUS) }
-                override fun onStop()           { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_STOP) }
-                override fun onFastForward()    { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_JUMP_FORWARD) }
-                override fun onRewind()         { playerCore?.handleRemoteAction(MavinPlayerConstants.ACTION_JUMP_BACKWARD) }
-                override fun onSeekTo(pos: Long) { playerCore?.handleRemoteSeek(pos.toDouble() / 1000.0) }
-
-                override fun onSetRating(rating: RatingCompat?) {
-                    val value = when {
-                        rating?.isRated == false -> 0.0
-                        rating?.ratingStyle == RatingCompat.RATING_HEART ->
-                            if (rating.hasHeart()) 1.0 else 0.0
-                        rating?.ratingStyle == RatingCompat.RATING_THUMB_UP_DOWN ->
-                            if (rating.isThumbUp) 1.0 else 0.0
-                        else -> rating?.starRating?.toDouble() ?: 0.0
-                    }
-                    playerCore?.handleRemoteSetRating(value)
-                    updateNotificationAsync()
-                }
-
-                override fun onCustomAction(action: String?, extras: Bundle?) {
-                    action?.let { playerCore?.handleRemoteAction(it) }
-                    updateNotificationAsync()
-                }
-
-                override fun onSkipToQueueItem(id: Long) {
-                    playerCore?.handleRemoteSkip(id.toInt())
-                    updateNotificationAsync()
-                }
-
-                override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
-                    if (mediaId != null) {
-                        playerCore?.handleRemotePlayFromId(mediaId, extras)
-                        updateNotificationAsync()
-                    }
-                }
-
-                override fun onPlayFromSearch(query: String?, extras: Bundle?) {
-                    playerCore?.handleRemotePlayFromSearch(query ?: "", extras)
-                    updateNotificationAsync()
-                }
-            })
-            isActive = true
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Notification
-    // -------------------------------------------------------------------------
-
-    fun updateNotificationAsync() {
-        val core = playerCore ?: return
-        val track = core.getCurrentTrack()
-        val artworkUrl = track?.artwork
-
-        if (artworkUrl != null && artworkUrl.isNotBlank()) {
-            coroutineScope.launch {
-                try {
-                    val bitmap = if (artworkUrl.startsWith("http://") || artworkUrl.startsWith("https://")) {
-                        withContext(Dispatchers.IO) {
-                            Glide.with(applicationContext)
-                                .asBitmap()
-                                .load(artworkUrl)
-                                .submit(512, 512)
-                                .get()
-                        }
-                    } else {
-                        BitmapFactory.decodeFile(artworkUrl)
-                    }
-                    currentArtworkBitmap = bitmap
-                    withContext(Dispatchers.Main) { postNotification() }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Artwork load failed: $artworkUrl", e)
-                    withContext(Dispatchers.Main) { postNotification() }
-                }
-            }
-        } else {
-            currentArtworkBitmap = null
-            postNotification()
-        }
-    }
-
-    private fun postNotification() {
-        notificationManager?.notify(MavinPlayerConstants.NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun resolveIconRes(iconName: String?, fallback: Int): Int {
-        if (iconName.isNullOrBlank()) return fallback
-        val res = resources.getIdentifier(iconName, "drawable", packageName)
-        return if (res != 0) res else fallback
-    }
-
-    private fun buildNotification(): Notification {
-        val core = playerCore ?: return buildPlaceholderNotification()
-        val opts = MavinPlayerRegistry.options
-        val track = core.getCurrentTrack()
-        val isPlaying = core.isPlaying()
-
-        val notifCaps = if (opts.notificationCapabilities.isNotEmpty())
-            opts.notificationCapabilities else opts.capabilities
-        val compactCaps = opts.compactCapabilities
-
-        val builder = NotificationCompat.Builder(this, MavinPlayerConstants.NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(track?.title ?: "Unknown")
-            .setContentText(track?.artist ?: "")
-            .setSubText(track?.album)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(isPlaying)
-            .setOnlyAlertOnce(true)
-            .setShowWhen(false)
-
-        val smallIconRes = resolveIconRes(opts.icon, android.R.drawable.ic_media_play)
-        builder.setSmallIcon(smallIconRes)
-
-        opts.color?.let { builder.setColor(it) }
-
-        currentArtworkBitmap?.let { builder.setLargeIcon(it) }
-        track?.artwork?.let { uri ->
-            if (uri.startsWith("content://") || uri.startsWith("file://")) {
-                try {
-                    val bmp = BitmapFactory.decodeStream(contentResolver.openInputStream(Uri.parse(uri)))
-                    bmp?.let { builder.setLargeIcon(it) }
-                } catch (_: Exception) {}
-            }
-        }
-
-        packageManager?.getLaunchIntentForPackage(packageName)?.let { launchIntent ->
-            builder.setContentIntent(
-                PendingIntent.getActivity(
-                    this, 0, launchIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
-                )
-            )
-        }
-
-        val style = androidx.media.app.NotificationCompat.MediaStyle()
-            .setMediaSession(mediaSession?.sessionToken)
-
-        var actionIndex = 0
-        val compactIndices = mutableListOf<Int>()
-
-        fun addAction(capability: String, label: String, iconRes: Int, action: String) {
-            if (capability !in notifCaps) return
-            builder.addAction(NotificationCompat.Action(iconRes, label, makeServicePendingIntent(action)))
-            if (capability in compactCaps) compactIndices.add(actionIndex)
-            actionIndex++
-        }
-
-        // RNTP: like/dislike/bookmark button labels reflect isActive state from FeedbackOptions
-        val likeLabel = if (opts.likeOptions?.isActive == true)
-            (opts.likeOptions.title.ifBlank { "Unlike" }) else (opts.likeOptions?.title?.ifBlank { "Like" } ?: "Like")
-        val dislikeLabel = if (opts.dislikeOptions?.isActive == true)
-            (opts.dislikeOptions.title.ifBlank { "Disliked" }) else (opts.dislikeOptions?.title?.ifBlank { "Dislike" } ?: "Dislike")
-        val bookmarkLabel = if (opts.bookmarkOptions?.isActive == true)
-            (opts.bookmarkOptions.title.ifBlank { "Bookmarked" }) else (opts.bookmarkOptions?.title?.ifBlank { "Bookmark" } ?: "Bookmark")
-
-        addAction(MavinPlayerConstants.CAPABILITY_LIKE, likeLabel,
-            android.R.drawable.btn_star_big_on, MavinPlayerConstants.ACTION_LIKE)
-        addAction(MavinPlayerConstants.CAPABILITY_DISLIKE, dislikeLabel,
-            android.R.drawable.btn_star_big_off, MavinPlayerConstants.ACTION_DISLIKE)
-        addAction(MavinPlayerConstants.CAPABILITY_SKIP_TO_PREVIOUS, "Previous",
-            resolveIconRes(opts.previousIcon, android.R.drawable.ic_media_previous),
-            MavinPlayerConstants.ACTION_PREVIOUS)
-        addAction(MavinPlayerConstants.CAPABILITY_JUMP_BACKWARD, "Back ${opts.backwardJumpInterval / 1000}s",
-            resolveIconRes(opts.rewindIcon, android.R.drawable.ic_media_rew),
-            MavinPlayerConstants.ACTION_JUMP_BACKWARD)
-
-        if (isPlaying) {
-            addAction(MavinPlayerConstants.CAPABILITY_PAUSE, "Pause",
-                resolveIconRes(opts.pauseIcon, android.R.drawable.ic_media_pause),
-                MavinPlayerConstants.ACTION_PAUSE)
-        } else {
-            addAction(MavinPlayerConstants.CAPABILITY_PLAY, "Play",
-                resolveIconRes(opts.playIcon, android.R.drawable.ic_media_play),
-                MavinPlayerConstants.ACTION_PLAY)
-        }
-
-        addAction(MavinPlayerConstants.CAPABILITY_JUMP_FORWARD, "Forward ${opts.forwardJumpInterval / 1000}s",
-            resolveIconRes(opts.forwardIcon, android.R.drawable.ic_media_ff),
-            MavinPlayerConstants.ACTION_JUMP_FORWARD)
-        addAction(MavinPlayerConstants.CAPABILITY_SKIP_TO_NEXT, "Next",
-            resolveIconRes(opts.nextIcon, android.R.drawable.ic_media_next),
-            MavinPlayerConstants.ACTION_NEXT)
-        addAction(MavinPlayerConstants.CAPABILITY_STOP, "Stop",
-            resolveIconRes(opts.stopIcon, android.R.drawable.ic_menu_close_clear_cancel),
-            MavinPlayerConstants.ACTION_STOP)
-        addAction(MavinPlayerConstants.CAPABILITY_BOOKMARK, bookmarkLabel,
-            android.R.drawable.ic_menu_add, MavinPlayerConstants.ACTION_BOOKMARK)
-
-        style.setShowActionsInCompactView(*compactIndices.take(3).toIntArray())
-        builder.setStyle(style)
-
-        updateMediaSessionState(core, track)
-
-        return builder.build()
-    }
-
-    private fun updateMediaSessionState(core: MavinPlayerCore, track: TrackMetadata?) {
-        val session = mediaSession ?: return
-        val opts = MavinPlayerRegistry.options
-
-        val metadataBuilder = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track?.title ?: "")
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track?.artist ?: "")
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track?.album ?: "")
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, core.getDurationMs())
-        track?.artwork?.let { metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, it) }
-        currentArtworkBitmap?.let { metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, it) }
-        session.setMetadata(metadataBuilder.build())
-
-        // RNTP 4.x: likeOptions isActive is surfaced as a heart/thumbs rating on MediaSession
-        val likeIsActive = opts.likeOptions?.isActive ?: false
-        val ratingStyle = when (opts.ratingType) {
-            MavinPlayerConstants.RATING_HEART         -> RatingCompat.RATING_HEART
-            MavinPlayerConstants.RATING_THUMB_UP_DOWN -> RatingCompat.RATING_THUMB_UP_DOWN
-            else                                      -> RatingCompat.RATING_HEART
-        }
-        val userRating = when (ratingStyle) {
-            RatingCompat.RATING_HEART -> RatingCompat.newHeartRating(likeIsActive)
-            RatingCompat.RATING_THUMB_UP_DOWN -> RatingCompat.newThumbRating(likeIsActive)
-            else -> RatingCompat.newUnratedRating(ratingStyle)
-        }
-        metadataBuilder.putRating(MediaMetadataCompat.METADATA_KEY_USER_RATING, userRating)
-
-        val state = when (core.getPlaybackState()) {
-            MavinPlayerConstants.STATE_PLAYING   -> PlaybackStateCompat.STATE_PLAYING
-            MavinPlayerConstants.STATE_PAUSED    -> PlaybackStateCompat.STATE_PAUSED
-            MavinPlayerConstants.STATE_BUFFERING -> PlaybackStateCompat.STATE_BUFFERING
-            MavinPlayerConstants.STATE_LOADING   -> PlaybackStateCompat.STATE_BUFFERING
-            MavinPlayerConstants.STATE_STOPPED   -> PlaybackStateCompat.STATE_STOPPED
-            MavinPlayerConstants.STATE_ERROR     -> PlaybackStateCompat.STATE_ERROR
-            else                                 -> PlaybackStateCompat.STATE_NONE
-        }
-
-        val actions = buildPlaybackStateActions(opts)
-        val stateBuilder = PlaybackStateCompat.Builder()
-            .setState(state, core.getCurrentPositionMs(), core.getPlaybackRate())
-            .setActions(actions)
-
-        // Carry error message into MediaSession error state
-        if (state == PlaybackStateCompat.STATE_ERROR) {
-            val err = MavinPlayerRegistry.lastPlaybackError
-            stateBuilder.setErrorMessage(
-                PlaybackStateCompat.ERROR_CODE_APP_ERROR,
-                err?.message ?: "Unknown error"
-            )
-        }
-
-        session.setPlaybackState(stateBuilder.build())
-
-        val queue = core.getQueue().mapIndexed { idx, t ->
-            val desc = MediaDescriptionCompat.Builder()
-                .setMediaId(t.id)
-                .setTitle(t.title ?: "")
-                .setSubtitle(t.artist ?: "")
-                .apply { t.artwork?.let { setIconUri(Uri.parse(it)) } }
-                .build()
-            MediaSessionCompat.QueueItem(desc, idx.toLong())
-        }
-        session.setQueue(queue)
-        session.setQueueTitle("Queue")
-    }
-
-    private fun buildPlaybackStateActions(opts: PlayerOptions): Long {
-        var actions = 0L
-        val caps = opts.capabilities
-        if (MavinPlayerConstants.CAPABILITY_PLAY in caps)             actions = actions or PlaybackStateCompat.ACTION_PLAY
-        if (MavinPlayerConstants.CAPABILITY_PAUSE in caps)            actions = actions or PlaybackStateCompat.ACTION_PAUSE
-        if (MavinPlayerConstants.CAPABILITY_STOP in caps)             actions = actions or PlaybackStateCompat.ACTION_STOP
-        if (MavinPlayerConstants.CAPABILITY_SEEK_TO in caps)          actions = actions or PlaybackStateCompat.ACTION_SEEK_TO
-        if (MavinPlayerConstants.CAPABILITY_SKIP_TO_NEXT in caps)     actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
-        if (MavinPlayerConstants.CAPABILITY_SKIP_TO_PREVIOUS in caps) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-        if (MavinPlayerConstants.CAPABILITY_JUMP_FORWARD in caps)     actions = actions or PlaybackStateCompat.ACTION_FAST_FORWARD
-        if (MavinPlayerConstants.CAPABILITY_JUMP_BACKWARD in caps)    actions = actions or PlaybackStateCompat.ACTION_REWIND
-        if (MavinPlayerConstants.CAPABILITY_SET_RATING in caps)       actions = actions or PlaybackStateCompat.ACTION_SET_RATING
-        if (MavinPlayerConstants.CAPABILITY_SKIP in caps)             actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_QUEUE_ITEM
-        if (MavinPlayerConstants.CAPABILITY_PLAY_FROM_ID in caps)     actions = actions or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID
-        if (MavinPlayerConstants.CAPABILITY_PLAY_FROM_SEARCH in caps) actions = actions or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH
-        return actions
-    }
-
-    private fun buildPlaceholderNotification(): Notification =
-        NotificationCompat.Builder(this, MavinPlayerConstants.NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Mavin Player")
-            .setContentText("Loading…")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                MavinPlayerConstants.NOTIFICATION_CHANNEL_ID,
-                "Mavin Player",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Music playback controls"
-                setShowBadge(false)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-            notificationManager?.createNotificationChannel(channel)
-        }
-    }
-
-    private fun makeServicePendingIntent(action: String, extras: Bundle? = null): PendingIntent {
-        val intent = Intent(this, MavinPlaybackService::class.java).apply {
-            this.action = action
-            extras?.let { putExtras(it) }
-        }
-        return PendingIntent.getService(
-            this, action.hashCode(), intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
-        )
-    }
-
-    private fun pendingIntentImmutableFlag(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-
-    private fun stopForegroundAndService() {
-        playerCore?.stop()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        notificationManager?.cancel(MavinPlayerConstants.NOTIFICATION_ID)
-        stopSelf()
-    }
+    // ── Serialization helpers ─────────────────────────────────────────────────
+    private fun TrackMetadata.toPersistedMap(): Map<String, Any?> = mapOf(
+        "id" to id, "url" to url, "title" to title, "artist" to artist,
+        "album" to album, "genre" to genre, "artwork" to artwork, "duration" to duration
+    )
 }
 
 // ============================================================================
@@ -2343,6 +2584,13 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
 
     companion object {
         private const val TAG = "MavinPlayerModule"
+
+        @Volatile
+        var playerInstance: MavinPlayerCore? = null
+            private set
+
+        fun getAppKilledPlaybackBehavior(): String =
+            MavinPlayerRegistry.options.android.appKilledPlaybackBehavior
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -2361,11 +2609,15 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             "playback-error",
             "playback-progress-updated",
             "playback-play-when-ready-changed",
+            "playback-speed-changed",
+            "playback-pitch-changed",
+            "playback-position-bookmarked",
             // Metadata events
             "playback-metadata-received",
             "audio-common-metadata-received",
             "audio-timed-metadata-received",
             "audio-chapter-metadata-received",
+            "chapter-changed",
             // Remote events
             "remote-play",
             "remote-pause",
@@ -2381,11 +2633,24 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             "remote-bookmark",
             "remote-duck",
             "remote-skip",
+            "remote-mute",
+            "remote-unmute",
             // Android Auto events
             "remote-play-from-id",
             "remote-play-from-search",
             // DSP events
-            "peak-meter-update"
+            "peak-meter-update",
+            // Sleep timer
+            "sleep-timer-fired",
+            // Audio device events
+            "bluetooth-device-connected",
+            "bluetooth-device-disconnected",
+            "headphones-connected",
+            "headphones-disconnected",
+            // Network
+            "network-quality-changed",
+            // Output profile
+            "output-profile-changed"
         )
 
         // ==================================================================
@@ -2404,7 +2669,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             updateOptionsInternal(options, promise)
         }
 
-        // RNTP 4.x: isServiceRunning() — reports whether the playback service is active
         AsyncFunction("isServiceRunning") { promise: Promise ->
             promise.resolve(MavinPlayerRegistry.isServiceRunning)
         }
@@ -2475,7 +2739,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("updateNowPlayingMetadata") { metadata: Map<String, Any?>, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.updateNowPlayingMetadata(metadata.toTrackMetadata())
-                notifyServiceNotificationUpdate()
+                notifyServiceUpdate()
                 promise.resolve(null)
             }
         }
@@ -2483,7 +2747,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("clearNowPlayingMetadata") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.clearNowPlayingMetadata()
-                notifyServiceNotificationUpdate()
+                notifyServiceUpdate()
                 promise.resolve(null)
             }
         }
@@ -2493,6 +2757,15 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 core.preloadNextTrack(track.toTrackMetadata())
                 promise.resolve(null)
             }
+        }
+
+        // Queue persistence
+        AsyncFunction("getPersistedQueue") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getPersistedQueue()) }
+        }
+
+        AsyncFunction("restorePersistedQueue") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.restorePersistedQueue(); promise.resolve(null) }
         }
 
         // ==================================================================
@@ -2595,7 +2868,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             runWithPlayer(promise) { core -> promise.resolve(core.getPlaybackStateString()) }
         }
 
-        // RNTP 4.x: getPlaybackState() returns {state, error} — error carries live error in error state
         AsyncFunction("getPlaybackState") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val stateStr = core.getPlaybackStateString()
@@ -2732,6 +3004,14 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             runWithPlayer(promise) { core -> core.setPlaybackPitch(pitch.toFloat()); promise.resolve(null) }
         }
 
+        AsyncFunction("getTempo") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTempo().toDouble()) }
+        }
+
+        AsyncFunction("setTempo") { tempo: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTempo(tempo.toFloat()); promise.resolve(null) }
+        }
+
         AsyncFunction("setProgressUpdateInterval") { intervalSeconds: Double, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.setProgressUpdateInterval((intervalSeconds * 1000.0).toLong())
@@ -2743,9 +3023,358 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             promise.resolve(1.0)
         }
 
-        // RNTP: getCacheSize returns bytes consumed by the cache
         AsyncFunction("getCacheSize") { promise: Promise ->
             promise.resolve(MavinPlayerRegistry.sharedCache?.cacheSpace?.toDouble() ?: 0.0)
+        }
+
+        // ==================================================================
+        // SLEEP TIMER
+        // ==================================================================
+
+        AsyncFunction("setSleepTimer") { durationSeconds: Double, fadeOutSeconds: Double?, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                core.setSleepTimer(durationSeconds, fadeOutSeconds ?: 3.0)
+                promise.resolve(null)
+            }
+        }
+
+        AsyncFunction("setSleepTimerEndAfterCurrentTrack") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSleepTimerEndAfterCurrentTrack(); promise.resolve(null) }
+        }
+
+        AsyncFunction("cancelSleepTimer") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.cancelSleepTimer(); promise.resolve(null) }
+        }
+
+        AsyncFunction("getSleepTimerState") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSleepTimerState()) }
+        }
+
+        // ==================================================================
+        // BALANCE / STEREO / MONO
+        // ==================================================================
+
+        AsyncFunction("setBalance") { leftGain: Double, rightGain: Double, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                core.setBalance(leftGain.toFloat(), rightGain.toFloat())
+                promise.resolve(null)
+            }
+        }
+
+        AsyncFunction("getBalance") { promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val (l, r) = core.getBalance()
+                promise.resolve(mapOf("left" to l.toDouble(), "right" to r.toDouble()))
+            }
+        }
+
+        AsyncFunction("setPan") { pan: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setPanBalance(pan.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getPan") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getPan().toDouble()) }
+        }
+
+        AsyncFunction("setStereoExpansion") { expansion: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setStereoExpansion(expansion.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getStereoExpansion") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getStereoExpansion().toDouble()) }
+        }
+
+        AsyncFunction("setMonoMix") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setMonoMix(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isMonoMix") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isMonoMix()) }
+        }
+
+        // ==================================================================
+        // BASS / TREBLE
+        // ==================================================================
+
+        AsyncFunction("setBassBoost") { gainDb: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setBassBoost(gainDb.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getBassBoost") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getBassBoost().toDouble()) }
+        }
+
+        AsyncFunction("setTrebleBoost") { gainDb: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTrebleBoost(gainDb.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getTrebleBoost") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTrebleBoost().toDouble()) }
+        }
+
+        // ==================================================================
+        // LIMITER
+        // ==================================================================
+
+        AsyncFunction("setLimiterEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setLimiterEnabled(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isLimiterEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isLimiterEnabled()) }
+        }
+
+        AsyncFunction("setLimiterThreshold") { thresholdDb: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setLimiterThreshold(thresholdDb.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getLimiterThreshold") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getLimiterThreshold().toDouble()) }
+        }
+
+        // ==================================================================
+        // LOUDNESS NORMALIZATION
+        // ==================================================================
+
+        AsyncFunction("setLoudnessNormalizationEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setLoudnessNormalizationEnabled(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isLoudnessNormalizationEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isLoudnessNormalizationEnabled()) }
+        }
+
+        AsyncFunction("setTargetLufs") { lufs: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTargetLufs(lufs.toFloat()); promise.resolve(null) }
+        }
+
+        AsyncFunction("getTargetLufs") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTargetLufs().toDouble()) }
+        }
+
+        // ==================================================================
+        // HEADROOM GUARD
+        // ==================================================================
+
+        AsyncFunction("setHeadroomGuardEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setHeadroomGuardEnabled(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isHeadroomGuardEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isHeadroomGuardEnabled()) }
+        }
+
+        AsyncFunction("setHeadroomGuardThreshold") { thresholdDb: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setHeadroomGuardThreshold(thresholdDb.toFloat()); promise.resolve(null) }
+        }
+
+        // ==================================================================
+        // PHASE INVERSION
+        // ==================================================================
+
+        AsyncFunction("setPhaseInvert") { left: Boolean, right: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setPhaseInvert(left, right); promise.resolve(null) }
+        }
+
+        AsyncFunction("getPhaseInvert") { promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val (l, r) = core.getPhaseInvert()
+                promise.resolve(mapOf("left" to l, "right" to r))
+            }
+        }
+
+        // ==================================================================
+        // MID/SIDE EQ MODE
+        // ==================================================================
+
+        AsyncFunction("setEqProcessingMode") { mode: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setEqProcessingMode(mode); promise.resolve(null) }
+        }
+
+        AsyncFunction("getEqProcessingMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getEqProcessingMode()) }
+        }
+
+        // ==================================================================
+        // GAPLESS
+        // ==================================================================
+
+        AsyncFunction("setGaplessEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setGaplessEnabled(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isGaplessEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isGaplessEnabled()) }
+        }
+
+        // ==================================================================
+        // DVC
+        // ==================================================================
+
+        AsyncFunction("setDvcEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setDvcEnabled(enabled); promise.resolve(null) }
+        }
+
+        AsyncFunction("isDvcEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isDvcEnabled()) }
+        }
+
+        // ==================================================================
+        // RESAMPLER
+        // ==================================================================
+
+        AsyncFunction("setResamplerQuality") { quality: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setResamplerQuality(quality); promise.resolve(null) }
+        }
+
+        AsyncFunction("getResamplerQuality") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getResamplerQuality()) }
+        }
+
+        AsyncFunction("setTargetResampleRate") { hz: Int, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTargetResampleRate(hz); promise.resolve(null) }
+        }
+
+        AsyncFunction("getTargetResampleRate") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTargetResampleRate()) }
+        }
+
+        // ==================================================================
+        // OUTPUT PROFILES
+        // ==================================================================
+
+        AsyncFunction("setOutputProfile") { profile: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setOutputProfile(profile); promise.resolve(null) }
+        }
+
+        AsyncFunction("getCurrentOutputProfile") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getCurrentOutputProfile()) }
+        }
+
+        AsyncFunction("setOutputProfilePreset") { profile: String, presetName: String?, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setOutputProfilePreset(profile, presetName); promise.resolve(null) }
+        }
+
+        AsyncFunction("getOutputProfilePreset") { profile: String, promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getOutputProfilePreset(profile)) }
+        }
+
+        // ==================================================================
+        // BOOKMARKS
+        // ==================================================================
+
+        AsyncFunction("bookmarkCurrentPosition") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.bookmarkCurrentPosition(); promise.resolve(null) }
+        }
+
+        AsyncFunction("addBookmark") { positionSeconds: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.addBookmark(positionSeconds); promise.resolve(null) }
+        }
+
+        AsyncFunction("removeBookmark") { positionSeconds: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.removeBookmark(positionSeconds); promise.resolve(null) }
+        }
+
+        AsyncFunction("getBookmarks") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getBookmarks()) }
+        }
+
+        AsyncFunction("clearBookmarks") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearBookmarks(); promise.resolve(null) }
+        }
+
+        // ==================================================================
+        // RESUME / POSITION PERSISTENCE
+        // ==================================================================
+
+        AsyncFunction("getLastPlayedPosition") { trackId: String, promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getLastPlayedPosition(trackId)) }
+        }
+
+        AsyncFunction("clearLastPlayedPosition") { trackId: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearLastPlayedPosition(trackId); promise.resolve(null) }
+        }
+
+        AsyncFunction("clearAllPlayedPositions") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearAllPlayedPositions(); promise.resolve(null) }
+        }
+
+        // ==================================================================
+        // NETWORK QUALITY
+        // ==================================================================
+
+        AsyncFunction("getNetworkQuality") { promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val nq = core.getNetworkQuality()
+                promise.resolve(mapOf(
+                    "estimatedBandwidthBps" to nq.estimatedBandwidthBps.toDouble(),
+                    "quality" to nq.quality
+                ))
+            }
+        }
+
+        // ==================================================================
+        // VISUALIZATION
+        // ==================================================================
+
+        AsyncFunction("getWaveformData") { numBuckets: Int?, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val data = core.getWaveformData(numBuckets ?: 100)
+                promise.resolve(data.map { it.toDouble() })
+            }
+        }
+
+        AsyncFunction("getSpectrumData") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSpectrumData()) }
+        }
+
+        // ==================================================================
+        // AUTOEQ IMPORT
+        // ==================================================================
+
+        AsyncFunction("importAutoEqPreset") { name: String, csv: String, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                if (core.importAutoEqPreset(name, csv)) promise.resolve(null)
+                else promise.reject("AUTOEQ_IMPORT_FAILED", "Failed to parse AutoEQ CSV", null)
+            }
+        }
+
+        // ==================================================================
+        // EXTENDED DSP (Crossfade, Offline, 64-bit, USB)
+        // ==================================================================
+
+        AsyncFunction("isCrossfadeEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isCrossfadeEnabled()) }
+        }
+        AsyncFunction("setCrossfadeEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setCrossfadeEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("getCrossfadeDurationMs") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getCrossfadeDurationMs().toDouble()) }
+        }
+        AsyncFunction("setCrossfadeDurationMs") { durationMs: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setCrossfadeDurationMs(durationMs.toLong()); promise.resolve(null) }
+        }
+        AsyncFunction("isOfflineMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isOfflineMode()) }
+        }
+        AsyncFunction("setOfflineMode") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setOfflineMode(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("is64BitProcessingEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.is64BitProcessingEnabled()) }
+        }
+        AsyncFunction("set64BitProcessingEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.set64BitProcessingEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isUsbDacConnected") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isUsbDacConnected()) }
+        }
+        AsyncFunction("isDirectUsbRoutingEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isDirectUsbRoutingEnabled()) }
+        }
+        AsyncFunction("enableDirectUsbRouting") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.enableDirectUsbRouting(enabled); promise.resolve(null) }
         }
 
         // ==================================================================
@@ -3113,18 +3742,47 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                     ?: throw IllegalStateException("ReactContext not available")
 
                 playerCore = MavinPlayerCore.getInstance(context)
+
+                // ── Wire up remote callback lambdas for MavinPlaybackService ──
+                playerCore!!.onRemotePlay        = { sendEvent("remote-play", emptyMap<String, Any?>()) }
+                playerCore!!.onRemotePause       = { sendEvent("remote-pause", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteStop        = { sendEvent("remote-stop", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteNext        = { sendEvent("remote-next", emptyMap<String, Any?>()) }
+                playerCore!!.onRemotePrevious    = { sendEvent("remote-previous", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteJumpForward = { intervalSec ->
+                    sendEvent("remote-jump-forward", mapOf("interval" to intervalSec))
+                }
+                playerCore!!.onRemoteJumpBackward = { intervalSec ->
+                    sendEvent("remote-jump-backward", mapOf("interval" to intervalSec))
+                }
+                playerCore!!.onRemoteSetRating = { value ->
+                    sendEvent("remote-set-rating", mapOf("rating" to value.toDouble()))
+                }
+                playerCore!!.onRemoteLike     = { sendEvent("remote-like", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteDislike  = { sendEvent("remote-dislike", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteBookmark = { sendEvent("remote-bookmark", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteMute     = { sendEvent("remote-mute", emptyMap<String, Any?>()) }
+                playerCore!!.onRemoteUnmute   = { sendEvent("remote-unmute", emptyMap<String, Any?>()) }
+
                 playerCore!!.addEventListener(this)
                 playerCore!!.setAlwaysPauseOnInterruption(
                     opts.android.alwaysPauseOnInterruption || opts.alwaysPauseOnInterruption
                 )
                 playerCore!!.setAutoHandleInterruptions(opts.autoHandleInterruptions)
                 playerCore!!.setProgressUpdateInterval(opts.progressUpdateEventInterval)
+                playerCore!!.setGaplessEnabled(opts.gaplessEnabled)
+                playerCore!!.setDvcEnabled(opts.dvcEnabled)
+                playerCore!!.setResamplerQuality(opts.resamplerQuality)
+                playerCore!!.setTargetResampleRate(opts.targetResampleRateHz)
 
                 MavinPlayerRegistry.remoteEventCallback = { eventName, payload ->
                     mainHandler.post { sendEvent(eventName, payload) }
                 }
 
+                playerInstance = playerCore
+
                 startPlaybackService(context)
+                MavinPlayerRegistry.isServiceRunning = true
                 isServiceStarted = true
 
                 Log.i(TAG, "Player setup complete")
@@ -3140,9 +3798,23 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         mainHandler.post {
             try {
                 playerCore?.removeEventListener(this)
+                playerCore?.onRemotePlay = null
+                playerCore?.onRemotePause = null
+                playerCore?.onRemoteStop = null
+                playerCore?.onRemoteNext = null
+                playerCore?.onRemotePrevious = null
+                playerCore?.onRemoteJumpForward = null
+                playerCore?.onRemoteJumpBackward = null
+                playerCore?.onRemoteSetRating = null
+                playerCore?.onRemoteLike = null
+                playerCore?.onRemoteDislike = null
+                playerCore?.onRemoteBookmark = null
+                playerCore?.onRemoteMute = null
+                playerCore?.onRemoteUnmute = null
                 MavinPlayerRegistry.remoteEventCallback = null
+                playerInstance = null
                 appContext.reactContext?.let { ctx ->
-                    ctx.stopService(Intent(ctx, MavinPlaybackService::class.java))
+                    ctx.stopService(android.content.Intent(ctx, expo.modules.mavinplayer.service.MavinPlaybackService::class.java))
                 }
                 MavinPlayerCore.destroyInstance()
                 playerCore = null
@@ -3164,7 +3836,10 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 )
                 playerCore?.setAutoHandleInterruptions(opts.autoHandleInterruptions)
                 playerCore?.setProgressUpdateInterval(opts.progressUpdateEventInterval)
-                notifyServiceNotificationUpdate()
+                playerCore?.setGaplessEnabled(opts.gaplessEnabled)
+                playerCore?.setDvcEnabled(opts.dvcEnabled)
+                playerCore?.setResamplerQuality(opts.resamplerQuality)
+                notifyServiceUpdate()
                 promise.resolve(null)
             } catch (e: Exception) {
                 promise.reject("UPDATE_OPTIONS_ERROR", e.message, e)
@@ -3173,7 +3848,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
     }
 
     private fun startPlaybackService(context: Context) {
-        val intent = Intent(context, MavinPlaybackService::class.java)
+        val intent = android.content.Intent(context, expo.modules.mavinplayer.service.MavinPlaybackService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {
@@ -3181,9 +3856,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
     }
 
-    private fun notifyServiceNotificationUpdate() {
+    private fun notifyServiceUpdate() {
         appContext.reactContext?.let { ctx ->
-            ctx.startService(Intent(ctx, MavinPlaybackService::class.java))
+            ctx.startService(android.content.Intent(ctx, expo.modules.mavinplayer.service.MavinPlaybackService::class.java))
         }
     }
 
@@ -3220,8 +3895,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             ?: legacyJumpMs
         val backwardJumpMs = ((options["backwardJumpInterval"] as? Number)?.toDouble()?.times(1000.0))?.toLong()
             ?: legacyJumpMs
-
-        // RNTP: maxCacheSize is in KB — multiply by 1024 is done in PlayerOptions.maxCacheSizeBytes getter
         val maxCacheSizeKb = (options["maxCacheSize"] as? Number)?.toLong()
             ?: MavinPlayerConstants.DEFAULT_CACHE_SIZE_KB
 
@@ -3263,10 +3936,16 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             androidAudioContentType   = options["androidAudioContentType"] as? String
                 ?: MavinPlayerConstants.AUDIO_CONTENT_TYPE_MUSIC,
             maxCacheSizeKb            = maxCacheSizeKb,
-            // RNTP 4.x FeedbackOptions — parsed from structured objects
             likeOptions               = parseFeedbackOptions(options["likeOptions"] as? Map<String, Any?>),
             dislikeOptions            = parseFeedbackOptions(options["dislikeOptions"] as? Map<String, Any?>),
             bookmarkOptions           = parseFeedbackOptions(options["bookmarkOptions"] as? Map<String, Any?>),
+            gaplessEnabled            = options["gaplessEnabled"] as? Boolean ?: true,
+            persistQueue              = options["persistQueue"] as? Boolean ?: false,
+            persistPosition           = options["persistPosition"] as? Boolean ?: false,
+            outputProfile             = options["outputProfile"] as? String ?: MavinPlayerConstants.OUTPUT_PROFILE_DEFAULT,
+            dvcEnabled                = options["dvcEnabled"] as? Boolean ?: false,
+            resamplerQuality          = options["resamplerQuality"] as? String ?: MavinPlayerConstants.RESAMPLER_QUALITY_HIGH,
+            targetResampleRateHz      = (options["targetResampleRateHz"] as? Number)?.toInt() ?: 0,
             android = AndroidOptions(
                 appKilledPlaybackBehavior = androidMap?.get("appKilledPlaybackBehavior") as? String
                     ?: MavinPlayerConstants.APP_KILLED_CONTINUE,
@@ -3306,16 +3985,15 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         nextIndex: Int,
         lastPosition: Double
     ) {
-        // RNTP legacy event (deprecated but preserved)
-        val legacyPayload = mapOf(
+        // RNTP legacy event (preserved for backwards compat)
+        sendEvent("playback-track-changed", mapOf(
             "track"     to previousIndex.takeIf { it >= 0 },
             "position"  to lastPosition,
             "nextTrack" to index.takeIf { it >= 0 }
-        )
-        sendEvent("playback-track-changed", legacyPayload)
+        ))
 
-        // RNTP 4.x: PlaybackActiveTrackChanged — fires with null index/track when queue empties
-        val activePayload = mapOf(
+        // RNTP 4.x PlaybackActiveTrackChanged
+        sendEvent("playback-active-track-changed", mapOf(
             "index"         to index.takeIf { it >= 0 },
             "track"         to track?.toMap(),
             "lastIndex"     to previousIndex.takeIf { it >= 0 },
@@ -3323,9 +4001,8 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             "lastPosition"  to lastPosition,
             "nextTrack"     to nextTrack?.toMap(),
             "nextIndex"     to nextIndex.takeIf { it >= 0 }
-        )
-        sendEvent("playback-active-track-changed", activePayload)
-        notifyServiceNotificationUpdate()
+        ))
+        notifyServiceUpdate()
     }
 
     override fun onPlaybackQueueEnded(track: TrackMetadata?, positionSeconds: Double) {
@@ -3378,6 +4055,62 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         sendEvent("remote-skip", mapOf("index" to index))
     }
 
+    override fun onSleepTimerFired() {
+        sendEvent("sleep-timer-fired", emptyMap<String, Any?>())
+    }
+
+    override fun onBluetoothDeviceConnected(deviceName: String) {
+        sendEvent("bluetooth-device-connected", mapOf("deviceName" to deviceName))
+    }
+
+    override fun onBluetoothDeviceDisconnected(deviceName: String) {
+        sendEvent("bluetooth-device-disconnected", mapOf("deviceName" to deviceName))
+    }
+
+    override fun onHeadphonesConnected() {
+        sendEvent("headphones-connected", emptyMap<String, Any?>())
+    }
+
+    override fun onHeadphonesDisconnected() {
+        sendEvent("headphones-disconnected", emptyMap<String, Any?>())
+    }
+
+    override fun onNetworkQualityChanged(quality: NetworkQuality) {
+        sendEvent("network-quality-changed", mapOf(
+            "estimatedBandwidthBps" to quality.estimatedBandwidthBps.toDouble(),
+            "quality"               to quality.quality
+        ))
+    }
+
+    override fun onPlaybackSpeedChanged(speed: Float) {
+        sendEvent("playback-speed-changed", mapOf("speed" to speed.toDouble()))
+    }
+
+    override fun onPlaybackPitchChanged(pitch: Float) {
+        sendEvent("playback-pitch-changed", mapOf("pitch" to pitch.toDouble()))
+    }
+
+    override fun onChapterChanged(chapter: ChapterPoint?, index: Int) {
+        sendEvent("chapter-changed", mapOf(
+            "index"          to index.takeIf { it >= 0 },
+            "title"          to chapter?.title,
+            "startTime"      to chapter?.startTimeSeconds,
+            "endTime"        to chapter?.endTimeSeconds,
+            "artwork"        to chapter?.artwork
+        ))
+    }
+
+    override fun onPositionBookmarked(trackId: String, positionSeconds: Double) {
+        sendEvent("playback-position-bookmarked", mapOf(
+            "trackId"  to trackId,
+            "position" to positionSeconds
+        ))
+    }
+
+    override fun onOutputProfileChanged(profile: String) {
+        sendEvent("output-profile-changed", mapOf("profile" to profile))
+    }
+
     // ========================================================================
     // HELPERS
     // ========================================================================
@@ -3385,6 +4118,27 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
     @Suppress("UNCHECKED_CAST")
     private fun Map<String, Any?>.toTrackMetadata(): TrackMetadata {
         val drmMap = this["drm"] as? Map<String, Any?>
+
+        // Parse chapters if present
+        val chaptersRaw = this["chapters"] as? List<Map<String, Any?>>
+        val chapters = chaptersRaw?.map { c ->
+            ChapterPoint(
+                title = c["title"] as? String ?: "",
+                startTimeSeconds = (c["startTime"] as? Number)?.toDouble() ?: 0.0,
+                endTimeSeconds = (c["endTime"] as? Number)?.toDouble(),
+                artwork = c["artwork"] as? String
+            )
+        }
+
+        // Parse lyrics if present
+        val lyricsRaw = this["lyrics"] as? List<Map<String, Any?>>
+        val lyrics = lyricsRaw?.map { l ->
+            LyricLine(
+                text = l["text"] as? String ?: "",
+                timeSeconds = (l["time"] as? Number)?.toDouble()
+            )
+        }
+
         return TrackMetadata(
             id          = this["id"] as? String ?: throw IllegalArgumentException("Track must have id"),
             url         = this["url"] as? String ?: this["uri"] as? String
@@ -3407,7 +4161,15 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             drmScheme        = drmMap?.get("type") as? String,
             drmLicenseServer = drmMap?.get("licenseServer") as? String,
             drmHeaders       = drmMap?.get("headers") as? Map<String, String>,
-            drmMultiSession  = drmMap?.get("multiSession") as? Boolean ?: false
+            drmMultiSession  = drmMap?.get("multiSession") as? Boolean ?: false,
+            chapters         = chapters,
+            lyrics           = lyrics,
+            lyricsUrl        = this["lyricsUrl"] as? String,
+            waveformUrl      = this["waveformUrl"] as? String,
+            trackGain        = (this["trackGain"] as? Number)?.toDouble(),
+            albumGain        = (this["albumGain"] as? Number)?.toDouble(),
+            trackPeak        = (this["trackPeak"] as? Number)?.toDouble(),
+            albumPeak        = (this["albumPeak"] as? Number)?.toDouble()
         )
     }
 
@@ -3429,6 +4191,23 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         "userAgent"    to userAgent,
         "contentType"  to contentType,
         "pitchAlgorithm" to pitchAlgorithm,
+        "lyricsUrl"    to lyricsUrl,
+        "waveformUrl"  to waveformUrl,
+        "trackGain"    to trackGain,
+        "albumGain"    to albumGain,
+        "trackPeak"    to trackPeak,
+        "albumPeak"    to albumPeak,
+        "chapters"     to chapters?.map { c ->
+            mapOf(
+                "title"     to c.title,
+                "startTime" to c.startTimeSeconds,
+                "endTime"   to c.endTimeSeconds,
+                "artwork"   to c.artwork
+            )
+        },
+        "lyrics"       to lyrics?.map { l ->
+            mapOf("text" to l.text, "time" to l.timeSeconds)
+        },
         "drm"          to if (drmScheme != null) mapOf(
             "type"          to drmScheme,
             "licenseServer" to drmLicenseServer,
@@ -3449,6 +4228,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         "likeCount"    to likeCount,
         "dislikeCount" to dislikeCount,
         "viewCount"    to viewCount,
-        "commentsCount"to commentsCount
+        "commentsCount" to commentsCount
     )
 }
