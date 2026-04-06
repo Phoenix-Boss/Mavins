@@ -7,11 +7,16 @@
  *     not from 'react-native-track-player', so it listens to the correct
  *     native event bus.
  *
- *  2. (NEW) Calls setNavigateToPlayer() once on mount so that
+ *  2. (Previous fix, kept) Calls setNavigateToPlayer() once on mount so that
  *     MusicPlayerContext's navigateToPlayerRef is always populated.
- *     Previously nothing ever called setNavigateToPlayer, meaning
- *     navigateToPlayerRef.current was always null and goToPlayer?.() was
- *     always a silent no-op when no inline navigate arg was passed.
+ *
+ *  3. (NEW) useActiveTrack() returns { track, index, isLoading } — NOT the
+ *     track directly. The old code did `const activeTrack = useActiveTrack()`
+ *     and then accessed activeTrack.id / activeTrack.title etc., which were
+ *     all undefined (accessing properties of the wrapper object, not the track).
+ *     This meant the playerStore was never updated with a real track, so
+ *     playerContent's storeCurrentTrack fallback was always null too.
+ *     FIX: Destructure `const { track: activeTrack } = useActiveTrack()`.
  */
 
 import React, {
@@ -75,31 +80,44 @@ export function PlayerProvider({
     if (router.canGoBack()) router.back();
   }, [router]);
 
-  // ✅ FIX 2: Wire up the navigation callback in MusicPlayerContext so that
-  // calls to playAudio(song) without an explicit navigate arg can still
-  // route to the player. Previously navigateToPlayerRef was always null
-  // because setNavigateToPlayer was never called anywhere.
+  // Wire up the navigation callback in MusicPlayerContext so that calls to
+  // playAudio(song) without an explicit navigate arg can still route to the
+  // player. Previously navigateToPlayerRef was always null because
+  // setNavigateToPlayer was never called anywhere.
   const { setNavigateToPlayer } = useMusicPlayer();
 
   useEffect(() => {
     setNavigateToPlayer(() => router.push("/(player)"));
   }, [setNavigateToPlayer, router]);
 
-  // ── Sync active track into playerStore ───────────────────────────────────
+  // ── Sync active track into playerStore ─────────────────────────────────────
+  // FIX 3: useActiveTrack() returns { track, index, isLoading }.
+  // The previous code used the whole result object as the track, meaning
+  // activeTrack.id / activeTrack.title etc. were always undefined (those
+  // properties don't exist on the wrapper — they exist on wrapper.track).
+  // The playerStore therefore never held a real track, breaking the
+  // storeCurrentTrack fallback in playerContent.
+
   const setStoreTrack = usePlayerStore((s: PS) => s.setPlaying);
-  const activeTrack   = useActiveTrack();
+  const { track: activeTrack } = useActiveTrack(); // ← key fix: destructure
 
   useEffect(() => {
     if (!activeTrack || !playerReady) return;
+
     const trackForStore = {
       id:        activeTrack.id        ?? "",
       title:     activeTrack.title     ?? "Unknown",
       artist:    activeTrack.artist    ?? "Unknown",
-      thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
+      thumbnail: typeof activeTrack.artwork === "string"
+        ? activeTrack.artwork
+        : typeof (activeTrack as any).artworkUri === "string"
+          ? (activeTrack as any).artworkUri
+          : "",
       url:       (activeTrack as any).url ?? (activeTrack as any).uri ?? "",
       videoId:   (activeTrack as any).videoId,
       duration:  activeTrack.duration,
     };
+
     const current = usePlayerStore.getState().currentTrack;
     if (current?.id !== trackForStore.id) {
       setStoreTrack(trackForStore);

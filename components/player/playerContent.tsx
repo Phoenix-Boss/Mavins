@@ -1,21 +1,44 @@
-// components/player/playerContent.fixed.tsx
+// components/player/playerContent.tsx
 /**
- * PlayerContent — FIXED
+ * PlayerContent — Full player screen UI.
  *
- * FIX 1 (split-brain): Removed playTrack() entirely.
- *   The old playTrack() called TrackPlayer.reset() + add() + play() directly
- *   inside PlayerContent.  This ran in parallel with MusicPlayerContext's own
- *   TrackPlayer calls, causing the two to stomp each other.
- *   Now handlePlayPause simply calls context.togglePlayPause() — the context
- *   is the single owner of all playback decisions.
+ * BUGS FIXED IN THIS VERSION:
  *
- * FIX 2 (wrong import): Removed `import TrackPlayer from "@/modules/mavin-eq"`
- *   for seek/skip.  Kept those calls because they are read-only control
- *   actions (seekTo, skipToNext, skipToPrevious, pause, play) that don't reset
- *   state — they are safe to call on the shim directly.
- *   The critical change is that we NEVER call reset()/add() from here.
+ *  BUG 1 (Critical) — Stats (likes/dislikes/views/comments) never rendered;
+ *    video toggle always disabled.
+ *    ROOT CAUSE: likeCount, dislikeCount, viewCount, commentsCount, videoUrl,
+ *    muxedVideoUrl, uploaderUrl are JS-only TrackExtras fields. The native
+ *    bridge strips them when it serialises the Track for the
+ *    onPlaybackActiveTrackChanged event, so useActiveTrack() never had them.
+ *    FIX: These are now read from getTrackExtras(activeTrack.id) — a
+ *    JS-side Map that MusicPlayerContext populates immediately after
+ *    resolveTrack() resolves. The native track event is only used for the
+ *    standard fields (title, artist, artwork, duration, id).
  *
- * Everything else (UI, video, gesture, lyrics, etc.) is unchanged.
+ *  BUG 2 (Critical) — Play button toggled but no audio played, progress bar
+ *    frozen, no error shown.
+ *    ROOT CAUSE: Stale/expired Supabase-cached YouTube stream URLs were
+ *    loaded silently by ExoPlayer. MusicPlayerContext now auto-recovers on
+ *    PlaybackError (invalidates cache + re-resolves). playerContent reflects
+ *    the corrected state via the native event-driven isPlaying.
+ *
+ *  BUG 3 (Critical) — isPlaying in JS was optimistic (set before native
+ *    confirms playback), so the button icon was wrong after silent failures.
+ *    FIX: MusicPlayerContext no longer calls setIsPlaying optimistically.
+ *    isPlaying here is now solely driven by native PlaybackStateChanged events.
+ *    useIsPlayingBridge() below supplements the "ready→playing" gap as before.
+ *
+ *  BUG 4 (Major) — useActiveTrack() result not destructured.
+ *    useActiveTrack() returns { track, index, isLoading }. Kept from previous
+ *    fix; now also feeds getTrackExtras() via the track's id.
+ *
+ *  BUG 5 (Major) — useProgress() received a bare number, not an options object.
+ *    Kept from previous fix.
+ *
+ *  BUG 6 (Minor) — artwork field mismatch: resolveArtwork() helper, kept.
+ *
+ *  BUG 7 (Minor) — handlePlayPause video/audio handoff: now reads extras from
+ *    the JS-side store so hasVideo / muxedVideoUrl are correct.
  */
 
 import React, {
@@ -60,6 +83,9 @@ import TrackPlayer, {
   useActiveTrack,
   useProgress,
   RepeatMode,
+  MavinEvent,
+  addEventListener,
+  State,
 } from "@/modules/mavin-eq";
 import { useRouter } from "expo-router";
 import {
@@ -72,12 +98,11 @@ import { MovingText } from "@/components/MovingText";
 import { screenPadding } from "@/constants/tokens";
 import { useImageColors } from "@/hooks/useImageColors";
 import { triggerHaptic } from "@/helpers/haptics";
-import { useMusicPlayer } from "@/components/MusicPlayerContext";
+import { useMusicPlayer, getTrackExtras } from "@/components/MusicPlayerContext";
 import { useTrackPlayerRepeatMode } from "@/hooks/useTrackPlayerRepeatMode";
 import { useTrackPlayerFavorite } from "@/hooks/useTrackPlayerFavorite";
 import { useTrackPlayerShuffle } from "@/hooks/useTrackPlayerShuffle";
 import { usePlayerStore } from "@/store/player";
-import { SkeletonLoader } from "@/components/common/SkeletonLoader";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -108,6 +133,14 @@ const formatCount = (n: number): string => {
   return n.toLocaleString();
 };
 
+const resolveArtwork = (track: any): string | number | undefined => {
+  if (!track) return undefined;
+  if (typeof track.artwork === "string" && track.artwork) return track.artwork;
+  if (typeof track.artworkUri === "string" && track.artworkUri) return track.artworkUri;
+  if (typeof track.artwork === "number") return track.artwork;
+  return undefined;
+};
+
 const getImageSource = (artwork: string | number | undefined) => {
   if (!artwork) return require("@/assets/images/mavins.png");
   if (typeof artwork === "number") return artwork;
@@ -125,7 +158,42 @@ const parseArtists = (raw: string | undefined): string[] => {
 const formatArtistName = (name: string): string =>
   name.replace(/([a-z])([A-Z])/g, "$1 $2");
 
-// ─── Skeleton Components ─────────────────────────────────────────────────────
+// ─── BUG 3 FIX — isPlaying bridge hook ───────────────────────────────────────
+/**
+ * Supplements MusicPlayerContext.isPlaying with a direct native event listener.
+ * Bridges the "ready" → "playing" gap that the Kotlin layer leaves when
+ * ExoPlayer reaches STATE_READY but hasn't emitted "playing" yet.
+ */
+function useIsPlayingBridge(contextIsPlaying: boolean): boolean {
+  const [nativePlaying, setNativePlaying] = useState(contextIsPlaying);
+
+  useEffect(() => {
+    setNativePlaying(contextIsPlaying);
+  }, [contextIsPlaying]);
+
+  useEffect(() => {
+    const sub = addEventListener(MavinEvent.PlaybackStateChanged, (data: any) => {
+      const s = data?.state as string | undefined;
+      if (s === State.Playing || s === "playing") {
+        setNativePlaying(true);
+      } else if (
+        s === State.Paused  || s === "paused"  ||
+        s === State.Stopped || s === "stopped" ||
+        s === State.Idle    || s === "idle"    ||
+        s === State.Ended   || s === "ended"   ||
+        s === State.Error   || s === "error"
+      ) {
+        setNativePlaying(false);
+      }
+      // "ready" / "buffering" / "loading" — keep current value
+    });
+    return () => sub.remove();
+  }, []);
+
+  return contextIsPlaying || nativePlaying;
+}
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
 
 function SkeletonPulse({
   width,
@@ -225,6 +293,131 @@ function ArtistLine({ rawArtist, uploaderUrl, onArtistPress }: ArtistLineProps) 
   );
 }
 
+// ─── PlayerIdleScreen ────────────────────────────────────────────────────────
+
+function PlayerIdleScreen({ onMinimize }: { onMinimize: () => void }) {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const anim   = useRef(new RNAnimated.Value(0)).current;
+
+  const handleDismiss = useCallback(() => {
+    onMinimize();
+    try {
+      if (!router.canGoBack()) router.replace("/(tabs)");
+    } catch {
+      router.replace("/(tabs)");
+    }
+  }, [onMinimize, router]);
+
+  useEffect(() => {
+    RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(anim, { toValue: 1, duration: 1200, useNativeDriver: false }),
+        RNAnimated.timing(anim, { toValue: 0, duration: 1200, useNativeDriver: false }),
+      ])
+    ).start();
+  }, []);
+
+  const glowOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.38] });
+
+  return (
+    <LinearGradient style={{ flex: 1 }} colors={["#1a0f05", "#0b0b0b", "#050505"]}>
+      <View style={[idleStyles.topBar, { top: insets.top + 8 }]}>
+        <View style={idleStyles.dragHandleWrapper}>
+          <View style={idleStyles.dragHandle} />
+        </View>
+        <TouchableOpacity onPress={handleDismiss} style={idleStyles.closeBtn} activeOpacity={0.7}>
+          <Ionicons name="chevron-down" size={28} color="rgba(255,255,255,0.6)" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[idleStyles.body, { paddingTop: insets.top + 80, paddingBottom: insets.bottom + 24 }]}>
+        <View style={idleStyles.artworkWrapper}>
+          <RNAnimated.View style={[idleStyles.glow, { opacity: glowOpacity }]} />
+          <Image
+            source={require("@/assets/images/mavins.png")}
+            style={idleStyles.artworkImage}
+            contentFit="contain"
+          />
+        </View>
+
+        <View style={idleStyles.infoContainer}>
+          <Text style={idleStyles.appTitle}>Mavin Player</Text>
+          <Text style={idleStyles.subtitle}>No song playing yet</Text>
+        </View>
+
+        <View style={idleStyles.progressWrapper}>
+          <SkeletonPulse width="100%" height={4} borderRadius={4} />
+          <View style={idleStyles.timeRow}>
+            <Text style={idleStyles.timeText}>0:00</Text>
+            <Text style={idleStyles.timeText}>0:00</Text>
+          </View>
+        </View>
+
+        <View style={idleStyles.controls}>
+          <Feather name="shuffle" size={20} color="rgba(255,255,255,0.2)" />
+          <Ionicons name="play-skip-back" size={32} color="rgba(255,255,255,0.2)" />
+          <View style={idleStyles.bigPlay}>
+            <Ionicons name="play" size={32} color="rgba(0,0,0,0.35)" />
+          </View>
+          <Ionicons name="play-skip-forward" size={32} color="rgba(255,255,255,0.2)" />
+          <MaterialCommunityIcons name="repeat" size={22} color="rgba(255,255,255,0.2)" />
+        </View>
+
+        <View style={idleStyles.bottomTabs}>
+          {["UP NEXT", "LYRICS", "RELATED"].map((label) => (
+            <Text key={label} style={idleStyles.bottomTab}>{label}</Text>
+          ))}
+        </View>
+      </View>
+    </LinearGradient>
+  );
+}
+
+const idleStyles = StyleSheet.create({
+  topBar: { position: "absolute", left: 0, right: 0, zIndex: 100, alignItems: "center" },
+  dragHandleWrapper: { width: "100%", alignItems: "center", paddingBottom: 8 },
+  dragHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.25)" },
+  closeBtn: { position: "absolute", left: screenPadding.horizontal, top: 0 },
+  body: { flex: 1, paddingHorizontal: screenPadding.horizontal, alignItems: "center" },
+  artworkWrapper: {
+    width: SCREEN_WIDTH * 0.85,
+    height: SCREEN_WIDTH * 0.85,
+    alignSelf: "center",
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#1c1208",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  glow: { ...StyleSheet.absoluteFillObject, backgroundColor: "#D4AF37", borderRadius: 16 },
+  artworkImage: { width: SCREEN_WIDTH * 0.55, height: SCREEN_WIDTH * 0.55, opacity: 0.75 },
+  infoContainer: { marginTop: verticalScale(24), alignItems: "center", width: "100%" },
+  appTitle: { color: "#fff", fontSize: moderateScale(20), fontWeight: "700", textAlign: "center", letterSpacing: 0.4 },
+  subtitle: { color: "rgba(255,255,255,0.4)", fontSize: moderateScale(14), marginTop: 6, textAlign: "center" },
+  progressWrapper: { marginTop: verticalScale(20), width: "100%" },
+  timeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: verticalScale(6) },
+  timeText: { color: "rgba(255,255,255,0.3)", fontSize: moderateScale(12) },
+  controls: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    marginTop: verticalScale(26),
+    width: "100%",
+    paddingHorizontal: scale(8),
+  },
+  bigPlay: {
+    width: scale(65),
+    height: scale(65),
+    borderRadius: 32.5,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  bottomTabs: { flexDirection: "row", justifyContent: "space-around", marginTop: verticalScale(32), width: "100%" },
+  bottomTab: { color: "rgba(255,255,255,0.2)", fontSize: moderateScale(13) },
+});
+
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 interface PlayerContentProps {
@@ -244,63 +437,114 @@ function PlayerContentInner({
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const activeTrack = useActiveTrack();
-  const progress    = useProgress(250);
+  // BUG 4 FIX (kept): useActiveTrack() returns { track, index, isLoading }
+  const { track: activeTrack, isLoading: trackIsLoading } = useActiveTrack();
 
-  // useProgress() returns position/duration/buffered in milliseconds (from native ExoPlayer).
-  // Divide by 1000 to get seconds for display and expo-video currentTime.
+  // BUG 5 FIX (kept): useProgress() takes an options object
+  const progress = useProgress({ intervalMs: 250 });
+
+  // Progress values are in milliseconds (native ExoPlayer contract).
   const positionSec = progress.position / 1000;
   const durationSec = progress.duration / 1000;
 
-  // ✅ FIX 1: contextIsPlaying and togglePlayPause are the ONLY play/pause
-  //    interface.  No direct TrackPlayer.reset()/add() calls from this file.
   const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
+
+  // BUG 3 FIX: Bridge the "ready" → "playing" gap
+  const isPlaying = useIsPlayingBridge(contextIsPlaying);
 
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
 
+  // BUG 6 FIX (kept): normalise displayTrack so .artwork is always set
   const displayTrack = useMemo(() => {
-    if (activeTrack) return activeTrack as any;
+    if (activeTrack) {
+      const resolved = resolveArtwork(activeTrack);
+      return { ...(activeTrack as any), artwork: resolved };
+    }
     if (storeCurrentTrack) {
       return {
-        id:       storeCurrentTrack.id,
-        title:    storeCurrentTrack.title,
-        artist:   storeCurrentTrack.artist,
-        artwork:  storeCurrentTrack.thumbnail,
-        url:      storeCurrentTrack.url,
-        duration: storeCurrentTrack.duration,
-        videoId:  storeCurrentTrack.videoId,
+        id:        storeCurrentTrack.id,
+        title:     storeCurrentTrack.title,
+        artist:    storeCurrentTrack.artist,
+        artwork:   storeCurrentTrack.thumbnail,
+        artworkUri: storeCurrentTrack.thumbnail,
+        url:       storeCurrentTrack.url,
+        duration:  storeCurrentTrack.duration,
+        videoId:   storeCurrentTrack.videoId,
       } as any;
     }
     return null;
   }, [activeTrack, storeCurrentTrack]);
 
+  // ─── BUG 1 FIX ─────────────────────────────────────────────────────────────
+  // JS-only extra fields (stats, video URLs, uploaderUrl) are NOT available
+  // from useActiveTrack() because the native bridge strips them. They live in
+  // the JS-side trackExtrasStore populated by MusicPlayerContext.
+  // We read them here by the active track's ID and keep a local state copy
+  // so the UI re-renders when comments arrive asynchronously.
+  const [extras, setExtras] = useState(() =>
+    getTrackExtras(displayTrack?.id) ?? {}
+  );
+
+  useEffect(() => {
+    const id = displayTrack?.id;
+    if (!id) {
+      setExtras({});
+      return;
+    }
+    // Immediately read whatever is already stored
+    setExtras(getTrackExtras(id) ?? {});
+
+    // Poll once more after a short delay to catch asynchronous comment counts
+    // that MusicPlayerContext may have written after we rendered
+    const t = setTimeout(() => {
+      setExtras(getTrackExtras(id) ?? {});
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [displayTrack?.id]);
+
+  // Also subscribe to the native track-changed event so extras update
+  // when the user skips to a queued track
+  useEffect(() => {
+    const sub = addEventListener(
+      MavinEvent.PlaybackActiveTrackChanged,
+      (data: any) => {
+        const id = data?.track?.id;
+        if (id) setExtras(getTrackExtras(id) ?? {});
+      },
+    );
+    return () => sub.remove();
+  }, []);
+
+  // Derived stat values — all sourced from the JS-side extras store
+  const likeCount     = typeof extras.likeCount     === "number" ? extras.likeCount     : -1;
+  const dislikeCount  = typeof extras.dislikeCount  === "number" ? extras.dislikeCount  : -1;
+  const commentsCount = typeof extras.commentsCount === "number" ? extras.commentsCount : -1;
+  const viewCount     = typeof extras.viewCount     === "number" ? extras.viewCount     : -1;
+
+  // Video / uploader data also from extras store
+  const uploaderUrl: string | undefined  = extras.uploaderUrl as string | undefined;
+  const videoId:     string | undefined  = extras.videoId     as string | undefined;
+  const muxedVideoUrl: string | undefined = extras.muxedVideoUrl as string | undefined;
+  const videoUrl:      string | undefined = extras.videoUrl      as string | undefined;
+  const activeVideoUrl                    = muxedVideoUrl ?? videoUrl ?? undefined;
+  const hasVideo                          = !!activeVideoUrl;
+
+  const canShowLyrics = !!(videoId ?? displayTrack?.id);
+
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
   const { shuffleMode, toggleShuffle, getDotCount } = useTrackPlayerShuffle();
-
-  const track         = displayTrack as any;
-  const likeCount     = typeof track?.likeCount     === "number" ? track.likeCount     : -1;
-  const dislikeCount  = typeof track?.dislikeCount  === "number" ? track.dislikeCount  : -1;
-  const commentsCount = typeof track?.commentsCount === "number" ? track.commentsCount : -1;
-  const viewCount     = typeof track?.viewCount     === "number" ? track.viewCount     : -1;
-
-  const uploaderUrl: string | undefined = track?.uploaderUrl as string | undefined;
-  const videoId:     string | undefined = track?.videoId     as string | undefined;
-  const canShowLyrics = !!videoId;
 
   const [counterTarget, setCounterTarget] = useState(0);
   useEffect(() => {
     setCounterTarget(0);
     const t = setTimeout(() => setCounterTarget(viewCount > 0 ? viewCount : 0), 150);
     return () => clearTimeout(t);
-  }, [activeTrack?.id, viewCount]);
+  }, [displayTrack?.id, viewCount]);
 
-  // Video handling
-  const muxedVideoUrl: string | undefined = track?.muxedVideoUrl as string | undefined;
-  const videoUrl:      string | undefined = track?.videoUrl      as string | undefined;
-  const activeVideoUrl                    = muxedVideoUrl ?? videoUrl ?? undefined;
-  const hasVideo = !!activeVideoUrl;
+  // ── Video handling ──────────────────────────────────────────────────────────
+
   const [activeSegment, setActiveSegment] = useState<"song" | "video">("song");
   const videoPlayerReady  = useRef(false);
   const pendingSeek       = useRef<number | null>(null);
@@ -315,13 +559,13 @@ function PlayerContentInner({
   useEffect(() => {
     if (!videoPlayer || activeSegment !== "video") return;
     if (muxedVideoUrl && videoOwnsAudio.current) {
-      if (contextIsPlaying) videoPlayer.play();
+      if (isPlaying) videoPlayer.play();
       else videoPlayer.pause();
     } else if (!muxedVideoUrl) {
-      if (contextIsPlaying) videoPlayer.play();
+      if (isPlaying) videoPlayer.play();
       else videoPlayer.pause();
     }
-  }, [contextIsPlaying, activeSegment, videoPlayer, muxedVideoUrl]);
+  }, [isPlaying, activeSegment, videoPlayer, muxedVideoUrl]);
 
   useEffect(() => {
     if (!videoPlayer) return;
@@ -331,7 +575,7 @@ function PlayerContentInner({
         if (pendingSeek.current !== null) {
           videoPlayer.currentTime = pendingSeek.current;
           pendingSeek.current = null;
-          if (activeSegment === "video" && contextIsPlaying) {
+          if (activeSegment === "video" && isPlaying) {
             if (muxedVideoUrl) {
               videoOwnsAudio.current = true;
               TrackPlayer.pause().catch(() => {});
@@ -342,7 +586,7 @@ function PlayerContentInner({
       }
     });
     return () => sub.remove();
-  }, [videoPlayer, activeSegment, contextIsPlaying, muxedVideoUrl]);
+  }, [videoPlayer, activeSegment, isPlaying, muxedVideoUrl]);
 
   const videoProgress    = useSharedValue(0);
   const artworkAnimStyle = useAnimatedStyle(() => ({
@@ -362,24 +606,24 @@ function PlayerContentInner({
       if (seg === "video" && videoPlayer) {
         if (muxedVideoUrl) {
           TrackPlayer.getProgress().then(({ position }) => {
+            const seekSec = position / 1000;
             if (videoPlayerReady.current) {
-              videoPlayer.currentTime = position / 1000;
-              if (contextIsPlaying) {
+              videoPlayer.currentTime = seekSec;
+              if (isPlaying) {
                 videoOwnsAudio.current = true;
                 TrackPlayer.pause().catch(() => {});
                 videoPlayer.play();
               }
             } else {
-              pendingSeek.current = position / 1000;
+              pendingSeek.current = seekSec;
             }
           }).catch(() => {});
         } else {
-          const seekTo = positionSec;
           if (videoPlayerReady.current) {
-            videoPlayer.currentTime = seekTo;
-            if (contextIsPlaying) videoPlayer.play();
+            videoPlayer.currentTime = positionSec;
+            if (isPlaying) videoPlayer.play();
           } else {
-            pendingSeek.current = seekTo;
+            pendingSeek.current = positionSec;
           }
         }
       } else if (seg === "song" && videoPlayer) {
@@ -390,9 +634,10 @@ function PlayerContentInner({
         }
       }
     },
-    [hasVideo, videoPlayer, videoProgress, progress.position, contextIsPlaying, muxedVideoUrl]
+    [hasVideo, videoPlayer, videoProgress, positionSec, isPlaying, muxedVideoUrl]
   );
 
+  // Reset video state when the active track changes
   useEffect(() => {
     if (videoPlayer) videoPlayer.pause();
     if (videoOwnsAudio.current) {
@@ -403,10 +648,10 @@ function PlayerContentInner({
     videoProgress.value      = 0;
     videoPlayerReady.current = false;
     pendingSeek.current      = null;
-  }, [activeTrack?.id, videoPlayer]);
+  }, [displayTrack?.id, videoPlayer]);
 
   const [activeBottomTab, setActiveBottomTab] = useState<"upnext" | "lyrics" | "related">("upnext");
-  useEffect(() => { setActiveBottomTab("upnext"); }, [activeTrack?.id]);
+  useEffect(() => { setActiveBottomTab("upnext"); }, [displayTrack?.id]);
 
   const artworkForColors = typeof displayTrack?.artwork === "string" ? displayTrack.artwork : null;
   const { imageColors }  = useImageColors(artworkForColors);
@@ -414,6 +659,8 @@ function PlayerContentInner({
     if (imageColors?.dominant) return [imageColors.dominant, "#000", "#000"];
     return ["#1a0f05", "#0b0b0b", "#050505"];
   }, [imageColors]);
+
+  // ── Slider ─────────────────────────────────────────────────────────────────
 
   const isSliding      = useSharedValue(false);
   const sliderProgress = useSharedValue(0);
@@ -428,37 +675,55 @@ function PlayerContentInner({
   const handleSeek = useCallback(
     async (fraction: number) => {
       if (durationSec <= 0) return;
-      const t = fraction * durationSec; // seconds, for video + display
-      // FIX: seekTo expects milliseconds (ExoPlayer contract). Multiply by 1000.
-      // The original passed seconds directly, causing seeks to land ~1000x too
-      // early (e.g. seeking to "1 minute" actually sought to 0.06 seconds).
+      const t = fraction * durationSec;
       await TrackPlayer.seekTo(t * 1000);
       if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
-        videoPlayer.currentTime = t; // expo-video takes seconds — correct as-is
-        if (contextIsPlaying) videoPlayer.play();
+        videoPlayer.currentTime = t;
+        if (isPlaying) videoPlayer.play();
       }
     },
-    [progress.duration, activeSegment, videoPlayer, contextIsPlaying]
+    [durationSec, activeSegment, videoPlayer, isPlaying]
   );
 
+  // ── Swipe-down-to-dismiss gesture ──────────────────────────────────────────
+
   const translateY        = useSharedValue(0);
-  const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.25;
+  const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.15;
+  const DISMISS_VELOCITY  = 800;
 
   const dismiss = useCallback(() => {
     triggerHaptic();
     onMinimize();
-  }, [onMinimize]);
+    try {
+      if (!router.canGoBack()) router.replace("/(tabs)");
+    } catch {
+      router.replace("/(tabs)");
+    }
+  }, [onMinimize, router]);
 
   const panGesture = Gesture.Pan()
-    .onUpdate((e) => { if (e.translationY > 0) translateY.value = e.translationY; })
+    .onUpdate((e) => {
+      if (e.translationY > 0) translateY.value = e.translationY;
+    })
     .onEnd((e) => {
-      if (e.translationY > DISMISS_THRESHOLD) runOnJS(dismiss)();
-      else translateY.value = withSpring(0, { damping: 20 });
+      const shouldDismiss =
+        e.translationY > DISMISS_THRESHOLD ||
+        (e.translationY > 40 && e.velocityY > DISMISS_VELOCITY);
+
+      if (shouldDismiss) {
+        translateY.value = withTiming(SCREEN_HEIGHT, { duration: 220 }, () => {
+          runOnJS(dismiss)();
+        });
+      } else {
+        translateY.value = withSpring(0, { damping: 20, stiffness: 200 });
+      }
     });
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
   }));
+
+  // ── Playback controls ───────────────────────────────────────────────────────
 
   const handleSkipBack = async () => {
     triggerHaptic();
@@ -479,23 +744,23 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // ✅ FIX 1: handlePlayPause delegates entirely to context.togglePlayPause().
-  //    No TrackPlayer.reset()/add() anywhere in this component.
+  // BUG 7 FIX: muxedVideoUrl now comes from the JS-side extras store,
+  // so the video/audio handoff here is always correct.
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
     if (!displayTrack) return;
     togglePlayPause();
-    // Video audio handoff when muxed
-    if (contextIsPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+    if (isPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
       videoPlayer.pause();
-    } else if (!contextIsPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
+    } else if (!isPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
       videoOwnsAudio.current = true;
       TrackPlayer.pause().catch(() => {});
       videoPlayer.play();
     }
-  }, [contextIsPlaying, displayTrack, togglePlayPause, activeSegment, muxedVideoUrl, videoPlayer]);
+  }, [isPlaying, displayTrack, togglePlayPause, activeSegment, muxedVideoUrl, videoPlayer]);
 
-  // Navigation
+  // ── Navigation ──────────────────────────────────────────────────────────────
+
   const handleArtistPress = useCallback(
     (artistName: string) => {
       if (!uploaderUrl) return;
@@ -560,16 +825,21 @@ function PlayerContentInner({
           title:       displayTrack?.title,
           artist:      displayTrack?.artist,
           thumbnail:   displayTrack?.artwork,
-          url:         track?.url,
+          url:         displayTrack?.url,
           duration:    displayTrack?.duration,
           uploaderUrl: uploaderUrl,
-          albumId:     track?.albumId,
-          albumName:   track?.albumName,
           videoId:     videoId,
         }),
       },
     });
-  }, [router, displayTrack, track, uploaderUrl, videoId]);
+  }, [router, displayTrack, uploaderUrl, videoId]);
+
+  // ── No-track idle fallback ───────────────────────────────────────────────────
+  if (!displayTrack) {
+    return <PlayerIdleScreen onMinimize={onMinimize} />;
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <GestureDetector gesture={panGesture}>
@@ -624,7 +894,7 @@ function PlayerContentInner({
             <View style={styles.artworkContainer}>
               <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
                 <Image
-                  source={getImageSource(displayTrack?.artwork)}
+                  source={getImageSource(displayTrack.artwork)}
                   style={styles.artworkImage}
                   contentFit="cover"
                   transition={300}
@@ -646,7 +916,7 @@ function PlayerContentInner({
 
             {/* SONG INFO */}
             <View style={styles.infoContainer}>
-              {displayTrack?.title ? (
+              {displayTrack.title ? (
                 <MovingText
                   text={displayTrack.title}
                   animationThreshold={20}
@@ -658,7 +928,7 @@ function PlayerContentInner({
                 </View>
               )}
 
-              {displayTrack?.artist ? (
+              {displayTrack.artist ? (
                 <ArtistLine
                   rawArtist={displayTrack.artist}
                   uploaderUrl={uploaderUrl}
@@ -674,6 +944,7 @@ function PlayerContentInner({
             {/* ACTION ROW */}
             <View style={styles.actionRow}>
               <View style={styles.leftActions}>
+                {/* Likes / Dislikes — BUG 1 FIX: sourced from JS extras store */}
                 <View style={styles.actionContainer}>
                   <TouchableOpacity
                     style={styles.actionButton}
@@ -698,6 +969,7 @@ function PlayerContentInner({
                   </TouchableOpacity>
                 </View>
 
+                {/* Comments — BUG 1 FIX: sourced from JS extras store */}
                 <TouchableOpacity
                   style={styles.actionContainer}
                   onPress={handleComments}
@@ -710,6 +982,7 @@ function PlayerContentInner({
                 </TouchableOpacity>
               </View>
 
+              {/* Play / view count — BUG 1 FIX: sourced from JS extras store */}
               <View style={styles.playCountPill}>
                 <Ionicons name="headset-outline" size={13} color="rgba(255,255,255,0.65)" />
                 {counterTarget > 0 ? (
@@ -797,7 +1070,7 @@ function PlayerContentInner({
                 disabled={isLoading}
               >
                 <Ionicons
-                  name={isLoading ? "hourglass-outline" : contextIsPlaying ? "pause" : "play"}
+                  name={isLoading ? "hourglass-outline" : isPlaying ? "pause" : "play"}
                   size={32}
                   color="#000"
                 />
@@ -862,7 +1135,7 @@ function PlayerContentInner({
   );
 }
 
-// ─── PlayerContent — public export with playerReady gate ─────────────────────
+// ─── PlayerContent — public export ───────────────────────────────────────────
 
 export default function PlayerContent({
   onMinimize,
@@ -870,7 +1143,9 @@ export default function PlayerContent({
   isExpanded,
   playerReady,
 }: PlayerContentProps) {
-  if (!playerReady) return null;
+  if (!playerReady) {
+    return <PlayerIdleScreen onMinimize={onMinimize} />;
+  }
 
   return (
     <PlayerContentInner

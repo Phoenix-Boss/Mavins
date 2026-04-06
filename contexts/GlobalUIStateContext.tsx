@@ -11,9 +11,9 @@ import React, {
 import { usePlaybackState, State } from "@/modules/mavin-eq";
 import { triggerHaptic } from "@/helpers/haptics";
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface GlobalUIStateContextType {
   tabsVisible: boolean;
@@ -31,43 +31,34 @@ interface GlobalUIStateContextType {
 const GlobalUIStateContext =
   createContext<GlobalUIStateContextType | undefined>(undefined);
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Provider
 //
 // IMPORTANT: This component calls usePlaybackState() at the top level.
-// It must only be rendered after TrackPlayer.setupPlayer() has resolved.
+// It must only be rendered after MavinPlayer.setupPlayer() has resolved.
 // In _layout.tsx this is guaranteed by the `playerReady` gate on AppShell.
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const GlobalUIStateProvider: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
-  const [tabsVisible,   setTabsVisibleState]   = useState(true);
-  const [tabsLocked,    setTabsLockedState]     = useState(false);
-  const [handleVisible, setHandleVisibleState]  = useState(false);
+  const [tabsVisible,    setTabsVisibleState]    = useState(true);
+  const [tabsLocked,     setTabsLockedState]     = useState(false);
+  const [handleVisible,  setHandleVisibleState]  = useState(false);
   const [isMusicPlaying, setIsMusicPlayingState] = useState(false);
 
   /**
-   * usePlaybackState() is safe here because this component only mounts after
-   * setupPlayer() has resolved (enforced by the playerReady gate in _layout).
-   *
-   * The hook returns:
-   *   v4 — { state: State.Playing, ... }   (object)
-   *   v3 — State.Playing                   (enum directly)
-   *
-   * We normalise both shapes below and fall back to State.None if the value
-   * is not yet available on the very first render tick.
+   * usePlaybackState() returns { state: PlaybackState, isLoading, error }.
+   * `state` is itself a PlaybackState object: { state: State, stateCode?, error? }.
+   * We drill into `.state.state` to get the actual State enum value.
    */
-  const playbackState = usePlaybackState();
+  const { state: playbackState } = usePlaybackState();
 
   const currentState = useMemo<State>(() => {
-    if (!playbackState) return State.None;
-
-    if (typeof playbackState === "object" && "state" in playbackState) {
-      return (playbackState as { state: State }).state ?? State.None;
-    }
-
-    return playbackState as unknown as State;
+    const raw = playbackState?.state;
+    if (!raw) return State.None;
+    // The inner .state field is already a State enum string value
+    return raw as State;
   }, [playbackState]);
 
   const isPlaying = useMemo(
@@ -116,7 +107,7 @@ export const GlobalUIStateProvider: React.FC<{
     if (!isMusicPlaying) return;
 
     const newVisibility = !tabsVisible;
-    setTabsLockedState(newVisibility);   // lock when showing, unlock when hiding
+    setTabsLockedState(newVisibility); // lock when showing, unlock when hiding
     setTabsVisibleState(newVisibility);
     triggerHaptic();
   }, [isMusicPlaying, tabsVisible]);
@@ -156,9 +147,9 @@ export const GlobalUIStateProvider: React.FC<{
   );
 };
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Hook
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const useGlobalUIState = (): GlobalUIStateContextType => {
   const context = useContext(GlobalUIStateContext);

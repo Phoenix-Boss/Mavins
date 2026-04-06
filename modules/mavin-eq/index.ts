@@ -4,6 +4,16 @@
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 import { useEffect, useState, useRef } from 'react';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VALUE imports — enums and consts must NOT be `import type` or they are
+// erased at runtime, causing "Property 'X' doesn't exist" crashes.
+// ─────────────────────────────────────────────────────────────────────────────
+import { MavinEvent, RNTPEvent, State, RepeatMode, ISO_FREQ_CENTERS } from './types';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPE-ONLY imports — interfaces, type aliases, and hook-result shapes.
+// These are stripped at compile time and have zero runtime cost.
+// ─────────────────────────────────────────────────────────────────────────────
 import type {
   // Core
   Nullable,
@@ -11,15 +21,12 @@ import type {
 
   // Track & Playback
   Track,
-  State,
   PlaybackState,
   Progress,
   PeakMeter,
-  RepeatMode,
   ShuffleMode,
 
   // EQ Types
-  ISO_FREQ_CENTERS,
   IsoFreqIndex,
   EQGains,
   EqBandGains,
@@ -53,8 +60,8 @@ import type {
   UpdateOptions,
 
   // Events
-  MavinEvent,
-  RNTPEvent,
+  MavinEvent as MavinEventType,
+  RNTPEvent as RNTPEventType,
   EventName,
   EventSubscription as EventSubscriptionType,
 
@@ -125,19 +132,19 @@ type EventPayloadMap = {
   [MavinEvent.PlaybackQueueEnded]:          PlaybackQueueEndedEvent;
   [MavinEvent.PlaybackPlayWhenReadyChanged]:{ playWhenReady: boolean };
   [MavinEvent.PlaybackError]:               PlaybackErrorEvent;
-  [MavinEvent.Spectrum]:                    SpectrumEvent;     // was SpectrumData — incorrect
+  [MavinEvent.Spectrum]:                    SpectrumEvent;
   [MavinEvent.PeakMeter]:                   PeakMeterEvent;
   [MavinEvent.ReplayGainApplied]:           ReplayGainAppliedEvent;
-  [MavinEvent.AudioFocusLost]:              AudioFocusEvent;   // was AudioFocusChanged — incorrect
+  [MavinEvent.AudioFocusLost]:              AudioFocusEvent;
   [MavinEvent.AudioFocusGranted]:           Record<string, never>;
   [MavinEvent.RemoteSeek]:                  RemoteSeekEvent;
   [MavinEvent.RemoteSkip]:                  RemoteSkipEvent;
   [MavinEvent.RemoteSetRating]:             RemoteSetRatingEvent;
-  [MavinEvent.RemoteJumpForward]:           RemoteJumpEvent;   // was RemoteJump — incorrect
-  [MavinEvent.RemoteJumpBackward]:          RemoteJumpEvent;   // was RemoteJump — incorrect
+  [MavinEvent.RemoteJumpForward]:           RemoteJumpEvent;
+  [MavinEvent.RemoteJumpBackward]:          RemoteJumpEvent;
   [MavinEvent.RemoteDuck]:                  RemoteDuckEvent;
-  [MavinEvent.AudioCommonMetadataReceived]: MetadataEvent;     // was MetadataReceived — incorrect
-  [MavinEvent.AudioTimedMetadataReceived]:  MetadataEvent;     // was MetadataReceived — incorrect
+  [MavinEvent.AudioCommonMetadataReceived]: MetadataEvent;
+  [MavinEvent.AudioTimedMetadataReceived]:  MetadataEvent;
   [MavinEvent.UsbDacConnected]:             DacInfo;
   [MavinEvent.UsbDacDisconnected]:          Record<string, never>;
   [MavinEvent.TrackChanged]:                TrackChangedEvent;
@@ -150,8 +157,6 @@ type EventPayloadMap = {
   [MavinEvent.RemotePlaySearch]:            { query: string; extras: Record<string, unknown> };
 
   // ── RNTP parity events ────────────────────────────────────────────────────
-  // Note: RNTPEvent has no RemoteJumpForward/Backward/RemoteDuck —
-  // those remote controls map to RemoteLike/Dislike/Bookmark in RNTP.
   [RNTPEvent.PlaybackState]:           { state: number; stateName?: string };
   [RNTPEvent.PlaybackTrackChanged]:    { track: Track | null; index: number };
   [RNTPEvent.PlaybackQueueEnded]:      { position: number };
@@ -235,7 +240,14 @@ export function subscribeToEvents<K extends keyof EventPayloadMap>(
 
 export default MavinPlayer;
 
-// Re-export all types
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-export enum values (these are runtime values, not types)
+// ─────────────────────────────────────────────────────────────────────────────
+export { MavinEvent, RNTPEvent, State, RepeatMode, ISO_FREQ_CENTERS };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-export pure types (erased at runtime)
+// ─────────────────────────────────────────────────────────────────────────────
 export type {
   Nullable,
   Optional,
@@ -244,7 +256,6 @@ export type {
   Progress,
   PeakMeter,
   ShuffleMode,
-  ISO_FREQ_CENTERS,
   IsoFreqIndex,
   EQGains,
   EqBandGains,
@@ -301,9 +312,6 @@ export type {
   MavinPlayerEvents,
 };
 
-// Re-export enums (values, not just types)
-export { MavinEvent, RNTPEvent, State, RepeatMode } from './types';
-
 // ─────────────────────────────────────────────────────────────────────────────
 // LIFECYCLE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +353,7 @@ export const skipToPrevious = (): Promise<void> => MavinPlayer.skipToPrevious();
 
 /**
  * Skip to track at index with optional initial position.
- * @param index           - Queue index
+ * @param index             - Queue index
  * @param initialPositionMs - Optional start position in ms (RNTP v5)
  */
 export const skipToIndex = (index: number, initialPositionMs?: number): Promise<void> =>
@@ -354,9 +362,9 @@ export const skipToIndex = (index: number, initialPositionMs?: number): Promise<
 /** Skip forward/backward by seconds. (RNTP parity) */
 export const skip = (seconds: number): Promise<void> => MavinPlayer.skip(seconds);
 
-export const setVolume     = (vol: number): Promise<void>              => MavinPlayer.setVolume(vol);
-export const setRepeatMode = (mode: RepeatMode | number): Promise<void> => MavinPlayer.setRepeatMode(mode);
-export const setShuffleMode = (enabled: boolean): Promise<void>        => MavinPlayer.setShuffleMode(enabled);
+export const setVolume      = (vol: number): Promise<void>               => MavinPlayer.setVolume(vol);
+export const setRepeatMode  = (mode: RepeatMode | number): Promise<void> => MavinPlayer.setRepeatMode(mode);
+export const setShuffleMode = (enabled: boolean): Promise<void>          => MavinPlayer.setShuffleMode(enabled);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ERROR RECOVERY
@@ -430,22 +438,20 @@ export const updateNowPlayingMetadata = (track: Partial<Track>): Promise<void> =
 // STATE GETTERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getPosition        = (): Promise<number>  => MavinPlayer.getPosition();
-export const getDuration        = (): Promise<number>  => MavinPlayer.getDuration();
-export const getBufferedPosition = (): Promise<number> => MavinPlayer.getBufferedPosition();
-
-export const getCurrentTrack    = (): Promise<Nullable<Track>>   => MavinPlayer.getCurrentTrack();
-export const getActiveTrack     = (): Promise<Nullable<Track>>   => MavinPlayer.getActiveTrack();
-export const getActiveTrackIndex = (): Promise<Nullable<number>> => MavinPlayer.getActiveTrackIndex();
-
-export const isPlaying         = (): Promise<boolean>       => MavinPlayer.isPlaying();
-export const getQueueSize      = (): Promise<number>         => MavinPlayer.getQueueSize();
-export const getProgress       = (): Promise<Progress>       => MavinPlayer.getProgress();
-export const getPlaybackState  = (): Promise<PlaybackState>  => MavinPlayer.getPlaybackState();
-export const getVolume         = (): Promise<number>         => MavinPlayer.getVolume();
-export const getRepeatMode     = (): Promise<RepeatMode>     => MavinPlayer.getRepeatMode();
-export const getShuffleMode    = (): Promise<boolean>        => MavinPlayer.getShuffleMode();
-export const getAudioFocus     = (): Promise<boolean>        => MavinPlayer.getAudioFocus();
+export const getPosition         = (): Promise<number>          => MavinPlayer.getPosition();
+export const getDuration         = (): Promise<number>          => MavinPlayer.getDuration();
+export const getBufferedPosition = (): Promise<number>          => MavinPlayer.getBufferedPosition();
+export const getCurrentTrack     = (): Promise<Nullable<Track>> => MavinPlayer.getCurrentTrack();
+export const getActiveTrack      = (): Promise<Nullable<Track>> => MavinPlayer.getActiveTrack();
+export const getActiveTrackIndex = (): Promise<Nullable<number>>=> MavinPlayer.getActiveTrackIndex();
+export const isPlaying           = (): Promise<boolean>         => MavinPlayer.isPlaying();
+export const getQueueSize        = (): Promise<number>          => MavinPlayer.getQueueSize();
+export const getProgress         = (): Promise<Progress>        => MavinPlayer.getProgress();
+export const getPlaybackState    = (): Promise<PlaybackState>   => MavinPlayer.getPlaybackState();
+export const getVolume           = (): Promise<number>          => MavinPlayer.getVolume();
+export const getRepeatMode       = (): Promise<RepeatMode>      => MavinPlayer.getRepeatMode();
+export const getShuffleMode      = (): Promise<boolean>         => MavinPlayer.getShuffleMode();
+export const getAudioFocus       = (): Promise<boolean>         => MavinPlayer.getAudioFocus();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PLAY-WHEN-READY (RNTP 4.x parity)
@@ -497,56 +503,56 @@ export const getCacheStats = (): Promise<CacheStats> => MavinPlayer.getCacheStat
 // EQ — GRAPHIC
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setEQEnabled  = (enabled: boolean): Promise<void>          => MavinPlayer.setEQEnabled(enabled);
-export const isEQEnabled   = (): Promise<boolean>                        => MavinPlayer.isEQEnabled();
-export const setEQBand     = (band: number, gainDb: number): Promise<void> => MavinPlayer.setEQBand(band, gainDb);
-export const applyEQBands  = (gains: number[]): Promise<void>            => MavinPlayer.applyEQBands(gains);
-export const setEQPreamp   = (gainDb: number): Promise<void>             => MavinPlayer.setEQPreamp(gainDb);
-export const setEQBandQ    = (band: number, q: number): Promise<void>    => MavinPlayer.setEQBandQ(band, q);
-export const resetEQ       = (): Promise<void>                           => MavinPlayer.resetEQ();
-export const getEQGains    = (): Promise<EqBandInfo[]>                   => MavinPlayer.getEQGains();
-export const getEQPreamp   = (): Promise<number>                         => MavinPlayer.getEQPreamp();
+export const setEQEnabled  = (enabled: boolean): Promise<void>               => MavinPlayer.setEQEnabled(enabled);
+export const isEQEnabled   = (): Promise<boolean>                             => MavinPlayer.isEQEnabled();
+export const setEQBand     = (band: number, gainDb: number): Promise<void>   => MavinPlayer.setEQBand(band, gainDb);
+export const applyEQBands  = (gains: number[]): Promise<void>                => MavinPlayer.applyEQBands(gains);
+export const setEQPreamp   = (gainDb: number): Promise<void>                 => MavinPlayer.setEQPreamp(gainDb);
+export const setEQBandQ    = (band: number, q: number): Promise<void>        => MavinPlayer.setEQBandQ(band, q);
+export const resetEQ       = (): Promise<void>                               => MavinPlayer.resetEQ();
+export const getEQGains    = (): Promise<EqBandInfo[]>                       => MavinPlayer.getEQGains();
+export const getEQPreamp   = (): Promise<number>                             => MavinPlayer.getEQPreamp();
 export const getEQQValues  = (): Promise<Array<{ band: number; q: number }>> => MavinPlayer.getEQQValues();
-export const setEQMode     = (mode: EqMode): Promise<void>               => MavinPlayer.setEQMode(mode);
-export const getEQMode     = (): Promise<EqMode>                         => MavinPlayer.getEQMode();
-export const getLoudnessDb = (): Promise<number>                         => MavinPlayer.getLoudnessDb();
+export const setEQMode     = (mode: EqMode): Promise<void>                   => MavinPlayer.setEQMode(mode);
+export const getEQMode     = (): Promise<EqMode>                             => MavinPlayer.getEQMode();
+export const getLoudnessDb = (): Promise<number>                             => MavinPlayer.getLoudnessDb();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EQ — PARAMETRIC
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setParametricBandGain  = (band: number, gainDb: number): Promise<void>  => MavinPlayer.setParametricBandGain(band, gainDb);
-export const applyParametricBands   = (gains: number[]): Promise<void>                => MavinPlayer.applyParametricBands(gains);
-export const setParametricBandFreq  = (band: number, freqHz: number): Promise<void>  => MavinPlayer.setParametricBandFreq(band, freqHz);
-export const resetParametric        = (): Promise<void>                                => MavinPlayer.resetParametric();
-export const getParametricGains     = (): Promise<EqBandInfo[]>                       => MavinPlayer.getParametricGains();
-export const getParametricFreqs     = (): Promise<Array<{ band: number; freqHz: number }>> => MavinPlayer.getParametricFreqs();
+export const setParametricBandGain = (band: number, gainDb: number): Promise<void>  => MavinPlayer.setParametricBandGain(band, gainDb);
+export const applyParametricBands  = (gains: number[]): Promise<void>               => MavinPlayer.applyParametricBands(gains);
+export const setParametricBandFreq = (band: number, freqHz: number): Promise<void>  => MavinPlayer.setParametricBandFreq(band, freqHz);
+export const resetParametric       = (): Promise<void>                               => MavinPlayer.resetParametric();
+export const getParametricGains    = (): Promise<EqBandInfo[]>                      => MavinPlayer.getParametricGains();
+export const getParametricFreqs    = (): Promise<Array<{ band: number; freqHz: number }>> => MavinPlayer.getParametricFreqs();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DITHER / SMOOTHING
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const setDitherMode    = (mode: DitherMode): Promise<void> => MavinPlayer.setDitherMode(mode);
-export const getDitherMode    = (): Promise<DitherMode>            => MavinPlayer.getDitherMode();
-export const setSmoothingRamp = (ms: number): Promise<void>        => MavinPlayer.setSmoothingRamp(ms);
+export const getDitherMode    = (): Promise<DitherMode>           => MavinPlayer.getDitherMode();
+export const setSmoothingRamp = (ms: number): Promise<void>       => MavinPlayer.setSmoothingRamp(ms);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPRESSOR (DRC)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setCompressorEnabled   = (enabled: boolean): Promise<void> => MavinPlayer.setCompressorEnabled(enabled);
-export const isCompressorEnabled    = (): Promise<boolean>               => MavinPlayer.isCompressorEnabled();
-export const setCompressorThreshold = (db: number): Promise<void>        => MavinPlayer.setCompressorThreshold(db);
-export const setCompressorRatio     = (ratio: number): Promise<void>     => MavinPlayer.setCompressorRatio(ratio);
-export const setCompressorAttack    = (ms: number): Promise<void>        => MavinPlayer.setCompressorAttack(ms);
-export const setCompressorRelease   = (ms: number): Promise<void>        => MavinPlayer.setCompressorRelease(ms);
-export const setCompressorKnee      = (db: number): Promise<void>        => MavinPlayer.setCompressorKnee(db);
+export const setCompressorEnabled    = (enabled: boolean): Promise<void> => MavinPlayer.setCompressorEnabled(enabled);
+export const isCompressorEnabled     = (): Promise<boolean>               => MavinPlayer.isCompressorEnabled();
+export const setCompressorThreshold  = (db: number): Promise<void>       => MavinPlayer.setCompressorThreshold(db);
+export const setCompressorRatio      = (ratio: number): Promise<void>    => MavinPlayer.setCompressorRatio(ratio);
+export const setCompressorAttack     = (ms: number): Promise<void>       => MavinPlayer.setCompressorAttack(ms);
+export const setCompressorRelease    = (ms: number): Promise<void>       => MavinPlayer.setCompressorRelease(ms);
+export const setCompressorKnee       = (db: number): Promise<void>       => MavinPlayer.setCompressorKnee(db);
 export const setCompressorMakeupGain = (db: number): Promise<void>       => MavinPlayer.setCompressorMakeupGain(db);
-export const getCompressorReduction = (): Promise<number>                 => MavinPlayer.getCompressorReduction();
-export const getCompressorThreshold = (): Promise<number>                 => MavinPlayer.getCompressorThreshold();
-export const getCompressorRatio     = (): Promise<number>                 => MavinPlayer.getCompressorRatio();
-export const getCompressorAttack    = (): Promise<number>                 => MavinPlayer.getCompressorAttack();
-export const getCompressorRelease   = (): Promise<number>                 => MavinPlayer.getCompressorRelease();
+export const getCompressorReduction  = (): Promise<number>               => MavinPlayer.getCompressorReduction();
+export const getCompressorThreshold  = (): Promise<number>               => MavinPlayer.getCompressorThreshold();
+export const getCompressorRatio      = (): Promise<number>               => MavinPlayer.getCompressorRatio();
+export const getCompressorAttack     = (): Promise<number>               => MavinPlayer.getCompressorAttack();
+export const getCompressorRelease    = (): Promise<number>               => MavinPlayer.getCompressorRelease();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CROSSFADE
@@ -554,51 +560,51 @@ export const getCompressorRelease   = (): Promise<number>                 => Mav
 
 export const setCrossfadeEnabled  = (enabled: boolean): Promise<void> => MavinPlayer.setCrossfadeEnabled(enabled);
 export const isCrossfadeEnabled   = (): Promise<boolean>               => MavinPlayer.isCrossfadeEnabled();
-export const setCrossfadeDuration = (ms: number): Promise<void>        => MavinPlayer.setCrossfadeDuration(ms);
-export const getCrossfadeDuration = (): Promise<number>                 => MavinPlayer.getCrossfadeDuration();
+export const setCrossfadeDuration = (ms: number): Promise<void>       => MavinPlayer.setCrossfadeDuration(ms);
+export const getCrossfadeDuration = (): Promise<number>               => MavinPlayer.getCrossfadeDuration();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CROSSFEED
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setCrossfeedEnabled  = (enabled: boolean): Promise<void>   => MavinPlayer.setCrossfeedEnabled(enabled);
-export const isCrossfeedEnabled   = (): Promise<boolean>                 => MavinPlayer.isCrossfeedEnabled();
-export const setCrossfeedStrength = (strength: number): Promise<void>    => MavinPlayer.setCrossfeedStrength(strength);
-export const setCrossfeedCutoff   = (hz: number): Promise<void>          => MavinPlayer.setCrossfeedCutoff(hz);
-export const getCrossfeedStrength = (): Promise<number>                   => MavinPlayer.getCrossfeedStrength();
-export const getCrossfeedCutoff   = (): Promise<number>                   => MavinPlayer.getCrossfeedCutoff();
-export const setCrossfeedDelayMs  = (ms: number): Promise<void>          => MavinPlayer.setCrossfeedDelayMs(ms);
-export const getCrossfeedDelayMs  = (): Promise<number>                   => MavinPlayer.getCrossfeedDelayMs();
+export const setCrossfeedEnabled  = (enabled: boolean): Promise<void>  => MavinPlayer.setCrossfeedEnabled(enabled);
+export const isCrossfeedEnabled   = (): Promise<boolean>                => MavinPlayer.isCrossfeedEnabled();
+export const setCrossfeedStrength = (strength: number): Promise<void>  => MavinPlayer.setCrossfeedStrength(strength);
+export const setCrossfeedCutoff   = (hz: number): Promise<void>        => MavinPlayer.setCrossfeedCutoff(hz);
+export const getCrossfeedStrength = (): Promise<number>                => MavinPlayer.getCrossfeedStrength();
+export const getCrossfeedCutoff   = (): Promise<number>                => MavinPlayer.getCrossfeedCutoff();
+export const setCrossfeedDelayMs  = (ms: number): Promise<void>        => MavinPlayer.setCrossfeedDelayMs(ms);
+export const getCrossfeedDelayMs  = (): Promise<number>                => MavinPlayer.getCrossfeedDelayMs();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REPLAY GAIN
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setReplayGainMode    = (mode: ReplayGainMode): Promise<void>           => MavinPlayer.setReplayGainMode(mode);
-export const setReplayGainPreamp  = (gainDb: number): Promise<void>                  => MavinPlayer.setReplayGainPreamp(gainDb);
-export const setReplayGainFromMap = (tags: Record<string, string>): Promise<void>   => MavinPlayer.setReplayGainFromMap(tags);
-export const getReplayGainInfo    = (): Promise<ReplayGainInfo>                      => MavinPlayer.getReplayGainInfo();
+export const setReplayGainMode    = (mode: ReplayGainMode): Promise<void>          => MavinPlayer.setReplayGainMode(mode);
+export const setReplayGainPreamp  = (gainDb: number): Promise<void>                => MavinPlayer.setReplayGainPreamp(gainDb);
+export const setReplayGainFromMap = (tags: Record<string, string>): Promise<void>  => MavinPlayer.setReplayGainFromMap(tags);
+export const getReplayGainInfo    = (): Promise<ReplayGainInfo>                    => MavinPlayer.getReplayGainInfo();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PEAK METER
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setPeakHoldMs    = (ms: number): Promise<void>  => MavinPlayer.setPeakHoldMs(ms);
-export const setPeakReleaseMs = (ms: number): Promise<void>  => MavinPlayer.setPeakReleaseMs(ms);
-export const getCurrentPeaks  = (): Promise<PeakMeter>       => MavinPlayer.getCurrentPeaks();
-export const getHeldPeaks     = (): Promise<PeakMeter>       => MavinPlayer.getHeldPeaks();
-export const resetPeaks       = (): Promise<void>            => MavinPlayer.resetPeaks();
+export const setPeakHoldMs    = (ms: number): Promise<void> => MavinPlayer.setPeakHoldMs(ms);
+export const setPeakReleaseMs = (ms: number): Promise<void> => MavinPlayer.setPeakReleaseMs(ms);
+export const getCurrentPeaks  = (): Promise<PeakMeter>      => MavinPlayer.getCurrentPeaks();
+export const getHeldPeaks     = (): Promise<PeakMeter>      => MavinPlayer.getHeldPeaks();
+export const resetPeaks       = (): Promise<void>           => MavinPlayer.resetPeaks();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONVOLUTION (Impulse Response)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const loadImpulseResponse    = (filePath: string): Promise<void> => MavinPlayer.loadImpulseResponse(filePath);
-export const clearImpulseResponse   = (): Promise<void>                  => MavinPlayer.clearImpulseResponse();
-export const isImpulseResponseLoaded = (): Promise<boolean>              => MavinPlayer.isImpulseResponseLoaded();
-export const getIrLength            = (): Promise<number>                => MavinPlayer.getIrLength();
-export const setConvolutionEnabled  = (enabled: boolean): Promise<void>  => MavinPlayer.setConvolutionEnabled(enabled);
-export const isConvolutionEnabled   = (): Promise<boolean>               => MavinPlayer.isConvolutionEnabled();
+export const loadImpulseResponse     = (filePath: string): Promise<void> => MavinPlayer.loadImpulseResponse(filePath);
+export const clearImpulseResponse    = (): Promise<void>                  => MavinPlayer.clearImpulseResponse();
+export const isImpulseResponseLoaded = (): Promise<boolean>               => MavinPlayer.isImpulseResponseLoaded();
+export const getIrLength             = (): Promise<number>                => MavinPlayer.getIrLength();
+export const setConvolutionEnabled   = (enabled: boolean): Promise<void> => MavinPlayer.setConvolutionEnabled(enabled);
+export const isConvolutionEnabled    = (): Promise<boolean>              => MavinPlayer.isConvolutionEnabled();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FX PROCESSOR (Reverb, Delay, Modulation)
@@ -608,13 +614,13 @@ export const setFxEnabled  = (enabled: boolean): Promise<void> => MavinPlayer.se
 export const isFxEnabled   = (): Promise<boolean>               => MavinPlayer.isFxEnabled();
 export const setFxMode     = (mode: FxMode): Promise<void>      => MavinPlayer.setFxMode(mode);
 export const getFxMode     = (): Promise<FxMode>                 => MavinPlayer.getFxMode();
-export const setFxMix      = (mix: number): Promise<void>       => MavinPlayer.setFxMix(mix);  // 0-100
+export const setFxMix      = (mix: number): Promise<void>       => MavinPlayer.setFxMix(mix);
 export const getFxMix      = (): Promise<number>                 => MavinPlayer.getFxMix();
 export const setFxBypass   = (bypass: boolean): Promise<void>   => MavinPlayer.setFxBypass(bypass);
 export const isFxBypassed  = (): Promise<boolean>               => MavinPlayer.isFxBypassed();
 
 // ── Reverb ──
-export const setReverbRoomSize = (value: number): Promise<void> => MavinPlayer.setReverbRoomSize(value); // 0-100
+export const setReverbRoomSize = (value: number): Promise<void> => MavinPlayer.setReverbRoomSize(value);
 export const setReverbDecay    = (value: number): Promise<void> => MavinPlayer.setReverbDecay(value);
 export const setReverbPreDelay = (value: number): Promise<void> => MavinPlayer.setReverbPreDelay(value);
 export const setReverbDamping  = (value: number): Promise<void> => MavinPlayer.setReverbDamping(value);
@@ -635,15 +641,15 @@ export const setModFeedback = (value: number): Promise<void> => MavinPlayer.setM
 // PRESETS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const applyPreset        = (name: string): Promise<void>              => MavinPlayer.applyPreset(name);
-export const savePreset         = (name: string): Promise<void>              => MavinPlayer.savePreset(name);
-export const listPresets        = (): Promise<string[]>                       => MavinPlayer.listPresets();
-export const deletePreset       = (name: string): Promise<boolean>           => MavinPlayer.deletePreset(name);
-export const exportPreset       = (name: string): Promise<Nullable<string>>  => MavinPlayer.exportPreset(name);
-export const importPreset       = (json: string): Promise<void>              => MavinPlayer.importPreset(json);
-export const assignTrackPreset  = (mediaId: string, presetName: string | null): Promise<void> => MavinPlayer.assignTrackPreset(mediaId, presetName);
-export const getTrackPreset     = (mediaId: string): Promise<Nullable<string>> => MavinPlayer.getTrackPreset(mediaId);
-export const setAutoSwitchPresets = (enabled: boolean): Promise<void>        => MavinPlayer.setAutoSwitchPresets(enabled);
+export const applyPreset         = (name: string): Promise<void>                        => MavinPlayer.applyPreset(name);
+export const savePreset          = (name: string): Promise<void>                        => MavinPlayer.savePreset(name);
+export const listPresets         = (): Promise<string[]>                                => MavinPlayer.listPresets();
+export const deletePreset        = (name: string): Promise<boolean>                     => MavinPlayer.deletePreset(name);
+export const exportPreset        = (name: string): Promise<Nullable<string>>            => MavinPlayer.exportPreset(name);
+export const importPreset        = (json: string): Promise<void>                        => MavinPlayer.importPreset(json);
+export const assignTrackPreset   = (mediaId: string, presetName: string | null): Promise<void> => MavinPlayer.assignTrackPreset(mediaId, presetName);
+export const getTrackPreset      = (mediaId: string): Promise<Nullable<string>>         => MavinPlayer.getTrackPreset(mediaId);
+export const setAutoSwitchPresets = (enabled: boolean): Promise<void>                   => MavinPlayer.setAutoSwitchPresets(enabled);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SPECTRUM / AUTO-EQ
@@ -659,14 +665,14 @@ export const computeAutoEQ = (): Promise<Array<{ band: number; gain: number; fre
 // USB DAC
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const isUsbDacConnected        = (): Promise<boolean>                      => MavinPlayer.isUsbDacConnected();
-export const getCurrentDacInfo        = (): Promise<Nullable<DacInfo>>            => MavinPlayer.getCurrentDacInfo();
-export const getDacCapabilities       = (): Promise<Nullable<DacCapabilities>>    => MavinPlayer.getDacCapabilities();
-export const enableDirectUsbRouting   = (enabled: boolean): Promise<boolean>      => MavinPlayer.enableDirectUsbRouting(enabled);
-export const isDirectUsbRoutingEnabled = (): Promise<boolean>                     => MavinPlayer.isDirectUsbRoutingEnabled();
-export const setPreferredDacSampleRate = (rate: number): Promise<boolean>         => MavinPlayer.setPreferredDacSampleRate(rate);
-export const setPreferredDacBitDepth   = (depth: number): Promise<boolean>        => MavinPlayer.setPreferredDacBitDepth(depth);
-export const rescanUsbDevices          = (): Promise<void>                        => MavinPlayer.rescanUsbDevices();
+export const isUsbDacConnected         = (): Promise<boolean>                   => MavinPlayer.isUsbDacConnected();
+export const getCurrentDacInfo         = (): Promise<Nullable<DacInfo>>         => MavinPlayer.getCurrentDacInfo();
+export const getDacCapabilities        = (): Promise<Nullable<DacCapabilities>> => MavinPlayer.getDacCapabilities();
+export const enableDirectUsbRouting    = (enabled: boolean): Promise<boolean>   => MavinPlayer.enableDirectUsbRouting(enabled);
+export const isDirectUsbRoutingEnabled = (): Promise<boolean>                   => MavinPlayer.isDirectUsbRoutingEnabled();
+export const setPreferredDacSampleRate = (rate: number): Promise<boolean>       => MavinPlayer.setPreferredDacSampleRate(rate);
+export const setPreferredDacBitDepth   = (depth: number): Promise<boolean>      => MavinPlayer.setPreferredDacBitDepth(depth);
+export const rescanUsbDevices          = (): Promise<void>                      => MavinPlayer.rescanUsbDevices();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUDIO FORMAT DETECTION
@@ -674,29 +680,29 @@ export const rescanUsbDevices          = (): Promise<void>                      
 
 export const getAudioCapabilities  = (): Promise<Nullable<AudioCapabilities>>  => MavinPlayer.getAudioCapabilities();
 export const getOptimalAudioFormat = (): Promise<Nullable<OptimalAudioFormat>> => MavinPlayer.getOptimalAudioFormat();
-export const isHiResAudioCapable   = (): Promise<boolean>                       => MavinPlayer.isHiResAudioCapable();
-export const getMaxSampleRate      = (): Promise<number>                         => MavinPlayer.getMaxSampleRate();
-export const getMaxBitDepth        = (): Promise<number>                         => MavinPlayer.getMaxBitDepth();
+export const isHiResAudioCapable   = (): Promise<boolean>                      => MavinPlayer.isHiResAudioCapable();
+export const getMaxSampleRate      = (): Promise<number>                       => MavinPlayer.getMaxSampleRate();
+export const getMaxBitDepth        = (): Promise<number>                       => MavinPlayer.getMaxBitDepth();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OFFLINE / 64-BIT PROCESSING
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const setOfflineMode            = (enabled: boolean): Promise<void> => MavinPlayer.setOfflineMode(enabled);
-export const isOfflineMode             = (): Promise<boolean>               => MavinPlayer.isOfflineMode();
-export const set64BitProcessingEnabled = (enabled: boolean): Promise<void> => MavinPlayer.set64BitProcessingEnabled(enabled);
-export const is64BitProcessingEnabled  = (): Promise<boolean>              => MavinPlayer.is64BitProcessingEnabled();
+export const setOfflineMode             = (enabled: boolean): Promise<void> => MavinPlayer.setOfflineMode(enabled);
+export const isOfflineMode              = (): Promise<boolean>               => MavinPlayer.isOfflineMode();
+export const set64BitProcessingEnabled  = (enabled: boolean): Promise<void> => MavinPlayer.set64BitProcessingEnabled(enabled);
+export const is64BitProcessingEnabled   = (): Promise<boolean>              => MavinPlayer.is64BitProcessingEnabled();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const updateOptions           = (options: UpdateOptions): Promise<void>                      => MavinPlayer.updateOptions(options);
-export const setProgressUpdateInterval = (ms: number): Promise<void>                               => MavinPlayer.setProgressUpdateInterval(ms);
-export const getProgressUpdateInterval = (): Promise<number>                                        => MavinPlayer.getProgressUpdateInterval();
-export const setCacheConfig          = (options: { sizeMB?: number; sizeBytes?: number }): Promise<void> => MavinPlayer.setCacheConfig(options);
-export const setAudioAttributes      = (options: { usage?: string; contentType?: string }): Promise<void> => MavinPlayer.setAudioAttributes(options);
-export const setWakeMode             = (mode: number): Promise<void>                               => MavinPlayer.setWakeMode(mode);
+export const updateOptions              = (options: UpdateOptions): Promise<void>                        => MavinPlayer.updateOptions(options);
+export const setProgressUpdateInterval  = (ms: number): Promise<void>                                   => MavinPlayer.setProgressUpdateInterval(ms);
+export const getProgressUpdateInterval  = (): Promise<number>                                            => MavinPlayer.getProgressUpdateInterval();
+export const setCacheConfig             = (options: { sizeMB?: number; sizeBytes?: number }): Promise<void> => MavinPlayer.setCacheConfig(options);
+export const setAudioAttributes         = (options: { usage?: string; contentType?: string }): Promise<void> => MavinPlayer.setAudioAttributes(options);
+export const setWakeMode                = (mode: number): Promise<void>                                  => MavinPlayer.setWakeMode(mode);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REACT HOOKS
@@ -718,12 +724,10 @@ export function useProgress(options: UseProgressOptions = {}): Progress {
 
     let mounted = true;
 
-    // Subscribe to native progress events (most efficient path)
     const sub = addEventListener(MavinEvent.PlaybackProgress, (data: ProgressEvent) => {
       if (mounted) setProgress(data);
     });
 
-    // Fallback poll for when playback is paused / no events fire
     const poll = async () => {
       if (!mounted) return;
       try {
@@ -734,7 +738,7 @@ export function useProgress(options: UseProgressOptions = {}): Progress {
       }
     };
 
-    poll(); // Seed immediately
+    poll();
     const id = setInterval(poll, intervalMs);
 
     return () => {
@@ -749,18 +753,20 @@ export function useProgress(options: UseProgressOptions = {}): Progress {
 
 /**
  * Subscribe to playback state changes via the native `onPlaybackStateChanged`
- * event. Also mirrors RNTP's `playback-state` event.
+ * event. Returns `{ state: PlaybackState, isLoading: boolean, error: Error | null }`.
+ *
+ * Note: `state` is a `PlaybackState` object `{ state: State, stateCode?, error? }`.
+ * Use `result.state.state` to compare against `State.*` enum values.
  */
 export function usePlaybackState(): UsePlaybackStateResult {
-  const [state, setState]     = useState<PlaybackState>({ state: State.None });
+  const [state, setState]         = useState<PlaybackState>({ state: State.None });
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError]     = useState<Error | null>(null);
+  const [error, setError]         = useState<Error | null>(null);
 
   useEffect(() => {
     let mounted = true;
     setIsLoading(true);
 
-    // Seed with current state
     getPlaybackState()
       .then((s) => {
         if (mounted) {
@@ -775,14 +781,12 @@ export function usePlaybackState(): UsePlaybackStateResult {
         }
       });
 
-    // Native Mavin event
     const sub1 = addEventListener(MavinEvent.PlaybackStateChanged, (data: PlaybackStateChangedEvent) => {
       if (!mounted) return;
       setState({ state: (data?.state ?? State.None) as State });
       setIsLoading(false);
     });
 
-    // RNTP parity event (also bridged by the native module)
     const sub2 = addEventListener(RNTPEvent.PlaybackState, (data: { state: number; stateName?: string }) => {
       if (!mounted) return;
       setState((prev) => ({ ...prev, stateCode: data.state }));
@@ -803,15 +807,14 @@ export function usePlaybackState(): UsePlaybackStateResult {
  * Subscribe to the currently active track via `onPlaybackActiveTrackChanged`.
  */
 export function useActiveTrack(): UseActiveTrackResult {
-  const [track, setTrack]     = useState<Nullable<Track>>(null);
-  const [index, setIndex]     = useState<Nullable<number>>(null);
+  const [track, setTrack]         = useState<Nullable<Track>>(null);
+  const [index, setIndex]         = useState<Nullable<number>>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     setIsLoading(true);
 
-    // Seed with current values
     Promise.all([getActiveTrack(), getActiveTrackIndex()])
       .then(([t, i]) => {
         if (mounted) {
@@ -1032,14 +1035,11 @@ export function useSpectrum(
     let animationFrame: number;
     let intervalId: ReturnType<typeof setInterval>;
 
-    // Subscribe to native spectrum events (preferred — zero polling cost)
     const sub = addEventListener(MavinEvent.Spectrum, (data: SpectrumEvent) => {
       if (!mounted) return;
       setMagnitudes(data.magnitudes.map((magnitude, bin) => ({ bin, magnitude })));
     });
 
-    // Optional animation-frame or interval polling fallback (for devices that
-    // don't emit the native event or when finer control is needed)
     if (useAnimationFrame) {
       const poll = async () => {
         if (!mounted) return;
