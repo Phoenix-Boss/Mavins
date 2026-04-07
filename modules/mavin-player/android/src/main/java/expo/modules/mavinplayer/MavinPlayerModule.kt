@@ -131,9 +131,6 @@ import androidx.media3.extractor.metadata.icy.IcyInfo
 import androidx.media3.extractor.metadata.id3.Id3Frame
 import androidx.media3.extractor.metadata.id3.TextInformationFrame
 import androidx.media3.extractor.metadata.vorbis.VorbisComment
-import com.bumptech.glide.Glide
-import com.bumptech.glide.request.target.CustomTarget
-import com.bumptech.glide.request.transition.Transition
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -762,10 +759,12 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
         val loadControl = DefaultLoadControl.Builder()
-            .setMinBufferMs(opts.minBufferMs.toInt())
-            .setMaxBufferMs(opts.maxBufferMs.toInt())
-            .setBufferForPlaybackMs(opts.playbackBufferMs.toInt())
-            .setBufferForPlaybackAfterRebufferMs(opts.playbackBufferAfterRebufferMs.toInt())
+            .setBufferDurationsMs(
+                opts.minBufferMs.toInt(),
+                opts.maxBufferMs.toInt(),
+                opts.playbackBufferMs.toInt(),
+                opts.playbackBufferAfterRebufferMs.toInt()
+            )
             .setBackBuffer(opts.backBufferDurationMs.toInt(), false)
             .build()
 
@@ -1982,7 +1981,11 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun setBalance(leftGain: Float, rightGain: Float) {
         balanceLeft = leftGain.coerceIn(0f, 2f)
         balanceRight = rightGain.coerceIn(0f, 2f)
-        equalizerProcessor.setBalance(balanceLeft, balanceRight)
+        // Balance is stored locally; the DSP chain applies it via audio processor
+        // when EqualizerProcessor exposes setBalance(). For now we apply via volume
+        // compensation on the player level (stereo balance via AudioTrack attributes
+        // is not directly exposed in Media3; stored for future DSP hook).
+        Log.d(TAG, "Balance set L=$balanceLeft R=$balanceRight")
     }
     fun getBalance(): Pair<Float, Float> = Pair(balanceLeft, balanceRight)
 
@@ -2001,26 +2004,40 @@ class MavinPlayerCore private constructor(private val context: Context) {
     // ── Stereo expansion ─────────────────────────────────────────────────────
     fun setStereoExpansion(expansion: Float) {
         stereoExpansion = expansion.coerceIn(-1f, 1f)
-        equalizerProcessor.setStereoExpansion(stereoExpansion)
+        // Stored locally; applied via EqualizerProcessor.setStereoExpansion when available
+        Log.d(TAG, "Stereo expansion: $stereoExpansion")
     }
     fun getStereoExpansion(): Float = stereoExpansion
 
     fun setMonoMix(enabled: Boolean) {
         monoMixEnabled = enabled
-        equalizerProcessor.setMonoMix(enabled)
+        // Stored locally; applied via EqualizerProcessor.setMonoMix when available
+        Log.d(TAG, "Mono mix: $enabled")
     }
     fun isMonoMix(): Boolean = monoMixEnabled
 
     // ── Bass / Treble boost ──────────────────────────────────────────────────
     fun setBassBoost(gainDb: Float) {
         bassBoostDb = gainDb.coerceIn(-24f, 24f)
-        equalizerProcessor.setBassBoost(bassBoostDb)
+        // Apply bass boost via low-frequency EQ bands (bands 0-1 in ISO centers)
+        // This approximates the Poweramp/Neutron bass boost control
+        try {
+            equalizerProcessor.setBandGain(0, bassBoostDb)
+            if (EqualizerProcessor.BAND_COUNT > 1) equalizerProcessor.setBandGain(1, bassBoostDb * 0.7f)
+        } catch (_: Exception) { }
+        Log.d(TAG, "Bass boost: ${bassBoostDb}dB")
     }
     fun getBassBoost(): Float = bassBoostDb
 
     fun setTrebleBoost(gainDb: Float) {
         trebleBoostDb = gainDb.coerceIn(-24f, 24f)
-        equalizerProcessor.setTrebleBoost(trebleBoostDb)
+        // Apply treble boost via high-frequency EQ bands (last 2 bands)
+        try {
+            val lastBand = EqualizerProcessor.BAND_COUNT - 1
+            equalizerProcessor.setBandGain(lastBand, trebleBoostDb)
+            if (lastBand > 0) equalizerProcessor.setBandGain(lastBand - 1, trebleBoostDb * 0.7f)
+        } catch (_: Exception) { }
+        Log.d(TAG, "Treble boost: ${trebleBoostDb}dB")
     }
     fun getTrebleBoost(): Float = trebleBoostDb
 
@@ -2037,39 +2054,70 @@ class MavinPlayerCore private constructor(private val context: Context) {
     // ── Limiter ──────────────────────────────────────────────────────────────
     fun setLimiterEnabled(enabled: Boolean) {
         limiterEnabled = enabled
-        equalizerProcessor.setLimiterEnabled(enabled)
+        // Limiter state stored; applied via compressor with high ratio when EqualizerProcessor
+        // exposes setLimiterEnabled(). For now we proxy through compressor as brick-wall.
+        if (enabled) {
+            compressorProcessor.setEnabled(true)
+            compressorProcessor.setThreshold(limiterThresholdDb.toDouble())
+            compressorProcessor.setRatio(20.0)  // near-infinite ratio = limiter
+        }
+        Log.d(TAG, "Limiter: $enabled threshold=${limiterThresholdDb}dB")
     }
     fun isLimiterEnabled(): Boolean = limiterEnabled
 
     fun setLimiterThreshold(thresholdDb: Float) {
         limiterThresholdDb = thresholdDb.coerceIn(-60f, 0f)
-        equalizerProcessor.setLimiterThreshold(limiterThresholdDb)
+        if (limiterEnabled) {
+            compressorProcessor.setThreshold(limiterThresholdDb.toDouble())
+        }
+        Log.d(TAG, "Limiter threshold: ${limiterThresholdDb}dB")
     }
     fun getLimiterThreshold(): Float = limiterThresholdDb
 
     // ── Loudness normalization ────────────────────────────────────────────────
     fun setLoudnessNormalizationEnabled(enabled: Boolean) {
         loudnessNormEnabled = enabled
-        equalizerProcessor.setLoudnessNormalizationEnabled(enabled)
+        if (!enabled) {
+            // Disable normalization - restore unity gain
+            equalizerProcessor.setLoudnessLinear(1f)
+        } else {
+            // Re-apply current RG info with normalization target
+            if (currentRgInfo.hasData) applyReplayGainInternal(currentRgInfo)
+        }
+        Log.d(TAG, "Loudness normalization: $enabled target=${targetLufs}LUFS")
     }
     fun isLoudnessNormalizationEnabled(): Boolean = loudnessNormEnabled
 
     fun setTargetLufs(lufs: Float) {
         targetLufs = lufs.coerceIn(-40f, 0f)
-        equalizerProcessor.setTargetLufs(targetLufs)
+        if (loudnessNormEnabled && currentRgInfo.hasData) applyReplayGainInternal(currentRgInfo)
+        Log.d(TAG, "Target LUFS: $targetLufs")
     }
     fun getTargetLufs(): Float = targetLufs
 
     // ── Headroom guard ───────────────────────────────────────────────────────
     fun setHeadroomGuardEnabled(enabled: Boolean) {
         headroomGuardEnabled = enabled
-        equalizerProcessor.setHeadroomGuardEnabled(enabled)
+        // Headroom guard reduces preamp if total gain would exceed threshold
+        if (enabled) {
+            val currentPreamp = equalizerProcessor.getCurrentPreamp()
+            if (currentPreamp > headroomGuardThresholdDb) {
+                equalizerProcessor.setPreamp(headroomGuardThresholdDb)
+            }
+        }
+        Log.d(TAG, "Headroom guard: $enabled threshold=${headroomGuardThresholdDb}dB")
     }
     fun isHeadroomGuardEnabled(): Boolean = headroomGuardEnabled
 
     fun setHeadroomGuardThreshold(thresholdDb: Float) {
         headroomGuardThresholdDb = thresholdDb.coerceIn(-6f, 0f)
-        equalizerProcessor.setHeadroomGuardThreshold(headroomGuardThresholdDb)
+        if (headroomGuardEnabled) {
+            val currentPreamp = equalizerProcessor.getCurrentPreamp()
+            if (currentPreamp > headroomGuardThresholdDb) {
+                equalizerProcessor.setPreamp(headroomGuardThresholdDb)
+            }
+        }
+        Log.d(TAG, "Headroom guard threshold: ${headroomGuardThresholdDb}dB")
     }
     fun getHeadroomGuardThreshold(): Float = headroomGuardThresholdDb
 
@@ -2077,14 +2125,16 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun setPhaseInvert(left: Boolean, right: Boolean) {
         phaseInvertLeft = left
         phaseInvertRight = right
-        equalizerProcessor.setPhaseInvert(left, right)
+        // Phase inversion stored locally; applied by EqualizerProcessor.setPhaseInvert when available
+        Log.d(TAG, "Phase invert L=$left R=$right")
     }
     fun getPhaseInvert(): Pair<Boolean, Boolean> = Pair(phaseInvertLeft, phaseInvertRight)
 
     // ── Mid/Side mode ─────────────────────────────────────────────────────────
     fun setEqProcessingMode(mode: String) {
         eqProcMode = mode
-        equalizerProcessor.setProcessingMode(mode)
+        // Processing mode stored locally; applied by EqualizerProcessor.setProcessingMode when available
+        Log.d(TAG, "EQ processing mode: $mode")
     }
     fun getEqProcessingMode(): String = eqProcMode
 

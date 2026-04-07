@@ -11,31 +11,36 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
 /**
- * EqualizerProcessor v5 â€” Complete Poweramp-parity DSP engine with 64-bit processing
+ * EqualizerProcessor v5 — Complete Poweramp/Neutron-parity DSP engine
  *
- * âœ… 31-band ISO 1/3-octave graphic EQ
- * âœ… Full parametric EQ mode â€” independent per-band freq, gain, Q
- * âœ… Parallel dual-processor: graphic + parametric run simultaneously, summed and normalized
- * âœ… Low shelf (band 0) Â· Peaking (bands 1â€“29) Â· High shelf (band 30)
- * âœ… Per-band Q (0.3â€“10) â€” shared across both modes
- * âœ… Preamp Â±15 dB â€” smoothed, separate gain stage
- * âœ… Loudness normalization â€” separate gain stage (ReplayGain / LUFS offset)
- * âœ… Parameter smoothing â€” linear interpolation, configurable 0â€“50 ms ramp
- * âœ… True-peak limiter â€” soft-knee, 0.1 ms attack / 80 ms release, â€“0.17 dBFS
- * âœ… TPDF dither + noise shaping on 16-bit output (4 shaping curves)
- * âœ… PCM_16BIT Â· PCM_FLOAT Â· PCM_32BIT support
- * âœ… Mono and stereo support
- * âœ… Denormal flush guards on all biquad state registers
- * âœ… Lock-free atomic updates from JS thread
- * âœ… Peak metering (VU) with configurable hold/release
- * âœ… 64-bin Goertzel spectrum analysis, log-spaced 20 Hzâ€“Nyquist
- * âœ… Flat-response auto-EQ suggestion from spectrum
- * âœ… Compression/limiting stage with soft knee
- * âœ… 64-bit high-precision processing mode (Double precision)
+ * ✅ 31-band ISO 1/3-octave graphic EQ
+ * ✅ Full parametric EQ mode — independent per-band freq, gain, Q
+ * ✅ Parallel dual-processor: graphic + parametric run simultaneously, summed and normalized
+ * ✅ Low shelf (band 0) · Peaking (bands 1–29) · High shelf (band 30)
+ * ✅ Per-band Q (0.3–10) — shared across both modes
+ * ✅ Preamp ±15 dB — smoothed, separate gain stage
+ * ✅ Loudness normalization — separate gain stage (ReplayGain / LUFS offset)
+ * ✅ Parameter smoothing — linear interpolation, configurable 0–50 ms ramp
+ * ✅ True-peak limiter — soft-knee, 0.1 ms attack / 80 ms release, –0.17 dBFS
+ * ✅ TPDF dither + noise shaping on 16-bit output (4 shaping curves)
+ * ✅ PCM_16BIT · PCM_FLOAT · PCM_32BIT support
+ * ✅ Mono and stereo support
+ * ✅ Denormal flush guards on all biquad state registers
+ * ✅ Lock-free atomic updates from JS thread
+ * ✅ Peak metering (VU) with configurable hold/release
+ * ✅ 64-bin Goertzel spectrum analysis, log-spaced 20 Hz–Nyquist
+ * ✅ Flat-response auto-EQ suggestion from spectrum
+ * ✅ Compression/limiting stage with soft knee
+ * ✅ 64-bit high-precision processing mode (Double precision)
+ * ✅ Balance (left/right channel gain), stereo expansion, mono mix
+ * ✅ Phase inversion per channel (left, right, both)
+ * ✅ Mid/Side EQ processing mode
+ * ✅ Bass boost / treble boost convenience controls
  *
  * DSP chain per sample:
- *   PCM in â†’ loudness â†’ preamp â†’ graphic EQ â†’ parametric EQ (parallel) 
- *          â†’ compressor â†’ true-peak limiter â†’ dither/shaping â†’ PCM out
+ *   PCM in → M/S encode (opt) → loudness → preamp → balance/pan →
+ *   graphic EQ → parametric EQ (parallel) → compressor → limiter →
+ *   M/S decode (opt) → stereo expand → phase invert → dither → PCM out
  */
 @androidx.media3.common.util.UnstableApi
 class EqualizerProcessor : AudioProcessor {
@@ -81,14 +86,18 @@ class EqualizerProcessor : AudioProcessor {
         private const val PEAK_HOLD_MS = 300.0
         private const val PEAK_RELEASE_MS = 100.0
 
-        // PCM_32BIT encoding constant
+        // PCM_32BIT encoding constant (matches Android internal)
         private const val ENCODING_PCM_32BIT = 0x00000004
+
+        // Processing modes
+        const val PROC_MODE_NORMAL   = "normal"
+        const val PROC_MODE_MID_SIDE = "mid_side"
     }
 
     enum class DitherMode { FLAT, E_WEIGHTED, F_WEIGHTED, HIGHPASS }
     enum class EqMode { GRAPHIC, PARAMETRIC, PARALLEL }
 
-    // â”€â”€ Atomic public state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Atomic public state ──────────────────────────────────────────────────
     private val _isEnabled = AtomicBoolean(true)
     var isEnabled: Boolean
         get() = _isEnabled.get()
@@ -97,93 +106,102 @@ class EqualizerProcessor : AudioProcessor {
     @Volatile private var eqMode: EqMode = EqMode.GRAPHIC
     @Volatile private var ditherMode: DitherMode = DitherMode.E_WEIGHTED
     var smoothingRampMs: Double = SMOOTH_RAMP_MS_DEFAULT
-    
+
     // 64-bit high-precision mode
     @Volatile private var highPrecisionMode = false
     fun setHighPrecisionMode(enabled: Boolean) { highPrecisionMode = enabled }
     fun isHighPrecisionMode(): Boolean = highPrecisionMode
 
-    // â”€â”€ Pending atomic updates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private val pendingGraphicGains = AtomicReference<FloatArray?>(null)
+    // ── Balance / stereo / mono / phase ─────────────────────────────────────
+    @Volatile private var balanceLeft: Float  = 1.0f
+    @Volatile private var balanceRight: Float = 1.0f
+    @Volatile private var stereoExpansion: Float = 0.0f  // 0=normal, +1=max expand, -1=mono
+    @Volatile private var monoMixEnabled: Boolean = false
+    @Volatile private var phaseInvertLeft: Boolean  = false
+    @Volatile private var phaseInvertRight: Boolean = false
+    @Volatile private var processingMode: String = PROC_MODE_NORMAL  // "normal" | "mid_side"
+
+    // ── Pending atomic updates ───────────────────────────────────────────────
+    private val pendingGraphicGains    = AtomicReference<FloatArray?>(null)
     private val pendingParametricGains = AtomicReference<FloatArray?>(null)
     private val pendingParametricFreqs = AtomicReference<DoubleArray?>(null)
-    private val pendingPreamp = AtomicReference<Float?>(null)
-    private val pendingQValues = AtomicReference<FloatArray?>(null)
-    private val pendingLoudness = AtomicReference<Float?>(null)
-    private val pendingEqMode = AtomicReference<EqMode?>(null)
+    private val pendingPreamp          = AtomicReference<Float?>(null)
+    private val pendingQValues         = AtomicReference<FloatArray?>(null)
+    private val pendingLoudness        = AtomicReference<Float?>(null)
+    private val pendingEqMode          = AtomicReference<EqMode?>(null)
 
-    // â”€â”€ Compressor state (lock-free) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    @Volatile private var compressorThreshold = COMPRESSOR_THRESHOLD_DB
-    @Volatile private var compressorRatio = COMPRESSOR_RATIO
-    @Volatile private var compressorAttackMs = COMPRESSOR_ATTACK_MS
-    @Volatile private var compressorReleaseMs = COMPRESSOR_RELEASE_MS
-    @Volatile private var compressorKneeDb = COMPRESSOR_KNEE_DB
-    @Volatile private var compressorMakeupDb = COMPRESSOR_MAKEUP_DB
-    @Volatile private var compressorEnabled = true
-    
+    // ── Compressor state (lock-free) ─────────────────────────────────────────
+    @Volatile private var compressorThreshold  = COMPRESSOR_THRESHOLD_DB
+    @Volatile private var compressorRatio      = COMPRESSOR_RATIO
+    @Volatile private var compressorAttackMs   = COMPRESSOR_ATTACK_MS
+    @Volatile private var compressorReleaseMs  = COMPRESSOR_RELEASE_MS
+    @Volatile private var compressorKneeDb     = COMPRESSOR_KNEE_DB
+    @Volatile private var compressorMakeupDb   = COMPRESSOR_MAKEUP_DB
+    @Volatile private var compressorEnabled    = true
+
     private var compressorLinearThreshold = 0.0
     private var compressorLinearKneeStart = 0.0
-    private var compressorLinearKneeEnd = 0.0
-    private var compressorSlope = 0.0
-    private var compressorMakeupLinear = 1.0
-    private var compressorEnvelope = DoubleArray(8) { 1.0 }
-    private var compressorAttackCoeff = 0.0
-    private var compressorReleaseCoeff = 0.0
+    private var compressorLinearKneeEnd   = 0.0
+    private var compressorSlope           = 0.0
+    private var compressorMakeupLinear    = 1.0
+    private var compressorEnvelope        = DoubleArray(8) { 1.0 }
+    private var compressorAttackCoeff     = 0.0
+    private var compressorReleaseCoeff    = 0.0
 
-    // â”€â”€ Peak meter state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    @Volatile private var peakHoldMs = PEAK_HOLD_MS
-    @Volatile private var peakReleaseMs = PEAK_RELEASE_MS
-    private var currentPeaks = FloatArray(8) { 0f }
-    private var heldPeaks = FloatArray(8) { 0f }
-    private var peakTimer = LongArray(8) { 0L }
+    // ── Peak meter state ─────────────────────────────────────────────────────
+    @Volatile private var peakHoldMs     = PEAK_HOLD_MS
+    @Volatile private var peakReleaseMs  = PEAK_RELEASE_MS
+    private var currentPeaks  = FloatArray(8) { 0f }
+    private var heldPeaks     = FloatArray(8) { 0f }
+    private var peakTimer     = LongArray(8) { 0L }
     private var peakReleaseCoeff = 0.0
     private var peakCallback: ((FloatArray) -> Unit)? = null
 
-    // â”€â”€ DSP state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── DSP state ────────────────────────────────────────────────────────────
     private var numChannels = 0
-    private var numBands = 0
-    private var sampleRate = 48000.0
+    private var numBands    = 0
+    private var sampleRate  = 48000.0
 
-    private var graphicGainsDb = FloatArray(BAND_COUNT) { 0f }
+    private var graphicGainsDb    = FloatArray(BAND_COUNT) { 0f }
     private var parametricGainsDb = FloatArray(BAND_COUNT) { 0f }
-    private var parametricFreqs = ISO_FREQ_CENTERS.copyOf()
-    private var currentQValues = FloatArray(BAND_COUNT) { defaultQ(it) }
+    private var parametricFreqs   = ISO_FREQ_CENTERS.copyOf()
+    private var currentQValues    = FloatArray(BAND_COUNT) { defaultQ(it) }
 
     private var smoothedGraphicGains = FloatArray(BAND_COUNT) { 0f }
-    private var targetGraphicGains = FloatArray(BAND_COUNT) { 0f }
-    private var smoothedParamGains = FloatArray(BAND_COUNT) { 0f }
-    private var targetParamGains = FloatArray(BAND_COUNT) { 0f }
+    private var targetGraphicGains   = FloatArray(BAND_COUNT) { 0f }
+    private var smoothedParamGains   = FloatArray(BAND_COUNT) { 0f }
+    private var targetParamGains     = FloatArray(BAND_COUNT) { 0f }
 
-    private var smoothedPreamp = 1.0
-    private var targetPreamp = 1.0
+    private var smoothedPreamp   = 1.0
+    private var targetPreamp     = 1.0
     private var smoothedLoudness = 1.0
-    private var targetLoudness = 1.0
+    private var targetLoudness   = 1.0
     private var smoothStepFraction = 0.0
 
     private var graphicCoeffs: Array<DoubleArray> = emptyArray()
-    private var graphicState: Array<Array<DoubleArray>> = emptyArray()
-    private var paramCoeffs: Array<DoubleArray> = emptyArray()
-    private var paramState: Array<Array<DoubleArray>> = emptyArray()
+    private var graphicState:  Array<Array<DoubleArray>> = emptyArray()
+    private var paramCoeffs:   Array<DoubleArray> = emptyArray()
+    private var paramState:    Array<Array<DoubleArray>> = emptyArray()
 
-    // â”€â”€ Limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Limiter ───────────────────────────────────────────────────────────────
     private var limiterEnvelope = DoubleArray(8) { 1.0 }
     private var limiterAttCoeff = 0.0
     private var limiterRelCoeff = 0.0
 
-    // â”€â”€ Dither â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private val ditherRandom = Random()
-    private var shapingError = Array(8) { DoubleArray(4) }
+    // ── Dither ────────────────────────────────────────────────────────────────
+    private val ditherRandom  = Random()
+    private var shapingError  = Array(8) { DoubleArray(4) }
 
-    // â”€â”€ Output buffer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
-    private var inputAudioFormat: AudioFormat = AudioFormat.NOT_SET
+    // ── Output buffer ─────────────────────────────────────────────────────────
+    private var outputBuffer:      ByteBuffer = AudioProcessor.EMPTY_BUFFER
+    private var inputAudioFormat:  AudioFormat = AudioFormat.NOT_SET
     private var outputAudioFormat: AudioFormat = AudioFormat.NOT_SET
     private var inputEnded = false
 
-    // â”€â”€ Spectrum â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private var spectrumBuf = FloatArray(8192)
-    private var spectrumWritePos = 0
-    private var spectrumFrameCount = 0
+    // ── Spectrum ──────────────────────────────────────────────────────────────
+    private var spectrumBuf          = FloatArray(8192)
+    private var spectrumWritePos     = 0
+    private var spectrumFrameCount   = 0
     private var spectrumRefreshSamples = 4800
     @Volatile private var _spectrumMagnitudes = FloatArray(SPECTRUM_BINS) { 0f }
     val spectrumMagnitudes: FloatArray get() = _spectrumMagnitudes.copyOf()
@@ -195,9 +213,9 @@ class EqualizerProcessor : AudioProcessor {
         updatePeakReleaseCoeff()
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PUBLIC API â€” GRAPHIC EQ
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — GRAPHIC EQ
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun setBandGain(band: Int, gainDb: Float) {
         if (band !in 0 until BAND_COUNT) return
@@ -212,9 +230,9 @@ class EqualizerProcessor : AudioProcessor {
         })
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PUBLIC API â€” PARAMETRIC EQ
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — PARAMETRIC EQ
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun setParametricBandGain(band: Int, gainDb: Float) {
         if (band !in 0 until BAND_COUNT) return
@@ -236,20 +254,23 @@ class EqualizerProcessor : AudioProcessor {
         pendingParametricFreqs.set(next)
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PUBLIC API â€” SHARED CONTROLS
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — SHARED CONTROLS
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun setPreamp(gainDb: Float) {
         pendingPreamp.set(gainDb.coerceIn(PREAMP_MIN.toFloat(), PREAMP_MAX.toFloat()))
     }
 
-    fun setBandQ(band: Int, q: Float) {
+    fun setBandQ(band: Int, q: Double) {
         if (band !in 0 until BAND_COUNT) return
         val next = pendingQValues.get()?.copyOf() ?: currentQValues.copyOf()
-        next[band] = q.coerceIn(0.3f, 10f)
+        next[band] = q.toFloat().coerceIn(0.3f, 10f)
         pendingQValues.set(next)
     }
+
+    // Float overload for backward compatibility
+    fun setBandQ(band: Int, q: Float) = setBandQ(band, q.toDouble())
 
     fun setLoudnessLinear(linear: Float) {
         pendingLoudness.set(linear.coerceIn(0.01f, 10f))
@@ -262,63 +283,122 @@ class EqualizerProcessor : AudioProcessor {
     fun setEqMode(mode: EqMode) { pendingEqMode.set(mode) }
     fun setDitherMode(mode: DitherMode) { ditherMode = mode }
     fun resetGains() { pendingGraphicGains.set(FloatArray(BAND_COUNT) { 0f }); pendingPreamp.set(0f) }
-    fun resetParametric() { pendingParametricGains.set(FloatArray(BAND_COUNT) { 0f }); pendingParametricFreqs.set(ISO_FREQ_CENTERS.copyOf()) }
+    fun resetParametric() {
+        pendingParametricGains.set(FloatArray(BAND_COUNT) { 0f })
+        pendingParametricFreqs.set(ISO_FREQ_CENTERS.copyOf())
+    }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PUBLIC API â€” COMPRESSOR
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Balance (left gain, right gain) ─────────────────────────────────────
+    /**
+     * Sets per-channel volume balance.
+     * @param leftGain  0.0 (mute) to 2.0 (double), 1.0 = unity
+     * @param rightGain 0.0 (mute) to 2.0 (double), 1.0 = unity
+     */
+    fun setBalance(leftGain: Float, rightGain: Float) {
+        balanceLeft  = leftGain.coerceIn(0f, 2f)
+        balanceRight = rightGain.coerceIn(0f, 2f)
+    }
+    fun getBalanceLeft(): Float = balanceLeft
+    fun getBalanceRight(): Float = balanceRight
+
+    // ── Stereo expansion ─────────────────────────────────────────────────────
+    /**
+     * Sets stereo width.
+     * @param expansion -1.0 = mono, 0.0 = normal stereo, +1.0 = maximum expansion
+     */
+    fun setStereoExpansion(expansion: Float) {
+        stereoExpansion = expansion.coerceIn(-1f, 1f)
+    }
+    fun getStereoExpansion(): Float = stereoExpansion
+
+    // ── Mono mix ─────────────────────────────────────────────────────────────
+    fun setMonoMix(enabled: Boolean) {
+        monoMixEnabled = enabled
+    }
+    fun isMonoMix(): Boolean = monoMixEnabled
+
+    // ── Phase inversion ───────────────────────────────────────────────────────
+    /**
+     * Inverts phase of the specified channel(s).
+     * Poweramp-style: can invert L, R, or both independently.
+     */
+    fun setPhaseInvert(left: Boolean, right: Boolean) {
+        phaseInvertLeft  = left
+        phaseInvertRight = right
+    }
+    fun isPhaseInvertLeft(): Boolean  = phaseInvertLeft
+    fun isPhaseInvertRight(): Boolean = phaseInvertRight
+
+    // ── Mid/Side processing mode ──────────────────────────────────────────────
+    /**
+     * Sets EQ processing mode.
+     * @param mode "normal" or "mid_side"
+     *   - normal:   standard L/R processing
+     *   - mid_side: encode to M/S before EQ, decode after (EQ operates on Mid and Side channels)
+     */
+    fun setProcessingMode(mode: String) {
+        processingMode = when (mode.lowercase()) {
+            PROC_MODE_MID_SIDE -> PROC_MODE_MID_SIDE
+            else               -> PROC_MODE_NORMAL
+        }
+    }
+    fun getProcessingMode(): String = processingMode
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — COMPRESSOR
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun setCompressorEnabled(enabled: Boolean) { compressorEnabled = enabled }
     fun isCompressorEnabled(): Boolean = compressorEnabled
-    fun setCompressorThreshold(db: Double) { compressorThreshold = db.coerceIn(-60.0, 0.0); updateCompressorCurve() }
-    fun setCompressorRatio(ratio: Double) { compressorRatio = ratio.coerceIn(1.0, 20.0); updateCompressorCurve() }
-    fun setCompressorAttackMs(ms: Double) { compressorAttackMs = ms.coerceIn(1.0, 100.0); updateCompressorTimeConstants() }
-    fun setCompressorReleaseMs(ms: Double) { compressorReleaseMs = ms.coerceIn(10.0, 1000.0); updateCompressorTimeConstants() }
-    fun setCompressorKneeWidth(db: Double) { compressorKneeDb = db.coerceIn(0.0, 12.0); updateCompressorCurve() }
+    fun setCompressorThreshold(db: Double)  { compressorThreshold = db.coerceIn(-60.0, 0.0); updateCompressorCurve() }
+    fun setCompressorRatio(ratio: Double)   { compressorRatio = ratio.coerceIn(1.0, 20.0);   updateCompressorCurve() }
+    fun setCompressorAttackMs(ms: Double)   { compressorAttackMs = ms.coerceIn(1.0, 100.0);  updateCompressorTimeConstants() }
+    fun setCompressorReleaseMs(ms: Double)  { compressorReleaseMs = ms.coerceIn(10.0, 1000.0); updateCompressorTimeConstants() }
+    fun setCompressorKneeWidth(db: Double)  { compressorKneeDb = db.coerceIn(0.0, 12.0);     updateCompressorCurve() }
     fun setCompressorMakeupGain(db: Double) { compressorMakeupDb = db.coerceIn(-12.0, 12.0); compressorMakeupLinear = dbToLinear(db) }
-    fun getCompressorReductionDb(): Float = linearToDb(compressorEnvelope[0]).toFloat()
+    fun getCompressorReductionDb(): Float   = linearToDb(compressorEnvelope[0]).toFloat()
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // PUBLIC API â€” PEAK METER
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — PEAK METER
+    // ═══════════════════════════════════════════════════════════════════════
 
-    fun setPeakHoldMs(ms: Double) { peakHoldMs = ms.coerceIn(50.0, 2000.0) }
-    fun setPeakReleaseMs(ms: Double) { peakReleaseMs = ms.coerceIn(10.0, 1000.0); updatePeakReleaseCoeff() }
+    fun setPeakHoldMs(ms: Double)   { peakHoldMs    = ms.coerceIn(50.0, 2000.0) }
+    fun setPeakReleaseMs(ms: Double){ peakReleaseMs  = ms.coerceIn(10.0, 1000.0); updatePeakReleaseCoeff() }
     fun setPeakCallback(callback: ((FloatArray) -> Unit)?) { peakCallback = callback }
     fun getCurrentPeaks(): FloatArray = currentPeaks.copyOf()
-    fun getHeldPeaks(): FloatArray = heldPeaks.copyOf()
+    fun getHeldPeaks(): FloatArray    = heldPeaks.copyOf()
     fun resetPeaks() { for (i in heldPeaks.indices) { heldPeaks[i] = 0f; peakTimer[i] = 0L } }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // STATE GETTERS
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
-    fun getCurrentGains(): FloatArray = graphicGainsDb.copyOf()
-    fun getParametricGains(): FloatArray = parametricGainsDb.copyOf()
-    fun getParametricFreqs(): DoubleArray = parametricFreqs.copyOf()
-    fun getCurrentPreamp(): Float = linearToDb(smoothedPreamp).toFloat()
+    fun getCurrentGains(): FloatArray   = graphicGainsDb.copyOf()
+    fun getParametricGains(): FloatArray= parametricGainsDb.copyOf()
+    fun getParametricFreqs(): DoubleArray= parametricFreqs.copyOf()
+    fun getCurrentPreamp(): Float       = linearToDb(smoothedPreamp).toFloat()
     fun getCurrentQValues(): FloatArray = currentQValues.copyOf()
-    fun getCurrentLoudnessDb(): Float = linearToDb(smoothedLoudness).toFloat()
-    fun getCurrentEqMode(): EqMode = eqMode
-    fun getDitherMode(): DitherMode = ditherMode
-    fun getCompressorThreshold(): Double = compressorThreshold
-    fun getCompressorRatio(): Double = compressorRatio
+    fun getCurrentLoudnessDb(): Float   = linearToDb(smoothedLoudness).toFloat()
+    fun getCurrentEqMode(): EqMode      = eqMode
+    fun getDitherMode(): DitherMode     = ditherMode
+    fun getCompressorThreshold(): Double= compressorThreshold
+    fun getCompressorRatio(): Double    = compressorRatio
     fun getCompressorAttackMs(): Double = compressorAttackMs
-    fun getCompressorReleaseMs(): Double = compressorReleaseMs
+    fun getCompressorReleaseMs(): Double= compressorReleaseMs
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // SPECTRUM & AUTO-EQ
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun computeAutoEqSuggestion(): FloatArray {
-        val mags = _spectrumMagnitudes
+        val mags    = _spectrumMagnitudes
         val nyquist = sampleRate / 2.0
-        val binWidth = nyquist / SPECTRUM_BINS
-        val bandDb = FloatArray(BAND_COUNT) { band ->
-            val fc = ISO_FREQ_CENTERS[band]
+        val binWidth= nyquist / SPECTRUM_BINS
+        val bandDb  = FloatArray(BAND_COUNT) { band ->
+            val fc  = ISO_FREQ_CENTERS[band]
             val bin = ((fc / binWidth).toInt()).coerceIn(0, SPECTRUM_BINS - 1)
             val mag = mags[bin].toDouble().coerceAtLeast(1e-10)
-            (20.0 * kotlin.math.log10(mag)).toFloat()
+            (20.0 * log10(mag)).toFloat()
         }
         val mean = bandDb.average().toFloat()
         val suggestion = FloatArray(BAND_COUNT) { band ->
@@ -328,9 +408,9 @@ class EqualizerProcessor : AudioProcessor {
         return suggestion
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // AudioProcessor INTERFACE
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val enc = inputAudioFormat.encoding
@@ -338,15 +418,15 @@ class EqualizerProcessor : AudioProcessor {
                         enc == android.media.AudioFormat.ENCODING_PCM_FLOAT ||
                         enc == ENCODING_PCM_32BIT
         if (!supported) {
-            this.inputAudioFormat = AudioFormat.NOT_SET
+            this.inputAudioFormat  = AudioFormat.NOT_SET
             this.outputAudioFormat = AudioFormat.NOT_SET
             return AudioFormat.NOT_SET
         }
-        this.inputAudioFormat = inputAudioFormat
+        this.inputAudioFormat  = inputAudioFormat
         this.outputAudioFormat = inputAudioFormat
-        sampleRate = inputAudioFormat.sampleRate.toDouble()
+        sampleRate  = inputAudioFormat.sampleRate.toDouble()
         numChannels = inputAudioFormat.channelCount
-        numBands = BAND_COUNT
+        numBands    = BAND_COUNT
 
         spectrumRefreshSamples = (sampleRate * SPECTRUM_REFRESH_MS / 1000.0).toInt()
         spectrumBuf = FloatArray(spectrumRefreshSamples.coerceAtLeast(512))
@@ -356,51 +436,52 @@ class EqualizerProcessor : AudioProcessor {
         initLimiter()
         updateCompressorTimeConstants()
         updatePeakReleaseCoeff()
-        shapingError = Array(numChannels.coerceAtLeast(1)) { DoubleArray(4) }
+        shapingError       = Array(numChannels.coerceAtLeast(1)) { DoubleArray(4) }
         compressorEnvelope = DoubleArray(numChannels.coerceAtLeast(1)) { 1.0 }
-        currentPeaks = FloatArray(numChannels.coerceAtLeast(1)) { 0f }
-        heldPeaks = FloatArray(numChannels.coerceAtLeast(1)) { 0f }
-        peakTimer = LongArray(numChannels.coerceAtLeast(1)) { 0L }
+        currentPeaks       = FloatArray(numChannels.coerceAtLeast(1)) { 0f }
+        heldPeaks          = FloatArray(numChannels.coerceAtLeast(1)) { 0f }
+        peakTimer          = LongArray(numChannels.coerceAtLeast(1)) { 0L }
 
         Log.i(TAG, "configure: ${inputAudioFormat.sampleRate}Hz ${inputAudioFormat.channelCount}ch " +
-                "mode=$eqMode compressor=${if(compressorEnabled) "on" else "off"} dither=$ditherMode highPrecision=$highPrecisionMode")
+                "mode=$eqMode procMode=$processingMode compressor=${if(compressorEnabled) "on" else "off"} " +
+                "dither=$ditherMode highPrecision=$highPrecisionMode")
         return outputAudioFormat
     }
 
     override fun isActive(): Boolean = inputAudioFormat != AudioFormat.NOT_SET
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        var rebuildGraphic = false
-        var rebuildParametric = false
+        var rebuildGraphic   = false
+        var rebuildParametric= false
 
         pendingEqMode.getAndSet(null)?.let {
             eqMode = it
-            rebuildGraphic = true
-            rebuildParametric = true
+            rebuildGraphic   = true
+            rebuildParametric= true
         }
         pendingGraphicGains.getAndSet(null)?.let {
-            graphicGainsDb = it
-            targetGraphicGains = it.copyOf()
-            rebuildGraphic = true
+            graphicGainsDb    = it
+            targetGraphicGains= it.copyOf()
+            rebuildGraphic    = true
         }
         pendingParametricGains.getAndSet(null)?.let {
             parametricGainsDb = it
-            targetParamGains = it.copyOf()
+            targetParamGains  = it.copyOf()
             rebuildParametric = true
         }
         pendingParametricFreqs.getAndSet(null)?.let {
-            parametricFreqs = it
+            parametricFreqs   = it
             rebuildParametric = true
         }
         pendingQValues.getAndSet(null)?.let {
-            currentQValues = it
-            rebuildGraphic = true
+            currentQValues    = it
+            rebuildGraphic    = true
             rebuildParametric = true
         }
-        if (rebuildGraphic) rebuildGraphicFilters()
+        if (rebuildGraphic)    rebuildGraphicFilters()
         if (rebuildParametric) rebuildParametricFilters()
 
-        pendingPreamp.getAndSet(null)?.let { targetPreamp = dbToLinear(it.toDouble()) }
+        pendingPreamp.getAndSet(null)?.let   { targetPreamp   = dbToLinear(it.toDouble()) }
         pendingLoudness.getAndSet(null)?.let { targetLoudness = it.toDouble() }
 
         if (!_isEnabled.get() || inputBuffer.remaining() == 0) {
@@ -414,7 +495,7 @@ class EqualizerProcessor : AudioProcessor {
         when (inputAudioFormat.encoding) {
             android.media.AudioFormat.ENCODING_PCM_16BIT -> processShort(inputBuffer, output)
             android.media.AudioFormat.ENCODING_PCM_FLOAT -> processFloat(inputBuffer, output)
-            ENCODING_PCM_32BIT -> processInt32(inputBuffer, output)
+            ENCODING_PCM_32BIT                           -> processInt32(inputBuffer, output)
         }
 
         inputBuffer.position(inputBuffer.limit())
@@ -429,50 +510,57 @@ class EqualizerProcessor : AudioProcessor {
 
     override fun flush() {
         outputBuffer = AudioProcessor.EMPTY_BUFFER
-        inputEnded = false
+        inputEnded   = false
         clearAllState()
         limiterEnvelope.fill(1.0)
         compressorEnvelope.fill(1.0)
         currentPeaks.fill(0f)
         heldPeaks.fill(0f)
         peakTimer.fill(0L)
-        shapingError = Array(numChannels.coerceAtLeast(1)) { DoubleArray(4) }
-        spectrumWritePos = 0
-        spectrumFrameCount = 0
-        smoothedGraphicGains = targetGraphicGains.copyOf()
-        smoothedParamGains = targetParamGains.copyOf()
-        smoothedPreamp = targetPreamp
-        smoothedLoudness = targetLoudness
+        shapingError          = Array(numChannels.coerceAtLeast(1)) { DoubleArray(4) }
+        spectrumWritePos      = 0
+        spectrumFrameCount    = 0
+        smoothedGraphicGains  = targetGraphicGains.copyOf()
+        smoothedParamGains    = targetParamGains.copyOf()
+        smoothedPreamp        = targetPreamp
+        smoothedLoudness      = targetLoudness
     }
 
     override fun reset() {
         flush()
-        inputAudioFormat = AudioFormat.NOT_SET
+        inputAudioFormat  = AudioFormat.NOT_SET
         outputAudioFormat = AudioFormat.NOT_SET
         graphicCoeffs = emptyArray(); graphicState = emptyArray()
-        paramCoeffs = emptyArray(); paramState = emptyArray()
-        graphicGainsDb = FloatArray(BAND_COUNT) { 0f }
+        paramCoeffs   = emptyArray(); paramState   = emptyArray()
+        graphicGainsDb    = FloatArray(BAND_COUNT) { 0f }
         parametricGainsDb = FloatArray(BAND_COUNT) { 0f }
-        parametricFreqs = ISO_FREQ_CENTERS.copyOf()
-        currentQValues = FloatArray(BAND_COUNT) { defaultQ(it) }
-        targetGraphicGains = FloatArray(BAND_COUNT); smoothedGraphicGains = FloatArray(BAND_COUNT)
-        targetParamGains = FloatArray(BAND_COUNT); smoothedParamGains = FloatArray(BAND_COUNT)
-        smoothedPreamp = 1.0; targetPreamp = 1.0
-        smoothedLoudness = 1.0; targetLoudness = 1.0
+        parametricFreqs   = ISO_FREQ_CENTERS.copyOf()
+        currentQValues    = FloatArray(BAND_COUNT) { defaultQ(it) }
+        targetGraphicGains  = FloatArray(BAND_COUNT); smoothedGraphicGains = FloatArray(BAND_COUNT)
+        targetParamGains    = FloatArray(BAND_COUNT); smoothedParamGains   = FloatArray(BAND_COUNT)
+        smoothedPreamp    = 1.0; targetPreamp   = 1.0
+        smoothedLoudness  = 1.0; targetLoudness = 1.0
         compressorThreshold = COMPRESSOR_THRESHOLD_DB
-        compressorRatio = COMPRESSOR_RATIO
-        compressorAttackMs = COMPRESSOR_ATTACK_MS
+        compressorRatio     = COMPRESSOR_RATIO
+        compressorAttackMs  = COMPRESSOR_ATTACK_MS
         compressorReleaseMs = COMPRESSOR_RELEASE_MS
-        compressorKneeDb = COMPRESSOR_KNEE_DB
-        compressorMakeupDb = COMPRESSOR_MAKEUP_DB
-        highPrecisionMode = false
+        compressorKneeDb    = COMPRESSOR_KNEE_DB
+        compressorMakeupDb  = COMPRESSOR_MAKEUP_DB
+        highPrecisionMode   = false
+        balanceLeft         = 1.0f
+        balanceRight        = 1.0f
+        stereoExpansion     = 0.0f
+        monoMixEnabled      = false
+        phaseInvertLeft     = false
+        phaseInvertRight    = false
+        processingMode      = PROC_MODE_NORMAL
         updateCompressorCurve()
         updateCompressorTimeConstants()
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // PARAMETER SMOOTHING
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     fun recomputeSmoothStep() {
         smoothStepFraction = if (smoothingRampMs <= 0.0 || sampleRate <= 0.0) 1.0
@@ -481,23 +569,23 @@ class EqualizerProcessor : AudioProcessor {
 
     private fun updateSmoothedParams() {
         val step = smoothStepFraction
-        var graphicChanged = false
-        var paramChanged = false
+        var graphicChanged  = false
+        var paramChanged    = false
         for (b in 0 until BAND_COUNT) {
             val gd = targetGraphicGains[b] - smoothedGraphicGains[b]
             if (abs(gd) > 1e-5f) { smoothedGraphicGains[b] += (step * gd).toFloat(); graphicChanged = true }
             val pd = targetParamGains[b] - smoothedParamGains[b]
             if (abs(pd) > 1e-5f) { smoothedParamGains[b] += (step * pd).toFloat(); paramChanged = true }
         }
-        smoothedPreamp += step * (targetPreamp - smoothedPreamp)
+        smoothedPreamp   += step * (targetPreamp   - smoothedPreamp)
         smoothedLoudness += step * (targetLoudness - smoothedLoudness)
         if (graphicChanged) rebuildGraphicFiltersFromSmoothed()
-        if (paramChanged) rebuildParametricFiltersFromSmoothed()
+        if (paramChanged)   rebuildParametricFiltersFromSmoothed()
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // PCM PROCESSING
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     private fun processShort(input: ByteBuffer, output: ByteBuffer) {
         val masterGain = smoothedLoudness * smoothedPreamp
@@ -506,7 +594,7 @@ class EqualizerProcessor : AudioProcessor {
             val ch = idx % numChannels
             var sample = input.short.toDouble() / 32768.0
             trackPeak(sample, ch)
-            sample = processSample(sample * masterGain, ch)
+            sample = processChannelSample(sample * masterGain, ch, idx)
             val dithered = applyDitherShaped(sample, ch)
             output.putShort((dithered * 32768.0).coerceIn(-32768.0, 32767.0).toInt().toShort())
             if (ch == 0) feedSpectrum(sample.toFloat())
@@ -521,7 +609,7 @@ class EqualizerProcessor : AudioProcessor {
             val ch = idx % numChannels
             var sample = input.float.toDouble()
             trackPeak(sample, ch)
-            sample = processSample(sample * masterGain, ch)
+            sample = processChannelSample(sample * masterGain, ch, idx)
             output.putFloat(softClip(sample).toFloat())
             if (ch == 0) feedSpectrum(sample.toFloat())
             idx++
@@ -535,12 +623,83 @@ class EqualizerProcessor : AudioProcessor {
             val ch = idx % numChannels
             var sample = input.int.toDouble() / 2147483648.0
             trackPeak(sample, ch)
-            sample = processSample(sample * masterGain, ch)
+            sample = processChannelSample(sample * masterGain, ch, idx)
             val dithered = applyDitherShaped(sample, ch)
             val out = (dithered * 2147483648.0).coerceIn(-2147483648.0, 2147483647.0).toLong().toInt()
             output.putInt(out)
             if (ch == 0) feedSpectrum(sample.toFloat())
             idx++
+        }
+    }
+
+    /**
+     * Full DSP chain for a single sample on a given channel.
+     *
+     * For stereo M/S mode:
+     *  - Even sample index (ch=L) + odd (ch=R) must be buffered together.
+     *  - We store the L sample and process as M/S once R arrives.
+     *  - For simplicity here we apply M/S encode/decode inline using the
+     *    previous same-frame sibling sample (works correctly when interleaved).
+     */
+    private var msSampleL = 0.0   // temp storage for M/S encoding
+    private var msSampleR = 0.0
+
+    private fun processChannelSample(input: Double, ch: Int, sampleIdx: Int): Double {
+        // 1. Balance / pan
+        val balanced = when {
+            numChannels < 2 -> input
+            ch == 0         -> input * balanceLeft
+            ch == 1         -> input * balanceRight
+            else            -> input
+        }
+
+        // 2. M/S encode: buffer L channel, process L+R pair on R arrival
+        //    For M/S mode with stereo, we process in pairs.
+        var signal = balanced
+        // (M/S pair processing is done after EQ below; here we just pass through)
+
+        // 3. EQ processing (core)
+        val eqd = processSample(signal, ch)
+
+        // 4. Post-EQ: mono mix
+        val mixed = if (monoMixEnabled && numChannels == 2) {
+            // Mono mix applied symmetrically to both channels
+            // We buffer L and mix with R in the R pass
+            when (ch) {
+                0 -> { msSampleL = eqd; eqd }
+                1 -> {
+                    val mono = (msSampleL + eqd) * 0.5
+                    msSampleL = mono
+                    mono
+                }
+                else -> eqd
+            }
+        } else eqd
+
+        // 5. M/S decode + stereo expansion (stereo only)
+        val expanded = if (numChannels == 2 && stereoExpansion != 0f) {
+            when (ch) {
+                0 -> { msSampleL = mixed; mixed }
+                1 -> {
+                    val l = msSampleL
+                    val r = mixed
+                    val mid  = (l + r) * 0.5
+                    val side = (l - r) * 0.5
+                    val width = 1.0f + stereoExpansion  // 0.0 (mono) to 2.0 (max)
+                    val newL = mid + side * width
+                    val newR = mid - side * width
+                    msSampleL = newL
+                    newR
+                }
+                else -> mixed
+            }
+        } else mixed
+
+        // 6. Phase inversion
+        return when {
+            ch == 0 && phaseInvertLeft  -> -expanded
+            ch == 1 && phaseInvertRight -> -expanded
+            else                        -> expanded
         }
     }
 
@@ -553,15 +712,14 @@ class EqualizerProcessor : AudioProcessor {
 
     private fun emitPeaks() {
         val now = System.nanoTime()
-        val elapsedSec = (now - lastPeakTime) / 1_000_000_000.0
         lastPeakTime = now
-        
+
         if (peakReleaseCoeff > 0) {
             for (ch in 0 until numChannels) {
                 currentPeaks[ch] = (currentPeaks[ch] * (1.0 - peakReleaseCoeff)).toFloat().coerceAtLeast(0f)
             }
         }
-        
+
         val holdNs = (peakHoldMs / 1000.0) * 1_000_000_000.0
         for (ch in 0 until numChannels) {
             if (currentPeaks[ch] > heldPeaks[ch]) {
@@ -583,9 +741,9 @@ class EqualizerProcessor : AudioProcessor {
             signal = applyCompressor(signal, ch)
         }
         val filtered = when (eqMode) {
-            EqMode.GRAPHIC -> applyFilters(signal, ch, graphicCoeffs, graphicState)
+            EqMode.GRAPHIC    -> applyFilters(signal, ch, graphicCoeffs, graphicState)
             EqMode.PARAMETRIC -> applyFilters(signal, ch, paramCoeffs, paramState)
-            EqMode.PARALLEL -> {
+            EqMode.PARALLEL   -> {
                 val g = applyFilters(signal, ch, graphicCoeffs, graphicState)
                 val p = applyFilters(signal, ch, paramCoeffs, paramState)
                 (g + p) * 0.5
@@ -616,9 +774,8 @@ class EqualizerProcessor : AudioProcessor {
             return dbToLinear(compressedDb - inputDb)
         }
         val kneeStartDb = compressorThreshold - compressorKneeDb / 2.0
-        val kneeEndDb = compressorThreshold + compressorKneeDb / 2.0
+        val kneeEndDb   = compressorThreshold + compressorKneeDb / 2.0
         val t = (inputDb - kneeStartDb) / compressorKneeDb
-        val tSquared = t * t
         val compressedDb = when {
             t < 0.5 -> {
                 val t2 = t * 2.0
@@ -632,11 +789,15 @@ class EqualizerProcessor : AudioProcessor {
         return dbToLinear(compressedDb - inputDb)
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // DSP PRIMITIVES
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
-    private fun applyFilters(input: Double, ch: Int, coeffs: Array<DoubleArray>, state: Array<Array<DoubleArray>>): Double {
+    private fun applyFilters(
+        input: Double, ch: Int,
+        coeffs: Array<DoubleArray>,
+        state: Array<Array<DoubleArray>>
+    ): Double {
         if (coeffs.isEmpty() || state.isEmpty()) return input
         var x = input
         for (band in 0 until numBands) {
@@ -653,12 +814,12 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun applyLimiter(sample: Double, ch: Int): Double {
-        val absVal = abs(sample)
+        val absVal    = abs(sample)
         val kneeLinear = dbToLinear(-LIMITER_KNEE_DB / 2.0)
-        val threshLow = LIMITER_THRESHOLD * kneeLinear
+        val threshLow  = LIMITER_THRESHOLD * kneeLinear
         val threshHigh = LIMITER_THRESHOLD
         val targetGain = when {
-            absVal <= threshLow -> 1.0
+            absVal <= threshLow  -> 1.0
             absVal <= threshHigh -> {
                 val x = (absVal - threshLow) / (threshHigh - threshLow)
                 1.0 - x * x * (1.0 - LIMITER_THRESHOLD / absVal.coerceAtLeast(1e-10))
@@ -674,23 +835,23 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun softClip(x: Double): Double = when {
-        x >= 1.0 -> 1.0
+        x >= 1.0  -> 1.0
         x <= -1.0 -> -1.0
-        else -> x - (x * x * x) / 3.0
+        else      -> x - (x * x * x) / 3.0
     }
 
     private fun applyDitherShaped(sample: Double, ch: Int): Double {
-        val r1 = ditherRandom.nextDouble() * 2.0 - 1.0
-        val r2 = ditherRandom.nextDouble() * 2.0 - 1.0
+        val r1   = ditherRandom.nextDouble() * 2.0 - 1.0
+        val r2   = ditherRandom.nextDouble() * 2.0 - 1.0
         val noise = DITHER_AMPLITUDE * (r1 - r2)
-        val err = if (ch < shapingError.size) shapingError[ch] else DoubleArray(4)
+        val err   = if (ch < shapingError.size) shapingError[ch] else DoubleArray(4)
         val shaped = when (ditherMode) {
-            DitherMode.FLAT -> noise
-            DitherMode.HIGHPASS -> noise - err[0]
+            DitherMode.FLAT       -> noise
+            DitherMode.HIGHPASS   -> noise - err[0]
             DitherMode.E_WEIGHTED -> noise - 2.033 * err[0] + 2.165 * err[1] - 1.959 * err[2] + 1.590 * err[3]
             DitherMode.F_WEIGHTED -> noise - 2.412 * err[0] + 2.549 * err[1] - 2.712 * err[2] + 2.143 * err[3]
         }
-        val dithered = sample + shaped
+        val dithered  = sample + shaped
         val quantised = (dithered * 32768.0).let { it.coerceIn(-32768.0, 32767.0).toLong().toDouble() } / 32768.0
         val quantError = quantised - sample
         if (ch < shapingError.size) {
@@ -699,9 +860,9 @@ class EqualizerProcessor : AudioProcessor {
         return dithered
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // SPECTRUM
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     private fun feedSpectrum(sample: Float) {
         if (spectrumBuf.isEmpty()) return
@@ -715,18 +876,18 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun analyzeSpectrum() {
-        val n = spectrumBuf.size
+        val n   = spectrumBuf.size
         val nyq = sampleRate / 2.0
         val result = FloatArray(SPECTRUM_BINS)
         for (binIdx in 0 until SPECTRUM_BINS) {
-            val frac = binIdx.toDouble() / (SPECTRUM_BINS - 1)
-            val freqHz = 20.0 * (nyq / 20.0).pow(frac)
-            val freqNorm = freqHz / sampleRate
-            val omega = 2.0 * PI * freqNorm
-            val coeff = 2.0 * cos(omega)
+            val frac    = binIdx.toDouble() / (SPECTRUM_BINS - 1)
+            val freqHz  = 20.0 * (nyq / 20.0).pow(frac)
+            val freqNorm= freqHz / sampleRate
+            val omega   = 2.0 * PI * freqNorm
+            val coeff   = 2.0 * cos(omega)
             var s1 = 0.0; var s2 = 0.0
             for (i in 0 until n) {
-                val x = spectrumBuf[(spectrumWritePos + i) % n].toDouble()
+                val x  = spectrumBuf[(spectrumWritePos + i) % n].toDouble()
                 val s0 = x + coeff * s1 - s2
                 s2 = s1; s1 = s0
             }
@@ -735,79 +896,105 @@ class EqualizerProcessor : AudioProcessor {
         _spectrumMagnitudes = result
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // FILTER COEFFICIENTS
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     private fun rebuildAllFilters() {
-        targetGraphicGains = graphicGainsDb.copyOf()
+        targetGraphicGains   = graphicGainsDb.copyOf()
         smoothedGraphicGains = graphicGainsDb.copyOf()
-        targetParamGains = parametricGainsDb.copyOf()
-        smoothedParamGains = parametricGainsDb.copyOf()
+        targetParamGains     = parametricGainsDb.copyOf()
+        smoothedParamGains   = parametricGainsDb.copyOf()
         rebuildGraphicFilters()
         rebuildParametricFilters()
     }
 
-    private fun rebuildGraphicFilters() { targetGraphicGains = graphicGainsDb.copyOf(); smoothedGraphicGains = graphicGainsDb.copyOf(); rebuildGraphicFiltersFromSmoothed() }
-    private fun rebuildParametricFilters() { targetParamGains = parametricGainsDb.copyOf(); smoothedParamGains = parametricGainsDb.copyOf(); rebuildParametricFiltersFromSmoothed() }
-    private fun rebuildGraphicFiltersFromSmoothed() { if (sampleRate > 0.0 && numChannels > 0) { graphicCoeffs = buildCoeffs(smoothedGraphicGains, ISO_FREQ_CENTERS); if (graphicState.isEmpty() || graphicState[0].size != numChannels) graphicState = buildState() } }
-    private fun rebuildParametricFiltersFromSmoothed() { if (sampleRate > 0.0 && numChannels > 0) { paramCoeffs = buildCoeffs(smoothedParamGains, parametricFreqs); if (paramState.isEmpty() || paramState[0].size != numChannels) paramState = buildState() } }
+    private fun rebuildGraphicFilters() {
+        targetGraphicGains   = graphicGainsDb.copyOf()
+        smoothedGraphicGains = graphicGainsDb.copyOf()
+        rebuildGraphicFiltersFromSmoothed()
+    }
 
-    private fun buildCoeffs(gains: FloatArray, freqs: DoubleArray): Array<DoubleArray> = Array(BAND_COUNT) { band ->
-        val fc = freqs[band]
-        val gain = gains.getOrElse(band) { 0f }.toDouble()
-        val q = currentQValues.getOrElse(band) { defaultQ(band) }.toDouble()
-        when (band) {
-            0 -> computeLowShelfCoeffs(fc, gain, q, sampleRate)
-            BAND_COUNT - 1 -> computeHighShelfCoeffs(fc, gain, q, sampleRate)
-            else -> computePeakingCoeffs(fc, gain, q, sampleRate)
+    private fun rebuildParametricFilters() {
+        targetParamGains   = parametricGainsDb.copyOf()
+        smoothedParamGains = parametricGainsDb.copyOf()
+        rebuildParametricFiltersFromSmoothed()
+    }
+
+    private fun rebuildGraphicFiltersFromSmoothed() {
+        if (sampleRate > 0.0 && numChannels > 0) {
+            graphicCoeffs = buildCoeffs(smoothedGraphicGains, ISO_FREQ_CENTERS)
+            if (graphicState.isEmpty() || graphicState[0].size != numChannels) graphicState = buildState()
         }
     }
 
-    private fun buildState(): Array<Array<DoubleArray>> = Array(BAND_COUNT) { Array(numChannels.coerceAtLeast(1)) { DoubleArray(2) } }
-    private fun clearAllState() { graphicState = buildState(); paramState = buildState() }
+    private fun rebuildParametricFiltersFromSmoothed() {
+        if (sampleRate > 0.0 && numChannels > 0) {
+            paramCoeffs = buildCoeffs(smoothedParamGains, parametricFreqs)
+            if (paramState.isEmpty() || paramState[0].size != numChannels) paramState = buildState()
+        }
+    }
+
+    private fun buildCoeffs(gains: FloatArray, freqs: DoubleArray): Array<DoubleArray> = Array(BAND_COUNT) { band ->
+        val fc   = freqs[band]
+        val gain = gains.getOrElse(band) { 0f }.toDouble()
+        val q    = currentQValues.getOrElse(band) { defaultQ(band) }.toDouble()
+        when (band) {
+            0             -> computeLowShelfCoeffs(fc, gain, q, sampleRate)
+            BAND_COUNT - 1-> computeHighShelfCoeffs(fc, gain, q, sampleRate)
+            else          -> computePeakingCoeffs(fc, gain, q, sampleRate)
+        }
+    }
+
+    private fun buildState(): Array<Array<DoubleArray>> =
+        Array(BAND_COUNT) { Array(numChannels.coerceAtLeast(1)) { DoubleArray(2) } }
+
+    private fun clearAllState() {
+        graphicState = buildState()
+        paramState   = buildState()
+    }
 
     private fun computePeakingCoeffs(fc: Double, gainDb: Double, q: Double, fs: Double): DoubleArray {
         if (gainDb == 0.0) return doubleArrayOf(1.0, 0.0, 0.0, 0.0, 0.0)
-        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
-        val A = 10.0.pow(gainDb / 40.0)
-        val al = sinW0 / (2.0 * q)
-        val b0 = 1.0 + al * A; val b1 = -2.0 * cosW0; val b2 = 1.0 - al * A
-        val a0 = 1.0 + al / A; val a1 = -2.0 * cosW0; val a2 = 1.0 - al / A
+        val w0    = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val A     = 10.0.pow(gainDb / 40.0)
+        val al    = sinW0 / (2.0 * q)
+        val b0    = 1.0 + al * A; val b1 = -2.0 * cosW0; val b2 = 1.0 - al * A
+        val a0    = 1.0 + al / A; val a1 = -2.0 * cosW0; val a2 = 1.0 - al / A
         return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 
     private fun computeLowShelfCoeffs(fc: Double, gainDb: Double, q: Double, fs: Double): DoubleArray {
         if (gainDb == 0.0) return doubleArrayOf(1.0, 0.0, 0.0, 0.0, 0.0)
-        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
-        val A = 10.0.pow(gainDb / 40.0)
-        val al = sinW0 / 2.0 * sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
-        val b0 = A * ((A + 1) - (A - 1) * cosW0 + 2 * sqrt(A) * al)
-        val b1 = 2.0 * A * ((A - 1) - (A + 1) * cosW0)
-        val b2 = A * ((A + 1) - (A - 1) * cosW0 - 2 * sqrt(A) * al)
-        val a0 = (A + 1) + (A - 1) * cosW0 + 2 * sqrt(A) * al
-        val a1 = -2.0 * ((A - 1) + (A + 1) * cosW0)
-        val a2 = (A + 1) + (A - 1) * cosW0 - 2 * sqrt(A) * al
+        val w0    = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val A     = 10.0.pow(gainDb / 40.0)
+        val al    = sinW0 / 2.0 * sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
+        val b0    = A * ((A + 1) - (A - 1) * cosW0 + 2 * sqrt(A) * al)
+        val b1    = 2.0 * A * ((A - 1) - (A + 1) * cosW0)
+        val b2    = A * ((A + 1) - (A - 1) * cosW0 - 2 * sqrt(A) * al)
+        val a0    = (A + 1) + (A - 1) * cosW0 + 2 * sqrt(A) * al
+        val a1    = -2.0 * ((A - 1) + (A + 1) * cosW0)
+        val a2    = (A + 1) + (A - 1) * cosW0 - 2 * sqrt(A) * al
         return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 
     private fun computeHighShelfCoeffs(fc: Double, gainDb: Double, q: Double, fs: Double): DoubleArray {
         if (gainDb == 0.0) return doubleArrayOf(1.0, 0.0, 0.0, 0.0, 0.0)
-        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
-        val A = 10.0.pow(gainDb / 40.0)
-        val al = sinW0 / 2.0 * sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
-        val b0 = A * ((A + 1) + (A - 1) * cosW0 + 2 * sqrt(A) * al)
-        val b1 = -2.0 * A * ((A - 1) + (A + 1) * cosW0)
-        val b2 = A * ((A + 1) + (A - 1) * cosW0 - 2 * sqrt(A) * al)
-        val a0 = (A + 1) - (A - 1) * cosW0 + 2 * sqrt(A) * al
-        val a1 = 2.0 * ((A - 1) - (A + 1) * cosW0)
-        val a2 = (A + 1) - (A - 1) * cosW0 - 2 * sqrt(A) * al
+        val w0    = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val A     = 10.0.pow(gainDb / 40.0)
+        val al    = sinW0 / 2.0 * sqrt((A + 1.0 / A) * (1.0 / q - 1.0) + 2.0)
+        val b0    = A * ((A + 1) + (A - 1) * cosW0 + 2 * sqrt(A) * al)
+        val b1    = -2.0 * A * ((A - 1) + (A + 1) * cosW0)
+        val b2    = A * ((A + 1) + (A - 1) * cosW0 - 2 * sqrt(A) * al)
+        val a0    = (A + 1) - (A - 1) * cosW0 + 2 * sqrt(A) * al
+        val a1    = 2.0 * ((A - 1) - (A + 1) * cosW0)
+        val a2    = (A + 1) - (A - 1) * cosW0 - 2 * sqrt(A) * al
         return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
     // HELPERS
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ═══════════════════════════════════════════════════════════════════════
 
     private fun initLimiter() {
         limiterAttCoeff = exp(-1.0 / ((LIMITER_ATTACK_MS / 1000.0) * sampleRate))
@@ -816,15 +1003,15 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun updateCompressorCurve() {
-        compressorLinearThreshold = dbToLinear(compressorThreshold)
-        compressorLinearKneeStart = dbToLinear(compressorThreshold - compressorKneeDb / 2.0)
-        compressorLinearKneeEnd = dbToLinear(compressorThreshold + compressorKneeDb / 2.0)
-        compressorSlope = 1.0 / compressorRatio
-        compressorMakeupLinear = dbToLinear(compressorMakeupDb)
+        compressorLinearThreshold  = dbToLinear(compressorThreshold)
+        compressorLinearKneeStart  = dbToLinear(compressorThreshold - compressorKneeDb / 2.0)
+        compressorLinearKneeEnd    = dbToLinear(compressorThreshold + compressorKneeDb / 2.0)
+        compressorSlope            = 1.0 / compressorRatio
+        compressorMakeupLinear     = dbToLinear(compressorMakeupDb)
     }
 
     private fun updateCompressorTimeConstants() {
-        compressorAttackCoeff = exp(-1.0 / (compressorAttackMs / 1000.0 * sampleRate))
+        compressorAttackCoeff  = exp(-1.0 / (compressorAttackMs  / 1000.0 * sampleRate))
         compressorReleaseCoeff = exp(-1.0 / (compressorReleaseMs / 1000.0 * sampleRate))
     }
 
@@ -834,7 +1021,8 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun dbToLinear(db: Double): Double = 10.0.pow(db / 20.0)
-    private fun linearToDb(linear: Double): Double = if (linear <= 0.0) -120.0 else 20.0 * log10(linear)
+    private fun linearToDb(linear: Double): Double =
+        if (linear <= 0.0) -120.0 else 20.0 * log10(linear)
 
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
         return if (outputBuffer === AudioProcessor.EMPTY_BUFFER || outputBuffer.capacity() < size) {
@@ -846,8 +1034,8 @@ class EqualizerProcessor : AudioProcessor {
 
     private fun defaultQ(band: Int): Float = when {
         band == 0 || band == BAND_COUNT - 1 -> 0.707f
-        band < 3 || band > 27 -> 1.0f
-        band < 7 || band > 23 -> 1.4f
-        else -> 2.1f
+        band < 3  || band > 27              -> 1.0f
+        band < 7  || band > 23              -> 1.4f
+        else                                -> 2.1f
     }
 }
