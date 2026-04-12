@@ -540,9 +540,6 @@ class EqualizerProcessor : AudioProcessor {
         recomputeSmoothStep()
     }
 
-    /** Returns spectrum magnitudes (alias matching MavinPlayerCore call pattern). */
-    fun getSpectrumMagnitudes(): FloatArray = spectrumMagnitudes
-
     /** Returns the auto-EQ suggestion (alias matching MavinPlayerCore call pattern). */
     fun computeAutoEQ(): FloatArray = computeAutoEqSuggestion()
 
