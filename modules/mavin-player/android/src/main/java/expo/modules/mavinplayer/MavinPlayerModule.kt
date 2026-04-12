@@ -799,6 +799,65 @@ class MavinPlayerCore private constructor(private val context: Context) {
     // ── Output profile ───────────────────────────────────────────────────────
     private var currentOutputProfile: String = MavinPlayerConstants.OUTPUT_PROFILE_DEFAULT
 
+    // ── Parametric band full descriptors (Poweramp / Neutron style) ───────────
+    private val parametricBandConfigs: Array<ParametricBandConfig> =
+        Array(EqualizerProcessor.BAND_COUNT) { ParametricBandConfig() }
+
+    // ── Bass / treble freq + Q (Poweramp style) ───────────────────────────────
+    private var bassFreqHz: Double = 80.0
+    private var bassQ: Double = 1.0
+    private var trebleFreqHz: Double = 10000.0
+    private var trebleQ: Double = 1.0
+
+    // ── FRC presets (headphone correction) ───────────────────────────────────
+    private val frcPresets: MutableMap<String, FrcPreset> = mutableMapOf()
+    private var activeFrcPreset: String? = null
+
+    // ── Surround DSP config ───────────────────────────────────────────────────
+    private var surroundConfig: SurroundDspConfig = SurroundDspConfig()
+
+    // ── Oversampling filter type ───────────────────────────────────────────────
+    private var oversamplingFilterType: String = MavinPlayerConstants.OVERSAMPLE_LINEAR_PHASE
+
+    // ── Tube saturation mode + manual params ──────────────────────────────────
+    private var tubeMode: String = MavinPlayerConstants.TUBE_MODE_OFF
+    private var tubeDriveDb: Float = 0f
+    private var tubeHarmonic2: Float = 0f
+    private var tubeHarmonic3: Float = 0f
+
+    // ── ALC (Adaptive Loudness Compensation) ──────────────────────────────────
+    private var alcEnabled: Boolean = false
+    private var alcTargetLufs: Float = -14f
+
+    // ── RMS meter snapshot ────────────────────────────────────────────────────
+    @Volatile private var lastRmsSnapshot: RmsMeterSnapshot = RmsMeterSnapshot()
+
+    // ── BPM tracking ──────────────────────────────────────────────────────────
+    private val trackBpmMap: MutableMap<String, Double> = mutableMapOf()
+    private var currentTrackBpm: Double = 0.0
+
+    // ── Automix config ────────────────────────────────────────────────────────
+    private var automixConfig: AutomixConfig = AutomixConfig()
+
+    // ── Wake-up timer ─────────────────────────────────────────────────────────
+    private var wakeUpTimerState: WakeUpTimerState = WakeUpTimerState()
+    private var wakeUpTimerRunnable: Runnable? = null
+
+    // ── Queue auto-clear ──────────────────────────────────────────────────────
+    private var queueAutoClearEnabled: Boolean = false
+
+    // ── Pipeline mode (Android 15 AIDL workaround) ───────────────────────────
+    private var pipelineMode: String = MavinPlayerConstants.PIPELINE_MODE_DEFAULT
+
+    // ── Absolute volume ───────────────────────────────────────────────────────
+    private var absoluteVolumeEnabled: Boolean = false
+
+    // ── Max bitrate for adaptive streaming ───────────────────────────────────
+    private var maxBitrateKbps: Int = 0
+
+    // ── Buffering-during-play flag ────────────────────────────────────────────
+    private var bufferingDuringPlay: Boolean = false
+
     // ── Per-track last positions for resume ──────────────────────────────────
     private fun persistPosition(trackId: String, positionMs: Long) {
         if (MavinPlayerRegistry.options.persistPosition) {
@@ -1173,7 +1232,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
             Player.STATE_READY -> {
                 bufferingDuringPlay = false
                 MavinPlayerRegistry.lastPlaybackError = null
-                if (player.isPlaying) MavinPlayerConstants.STATE_PLAYING to "playing
+                if (player.isPlaying) MavinPlayerConstants.STATE_PLAYING to "playing"
                 else MavinPlayerConstants.STATE_READY to "ready"
             }
             Player.STATE_ENDED -> {
@@ -1310,7 +1369,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
         }
 
         // Queue auto-clear: if enabled, remove all items after loading a fresh set
-        if (queueAutoClearEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_QUEUE) {
+        if (queueAutoClearEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
             Log.d(TAG, "Queue auto-clear: no-op during normal transition")
         }
 

@@ -569,11 +569,11 @@ class FxProcessor : AudioProcessor {
      * The left sample is stored in [stereoBufferL] when this is called.
      */
     private fun processStereoR(inputR: Double): Double {
-        val wet = when (fxMode) {
+        val wet: Double = when (fxMode) {
             FxMode.REVERB  -> {
                 // Stereo reverb: feed reversed L into R comb buffers for width
                 val mono = ((stereoBufferL + inputR) * 0.5f).toFloat()
-                processReverb(mono)
+                processReverb(mono).toDouble()
             }
             FxMode.DELAY   -> {
                 // Ping-pong: read from R delay buffer that was written in processDelay(L)
