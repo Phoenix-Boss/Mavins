@@ -963,7 +963,7 @@ class MavinAudioPlayer(private val context: Context) {
             graphicGains = equalizerProcessor.getCurrentGains(),
             parametricGains = equalizerProcessor.getParametricGains(),
             parametricFreqs = equalizerProcessor.getParametricFreqs(),
-            qValues = equalizerProcessor.getCurrentQValues(),
+            qValues = equalizerProcessor.getCurrentQValues().map { it.toDouble() }.toDoubleArray(),
             preampDb = equalizerProcessor.getCurrentPreamp(),
             eqMode = equalizerProcessor.getCurrentEqMode().name,
             smoothingRampMs = equalizerProcessor.smoothingRampMs

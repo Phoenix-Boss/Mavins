@@ -36,10 +36,18 @@ import kotlin.math.*
  * ✅ Phase inversion per channel (left, right, both)
  * ✅ Mid/Side EQ processing mode
  * ✅ Bass boost / treble boost convenience controls
+ * ✅ Bass/Treble with configurable centre frequency and Q (Poweramp tone style)
+ * ✅ Loudness normalization — LUFS-targeted mode with integrated level tracking
+ * ✅ Per-band filter type override: Peaking, LowShelf, HighShelf, LowPass, HighPass, BandPass, Notch, AllPass
+ * ✅ String overloads for setDitherMode and setEqMode (JS-friendly)
+ * ✅ setSmoothingRamp(ms) convenience method
+ * ✅ getLoudnessDb() — current integrated loudness in dBFS
+ * ✅ setLoudnessNormalizationEnabled / setTargetLufs — LUFS-targeted normalization
+ * ✅ Band Q and type stored per-band for parametric round-trip serialization
  *
  * DSP chain per sample:
- *   PCM in → M/S encode (opt) → loudness → preamp → balance/pan →
- *   graphic EQ → parametric EQ (parallel) → compressor → limiter →
+ *   PCM in → M/S encode (opt) → loudness/LUFS norm → preamp → balance/pan →
+ *   graphic EQ → parametric EQ (parallel, per-band type-aware) → compressor → limiter →
  *   M/S decode (opt) → stereo expand → phase invert → dither → PCM out
  */
 @androidx.media3.common.util.UnstableApi
@@ -208,6 +216,43 @@ class EqualizerProcessor : AudioProcessor {
     @Volatile private var _autoEqSuggestion = FloatArray(BAND_COUNT) { 0f }
     val autoEqSuggestion: FloatArray get() = _autoEqSuggestion.copyOf()
 
+    // ── Bass / Treble tone controls with configurable freq and Q ─────────────
+    @Volatile private var bassFreqHz:    Double = 80.0
+    @Volatile private var bassQValue:    Double = 0.707
+    @Volatile private var trebleFreqHz:  Double = 12000.0
+    @Volatile private var trebleQValue:  Double = 0.707
+    @Volatile private var bassGainDb:    Float  = 0f
+    @Volatile private var trebleGainDb:  Float  = 0f
+    // Pending atomic updates for tone controls
+    private val pendingBassFreq   = AtomicReference<Double?>(null)
+    private val pendingBassQ      = AtomicReference<Double?>(null)
+    private val pendingTrebleFreq = AtomicReference<Double?>(null)
+    private val pendingTrebleQ    = AtomicReference<Double?>(null)
+    private val pendingBassGain   = AtomicReference<Float?>(null)
+    private val pendingTrebleGain = AtomicReference<Float?>(null)
+
+    // ── Per-band filter type table (Poweramp-style: Peaking, Shelf, Pass, Notch, AllPass) ─
+    // "peaking" | "low_shelf" | "high_shelf" | "low_pass" | "high_pass" | "band_pass" | "notch" | "all_pass"
+    private val parametricBandTypes = Array(BAND_COUNT) { band ->
+        when (band) {
+            0              -> "low_shelf"
+            BAND_COUNT - 1 -> "high_shelf"
+            else           -> "peaking"
+        }
+    }
+
+    // ── LUFS-targeted loudness normalization ──────────────────────────────────
+    @Volatile private var loudnessNormEnabled: Boolean  = false
+    @Volatile private var targetLufsValue:     Float    = -14.0f   // streaming standard
+    @Volatile private var integratedLufs:      Float    = -70.0f   // running integrated level
+    private var lufsRunningSquareSum:           Double   = 0.0
+    private var lufsWindowSamples:              Long     = 0L
+    private val LUFS_WINDOW_SAMPLES_TARGET      = 48000L * 3       // 3-second integration window
+
+    // ── Per-band Q stored for round-trip / preset export ─────────────────────
+    // currentQValues is already the authoritative store; this is an alias for clarity
+    val bandQValues: FloatArray get() = currentQValues.copyOf()
+
     init {
         updateCompressorCurve()
         updatePeakReleaseCoeff()
@@ -343,6 +388,163 @@ class EqualizerProcessor : AudioProcessor {
         }
     }
     fun getProcessingMode(): String = processingMode
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — BASS / TREBLE TONE CONTROLS (Poweramp style)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sets bass boost frequency centre and Q simultaneously.
+     * Implemented as a low-shelf biquad at the specified frequency.
+     * The gain is preserved from the last [setBassBoost] call.
+     */
+    fun setBassFreqAndQ(hz: Double, q: Double) {
+        pendingBassFreq.set(hz.coerceIn(20.0, 500.0))
+        pendingBassQ.set(q.coerceIn(0.1, 10.0))
+    }
+
+    fun getBassFreqHz(): Double  = bassFreqHz
+    fun getBassQValue(): Double  = bassQValue
+
+    /**
+     * Sets treble boost frequency centre and Q simultaneously.
+     * Implemented as a high-shelf biquad at the specified frequency.
+     */
+    fun setTrebleFreqAndQ(hz: Double, q: Double) {
+        pendingTrebleFreq.set(hz.coerceIn(1000.0, 20000.0))
+        pendingTrebleQ.set(q.coerceIn(0.1, 10.0))
+    }
+
+    fun getTrebleFreqHz(): Double  = trebleFreqHz
+    fun getTrebleQValue(): Double  = trebleQValue
+
+    /**
+     * Sets bass gain in dB (applied at bassFreqHz as a low-shelf).
+     * Convenience alias that maps to parametric band 0.
+     */
+    fun setBassBoost(gainDb: Float) {
+        pendingBassGain.set(gainDb.coerceIn(-15f, 15f))
+    }
+    fun getBassBoostDb(): Float = bassGainDb
+
+    /**
+     * Sets treble gain in dB (applied at trebleFreqHz as a high-shelf).
+     * Convenience alias that maps to parametric band BAND_COUNT - 1.
+     */
+    fun setTrebleBoost(gainDb: Float) {
+        pendingTrebleGain.set(gainDb.coerceIn(-15f, 15f))
+    }
+    fun getTrebleBoostDb(): Float = trebleGainDb
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — PER-BAND FILTER TYPE (Poweramp parametric band types)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sets the filter type for a specific parametric band.
+     * Supported types: "peaking", "low_shelf", "high_shelf",
+     *   "low_pass", "high_pass", "band_pass", "notch", "all_pass"
+     */
+    fun setParametricBandType(band: Int, type: String) {
+        if (band !in 0 until BAND_COUNT) return
+        parametricBandTypes[band] = type.lowercase()
+        // Mark parametric as dirty so coefficients rebuild
+        pendingParametricGains.set(pendingParametricGains.get() ?: parametricGainsDb.copyOf())
+    }
+
+    fun getParametricBandType(band: Int): String =
+        if (band in 0 until BAND_COUNT) parametricBandTypes[band] else "peaking"
+
+    fun getAllParametricBandTypes(): Array<String> = parametricBandTypes.copyOf()
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — LOUDNESS NORMALIZATION (LUFS)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Enables/disables LUFS-targeted loudness normalization.
+     * When enabled, the loudness gain stage adjusts in real-time to match targetLufsValue.
+     */
+    fun setLoudnessNormalizationEnabled(enabled: Boolean) {
+        loudnessNormEnabled = enabled
+        if (!enabled) {
+            // Reset to unity gain when disabled
+            pendingLoudness.set(1.0f)
+        }
+    }
+    fun isLoudnessNormalizationEnabled(): Boolean = loudnessNormEnabled
+
+    /**
+     * Sets the LUFS target for loudness normalization (typical range: -40 to -6).
+     * -14 LUFS = streaming standard (Spotify, Apple Music)
+     * -23 LUFS = EBU R128 broadcast standard
+     */
+    fun setTargetLufs(lufs: Float) {
+        targetLufsValue = lufs.coerceIn(-40f, -6f)
+    }
+    fun getTargetLufs(): Float = targetLufsValue
+
+    /**
+     * Returns the current integrated loudness estimate in dBFS.
+     * Updated in real-time during processing.
+     */
+    fun getLoudnessDb(): Float = integratedLufs
+
+    /**
+     * Returns the current loudness offset applied as a linear gain.
+     * Equivalent to: dbToLinear(loudnessOffsetDb)
+     */
+    fun getLoudnessOffset(): Float = smoothedLoudness.toFloat()
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC API — STRING OVERLOADS (JS-friendly, mirrors MavinPlayerModule calls)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sets dither mode from a string.
+     * Supported: "flat", "e_weighted", "f_weighted", "highpass"
+     */
+    fun setDitherMode(mode: String) {
+        ditherMode = when (mode.uppercase()) {
+            "FLAT"       -> DitherMode.FLAT
+            "F_WEIGHTED" -> DitherMode.F_WEIGHTED
+            "HIGHPASS"   -> DitherMode.HIGHPASS
+            else         -> DitherMode.E_WEIGHTED
+        }
+    }
+
+    /** Returns dither mode as a string for JS serialization. */
+    fun getDitherModeString(): String = ditherMode.name.lowercase()
+
+    /**
+     * Sets EQ mode from a string.
+     * Supported: "graphic", "parametric", "parallel"
+     */
+    fun setEqMode(mode: String) {
+        setEqMode(when (mode.uppercase()) {
+            "PARAMETRIC" -> EqMode.PARAMETRIC
+            "PARALLEL"   -> EqMode.PARALLEL
+            else         -> EqMode.GRAPHIC
+        })
+    }
+
+    /** Returns EQ mode as a string for JS serialization. */
+    fun getCurrentEqModeString(): String = eqMode.name.lowercase()
+
+    /**
+     * Sets the smoothing ramp time in milliseconds (convenience method).
+     * Equivalent to setting smoothingRampMs then calling recomputeSmoothStep().
+     */
+    fun setSmoothingRamp(ms: Double) {
+        smoothingRampMs = ms.coerceIn(0.0, 50.0)
+        recomputeSmoothStep()
+    }
+
+    /** Returns spectrum magnitudes (alias matching MavinPlayerCore call pattern). */
+    fun getSpectrumMagnitudes(): FloatArray = spectrumMagnitudes
+
+    /** Returns the auto-EQ suggestion (alias matching MavinPlayerCore call pattern). */
+    fun computeAutoEQ(): FloatArray = computeAutoEqSuggestion()
 
     // ═══════════════════════════════════════════════════════════════════════
     // PUBLIC API — COMPRESSOR
@@ -484,6 +686,44 @@ class EqualizerProcessor : AudioProcessor {
         pendingPreamp.getAndSet(null)?.let   { targetPreamp   = dbToLinear(it.toDouble()) }
         pendingLoudness.getAndSet(null)?.let { targetLoudness = it.toDouble() }
 
+        // ── Bass/Treble tone pending updates ─────────────────────────────────
+        var toneChanged = false
+        pendingBassFreq.getAndSet(null)?.let   { bassFreqHz = it;   toneChanged = true }
+        pendingBassQ.getAndSet(null)?.let      { bassQValue = it;   toneChanged = true }
+        pendingTrebleFreq.getAndSet(null)?.let { trebleFreqHz = it; toneChanged = true }
+        pendingTrebleQ.getAndSet(null)?.let    { trebleQValue = it; toneChanged = true }
+        pendingBassGain.getAndSet(null)?.let {
+            bassGainDb = it
+            // Sync to parametric band 0 (low-shelf) — updates freq + Q + gain together
+            val next0 = pendingParametricGains.get()?.copyOf() ?: parametricGainsDb.copyOf()
+            next0[0] = it
+            pendingParametricGains.set(next0)
+            val fq = pendingParametricFreqs.get()?.copyOf() ?: parametricFreqs.copyOf()
+            fq[0] = bassFreqHz
+            pendingParametricFreqs.set(fq)
+            val qv = pendingQValues.get()?.copyOf() ?: currentQValues.copyOf()
+            qv[0] = bassQValue.toFloat()
+            pendingQValues.set(qv)
+            parametricBandTypes[0] = "low_shelf"
+            toneChanged = true
+        }
+        pendingTrebleGain.getAndSet(null)?.let {
+            trebleGainDb = it
+            val lastBand = BAND_COUNT - 1
+            val next = pendingParametricGains.get()?.copyOf() ?: parametricGainsDb.copyOf()
+            next[lastBand] = it
+            pendingParametricGains.set(next)
+            val fq = pendingParametricFreqs.get()?.copyOf() ?: parametricFreqs.copyOf()
+            fq[lastBand] = trebleFreqHz
+            pendingParametricFreqs.set(fq)
+            val qv = pendingQValues.get()?.copyOf() ?: currentQValues.copyOf()
+            qv[lastBand] = trebleQValue.toFloat()
+            pendingQValues.set(qv)
+            parametricBandTypes[lastBand] = "high_shelf"
+            toneChanged = true
+        }
+        if (toneChanged && !rebuildParametric) rebuildParametricFilters()
+
         if (!_isEnabled.get() || inputBuffer.remaining() == 0) {
             outputBuffer = inputBuffer
             return
@@ -554,6 +794,25 @@ class EqualizerProcessor : AudioProcessor {
         phaseInvertLeft     = false
         phaseInvertRight    = false
         processingMode      = PROC_MODE_NORMAL
+        bassFreqHz          = 80.0
+        bassQValue          = 0.707
+        trebleFreqHz        = 12000.0
+        trebleQValue        = 0.707
+        bassGainDb          = 0f
+        trebleGainDb        = 0f
+        loudnessNormEnabled = false
+        targetLufsValue     = -14.0f
+        integratedLufs      = -70.0f
+        lufsRunningSquareSum = 0.0
+        lufsWindowSamples   = 0L
+        // Reset band types to defaults
+        for (i in 0 until BAND_COUNT) {
+            parametricBandTypes[i] = when (i) {
+                0              -> "low_shelf"
+                BAND_COUNT - 1 -> "high_shelf"
+                else           -> "peaking"
+            }
+        }
         updateCompressorCurve()
         updateCompressorTimeConstants()
     }
@@ -603,11 +862,26 @@ class EqualizerProcessor : AudioProcessor {
     }
 
     private fun processFloat(input: ByteBuffer, output: ByteBuffer) {
-        val masterGain = smoothedLoudness * smoothedPreamp
+        var masterGain = smoothedLoudness * smoothedPreamp
         var idx = 0
         while (input.remaining() >= 4) {
             val ch = idx % numChannels
             var sample = input.float.toDouble()
+            // LUFS integration (ITU-R BS.1770 simplified: RMS over rolling window)
+            if (loudnessNormEnabled && ch == 0) {
+                lufsRunningSquareSum += sample * sample
+                lufsWindowSamples++
+                if (lufsWindowSamples >= LUFS_WINDOW_SAMPLES_TARGET) {
+                    val rms = sqrt(lufsRunningSquareSum / lufsWindowSamples)
+                    integratedLufs = if (rms > 1e-10) (20.0 * log10(rms)).toFloat() else -70f
+                    lufsRunningSquareSum = 0.0
+                    lufsWindowSamples = 0L
+                    // Compute and apply normalization gain to match target
+                    val diffDb = targetLufsValue - integratedLufs
+                    val normGain = 10.0.pow(diffDb / 20.0).coerceIn(0.1, 10.0)
+                    pendingLoudness.set(normGain.toFloat())
+                }
+            }
             trackPeak(sample, ch)
             sample = processChannelSample(sample * masterGain, ch, idx)
             output.putFloat(softClip(sample).toFloat())
@@ -930,21 +1204,42 @@ class EqualizerProcessor : AudioProcessor {
 
     private fun rebuildParametricFiltersFromSmoothed() {
         if (sampleRate > 0.0 && numChannels > 0) {
-            paramCoeffs = buildCoeffs(smoothedParamGains, parametricFreqs)
+            paramCoeffs = buildCoeffs(smoothedParamGains, parametricFreqs, useParametricTypes = true)
             if (paramState.isEmpty() || paramState[0].size != numChannels) paramState = buildState()
         }
     }
 
-    private fun buildCoeffs(gains: FloatArray, freqs: DoubleArray): Array<DoubleArray> = Array(BAND_COUNT) { band ->
+    /**
+     * Builds biquad coefficients for each band.
+     * For the graphic EQ the band type is determined by position (band 0 = low shelf, 30 = high shelf).
+     * For the parametric EQ the per-band type from [parametricBandTypes] is used, enabling
+     * the full Poweramp / Neutron filter type palette.
+     */
+    private fun buildCoeffs(gains: FloatArray, freqs: DoubleArray,
+                             useParametricTypes: Boolean = false): Array<DoubleArray> = Array(BAND_COUNT) { band ->
         val fc   = freqs[band]
         val gain = gains.getOrElse(band) { 0f }.toDouble()
         val q    = currentQValues.getOrElse(band) { defaultQ(band) }.toDouble()
-        when (band) {
-            0             -> computeLowShelfCoeffs(fc, gain, q, sampleRate)
-            BAND_COUNT - 1-> computeHighShelfCoeffs(fc, gain, q, sampleRate)
-            else          -> computePeakingCoeffs(fc, gain, q, sampleRate)
+        val type = if (useParametricTypes) parametricBandTypes[band] else when (band) {
+            0              -> "low_shelf"
+            BAND_COUNT - 1 -> "high_shelf"
+            else           -> "peaking"
         }
+        computeBandCoeffsByType(fc, gain, q, sampleRate, type)
     }
+
+    /** Dispatches to the correct biquad formula based on filter type string. */
+    private fun computeBandCoeffsByType(fc: Double, gainDb: Double, q: Double, fs: Double, type: String): DoubleArray =
+        when (type) {
+            "low_shelf"  -> computeLowShelfCoeffs(fc, gainDb, q, fs)
+            "high_shelf" -> computeHighShelfCoeffs(fc, gainDb, q, fs)
+            "low_pass"   -> computeLowPassCoeffs(fc, q, fs)
+            "high_pass"  -> computeHighPassCoeffs(fc, q, fs)
+            "band_pass"  -> computeBandPassCoeffs(fc, q, fs)
+            "notch"      -> computeNotchCoeffs(fc, q, fs)
+            "all_pass"   -> computeAllPassCoeffs(fc, q, fs)
+            else         -> computePeakingCoeffs(fc, gainDb, q, fs)   // "peaking" default
+        }
 
     private fun buildState(): Array<Array<DoubleArray>> =
         Array(BAND_COUNT) { Array(numChannels.coerceAtLeast(1)) { DoubleArray(2) } }
@@ -989,6 +1284,55 @@ class EqualizerProcessor : AudioProcessor {
         val a0    = (A + 1) - (A - 1) * cosW0 + 2 * sqrt(A) * al
         val a1    = 2.0 * ((A - 1) - (A + 1) * cosW0)
         val a2    = (A + 1) - (A - 1) * cosW0 - 2 * sqrt(A) * al
+        return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ADDITIONAL FILTER COEFFICIENT FUNCTIONS (Poweramp / Neutron band types)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /** 2nd-order Butterworth low-pass — uses gain parameter as passband level (0 dB = flat) */
+    private fun computeLowPassCoeffs(fc: Double, q: Double, fs: Double): DoubleArray {
+        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val al = sinW0 / (2.0 * q)
+        val b0 = (1.0 - cosW0) / 2.0; val b1 = 1.0 - cosW0; val b2 = b0
+        val a0 = 1.0 + al; val a1 = -2.0 * cosW0; val a2 = 1.0 - al
+        return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    /** 2nd-order Butterworth high-pass */
+    private fun computeHighPassCoeffs(fc: Double, q: Double, fs: Double): DoubleArray {
+        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val al = sinW0 / (2.0 * q)
+        val b0 = (1.0 + cosW0) / 2.0; val b1 = -(1.0 + cosW0); val b2 = b0
+        val a0 = 1.0 + al; val a1 = -2.0 * cosW0; val a2 = 1.0 - al
+        return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    /** 2nd-order band-pass (constant 0 dB peak gain) */
+    private fun computeBandPassCoeffs(fc: Double, q: Double, fs: Double): DoubleArray {
+        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val al = sinW0 / (2.0 * q)
+        val b0 = sinW0 / 2.0; val b1 = 0.0; val b2 = -b0
+        val a0 = 1.0 + al; val a1 = -2.0 * cosW0; val a2 = 1.0 - al
+        return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    /** 2nd-order notch (band-reject) */
+    private fun computeNotchCoeffs(fc: Double, q: Double, fs: Double): DoubleArray {
+        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val al = sinW0 / (2.0 * q)
+        val b0 = 1.0; val b1 = -2.0 * cosW0; val b2 = 1.0
+        val a0 = 1.0 + al; val a1 = -2.0 * cosW0; val a2 = 1.0 - al
+        return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    /** 2nd-order all-pass (shifts phase 180° at fc, unity gain everywhere) */
+    private fun computeAllPassCoeffs(fc: Double, q: Double, fs: Double): DoubleArray {
+        val w0 = 2.0 * PI * fc / fs; val cosW0 = cos(w0); val sinW0 = sin(w0)
+        val al = sinW0 / (2.0 * q)
+        val b0 = 1.0 - al; val b1 = -2.0 * cosW0; val b2 = 1.0 + al
+        val a0 = 1.0 + al; val a1 = -2.0 * cosW0; val a2 = 1.0 - al
         return doubleArrayOf(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 

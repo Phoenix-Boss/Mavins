@@ -5,12 +5,12 @@ const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "tasijav-1",
-  slug: "tasijav",
+  owner: "wocof2",
+  slug: "wocof2",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "2ce3399e-d3e4-40b3-8688-f5ff8f36b0b5",
+      projectId: "8968f586-c2de-4f2b-91ac-a08008acd380",
     },
   },
   platforms: ["android"],

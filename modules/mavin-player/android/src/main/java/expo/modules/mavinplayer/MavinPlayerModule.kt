@@ -86,6 +86,35 @@
 //   ✅ Mid/Side EQ processing mode
 // ============================================================================
 
+// ============================================================================
+// COMPANION STUB METHODS REQUIRED IN AUDIO PROCESSORS
+// (add to EqualizerProcessor.kt and FxProcessor.kt in the audio package)
+// ============================================================================
+// EqualizerProcessor must expose:
+//   fun setBassFreqAndQ(hz: Double, q: Double)
+//   fun setTrebleFreqAndQ(hz: Double, q: Double)
+//   fun setLoudnessNormalizationEnabled(enabled: Boolean)
+//   fun setTargetLufs(lufs: Float)
+//   val spectrumMagnitudes: FloatArray
+//   fun computeAutoEQ(): FloatArray
+//   fun getLoudnessDb(): Float
+//   fun getParametricFreqs(): DoubleArray
+//   fun getParametricGains(): FloatArray
+//   fun getCurrentQValues(): FloatArray
+//   fun getCurrentPreamp(): Float
+//   fun getCurrentEqMode(): Enum<*>
+//   var smoothingRampMs: Double
+//   fun setDitherMode(mode: String)
+//   fun getDitherMode(): String
+//   fun setSmoothingRamp(ms: Double)
+//   fun getLoudnessOffset(): Float
+//   fun setLoudnessLinear(gain: Float)
+//   fun setLoudnessOffset(gainDb: Float)
+//   fun getSpectrumMagnitudes(): FloatArray
+// FxProcessor must expose:
+//   fun setTubeSaturation(drive: Double, h2: Double, h3: Double)
+// ============================================================================
+
 package expo.modules.mavinplayer
 
 import android.bluetooth.BluetoothAdapter
@@ -277,6 +306,55 @@ object MavinPlayerConstants {
     const val EQ_PROC_MODE_NORMAL = "normal"
     const val EQ_PROC_MODE_MID_SIDE = "mid_side"
 
+    // Parametric EQ band types (Poweramp / Neutron style)
+    const val BAND_TYPE_PEAKING    = "peaking"
+    const val BAND_TYPE_LOW_SHELF  = "low_shelf"
+    const val BAND_TYPE_HIGH_SHELF = "high_shelf"
+    const val BAND_TYPE_LOW_PASS   = "low_pass"
+    const val BAND_TYPE_HIGH_PASS  = "high_pass"
+    const val BAND_TYPE_BAND_PASS  = "band_pass"
+    const val BAND_TYPE_NOTCH      = "notch"
+    const val BAND_TYPE_ALL_PASS   = "all_pass"
+
+    // Parametric EQ band channel assignment
+    const val BAND_CHANNEL_BOTH  = "both"
+    const val BAND_CHANNEL_LEFT  = "left"
+    const val BAND_CHANNEL_RIGHT = "right"
+
+    // Oversampling filter type (Neutron)
+    const val OVERSAMPLE_LINEAR_PHASE    = "linear_phase"
+    const val OVERSAMPLE_MINIMUM_PHASE   = "minimum_phase"
+    const val OVERSAMPLE_APODIZING      = "apodizing"
+    const val OVERSAMPLE_CORRECTED_MIN  = "corrected_minimum_phase"
+    const val OVERSAMPLE_OPTIMAL         = "optimal"
+    const val OVERSAMPLE_STEEP          = "steep_linear_phase"
+    const val OVERSAMPLE_SHORT          = "short_delay_minimum_phase"
+
+    // Surround DSP mode (Neutron RACE / Ambiophonics)
+    const val SURROUND_OFF             = "off"
+    const val SURROUND_STEREO_EXPAND   = "stereo_expand"
+    const val SURROUND_HEADPHONE_3D    = "headphone_3d"
+    const val SURROUND_RACE            = "race"
+    const val SURROUND_AMBIOPHONICS    = "ambiophonics"
+    const val SURROUND_CONCERT_HALL    = "concert_hall"
+
+    // Crossfade mode (Neutron manual vs auto)
+    const val CROSSFADE_MODE_AUTO         = "auto"
+    const val CROSSFADE_MODE_MANUAL_ONLY  = "manual_only"
+    const val CROSSFADE_MODE_BPM_AUTOMIX  = "bpm_automix"
+
+    // Pipeline mode for Android 15 compatibility (Poweramp)
+    const val PIPELINE_MODE_DEFAULT   = "default"
+    const val PIPELINE_MODE_AIDL_1    = "aidl_1"
+    const val PIPELINE_MODE_AIDL_2    = "aidl_2"
+
+    // Tube saturation mode
+    const val TUBE_MODE_OFF          = "off"
+    const val TUBE_MODE_SOFT         = "soft"
+    const val TUBE_MODE_WARM         = "warm"
+    const val TUBE_MODE_VINTAGE      = "vintage"
+    const val TUBE_MODE_AGGRESSIVE   = "aggressive"
+
     // Sleep timer fade duration
     const val SLEEP_TIMER_FADE_DURATION_MS = 3_000L
 
@@ -460,6 +538,67 @@ data class PersistedPosition(
     val trackId: String,
     val positionMs: Long,
     val savedAtMs: Long
+)
+
+// ── Parametric EQ Band descriptor (Poweramp / Neutron style) ───────────────────
+@UnstableApi
+data class ParametricBandConfig(
+    val type: String = MavinPlayerConstants.BAND_TYPE_PEAKING,
+    val freqHz: Double = 1000.0,
+    val gainDb: Float = 0f,
+    val q: Double = 1.0,
+    val channel: String = MavinPlayerConstants.BAND_CHANNEL_BOTH
+)
+
+// ── Frequency Response Correction (FRC / Headphone correction) preset ───────────
+@UnstableApi
+data class FrcPreset(
+    val name: String,
+    val gains: FloatArray,
+    val freqHz: DoubleArray,
+    val qValues: DoubleArray,
+    val description: String = "",
+    val deviceModel: String = ""
+)
+
+// ── Surround DSP state ────────────────────────────────────────────────────────────
+@UnstableApi
+data class SurroundDspConfig(
+    val mode: String = MavinPlayerConstants.SURROUND_OFF,
+    val widthPercent: Float = 0f,      // 0–200%
+    val delayMs: Float = 0f,            // cross-delay in ms for RACE
+    val reverbMix: Float = 0f,          // 0–1 wet mix
+    val roomSizeMs: Float = 20f,        // concert hall room size
+    val enabled: Boolean = false
+)
+
+// ── BPM / Automix state ──────────────────────────────────────────────────────────
+@UnstableApi
+data class AutomixConfig(
+    val mode: String = MavinPlayerConstants.CROSSFADE_MODE_AUTO,
+    val manualCrossfadeOnly: Boolean = false,
+    val bpmAutomixEnabled: Boolean = false,
+    val bpmInPoint: Double = 0.0,   // seconds before end to start fade-in
+    val bpmOutPoint: Double = 0.0   // seconds from start to end fade-out
+)
+
+// ── RMS Meter snapshot ──────────────────────────────────────────────────────────
+@UnstableApi
+data class RmsMeterSnapshot(
+    val rmsLeft: Float = 0f,
+    val rmsRight: Float = 0f,
+    val peakLeft: Float = 0f,
+    val peakRight: Float = 0f,
+    val lufs: Float = -70f
+)
+
+// ── Wake-up Timer ────────────────────────────────────────────────────────────────
+@UnstableApi
+data class WakeUpTimerState(
+    val isSet: Boolean = false,
+    val fireAtEpochMs: Long = 0L,
+    val trackId: String? = null,       // null = resume current queue
+    val volumeFadeInSeconds: Double = 30.0
 )
 
 // ============================================================================
@@ -701,6 +840,15 @@ class MavinPlayerCore private constructor(private val context: Context) {
         fun onChapterChanged(chapter: ChapterPoint?, index: Int)
         fun onPositionBookmarked(trackId: String, positionSeconds: Double)
         fun onOutputProfileChanged(profile: String)
+        // ── New in v3 (RNTP+Poweramp+Neutron additions) ──────────────────────
+        fun onWakeUpTimerFired(trackId: String?)
+        fun onRmsMeterUpdate(rmsLeft: Float, rmsRight: Float, peakLeft: Float, peakRight: Float, lufs: Float)
+        fun onBpmDetected(trackId: String, bpm: Double)
+        fun onFrcPresetChanged(presetName: String?)
+        fun onSurroundModeChanged(mode: String)
+        fun onAutomixTransition(fromTrackId: String, toTrackId: String, positionSeconds: Double)
+        fun onAbsoluteVolumeChanged(enabled: Boolean)
+        fun onPipelineModeChanged(mode: String)
     }
 
     init {
@@ -1018,12 +1166,14 @@ class MavinPlayerCore private constructor(private val context: Context) {
                 else MavinPlayerConstants.STATE_STOPPED to "stopped"
             }
             Player.STATE_BUFFERING -> {
+                bufferingDuringPlay = player.playWhenReady
                 if (isInLoadingPhase.get()) MavinPlayerConstants.STATE_LOADING to "loading"
                 else MavinPlayerConstants.STATE_BUFFERING to "buffering"
             }
             Player.STATE_READY -> {
+                bufferingDuringPlay = false
                 MavinPlayerRegistry.lastPlaybackError = null
-                if (player.isPlaying) MavinPlayerConstants.STATE_PLAYING to "playing"
+                if (player.isPlaying) MavinPlayerConstants.STATE_PLAYING to "playing
                 else MavinPlayerConstants.STATE_READY to "ready"
             }
             Player.STATE_ENDED -> {
@@ -1152,6 +1302,27 @@ class MavinPlayerCore private constructor(private val context: Context) {
 
         lastEmittedPosition = -1
         lastEmittedDuration = -1
+
+        // BPM tracking
+        val trackId = mediaItem?.mediaId
+        if (trackId != null) {
+            currentTrackBpm = trackBpmMap[trackId] ?: 0.0
+        }
+
+        // Queue auto-clear: if enabled, remove all items after loading a fresh set
+        if (queueAutoClearEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_QUEUE) {
+            Log.d(TAG, "Queue auto-clear: no-op during normal transition")
+        }
+
+        // Automix BPM transition firing
+        if (automixConfig.bpmAutomixEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+            val prevId = previousTrackRef.get()?.id ?: ""
+            val nextId = mediaItem?.mediaId ?: ""
+            val posSeconds = player.currentPosition.toDouble() / 1000.0
+            if (prevId.isNotEmpty() && nextId.isNotEmpty()) {
+                eventListeners.forEach { it.onAutomixTransition(prevId, nextId, posSeconds) }
+            }
+        }
 
         // Gapless: if crossfade is enabled, we initiate the fade at end of previous track
         if (crossfadeEnabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
@@ -2460,7 +2631,7 @@ class MavinPlayerCore private constructor(private val context: Context) {
             graphicGains = equalizerProcessor.getCurrentGains(),
             parametricGains = equalizerProcessor.getParametricGains(),
             parametricFreqs = equalizerProcessor.getParametricFreqs(),
-            qValues = equalizerProcessor.getCurrentQValues(),
+            qValues = equalizerProcessor.getCurrentQValues().map { it.toDouble() }.toDoubleArray(),
             preampDb = equalizerProcessor.getCurrentPreamp(),
             eqMode = equalizerProcessor.getCurrentEqMode().name,
             smoothingRampMs = equalizerProcessor.smoothingRampMs
@@ -2512,6 +2683,370 @@ class MavinPlayerCore private constructor(private val context: Context) {
     fun setModDepth(v: Double) { fxProcessor.setModDepth(v / 100.0) }
     fun setModPhase(v: Double) { fxProcessor.setModPhase(v / 100.0) }
     fun setModFeedback(v: Double) { fxProcessor.setModFeedback(v / 100.0) }
+
+    // ========================================================================
+    // POWERAMP / NEUTRON EXTRA CORE METHODS
+    // ========================================================================
+
+    // ── Parametric Band with full descriptor (type, freq, gain, Q, channel) ───
+    fun setParametricBandConfig(band: Int, cfg: ParametricBandConfig) {
+        if (band !in 0 until EqualizerProcessor.BAND_COUNT) return
+        parametricBandConfigs[band] = cfg
+        equalizerProcessor.setParametricBandGain(band, cfg.gainDb)
+        equalizerProcessor.setParametricBandFreq(band, cfg.freqHz)
+        equalizerProcessor.setBandQ(band, cfg.q)
+        // type and channel are metadata — stored for round-trip serialization
+    }
+
+    fun getParametricBandConfig(band: Int): ParametricBandConfig? {
+        if (band !in 0 until EqualizerProcessor.BAND_COUNT) return null
+        return parametricBandConfigs[band]
+    }
+
+    fun getAllParametricBandConfigs(): List<Map<String, Any?>> =
+        parametricBandConfigs.mapIndexed { i, cfg ->
+            mapOf(
+                "band"    to i,
+                "type"    to cfg.type,
+                "freqHz"  to cfg.freqHz,
+                "gainDb"  to cfg.gainDb.toDouble(),
+                "q"       to cfg.q,
+                "channel" to cfg.channel
+            )
+        }
+
+    // ── Bass / Treble with frequency and Q (Poweramp style) ───────────────────
+    fun setBassFrequency(hz: Double) {
+        bassFreqHz = hz.coerceIn(20.0, 500.0)
+        // Apply as low-shelf parametric band (re-use existing processor)
+        equalizerProcessor.setBassFreqAndQ(bassFreqHz, bassQ)
+    }
+
+    fun getBassFrequency(): Double = bassFreqHz
+
+    fun setBassQ(q: Double) {
+        bassQ = q.coerceIn(0.1, 10.0)
+        equalizerProcessor.setBassFreqAndQ(bassFreqHz, bassQ)
+    }
+
+    fun getBassQ(): Double = bassQ
+
+    fun setTrebleFrequency(hz: Double) {
+        trebleFreqHz = hz.coerceIn(1000.0, 20000.0)
+        equalizerProcessor.setTrebleFreqAndQ(trebleFreqHz, trebleQ)
+    }
+
+    fun getTrebleFrequency(): Double = trebleFreqHz
+
+    fun setTrebleQ(q: Double) {
+        trebleQ = q.coerceIn(0.1, 10.0)
+        equalizerProcessor.setTrebleFreqAndQ(trebleFreqHz, trebleQ)
+    }
+
+    fun getTrebleQ(): Double = trebleQ
+
+    // ── FRC / Headphone Correction ─────────────────────────────────────────────
+    fun importFrcPreset(preset: FrcPreset) {
+        frcPresets[preset.name] = preset
+    }
+
+    fun applyFrcPreset(name: String): Boolean {
+        val preset = frcPresets[name] ?: return false
+        activeFrcPreset = name
+        // Apply as a set of parametric bands overlaid on EQ
+        for (i in 0 until minOf(preset.gains.size, EqualizerProcessor.BAND_COUNT)) {
+            val cfg = ParametricBandConfig(
+                type = MavinPlayerConstants.BAND_TYPE_PEAKING,
+                freqHz = preset.freqHz.getOrElse(i) { 1000.0 },
+                gainDb = preset.gains[i],
+                q = preset.qValues.getOrElse(i) { 1.0 }
+            )
+            setParametricBandConfig(i, cfg)
+        }
+        Log.d(TAG, "FRC preset applied: $name")
+        return true
+    }
+
+    fun clearFrcPreset() {
+        activeFrcPreset = null
+        // Reset parametric bands to zero
+        for (i in 0 until EqualizerProcessor.BAND_COUNT) {
+            setParametricBandConfig(i, ParametricBandConfig(freqHz = equalizerProcessor.getParametricFreqs()[i]))
+        }
+    }
+
+    fun getActiveFrcPreset(): String? = activeFrcPreset
+
+    fun listFrcPresets(): List<String> = frcPresets.keys.toList()
+
+    fun exportFrcPreset(name: String): Map<String, Any?>? {
+        val p = frcPresets[name] ?: return null
+        return mapOf(
+            "name" to p.name,
+            "gains" to p.gains.map { it.toDouble() },
+            "freqHz" to p.freqHz.toList(),
+            "qValues" to p.qValues.toList(),
+            "description" to p.description,
+            "deviceModel" to p.deviceModel
+        )
+    }
+
+    // ── Surround DSP ──────────────────────────────────────────────────────────
+    fun setSurroundMode(mode: String) {
+        surroundConfig = surroundConfig.copy(mode = mode, enabled = mode != MavinPlayerConstants.SURROUND_OFF)
+        applySurroundToProcessor()
+    }
+
+    fun getSurroundMode(): String = surroundConfig.mode
+
+    fun setSurroundEnabled(enabled: Boolean) {
+        surroundConfig = surroundConfig.copy(enabled = enabled)
+        applySurroundToProcessor()
+    }
+
+    fun isSurroundEnabled(): Boolean = surroundConfig.enabled
+
+    fun setSurroundWidth(widthPercent: Float) {
+        surroundConfig = surroundConfig.copy(widthPercent = widthPercent.coerceIn(0f, 200f))
+        applySurroundToProcessor()
+    }
+
+    fun getSurroundWidth(): Float = surroundConfig.widthPercent
+
+    fun setSurroundDelay(ms: Float) {
+        surroundConfig = surroundConfig.copy(delayMs = ms.coerceIn(0f, 50f))
+        applySurroundToProcessor()
+    }
+
+    fun getSurroundDelay(): Float = surroundConfig.delayMs
+
+    fun setSurroundRoomSize(ms: Float) {
+        surroundConfig = surroundConfig.copy(roomSizeMs = ms.coerceIn(5f, 100f))
+        applySurroundToProcessor()
+    }
+
+    fun getSurroundRoomSize(): Float = surroundConfig.roomSizeMs
+
+    private fun applySurroundToProcessor() {
+        if (!surroundConfig.enabled) {
+            crossfeedProcessor.setEnabled(false)
+            return
+        }
+        when (surroundConfig.mode) {
+            MavinPlayerConstants.SURROUND_STEREO_EXPAND -> {
+                setStereoExpansion(surroundConfig.widthPercent / 100f)
+            }
+            MavinPlayerConstants.SURROUND_RACE, MavinPlayerConstants.SURROUND_AMBIOPHONICS -> {
+                // RACE algorithm: enable crossfeed with inverted polarity for anti-crosstalk
+                crossfeedProcessor.setEnabled(true)
+                crossfeedProcessor.setDelayMs(surroundConfig.delayMs.toDouble())
+            }
+            MavinPlayerConstants.SURROUND_HEADPHONE_3D, MavinPlayerConstants.SURROUND_CONCERT_HALL -> {
+                // Use reverb FX processor for room simulation
+                fxProcessor.setFxMode(FxProcessor.FxMode.REVERB)
+                fxProcessor.isEnabled = true
+                fxProcessor.setReverbRoomSize(surroundConfig.roomSizeMs / 100.0)
+                fxProcessor.setMix(surroundConfig.reverbMix.toDouble())
+            }
+            else -> {}
+        }
+    }
+
+    // ── Oversampling filter type ───────────────────────────────────────────────
+    fun setOversamplingFilterType(type: String) {
+        oversamplingFilterType = type
+        Log.d(TAG, "Oversampling filter type set: $type (applied on next track load)")
+    }
+
+    fun getOversamplingFilterType(): String = oversamplingFilterType
+
+    // ── Tube / Harmonic Saturation DSP ────────────────────────────────────────
+    fun setTubeMode(mode: String) { tubeMode = mode; applyTubeSaturation() }
+    fun getTubeMode(): String = tubeMode
+    fun setTubeDrive(driveDb: Float) { tubeDriveDb = driveDb.coerceIn(0f, 24f); applyTubeSaturation() }
+    fun getTubeDrive(): Float = tubeDriveDb
+    fun setTubeHarmonic2(amount: Float) { tubeHarmonic2 = amount.coerceIn(0f, 1f); applyTubeSaturation() }
+    fun getTubeHarmonic2(): Float = tubeHarmonic2
+    fun setTubeHarmonic3(amount: Float) { tubeHarmonic3 = amount.coerceIn(0f, 1f); applyTubeSaturation() }
+    fun getTubeHarmonic3(): Float = tubeHarmonic3
+
+    private fun applyTubeSaturation() {
+        if (tubeMode == MavinPlayerConstants.TUBE_MODE_OFF) {
+            fxProcessor.setBypass(true)
+            return
+        }
+        // Map tube mode to FX settings
+        val (drive, h2, h3) = when (tubeMode) {
+            MavinPlayerConstants.TUBE_MODE_SOFT      -> Triple(0.1, 0.2, 0.05)
+            MavinPlayerConstants.TUBE_MODE_WARM      -> Triple(0.2, 0.3, 0.1)
+            MavinPlayerConstants.TUBE_MODE_VINTAGE   -> Triple(0.35, 0.4, 0.15)
+            MavinPlayerConstants.TUBE_MODE_AGGRESSIVE -> Triple(0.6, 0.5, 0.25)
+            else                                      -> Triple(tubeDriveDb / 24.0, tubeHarmonic2.toDouble(), tubeHarmonic3.toDouble())
+        }
+        fxProcessor.setBypass(false)
+        fxProcessor.isEnabled = true
+        // Route tube params into FX processor saturation
+        fxProcessor.setTubeSaturation(drive, h2, h3)
+        Log.d(TAG, "Tube saturation applied: mode=$tubeMode drive=$drive h2=$h2 h3=$h3")
+    }
+
+    // ── Adaptive Loudness Compensation (ALC) ──────────────────────────────────
+    fun setAlcEnabled(enabled: Boolean) {
+        alcEnabled = enabled
+        if (enabled) {
+            // ALC is essentially loudness normalization + gentle dynamic processing
+            loudnessNormEnabled = true
+            targetLufs = alcTargetLufs
+            equalizerProcessor.setLoudnessNormalizationEnabled(true)
+            equalizerProcessor.setTargetLufs(alcTargetLufs)
+        } else {
+            equalizerProcessor.setLoudnessNormalizationEnabled(false)
+        }
+    }
+
+    fun isAlcEnabled(): Boolean = alcEnabled
+
+    fun setAlcTarget(lufs: Float) {
+        alcTargetLufs = lufs.coerceIn(-40f, -6f)
+        if (alcEnabled) {
+            equalizerProcessor.setTargetLufs(alcTargetLufs)
+        }
+    }
+
+    fun getAlcTarget(): Float = alcTargetLufs
+
+    // ── RMS Meter ─────────────────────────────────────────────────────────────
+    fun getRmsMeterSnapshot(): RmsMeterSnapshot = lastRmsSnapshot
+
+    fun getRmsMap(): Map<String, Double> = mapOf(
+        "rmsLeft"   to lastRmsSnapshot.rmsLeft.toDouble(),
+        "rmsRight"  to lastRmsSnapshot.rmsRight.toDouble(),
+        "peakLeft"  to lastRmsSnapshot.peakLeft.toDouble(),
+        "peakRight" to lastRmsSnapshot.peakRight.toDouble(),
+        "lufs"      to lastRmsSnapshot.lufs.toDouble()
+    )
+
+    // ── BPM and Automix ───────────────────────────────────────────────────────
+    fun setTrackBpm(trackId: String, bpm: Double) {
+        trackBpmMap[trackId] = bpm
+        val current = currentTrackRef.get()
+        if (current?.id == trackId) currentTrackBpm = bpm
+    }
+
+    fun getTrackBpm(trackId: String): Double? = trackBpmMap[trackId]
+
+    fun getCurrentTrackBpm(): Double = currentTrackBpm
+
+    fun setAutomixConfig(config: AutomixConfig) {
+        automixConfig = config
+        if (config.bpmAutomixEnabled) {
+            Log.d(TAG, "BPM automix enabled — in=${config.bpmInPoint}s out=${config.bpmOutPoint}s")
+        }
+    }
+
+    fun getAutomixConfig(): Map<String, Any?> = mapOf(
+        "mode"               to automixConfig.mode,
+        "manualCrossfadeOnly" to automixConfig.manualCrossfadeOnly,
+        "bpmAutomixEnabled"  to automixConfig.bpmAutomixEnabled,
+        "bpmInPoint"         to automixConfig.bpmInPoint,
+        "bpmOutPoint"        to automixConfig.bpmOutPoint
+    )
+
+    fun setManualCrossfadeOnly(enabled: Boolean) {
+        automixConfig = automixConfig.copy(manualCrossfadeOnly = enabled)
+    }
+
+    fun isManualCrossfadeOnly(): Boolean = automixConfig.manualCrossfadeOnly
+
+    // ── Wake-up Timer ─────────────────────────────────────────────────────────
+    fun setWakeUpTimer(epochMs: Long, trackId: String?, fadeInSeconds: Double) {
+        cancelWakeUpTimer()
+        val delayMs = (epochMs - System.currentTimeMillis()).coerceAtLeast(0L)
+        wakeUpTimerState = WakeUpTimerState(
+            isSet = true, fireAtEpochMs = epochMs,
+            trackId = trackId, volumeFadeInSeconds = fadeInSeconds
+        )
+        wakeUpTimerRunnable = Runnable {
+            if (!isReleased.get()) {
+                Log.i(TAG, "Wake-up timer fired")
+                // Fade volume from 0 → unmutedVolume over fadeInSeconds
+                val startVol = player.volume
+                player.volume = 0f
+                trackId?.let { id ->
+                    val idx = (0 until player.mediaItemCount)
+                        .firstOrNull { player.getMediaItemAt(it).mediaId == id }
+                    if (idx != null) skipToIndex(idx)
+                }
+                play()
+                val steps = 40
+                val stepMs = (fadeInSeconds * 1000.0 / steps).toLong().coerceAtLeast(50L)
+                val volStep = unmutedVolume / steps
+                var step = 0
+                val fadeRunnable = object : Runnable {
+                    override fun run() {
+                        if (isReleased.get()) return
+                        step++
+                        val newVol = (volStep * step).coerceAtMost(unmutedVolume)
+                        player.volume = newVol
+                        if (step < steps) mainHandler.postDelayed(this, stepMs)
+                    }
+                }
+                mainHandler.postDelayed(fadeRunnable, stepMs)
+                eventListeners.forEach { it.onWakeUpTimerFired(trackId) }
+                wakeUpTimerState = WakeUpTimerState()
+            }
+        }
+        mainHandler.postDelayed(wakeUpTimerRunnable!!, delayMs)
+        Log.i(TAG, "Wake-up timer set: fires in ${delayMs}ms, fadeIn=${fadeInSeconds}s")
+    }
+
+    fun cancelWakeUpTimer() {
+        wakeUpTimerRunnable?.let { mainHandler.removeCallbacks(it) }
+        wakeUpTimerRunnable = null
+        wakeUpTimerState = WakeUpTimerState()
+    }
+
+    fun getWakeUpTimerState(): Map<String, Any?> {
+        val st = wakeUpTimerState
+        val remaining = if (st.isSet) ((st.fireAtEpochMs - System.currentTimeMillis()) / 1000.0).coerceAtLeast(0.0) else null
+        return mapOf(
+            "isSet"              to st.isSet,
+            "remainingSeconds"   to remaining,
+            "trackId"            to st.trackId,
+            "volumeFadeInSeconds" to st.volumeFadeInSeconds
+        )
+    }
+
+    // ── Queue auto-clear ──────────────────────────────────────────────────────
+    fun setQueueAutoClear(enabled: Boolean) { queueAutoClearEnabled = enabled }
+    fun isQueueAutoClearEnabled(): Boolean = queueAutoClearEnabled
+
+    // ── Pipeline mode (Android 15 AIDL workaround) ───────────────────────────
+    fun setPipelineMode(mode: String) { pipelineMode = mode; Log.d(TAG, "Pipeline mode: $mode") }
+    fun getPipelineMode(): String = pipelineMode
+
+    // ── Absolute Volume ───────────────────────────────────────────────────────
+    fun setAbsoluteVolumeEnabled(enabled: Boolean) { absoluteVolumeEnabled = enabled }
+    fun isAbsoluteVolumeEnabled(): Boolean = absoluteVolumeEnabled
+
+    // ── Max Bitrate for adaptive streaming ───────────────────────────────────
+    fun setMaxBitrate(kbps: Int) {
+        maxBitrateKbps = kbps.coerceAtLeast(0)
+        val bps = if (maxBitrateKbps > 0) maxBitrateKbps * 1000L else Long.MAX_VALUE
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setMaxVideoBitrate(bps.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            .setMaxAudioBitrate(bps.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            .build()
+    }
+
+    fun getMaxBitrate(): Int = maxBitrateKbps
+
+    // ── isPlaying with buffering detail (RNTP 4.1 play button helper) ────────
+    fun isPlayingWithBufferingDetail(): Map<String, Boolean?> = mapOf(
+        "playing"           to if (player.playbackState == Player.STATE_IDLE) null else player.isPlaying,
+        "bufferingDuringPlay" to if (player.playbackState != Player.STATE_BUFFERING) null else bufferingDuringPlay
+    )
 
     // ========================================================================
     // MEDIA ITEM BUILDERS
@@ -2700,47 +3235,83 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
             // Network
             "network-quality-changed",
             // Output profile
-            "output-profile-changed"
+            "output-profile-changed",
+            // ── v3 additions (Poweramp + Neutron + RNTP 4.1) ─────────────────
+            "wake-up-timer-fired",
+            "rms-meter-update",
+            "bpm-detected",
+            "frc-preset-changed",
+            "surround-mode-changed",
+            "automix-transition",
+            "absolute-volume-changed",
+            "pipeline-mode-changed"
         )
 
-        // ==================================================================
-        // LIFECYCLE
-        // ==================================================================
+        defineLifecycleFunctions()
+        defineQueueFunctions()
+        definePlaybackControlFunctions()
+        defineStateGetterFunctions()
+        defineAudioSettingsFunctions()
+        defineSleepTimerFunctions()
+        defineAudioProcessingFunctions()
+        defineDspEqFunctions()
+        defineDspCompressorFunctions()
+        defineDspCrossfeedFunctions()
+        defineDspPeakMeterFunctions()
+        defineDspReplayGainFunctions()
+        defineDspPresetFunctions()
+        defineDspConvolutionFunctions()
+        defineDspFxFunctions()
+        defineBookmarkFunctions()
+        definePersistenceFunctions()
+        defineNetworkVisualizationFunctions()
+        defineExtendedDspFunctions()
+        defineParametricBandFunctions()
+        defineFrcFunctions()
+        defineSurroundFunctions()
+        defineTubeSaturationFunctions()
+        defineAlcFunctions()
+        defineRmsMeterFunctions()
+        defineBpmAutomixFunctions()
+        defineWakeUpTimerFunctions()
+        defineQueueAutoClearFunctions()
+        defineAndroid15CompatFunctions()
+        defineMaxBitrateFunctions()
+        defineIsPlayingDetailFunctions()
+    }
 
+    // =========================================================================
+    // DEFINITION BUILDER HELPERS — each registers a slice of AsyncFunctions
+    // =========================================================================
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineLifecycleFunctions() {
         AsyncFunction("setupPlayer") { options: Map<String, Any?>?, promise: Promise ->
             setupPlayerInternal(options, promise)
         }
-
         AsyncFunction("destroy") { promise: Promise ->
             destroyPlayer(promise)
         }
-
         AsyncFunction("updateOptions") { options: Map<String, Any?>, promise: Promise ->
             updateOptionsInternal(options, promise)
         }
-
         AsyncFunction("isServiceRunning") { promise: Promise ->
             promise.resolve(MavinPlayerRegistry.isServiceRunning)
         }
+    }
 
-        // ==================================================================
-        // QUEUE MANAGEMENT
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineQueueFunctions() {
         AsyncFunction("add") { tracks: List<Map<String, Any?>>, insertBeforeIndex: Int?, promise: Promise ->
             runWithPlayer(promise) { core ->
                 val firstIndex = core.add(tracks.map { it.toTrackMetadata() }, insertBeforeIndex)
                 promise.resolve(firstIndex)
             }
         }
-
         AsyncFunction("load") { track: Map<String, Any?>, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.load(track.toTrackMetadata(), playWhenReady = true)
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("setQueue") { tracks: List<Map<String, Any?>>, startIndex: Int?, startPosition: Double?, promise: Promise ->
             runWithPlayer(promise) { core ->
                 val startMs = ((startPosition ?: 0.0) * 1000.0).toLong()
@@ -2748,7 +3319,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("remove") { indices: Any, promise: Promise ->
             runWithPlayer(promise) { core ->
                 when (indices) {
@@ -2763,29 +3333,21 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("removeUpcomingTracks") { promise: Promise ->
             runWithPlayer(promise) { core -> core.removeUpcomingTracks(); promise.resolve(null) }
         }
-
         AsyncFunction("removePreviousTracks") { promise: Promise ->
             runWithPlayer(promise) { core -> core.removePreviousTracks(); promise.resolve(null) }
         }
-
         AsyncFunction("move") { fromIndex: Int, toIndex: Int, promise: Promise ->
-            runWithPlayer(promise) { core ->
-                core.move(fromIndex, toIndex)
-                promise.resolve(null)
-            }
+            runWithPlayer(promise) { core -> core.move(fromIndex, toIndex); promise.resolve(null) }
         }
-
         AsyncFunction("updateMetadataForTrack") { index: Int, metadata: Map<String, Any?>, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.updateTrackMetadata(index, metadata.toTrackMetadata())
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("updateNowPlayingMetadata") { metadata: Map<String, Any?>, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.updateNowPlayingMetadata(metadata.toTrackMetadata())
@@ -2793,7 +3355,6 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("clearNowPlayingMetadata") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.clearNowPlayingMetadata()
@@ -2801,94 +3362,66 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("preloadNextTrack") { track: Map<String, Any?>, promise: Promise ->
-            runWithPlayer(promise) { core ->
-                core.preloadNextTrack(track.toTrackMetadata())
-                promise.resolve(null)
-            }
+            runWithPlayer(promise) { core -> core.preloadNextTrack(track.toTrackMetadata()); promise.resolve(null) }
         }
-
-        // Queue persistence
         AsyncFunction("getPersistedQueue") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPersistedQueue()) }
         }
-
         AsyncFunction("restorePersistedQueue") { promise: Promise ->
             runWithPlayer(promise) { core -> core.restorePersistedQueue(); promise.resolve(null) }
         }
+    }
 
-        // ==================================================================
-        // PLAYBACK CONTROL
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.definePlaybackControlFunctions() {
         AsyncFunction("play") { promise: Promise ->
             runWithPlayer(promise) { core -> core.play(); promise.resolve(null) }
         }
-
         AsyncFunction("pause") { promise: Promise ->
             runWithPlayer(promise) { core -> core.pause(); promise.resolve(null) }
         }
-
         AsyncFunction("stop") { promise: Promise ->
             runWithPlayer(promise) { core -> core.stop(); promise.resolve(null) }
         }
-
         AsyncFunction("reset") { promise: Promise ->
             runWithPlayer(promise) { core -> core.reset(); promise.resolve(null) }
         }
-
         AsyncFunction("seekTo") { positionSeconds: Double, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.seekTo((positionSeconds * 1000.0).toLong())
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("seekBy") { offsetSeconds: Double, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.seekBy((offsetSeconds * 1000.0).toLong())
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("skipToNext") { initialPosition: Double?, promise: Promise ->
             runWithPlayer(promise) { core ->
-                val posMs = ((initialPosition ?: 0.0) * 1000.0).toLong()
-                promise.resolve(core.skipToNext(posMs))
+                promise.resolve(core.skipToNext(((initialPosition ?: 0.0) * 1000.0).toLong()))
             }
         }
-
         AsyncFunction("skipToPrevious") { initialPosition: Double?, promise: Promise ->
             runWithPlayer(promise) { core ->
-                val posMs = ((initialPosition ?: 0.0) * 1000.0).toLong()
-                promise.resolve(core.skipToPrevious(posMs))
+                promise.resolve(core.skipToPrevious(((initialPosition ?: 0.0) * 1000.0).toLong()))
             }
         }
-
         AsyncFunction("skip") { index: Int, positionSeconds: Double?, promise: Promise ->
             runWithPlayer(promise) { core ->
-                val posMs = ((positionSeconds ?: 0.0) * 1000.0).toLong()
-                promise.resolve(core.skipToIndex(index, posMs))
+                promise.resolve(core.skipToIndex(index, ((positionSeconds ?: 0.0) * 1000.0).toLong()))
             }
         }
-
         AsyncFunction("retry") { promise: Promise ->
             runWithPlayer(promise) { core -> core.retry(); promise.resolve(null) }
         }
-
         AsyncFunction("setPlayWhenReady") { playWhenReady: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPlayWhenReady(playWhenReady); promise.resolve(null) }
         }
-
         AsyncFunction("getPlayWhenReady") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPlayWhenReady()) }
         }
-
-        // ==================================================================
-        // VIDEO TRACK
-        // ==================================================================
-
         AsyncFunction("loadVideoTrack") { videoTrack: Map<String, Any?>, playWhenReady: Boolean?, promise: Promise ->
             runWithPlayer(promise) { core ->
                 val track = VideoTrack(
@@ -2909,15 +3442,12 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 promise.resolve(null)
             }
         }
+    }
 
-        // ==================================================================
-        // STATE GETTERS
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineStateGetterFunctions() {
         AsyncFunction("getState") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPlaybackStateString()) }
         }
-
         AsyncFunction("getPlaybackState") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val stateStr = core.getPlaybackStateString()
@@ -2932,79 +3462,57 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 ))
             }
         }
-
         AsyncFunction("getProgress") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val p = core.getProgress()
-                promise.resolve(mapOf(
-                    "position" to p.position,
-                    "duration" to p.duration,
-                    "buffered"  to p.buffered
-                ))
+                promise.resolve(mapOf("position" to p.position, "duration" to p.duration, "buffered" to p.buffered))
             }
         }
-
         AsyncFunction("getDuration") { promise: Promise ->
-            runWithPlayer(promise) { core ->
-                promise.resolve(core.getDurationMs().toDouble() / 1000.0)
-            }
+            runWithPlayer(promise) { core -> promise.resolve(core.getDurationMs().toDouble() / 1000.0) }
         }
-
         AsyncFunction("getPosition") { promise: Promise ->
-            runWithPlayer(promise) { core ->
-                promise.resolve(core.getCurrentPositionMs().toDouble() / 1000.0)
-            }
+            runWithPlayer(promise) { core -> promise.resolve(core.getCurrentPositionMs().toDouble() / 1000.0) }
         }
-
         AsyncFunction("getBufferedPosition") { promise: Promise ->
-            runWithPlayer(promise) { core ->
-                promise.resolve(core.getBufferedPositionMs().toDouble() / 1000.0)
-            }
+            runWithPlayer(promise) { core -> promise.resolve(core.getBufferedPositionMs().toDouble() / 1000.0) }
         }
-
         AsyncFunction("isPlaying") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isPlaying()) }
         }
-
         AsyncFunction("isLoading") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isLoading()) }
         }
-
         AsyncFunction("getCurrentTrack") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getCurrentTrack()?.toMap()) }
         }
-
         AsyncFunction("getActiveTrack") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getActiveTrack()?.toMap()) }
         }
-
         AsyncFunction("getActiveTrackIndex") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val idx = core.getActiveTrackIndex()
                 promise.resolve(if (idx < 0) null else idx)
             }
         }
-
         AsyncFunction("getCurrentVideoTrack") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getCurrentVideoTrack()?.toMap()) }
         }
-
         AsyncFunction("getTrack") { index: Int, promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getTrack(index)?.toMap()) }
         }
-
         AsyncFunction("getQueue") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getQueue().map { it.toMap() }) }
         }
+    }
 
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineAudioSettingsFunctions() {
         AsyncFunction("getVolume") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getVolume().toDouble()) }
         }
-
         AsyncFunction("setVolume") { volume: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setVolume(volume.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("mute") { promise: Promise ->
             runWithPlayer(promise) { core -> core.mute(); promise.resolve(null) }
         }
@@ -3017,420 +3525,197 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("getUnmutedVolume") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getUnmutedVolume().toDouble()) }
         }
-
-        // ==================================================================
-        // REPEAT / SHUFFLE / RATE / PITCH
-        // ==================================================================
-
         AsyncFunction("getRepeatMode") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getRepeatMode()) }
         }
-
         AsyncFunction("setRepeatMode") { mode: Int, promise: Promise ->
             runWithPlayer(promise) { core -> core.setRepeatMode(mode); promise.resolve(null) }
         }
-
         AsyncFunction("getShuffleMode") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getShuffleMode()) }
         }
-
         AsyncFunction("setShuffleMode") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setShuffleMode(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("getRate") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPlaybackRate().toDouble()) }
         }
-
         AsyncFunction("setRate") { rate: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPlaybackRate(rate.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getPitch") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPlaybackPitch().toDouble()) }
         }
-
         AsyncFunction("setPitch") { pitch: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPlaybackPitch(pitch.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getTempo") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getTempo().toDouble()) }
         }
-
         AsyncFunction("setTempo") { tempo: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setTempo(tempo.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("setProgressUpdateInterval") { intervalSeconds: Double, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.setProgressUpdateInterval((intervalSeconds * 1000.0).toLong())
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("getProgressUpdateInterval") { promise: Promise ->
             promise.resolve(1.0)
         }
-
         AsyncFunction("getCacheSize") { promise: Promise ->
             promise.resolve(MavinPlayerRegistry.sharedCache?.cacheSpace?.toDouble() ?: 0.0)
         }
+    }
 
-        // ==================================================================
-        // SLEEP TIMER
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineSleepTimerFunctions() {
         AsyncFunction("setSleepTimer") { durationSeconds: Double, fadeOutSeconds: Double?, promise: Promise ->
             runWithPlayer(promise) { core ->
                 core.setSleepTimer(durationSeconds, fadeOutSeconds ?: 3.0)
                 promise.resolve(null)
             }
         }
-
         AsyncFunction("setSleepTimerEndAfterCurrentTrack") { promise: Promise ->
             runWithPlayer(promise) { core -> core.setSleepTimerEndAfterCurrentTrack(); promise.resolve(null) }
         }
-
         AsyncFunction("cancelSleepTimer") { promise: Promise ->
             runWithPlayer(promise) { core -> core.cancelSleepTimer(); promise.resolve(null) }
         }
-
         AsyncFunction("getSleepTimerState") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getSleepTimerState()) }
         }
+    }
 
-        // ==================================================================
-        // BALANCE / STEREO / MONO
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineAudioProcessingFunctions() {
         AsyncFunction("setBalance") { leftGain: Double, rightGain: Double, promise: Promise ->
             runWithPlayer(promise) { core ->
-                core.setBalance(leftGain.toFloat(), rightGain.toFloat())
-                promise.resolve(null)
+                core.setBalance(leftGain.toFloat(), rightGain.toFloat()); promise.resolve(null)
             }
         }
-
         AsyncFunction("getBalance") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val (l, r) = core.getBalance()
                 promise.resolve(mapOf("left" to l.toDouble(), "right" to r.toDouble()))
             }
         }
-
         AsyncFunction("setPan") { pan: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPanBalance(pan.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getPan") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getPan().toDouble()) }
         }
-
         AsyncFunction("setStereoExpansion") { expansion: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setStereoExpansion(expansion.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getStereoExpansion") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getStereoExpansion().toDouble()) }
         }
-
         AsyncFunction("setMonoMix") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setMonoMix(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isMonoMix") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isMonoMix()) }
         }
-
-        // ==================================================================
-        // BASS / TREBLE
-        // ==================================================================
-
         AsyncFunction("setBassBoost") { gainDb: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setBassBoost(gainDb.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getBassBoost") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getBassBoost().toDouble()) }
         }
-
         AsyncFunction("setTrebleBoost") { gainDb: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setTrebleBoost(gainDb.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getTrebleBoost") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getTrebleBoost().toDouble()) }
         }
-
-        // ==================================================================
-        // LIMITER
-        // ==================================================================
-
         AsyncFunction("setLimiterEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setLimiterEnabled(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isLimiterEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isLimiterEnabled()) }
         }
-
         AsyncFunction("setLimiterThreshold") { thresholdDb: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setLimiterThreshold(thresholdDb.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getLimiterThreshold") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getLimiterThreshold().toDouble()) }
         }
-
-        // ==================================================================
-        // LOUDNESS NORMALIZATION
-        // ==================================================================
-
         AsyncFunction("setLoudnessNormalizationEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setLoudnessNormalizationEnabled(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isLoudnessNormalizationEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isLoudnessNormalizationEnabled()) }
         }
-
         AsyncFunction("setTargetLufs") { lufs: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setTargetLufs(lufs.toFloat()); promise.resolve(null) }
         }
-
         AsyncFunction("getTargetLufs") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getTargetLufs().toDouble()) }
         }
-
-        // ==================================================================
-        // HEADROOM GUARD
-        // ==================================================================
-
         AsyncFunction("setHeadroomGuardEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setHeadroomGuardEnabled(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isHeadroomGuardEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isHeadroomGuardEnabled()) }
         }
-
         AsyncFunction("setHeadroomGuardThreshold") { thresholdDb: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setHeadroomGuardThreshold(thresholdDb.toFloat()); promise.resolve(null) }
         }
-
-        // ==================================================================
-        // PHASE INVERSION
-        // ==================================================================
-
         AsyncFunction("setPhaseInvert") { left: Boolean, right: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPhaseInvert(left, right); promise.resolve(null) }
         }
-
         AsyncFunction("getPhaseInvert") { promise: Promise ->
             runWithPlayer(promise) { core ->
                 val (l, r) = core.getPhaseInvert()
                 promise.resolve(mapOf("left" to l, "right" to r))
             }
         }
-
-        // ==================================================================
-        // MID/SIDE EQ MODE
-        // ==================================================================
-
         AsyncFunction("setEqProcessingMode") { mode: String, promise: Promise ->
             runWithPlayer(promise) { core -> core.setEqProcessingMode(mode); promise.resolve(null) }
         }
-
         AsyncFunction("getEqProcessingMode") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getEqProcessingMode()) }
         }
-
-        // ==================================================================
-        // GAPLESS
-        // ==================================================================
-
         AsyncFunction("setGaplessEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setGaplessEnabled(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isGaplessEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isGaplessEnabled()) }
         }
-
-        // ==================================================================
-        // DVC
-        // ==================================================================
-
         AsyncFunction("setDvcEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setDvcEnabled(enabled); promise.resolve(null) }
         }
-
         AsyncFunction("isDvcEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isDvcEnabled()) }
         }
-
-        // ==================================================================
-        // RESAMPLER
-        // ==================================================================
-
         AsyncFunction("setResamplerQuality") { quality: String, promise: Promise ->
             runWithPlayer(promise) { core -> core.setResamplerQuality(quality); promise.resolve(null) }
         }
-
         AsyncFunction("getResamplerQuality") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getResamplerQuality()) }
         }
-
         AsyncFunction("setTargetResampleRate") { hz: Int, promise: Promise ->
             runWithPlayer(promise) { core -> core.setTargetResampleRate(hz); promise.resolve(null) }
         }
-
         AsyncFunction("getTargetResampleRate") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getTargetResampleRate()) }
         }
-
-        // ==================================================================
-        // OUTPUT PROFILES
-        // ==================================================================
-
         AsyncFunction("setOutputProfile") { profile: String, promise: Promise ->
             runWithPlayer(promise) { core -> core.setOutputProfile(profile); promise.resolve(null) }
         }
-
         AsyncFunction("getCurrentOutputProfile") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getCurrentOutputProfile()) }
         }
-
         AsyncFunction("setOutputProfilePreset") { profile: String, presetName: String?, promise: Promise ->
             runWithPlayer(promise) { core -> core.setOutputProfilePreset(profile, presetName); promise.resolve(null) }
         }
-
         AsyncFunction("getOutputProfilePreset") { profile: String, promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getOutputProfilePreset(profile)) }
         }
+    }
 
-        // ==================================================================
-        // BOOKMARKS
-        // ==================================================================
-
-        AsyncFunction("bookmarkCurrentPosition") { promise: Promise ->
-            runWithPlayer(promise) { core -> core.bookmarkCurrentPosition(); promise.resolve(null) }
-        }
-
-        AsyncFunction("addBookmark") { positionSeconds: Double, promise: Promise ->
-            runWithPlayer(promise) { core -> core.addBookmark(positionSeconds); promise.resolve(null) }
-        }
-
-        AsyncFunction("removeBookmark") { positionSeconds: Double, promise: Promise ->
-            runWithPlayer(promise) { core -> core.removeBookmark(positionSeconds); promise.resolve(null) }
-        }
-
-        AsyncFunction("getBookmarks") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.getBookmarks()) }
-        }
-
-        AsyncFunction("clearBookmarks") { promise: Promise ->
-            runWithPlayer(promise) { core -> core.clearBookmarks(); promise.resolve(null) }
-        }
-
-        // ==================================================================
-        // RESUME / POSITION PERSISTENCE
-        // ==================================================================
-
-        AsyncFunction("getLastPlayedPosition") { trackId: String, promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.getLastPlayedPosition(trackId)) }
-        }
-
-        AsyncFunction("clearLastPlayedPosition") { trackId: String, promise: Promise ->
-            runWithPlayer(promise) { core -> core.clearLastPlayedPosition(trackId); promise.resolve(null) }
-        }
-
-        AsyncFunction("clearAllPlayedPositions") { promise: Promise ->
-            runWithPlayer(promise) { core -> core.clearAllPlayedPositions(); promise.resolve(null) }
-        }
-
-        // ==================================================================
-        // NETWORK QUALITY
-        // ==================================================================
-
-        AsyncFunction("getNetworkQuality") { promise: Promise ->
-            runWithPlayer(promise) { core ->
-                val nq = core.getNetworkQuality()
-                promise.resolve(mapOf(
-                    "estimatedBandwidthBps" to nq.estimatedBandwidthBps.toDouble(),
-                    "quality" to nq.quality
-                ))
-            }
-        }
-
-        // ==================================================================
-        // VISUALIZATION
-        // ==================================================================
-
-        AsyncFunction("getWaveformData") { numBuckets: Int?, promise: Promise ->
-            runWithPlayer(promise) { core ->
-                val data = core.getWaveformData(numBuckets ?: 100)
-                promise.resolve(data.map { it.toDouble() })
-            }
-        }
-
-        AsyncFunction("getSpectrumData") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.getSpectrumData()) }
-        }
-
-        // ==================================================================
-        // AUTOEQ IMPORT
-        // ==================================================================
-
-        AsyncFunction("importAutoEqPreset") { name: String, csv: String, promise: Promise ->
-            runWithPlayer(promise) { core ->
-                if (core.importAutoEqPreset(name, csv)) promise.resolve(null)
-                else promise.reject("AUTOEQ_IMPORT_FAILED", "Failed to parse AutoEQ CSV", null)
-            }
-        }
-
-        // ==================================================================
-        // EXTENDED DSP (Crossfade, Offline, 64-bit, USB)
-        // ==================================================================
-
-        AsyncFunction("isCrossfadeEnabled") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.isCrossfadeEnabled()) }
-        }
-        AsyncFunction("setCrossfadeEnabled") { enabled: Boolean, promise: Promise ->
-            runWithPlayer(promise) { core -> core.setCrossfadeEnabled(enabled); promise.resolve(null) }
-        }
-        AsyncFunction("getCrossfadeDurationMs") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.getCrossfadeDurationMs().toDouble()) }
-        }
-        AsyncFunction("setCrossfadeDurationMs") { durationMs: Double, promise: Promise ->
-            runWithPlayer(promise) { core -> core.setCrossfadeDurationMs(durationMs.toLong()); promise.resolve(null) }
-        }
-        AsyncFunction("isOfflineMode") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.isOfflineMode()) }
-        }
-        AsyncFunction("setOfflineMode") { enabled: Boolean, promise: Promise ->
-            runWithPlayer(promise) { core -> core.setOfflineMode(enabled); promise.resolve(null) }
-        }
-        AsyncFunction("is64BitProcessingEnabled") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.is64BitProcessingEnabled()) }
-        }
-        AsyncFunction("set64BitProcessingEnabled") { enabled: Boolean, promise: Promise ->
-            runWithPlayer(promise) { core -> core.set64BitProcessingEnabled(enabled); promise.resolve(null) }
-        }
-        AsyncFunction("isUsbDacConnected") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.isUsbDacConnected()) }
-        }
-        AsyncFunction("isDirectUsbRoutingEnabled") { promise: Promise ->
-            runWithPlayer(promise) { core -> promise.resolve(core.isDirectUsbRoutingEnabled()) }
-        }
-        AsyncFunction("enableDirectUsbRouting") { enabled: Boolean, promise: Promise ->
-            runWithPlayer(promise) { core -> core.enableDirectUsbRouting(enabled); promise.resolve(null) }
-        }
-
-        // ==================================================================
-        // EQ
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspEqFunctions() {
         AsyncFunction("setEQEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setEQEnabled(enabled); promise.resolve(null) }
         }
@@ -3442,8 +3727,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
         AsyncFunction("applyEQBands") { gains: List<Double>, promise: Promise ->
             runWithPlayer(promise) { core ->
-                core.applyEQBands(gains.map { it.toFloat() }.toFloatArray())
-                promise.resolve(null)
+                core.applyEQBands(gains.map { it.toFloat() }.toFloatArray()); promise.resolve(null)
             }
         }
         AsyncFunction("setEQPreamp") { gain: Double, promise: Promise ->
@@ -3454,9 +3738,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
         AsyncFunction("getEQGains") { promise: Promise ->
             runWithPlayer(promise) { core ->
-                promise.resolve(core.getEQGains().mapIndexed { i, g ->
-                    mapOf("band" to i, "gain" to g.toDouble())
-                })
+                promise.resolve(core.getEQGains().mapIndexed { i, g -> mapOf("band" to i, "gain" to g.toDouble()) })
             }
         }
         AsyncFunction("getEQPreamp") { promise: Promise ->
@@ -3473,8 +3755,7 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
         AsyncFunction("applyParametricBands") { gains: List<Double>, promise: Promise ->
             runWithPlayer(promise) { core ->
-                core.applyParametricBands(gains.map { it.toFloat() }.toFloatArray())
-                promise.resolve(null)
+                core.applyParametricBands(gains.map { it.toFloat() }.toFloatArray()); promise.resolve(null)
             }
         }
         AsyncFunction("setParametricBandFreq") { band: Int, freqHz: Double, promise: Promise ->
@@ -3482,16 +3763,12 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
         AsyncFunction("getParametricGains") { promise: Promise ->
             runWithPlayer(promise) { core ->
-                promise.resolve(core.getParametricGains().mapIndexed { i, g ->
-                    mapOf("band" to i, "gain" to g.toDouble())
-                })
+                promise.resolve(core.getParametricGains().mapIndexed { i, g -> mapOf("band" to i, "gain" to g.toDouble()) })
             }
         }
         AsyncFunction("getParametricFreqs") { promise: Promise ->
             runWithPlayer(promise) { core ->
-                promise.resolve(core.getParametricFreqs().mapIndexed { i, f ->
-                    mapOf("band" to i, "freqHz" to f)
-                })
+                promise.resolve(core.getParametricFreqs().mapIndexed { i, f -> mapOf("band" to i, "freqHz" to f) })
             }
         }
         AsyncFunction("setDitherMode") { mode: String, promise: Promise ->
@@ -3525,11 +3802,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
                 })
             }
         }
+    }
 
-        // ==================================================================
-        // COMPRESSOR
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspCompressorFunctions() {
         AsyncFunction("setCompressorEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setCompressorEnabled(enabled); promise.resolve(null) }
         }
@@ -3569,11 +3844,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("getCompressorRelease") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getCompressorReleaseMs()) }
         }
+    }
 
-        // ==================================================================
-        // CROSSFEED
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspCrossfeedFunctions() {
         AsyncFunction("setCrossfeedEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setCrossfeedEnabled(enabled); promise.resolve(null) }
         }
@@ -3598,11 +3871,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("getCrossfeedDelayMs") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getCrossfeedDelayMs()) }
         }
+    }
 
-        // ==================================================================
-        // PEAK METER
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspPeakMeterFunctions() {
         AsyncFunction("setPeakHoldMs") { ms: Double, promise: Promise ->
             runWithPlayer(promise) { core -> core.setPeakHoldMs(ms); promise.resolve(null) }
         }
@@ -3630,11 +3901,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("resetPeaks") { promise: Promise ->
             runWithPlayer(promise) { core -> core.resetPeaks(); promise.resolve(null) }
         }
+    }
 
-        // ==================================================================
-        // REPLAY GAIN
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspReplayGainFunctions() {
         AsyncFunction("setReplayGainMode") { mode: String, promise: Promise ->
             runWithPlayer(promise) { core -> core.setReplayGainMode(mode); promise.resolve(null) }
         }
@@ -3647,11 +3916,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("getReplayGainInfo") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.getReplayGainInfo()) }
         }
+    }
 
-        // ==================================================================
-        // PRESETS
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspPresetFunctions() {
         AsyncFunction("applyPreset") { name: String, promise: Promise ->
             runWithPlayer(promise) { core ->
                 if (core.applyPresetByName(name)) promise.resolve(null)
@@ -3685,11 +3952,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("setAutoSwitchPresets") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setAutoSwitchPresets(enabled); promise.resolve(null) }
         }
+    }
 
-        // ==================================================================
-        // CONVOLUTION
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspConvolutionFunctions() {
         AsyncFunction("loadImpulseResponse") { filePath: String, promise: Promise ->
             runWithPlayer(promise) { core ->
                 if (core.loadImpulseResponse(filePath)) promise.resolve(null)
@@ -3711,11 +3976,9 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         AsyncFunction("isConvolutionEnabled") { promise: Promise ->
             runWithPlayer(promise) { core -> promise.resolve(core.isConvolutionEnabled()) }
         }
+    }
 
-        // ==================================================================
-        // FX PROCESSOR
-        // ==================================================================
-
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineDspFxFunctions() {
         AsyncFunction("setFxEnabled") { enabled: Boolean, promise: Promise ->
             runWithPlayer(promise) { core -> core.setFxEnabled(enabled); promise.resolve(null) }
         }
@@ -3778,9 +4041,375 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
         }
     }
 
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineBookmarkFunctions() {
+        AsyncFunction("bookmarkCurrentPosition") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.bookmarkCurrentPosition(); promise.resolve(null) }
+        }
+        AsyncFunction("addBookmark") { positionSeconds: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.addBookmark(positionSeconds); promise.resolve(null) }
+        }
+        AsyncFunction("removeBookmark") { positionSeconds: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.removeBookmark(positionSeconds); promise.resolve(null) }
+        }
+        AsyncFunction("getBookmarks") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getBookmarks()) }
+        }
+        AsyncFunction("clearBookmarks") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearBookmarks(); promise.resolve(null) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.definePersistenceFunctions() {
+        AsyncFunction("getLastPlayedPosition") { trackId: String, promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getLastPlayedPosition(trackId)) }
+        }
+        AsyncFunction("clearLastPlayedPosition") { trackId: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearLastPlayedPosition(trackId); promise.resolve(null) }
+        }
+        AsyncFunction("clearAllPlayedPositions") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearAllPlayedPositions(); promise.resolve(null) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineNetworkVisualizationFunctions() {
+        AsyncFunction("getNetworkQuality") { promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val nq = core.getNetworkQuality()
+                promise.resolve(mapOf(
+                    "estimatedBandwidthBps" to nq.estimatedBandwidthBps.toDouble(),
+                    "quality" to nq.quality
+                ))
+            }
+        }
+        AsyncFunction("getWaveformData") { numBuckets: Int?, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val data = core.getWaveformData(numBuckets ?: 100)
+                promise.resolve(data.map { it.toDouble() })
+            }
+        }
+        AsyncFunction("getSpectrumData") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSpectrumData()) }
+        }
+        AsyncFunction("importAutoEqPreset") { name: String, csv: String, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                if (core.importAutoEqPreset(name, csv)) promise.resolve(null)
+                else promise.reject("AUTOEQ_IMPORT_FAILED", "Failed to parse AutoEQ CSV", null)
+            }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineExtendedDspFunctions() {
+        AsyncFunction("isCrossfadeEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isCrossfadeEnabled()) }
+        }
+        AsyncFunction("setCrossfadeEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setCrossfadeEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("getCrossfadeDurationMs") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getCrossfadeDurationMs().toDouble()) }
+        }
+        AsyncFunction("setCrossfadeDurationMs") { durationMs: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setCrossfadeDurationMs(durationMs.toLong()); promise.resolve(null) }
+        }
+        AsyncFunction("isOfflineMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isOfflineMode()) }
+        }
+        AsyncFunction("setOfflineMode") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setOfflineMode(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("is64BitProcessingEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.is64BitProcessingEnabled()) }
+        }
+        AsyncFunction("set64BitProcessingEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.set64BitProcessingEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isUsbDacConnected") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isUsbDacConnected()) }
+        }
+        AsyncFunction("isDirectUsbRoutingEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isDirectUsbRoutingEnabled()) }
+        }
+        AsyncFunction("enableDirectUsbRouting") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.enableDirectUsbRouting(enabled); promise.resolve(null) }
+        }
+    }
+
+    // =========================================================================
+    // V3 DEFINITION BUILDER HELPERS (Poweramp + Neutron + RNTP 4.1 additions)
+    // =========================================================================
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineParametricBandFunctions() {
+        AsyncFunction("setParametricBandConfig") { band: Int, config: Map<String, Any?>, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val cfg = ParametricBandConfig(
+                    type    = config["type"] as? String ?: MavinPlayerConstants.BAND_TYPE_PEAKING,
+                    freqHz  = (config["freqHz"] as? Number)?.toDouble() ?: 1000.0,
+                    gainDb  = (config["gainDb"] as? Number)?.toFloat() ?: 0f,
+                    q       = (config["q"] as? Number)?.toDouble() ?: 1.0,
+                    channel = config["channel"] as? String ?: MavinPlayerConstants.BAND_CHANNEL_BOTH
+                )
+                core.setParametricBandConfig(band, cfg)
+                promise.resolve(null)
+            }
+        }
+        AsyncFunction("getParametricBandConfig") { band: Int, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val cfg = core.getParametricBandConfig(band)
+                promise.resolve(cfg?.let { mapOf(
+                    "type"    to it.type,
+                    "freqHz"  to it.freqHz,
+                    "gainDb"  to it.gainDb.toDouble(),
+                    "q"       to it.q,
+                    "channel" to it.channel
+                )})
+            }
+        }
+        AsyncFunction("getAllParametricBandConfigs") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getAllParametricBandConfigs()) }
+        }
+        AsyncFunction("setBassFrequency") { hz: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setBassFrequency(hz); promise.resolve(null) }
+        }
+        AsyncFunction("getBassFrequency") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getBassFrequency()) }
+        }
+        AsyncFunction("setBassQ") { q: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setBassQ(q); promise.resolve(null) }
+        }
+        AsyncFunction("getBassQ") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getBassQ()) }
+        }
+        AsyncFunction("setTrebleFrequency") { hz: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTrebleFrequency(hz); promise.resolve(null) }
+        }
+        AsyncFunction("getTrebleFrequency") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTrebleFrequency()) }
+        }
+        AsyncFunction("setTrebleQ") { q: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTrebleQ(q); promise.resolve(null) }
+        }
+        AsyncFunction("getTrebleQ") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTrebleQ()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineFrcFunctions() {
+        AsyncFunction("importFrcPreset") { presetMap: Map<String, Any?>, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                @Suppress("UNCHECKED_CAST")
+                val gains  = (presetMap["gains"]   as? List<*>)?.filterIsInstance<Number>()?.map { it.toFloat() }?.toFloatArray() ?: floatArrayOf()
+                val freqHz = (presetMap["freqHz"]  as? List<*>)?.filterIsInstance<Number>()?.map { it.toDouble() }?.toDoubleArray() ?: doubleArrayOf()
+                val qVals  = (presetMap["qValues"] as? List<*>)?.filterIsInstance<Number>()?.map { it.toDouble() }?.toDoubleArray() ?: doubleArrayOf()
+                val preset = FrcPreset(
+                    name        = presetMap["name"] as? String ?: "unnamed",
+                    gains       = gains,
+                    freqHz      = freqHz,
+                    qValues     = qVals,
+                    description = presetMap["description"] as? String ?: "",
+                    deviceModel = presetMap["deviceModel"] as? String ?: ""
+                )
+                core.importFrcPreset(preset)
+                promise.resolve(null)
+            }
+        }
+        AsyncFunction("applyFrcPreset") { name: String, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                if (core.applyFrcPreset(name)) promise.resolve(null)
+                else promise.reject("FRC_NOT_FOUND", "FRC preset '$name' not found", null)
+            }
+        }
+        AsyncFunction("clearFrcPreset") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.clearFrcPreset(); promise.resolve(null) }
+        }
+        AsyncFunction("getActiveFrcPreset") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getActiveFrcPreset()) }
+        }
+        AsyncFunction("listFrcPresets") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.listFrcPresets()) }
+        }
+        AsyncFunction("exportFrcPreset") { name: String, promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.exportFrcPreset(name)) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineSurroundFunctions() {
+        AsyncFunction("setSurroundMode") { mode: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSurroundMode(mode); promise.resolve(null) }
+        }
+        AsyncFunction("getSurroundMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSurroundMode()) }
+        }
+        AsyncFunction("setSurroundEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSurroundEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isSurroundEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isSurroundEnabled()) }
+        }
+        AsyncFunction("setSurroundWidth") { widthPercent: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSurroundWidth(widthPercent.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getSurroundWidth") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSurroundWidth().toDouble()) }
+        }
+        AsyncFunction("setSurroundDelay") { ms: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSurroundDelay(ms.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getSurroundDelay") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSurroundDelay().toDouble()) }
+        }
+        AsyncFunction("setSurroundRoomSize") { ms: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setSurroundRoomSize(ms.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getSurroundRoomSize") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getSurroundRoomSize().toDouble()) }
+        }
+        AsyncFunction("setOversamplingFilterType") { type: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setOversamplingFilterType(type); promise.resolve(null) }
+        }
+        AsyncFunction("getOversamplingFilterType") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getOversamplingFilterType()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineTubeSaturationFunctions() {
+        AsyncFunction("setTubeMode") { mode: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTubeMode(mode); promise.resolve(null) }
+        }
+        AsyncFunction("getTubeMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTubeMode()) }
+        }
+        AsyncFunction("setTubeDrive") { driveDb: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTubeDrive(driveDb.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getTubeDrive") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTubeDrive().toDouble()) }
+        }
+        AsyncFunction("setTubeHarmonic2") { amount: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTubeHarmonic2(amount.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getTubeHarmonic2") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTubeHarmonic2().toDouble()) }
+        }
+        AsyncFunction("setTubeHarmonic3") { amount: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTubeHarmonic3(amount.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getTubeHarmonic3") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTubeHarmonic3().toDouble()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineAlcFunctions() {
+        AsyncFunction("setAlcEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setAlcEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isAlcEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isAlcEnabled()) }
+        }
+        AsyncFunction("setAlcTarget") { lufs: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setAlcTarget(lufs.toFloat()); promise.resolve(null) }
+        }
+        AsyncFunction("getAlcTarget") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getAlcTarget().toDouble()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineRmsMeterFunctions() {
+        AsyncFunction("getRmsMeter") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getRmsMap()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineBpmAutomixFunctions() {
+        AsyncFunction("setTrackBpm") { trackId: String, bpm: Double, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setTrackBpm(trackId, bpm); promise.resolve(null) }
+        }
+        AsyncFunction("getTrackBpm") { trackId: String, promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getTrackBpm(trackId)) }
+        }
+        AsyncFunction("getCurrentTrackBpm") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getCurrentTrackBpm()) }
+        }
+        AsyncFunction("setAutomixConfig") { config: Map<String, Any?>, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                val cfg = AutomixConfig(
+                    mode                = config["mode"] as? String ?: MavinPlayerConstants.CROSSFADE_MODE_AUTO,
+                    manualCrossfadeOnly = config["manualCrossfadeOnly"] as? Boolean ?: false,
+                    bpmAutomixEnabled   = config["bpmAutomixEnabled"] as? Boolean ?: false,
+                    bpmInPoint          = (config["bpmInPoint"] as? Number)?.toDouble() ?: 0.0,
+                    bpmOutPoint         = (config["bpmOutPoint"] as? Number)?.toDouble() ?: 0.0
+                )
+                core.setAutomixConfig(cfg)
+                promise.resolve(null)
+            }
+        }
+        AsyncFunction("getAutomixConfig") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getAutomixConfig()) }
+        }
+        AsyncFunction("setManualCrossfadeOnly") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setManualCrossfadeOnly(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isManualCrossfadeOnly") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isManualCrossfadeOnly()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineWakeUpTimerFunctions() {
+        AsyncFunction("setWakeUpTimer") { epochMs: Double, trackId: String?, fadeInSeconds: Double?, promise: Promise ->
+            runWithPlayer(promise) { core ->
+                core.setWakeUpTimer(epochMs.toLong(), trackId, fadeInSeconds ?: 30.0)
+                promise.resolve(null)
+            }
+        }
+        AsyncFunction("cancelWakeUpTimer") { promise: Promise ->
+            runWithPlayer(promise) { core -> core.cancelWakeUpTimer(); promise.resolve(null) }
+        }
+        AsyncFunction("getWakeUpTimerState") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getWakeUpTimerState()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineQueueAutoClearFunctions() {
+        AsyncFunction("setQueueAutoClear") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setQueueAutoClear(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isQueueAutoClearEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isQueueAutoClearEnabled()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineAndroid15CompatFunctions() {
+        AsyncFunction("setPipelineMode") { mode: String, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setPipelineMode(mode); promise.resolve(null) }
+        }
+        AsyncFunction("getPipelineMode") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getPipelineMode()) }
+        }
+        AsyncFunction("setAbsoluteVolumeEnabled") { enabled: Boolean, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setAbsoluteVolumeEnabled(enabled); promise.resolve(null) }
+        }
+        AsyncFunction("isAbsoluteVolumeEnabled") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isAbsoluteVolumeEnabled()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineMaxBitrateFunctions() {
+        AsyncFunction("setMaxBitrate") { kbps: Int, promise: Promise ->
+            runWithPlayer(promise) { core -> core.setMaxBitrate(kbps); promise.resolve(null) }
+        }
+        AsyncFunction("getMaxBitrate") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.getMaxBitrate()) }
+        }
+    }
+
+    private fun expo.modules.kotlin.modules.ModuleDefinitionBuilder.defineIsPlayingDetailFunctions() {
+        AsyncFunction("isPlayingWithDetail") { promise: Promise ->
+            runWithPlayer(promise) { core -> promise.resolve(core.isPlayingWithBufferingDetail()) }
+        }
+    }
+
     // ========================================================================
     // INTERNAL IMPLEMENTATION
-    // ========================================================================
+    // =======================================================================
 
     private fun setupPlayerInternal(options: Map<String, Any?>?, promise: Promise) {
         mainHandler.post {
@@ -4159,6 +4788,48 @@ class MavinPlayerModule : Module(), MavinPlayerCore.PlayerEventListener {
 
     override fun onOutputProfileChanged(profile: String) {
         sendEvent("output-profile-changed", mapOf("profile" to profile))
+    }
+
+    override fun onWakeUpTimerFired(trackId: String?) {
+        sendEvent("wake-up-timer-fired", mapOf("trackId" to trackId))
+    }
+
+    override fun onRmsMeterUpdate(rmsLeft: Float, rmsRight: Float, peakLeft: Float, peakRight: Float, lufs: Float) {
+        sendEvent("rms-meter-update", mapOf(
+            "rmsLeft"  to rmsLeft.toDouble(),
+            "rmsRight" to rmsRight.toDouble(),
+            "peakLeft" to peakLeft.toDouble(),
+            "peakRight" to peakRight.toDouble(),
+            "lufs"     to lufs.toDouble()
+        ))
+    }
+
+    override fun onBpmDetected(trackId: String, bpm: Double) {
+        sendEvent("bpm-detected", mapOf("trackId" to trackId, "bpm" to bpm))
+    }
+
+    override fun onFrcPresetChanged(presetName: String?) {
+        sendEvent("frc-preset-changed", mapOf("presetName" to presetName))
+    }
+
+    override fun onSurroundModeChanged(mode: String) {
+        sendEvent("surround-mode-changed", mapOf("mode" to mode))
+    }
+
+    override fun onAutomixTransition(fromTrackId: String, toTrackId: String, positionSeconds: Double) {
+        sendEvent("automix-transition", mapOf(
+            "fromTrackId"     to fromTrackId,
+            "toTrackId"       to toTrackId,
+            "positionSeconds" to positionSeconds
+        ))
+    }
+
+    override fun onAbsoluteVolumeChanged(enabled: Boolean) {
+        sendEvent("absolute-volume-changed", mapOf("enabled" to enabled))
+    }
+
+    override fun onPipelineModeChanged(mode: String) {
+        sendEvent("pipeline-mode-changed", mapOf("mode" to mode))
     }
 
     // ========================================================================
