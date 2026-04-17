@@ -1,75 +1,129 @@
 /**
- * useTrackPlayerFavorite
- *
- * Manages the favourite status of the currently active track.
- *
- * Fix vs previous version:
- *   checkIfFavorite used a dynamic `await import('@/store/library')` inside
- *   a useCallback. Dynamic imports inside callbacks are fragile — they create
- *   a new module reference on every call, bypass tree-shaking, and can cause
- *   timing issues if the module hasn't been evaluated yet. The library store
- *   is always needed here, so we import it statically at the top of the file
- *   and call `useLibraryStore.getState()` directly — zero overhead, always safe.
- *
- * Other fixes preserved:
- *   [1] useIsSongFavorite(id) — single boolean selector, no render loop.
- *   [2] toggleFavoriteTrack — stable action reference from the store.
+ * useTrackPlayerFavorite.tsx
+ * 
+ * ADJUSTED: Added safety guards for when player isn't ready
  */
 
-import { useCallback } from "react";
-import TrackPlayer, { useActiveTrack } from "@/modules/mavin-eq";
-import { useIsSongFavorite, useFavorites, useLibraryStore } from "@/store/library";
+import { useCallback, useEffect, useState, useRef } from "react";
+import { useActiveTrack } from "@/modules/mavin-eq";
+import { useLibraryStore, useIsSongFavorite } from "@/store/library";
+import { triggerHaptic, type HapticStrength } from "@/helpers/haptics";
 
-export const useTrackPlayerFavorite = () => {
-  const activeTrack = useActiveTrack();
+interface UseTrackPlayerFavoriteResult {
+  isFavorite: boolean;
+  toggleFavorite: () => Promise<void>;
+  toggleFavoriteFunc: () => Promise<void>;
+  currentTrackId: string | null;
+  isLoading: boolean;
+}
 
-  // ── isFavorite — direct boolean selector, never causes a render loop ───────
-  // Falls back to false when no track is active (activeTrack?.id is undefined).
-  const isFavorite = useIsSongFavorite(activeTrack?.id ?? "");
+export const useTrackPlayerFavorite = (): UseTrackPlayerFavoriteResult => {
+  // 🔥 SAFETY: useActiveTrack might return null/undefined initially
+  const activeTrackResult = useActiveTrack();
+  const activeTrack = activeTrackResult?.track ?? null;
+  const trackLoading = activeTrackResult?.isLoading ?? true;
+  
+  const currentTrackId = activeTrack?.id ?? null;
+  
+  const isFavoriteFromStore = useIsSongFavorite(currentTrackId ?? "");
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const addFavorite = useLibraryStore((s) => s.addFavorite);
+  const removeFavorite = useLibraryStore((s) => s.removeFavorite);
+  
+  const lastTrackIdRef = useRef<string | null>(null);
+  const pendingToggleRef = useRef<boolean>(false);
 
-  // ── toggleFavoriteTrack — stable action reference from the Zustand store ───
-  const { toggleFavoriteTrack } = useFavorites();
+  useEffect(() => {
+    if (trackLoading) {
+      setIsLoading(true);
+      return;
+    }
 
-  // ── checkIfFavorite — reads current store state outside React ─────────────
-  // Uses getState() (not a hook) so it does NOT subscribe to re-renders.
-  // Static import means no dynamic-import overhead or timing issues.
-  const checkIfFavorite = useCallback((id: string): boolean => {
-    return useLibraryStore.getState().favoriteSongIds.includes(id);
+    const trackId = activeTrack?.id;
+    
+    if (trackId !== lastTrackIdRef.current) {
+      lastTrackIdRef.current = trackId ?? null;
+      pendingToggleRef.current = false;
+    }
+    
+    if (!trackId) {
+      setIsFavorite(false);
+      setIsLoading(false);
+      return;
+    }
+    
+    setIsFavorite(isFavoriteFromStore);
+    setIsLoading(false);
+  }, [activeTrack?.id, isFavoriteFromStore, trackLoading]);
+
+  const toggleFavorite = useCallback(async () => {
+    const trackId = currentTrackId;
+    
+    if (!trackId || pendingToggleRef.current) return;
+    pendingToggleRef.current = true;
+    
+    const newState = !isFavorite;
+    setIsFavorite(newState);
+    
+    const hapticType: HapticStrength = newState ? "light" : "medium";
+    triggerHaptic(hapticType);
+    
+    try {
+      if (newState) {
+        addFavorite('song', trackId);
+      } else {
+        removeFavorite('song', trackId);
+      }
+    } catch (error) {
+      console.error("[useTrackPlayerFavorite] Failed:", error);
+      setIsFavorite(!newState);
+    } finally {
+      pendingToggleRef.current = false;
+    }
+  }, [currentTrackId, isFavorite, addFavorite, removeFavorite]);
+
+  useEffect(() => {
+    return () => { pendingToggleRef.current = false; };
   }, []);
 
-  // ── toggleFavoriteFunc ─────────────────────────────────────────────────────
-  const toggleFavoriteFunc = useCallback(
-    async (
-      track = activeTrack
-        ? {
-            id:        activeTrack.id       ?? "",
-            title:     activeTrack.title    ?? "",
-            artist:    activeTrack.artist   ?? "",
-            thumbnail: typeof activeTrack.artwork === "string" ? activeTrack.artwork : "",
-          }
-        : undefined,
-    ) => {
-      if (!track?.id) return;
+  return {
+    isFavorite,
+    toggleFavorite,
+    toggleFavoriteFunc: toggleFavorite,
+    currentTrackId,
+    isLoading: isLoading || trackLoading,
+  };
+};
 
-      // Toggle in the Zustand store
-      toggleFavoriteTrack(track.id);
+export const checkIsFavorite = (trackId: string | null | undefined): boolean => {
+  if (!trackId) return false;
+  const state = useLibraryStore.getState();
+  return state.favoriteSongIds.includes(trackId);
+};
 
-      // Update RNTP queue metadata so the notification rating reflects the change.
-      // isFavorite is the PRE-toggle value here, so we invert it for the rating.
-      try {
-        const queue      = await TrackPlayer.getQueue();
-        const trackIndex = queue.findIndex((t) => t.id === track.id);
-        if (trackIndex !== -1) {
-          await TrackPlayer.updateMetadataForTrack(trackIndex, {
-            rating: isFavorite ? 0 : 1,
-          });
-        }
-      } catch (error) {
-        console.error("useTrackPlayerFavorite: error updating RNTP metadata", error);
-      }
-    },
-    [activeTrack, isFavorite, toggleFavoriteTrack],
-  );
-
-  return { isFavorite, toggleFavoriteFunc, checkIfFavorite };
+export const toggleTrackFavorite = async (
+  trackId: string,
+  trackData?: {
+    title?: string;
+    artist?: string;
+    thumbnail?: string;
+    url?: string;
+    duration?: number;
+  }
+): Promise<boolean> => {
+  const state = useLibraryStore.getState();
+  const isCurrentlyFavorite = state.favoriteSongIds.includes(trackId);
+  
+  const hapticType: HapticStrength = isCurrentlyFavorite ? "medium" : "light";
+  triggerHaptic(hapticType);
+  
+  if (isCurrentlyFavorite) {
+    state.removeFavorite('song', trackId);
+    return false;
+  } else {
+    state.addFavorite('song', trackId);
+    return true;
+  }
 };

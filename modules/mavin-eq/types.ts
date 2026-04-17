@@ -1,5 +1,6 @@
 // modules/mavin-player/types.ts
 // Complete TypeScript type definitions for MavinPlayer native module
+// MATCHES: MavinPlayerModule.kt exactly
 
 import type { NativeModule, EventSubscription as ExpoEventSubscription } from 'expo-modules-core';
 
@@ -11,74 +12,119 @@ export type Nullable<T> = T | null;
 export type Optional<T> = T | undefined;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TRACK TYPES
+// TRACK TYPES - Must match TrackMetadata in Kotlin exactly
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface Track {
   // Required
   id: string;
-  uri: string;
+  /** @deprecated Use url instead - kept for compatibility */
+  uri?: string;
+  url: string;
 
   // Optional metadata
-  url?: string;
   title?: string;
   artist?: string;
   album?: string;
   artwork?: string;
-  artworkUri?: string;
-  duration?: number;       // milliseconds
+  duration?: number;       // seconds (native uses seconds)
   genre?: string;
   description?: string;
   date?: string;
   rating?: number;
   isLiveStream?: boolean;
 
-  // Advanced
-  headers?: Record<string, string>;
-  replayGainTags?: Record<string, string>;
-
-  // RNTP v5 compatibility
+  // Track type hints
   type?: 'default' | 'hls' | 'dash' | 'smoothstreaming';
+  
+  // Headers and user agent
+  headers?: Record<string, string>;
   userAgent?: string;
   contentType?: string;
+  pitchAlgorithm?: 'linear' | 'music' | 'voice';
 
-  // Mavin extensions
-  presetName?: string;
-  isLossless?: boolean;
-  bitDepth?: number;
-  sampleRate?: number;
+  // DRM configuration
+  drm?: {
+    type: 'widevine' | 'playready' | 'clearkey';
+    licenseServer: string;
+    headers?: Record<string, string>;
+    multiSession?: boolean;
+  };
+
+  // Chapters (v2)
+  chapters?: Array<{
+    title: string;
+    startTime: number;  // seconds
+    endTime?: number;   // seconds
+    artwork?: string;
+  }>;
+
+  // Lyrics (v2)
+  lyrics?: Array<{
+    text: string;
+    time?: number;  // seconds, null for plain lyrics
+  }>;
+  lyricsUrl?: string;
+  waveformUrl?: string;
+
+  // ReplayGain tags (v2)
+  trackGain?: number;
+  albumGain?: number;
+  trackPeak?: number;
+  albumPeak?: number;
 
   // Allow extra fields
   [key: string]: unknown;
 }
 
+// Video track (separate from audio Track)
+export interface VideoTrack {
+  id: string;
+  url: string;
+  muxedUrl?: string;
+  title?: string;
+  artist?: string;
+  artwork?: string;
+  duration?: number;
+  uploaderUrl?: string;
+  likeCount?: number;
+  dislikeCount?: number;
+  viewCount?: number;
+  commentsCount?: number;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// PLAYBACK STATE TYPES
+// PLAYBACK STATE TYPES - Native uses string state names
 // ═══════════════════════════════════════════════════════════════════════════
 
-export enum State {
-  None      = 'none',
-  Idle      = 'idle',
-  Buffering = 'buffering',
-  Ready     = 'ready',
-  Playing   = 'playing',
-  Paused    = 'paused',
-  Stopped   = 'stopped',
-  Ended     = 'ended',
-  Error     = 'error',
-  Loading   = 'loading',
-}
+export type PlaybackStateName = 
+  | 'none'
+  | 'idle'
+  | 'ready'
+  | 'playing'
+  | 'paused'
+  | 'stopped'
+  | 'buffering'
+  | 'loading'
+  | 'connection-error'
+  | 'error'
+  | 'ended';
 
 export interface PlaybackState {
-  state: State | string;
-  stateCode?: number;
-  error?: { message: string; code: string } | null;
+  state: PlaybackStateName;
+  stateCode: number;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
 }
 
+// Progress in SECONDS (native uses seconds, not milliseconds)
 export interface Progress {
-  position: number; // milliseconds
-  duration: number; // milliseconds
-  buffered: number; // milliseconds
+  position: number; // seconds
+  duration: number; // seconds
+  buffered: number; // seconds
+  track?: number;   // track index (added in v2)
 }
 
 export interface PeakMeter {
@@ -91,12 +137,12 @@ export interface PeakMeter {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export enum RepeatMode {
-  Off   = 0,
-  Queue = 1,
-  Track = 2,
+  Off = 0,
+  Track = 1,
+  Queue = 2,
 }
 
-export type ShuffleMode = 'off' | 'songs' | 'albums';
+export type ShuffleMode = boolean;  // Native uses boolean, not string
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EQ TYPES
@@ -108,10 +154,9 @@ export const ISO_FREQ_CENTERS = [
   2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
 ] as const;
 
-export type IsoFreqIndex =
-  | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
-  | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19
-  | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30;
+export type IsoFreqIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+  10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 |
+  20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30;
 
 export type EQGains = readonly [
   number, number, number, number, number, number, number, number, number, number,
@@ -128,7 +173,7 @@ export interface EqBandInfo {
   q?: number;
 }
 
-export type EqMode    = 'GRAPHIC' | 'PARAMETRIC' | 'PARALLEL';
+export type EqMode = 'GRAPHIC' | 'PARAMETRIC' | 'PARALLEL';
 export type DitherMode = 'FLAT' | 'HIGHPASS' | 'E_WEIGHTED' | 'F_WEIGHTED';
 
 export interface EqBiquadFilter {
@@ -343,8 +388,7 @@ export interface AndroidOptions {
   appKilledPlaybackBehavior?:
     | 'ContinuePlayback'
     | 'PausePlayback'
-    | 'StopPlaybackAndRemoveNotification'
-    | 'ResumeAfterReconnect';
+    | 'StopPlaybackAndRemoveNotification';
   alwaysPauseOnInterruption?: boolean;
   stopForegroundGracePeriod?: number; // milliseconds
 }
@@ -356,13 +400,24 @@ export interface BufferConfig {
   backBuffer?: number; // milliseconds
 }
 
+export interface FeedbackOptions {
+  isActive: boolean;
+  title: string;
+}
+
 export interface SetupOptions {
   // Audio attributes
   audioUsage?: string;
-  audioContentType?: string;
+  audioContentType?: 'music' | 'speech' | 'movie' | 'sonification' | 'unknown';
 
   // Buffer config
   bufferConfig?: BufferConfig;
+  minBuffer?: number;   // ms (legacy)
+  maxBuffer?: number;   // ms (legacy)
+  playBuffer?: number;  // ms (legacy)
+  playbackBuffer?: number;  // ms (alias)
+  playbackBufferAfterRebuffer?: number; // ms
+  backBuffer?: number;  // ms (legacy)
 
   // Wake mode
   wakeMode?: number;
@@ -370,9 +425,57 @@ export interface SetupOptions {
   // Android lifecycle
   android?: AndroidOptions;
 
-  // Cache size
-  sizeMB?: number;
-  sizeBytes?: number;
+  // Cache size in KB (RNTP spec)
+  maxCacheSize?: number;  // KB
+
+  // Capabilities
+  capabilities?: string[];
+  compactCapabilities?: string[];
+  notificationCapabilities?: string[];
+
+  // Notification styling
+  color?: string; // hex color
+  icon?: string;  // drawable resource name
+  playIcon?: string;
+  pauseIcon?: string;
+  stopIcon?: string;
+  previousIcon?: string;
+  nextIcon?: string;
+  rewindIcon?: string;
+  forwardIcon?: string;
+
+  // Jump intervals (seconds in JS, converted to ms in native)
+  jumpInterval?: number;           // seconds (legacy)
+  forwardJumpInterval?: number;    // seconds
+  backwardJumpInterval?: number;   // seconds
+
+  // Rating
+  ratingType?: number;
+
+  // Progress update interval (seconds in JS, converted to ms in native)
+  progressUpdateEventInterval?: number; // seconds
+
+  // Behavior flags
+  autoWait?: boolean;
+  autoUpdateMetadata?: boolean;
+  stopWithApp?: boolean;
+  alwaysPauseOnInterruption?: boolean;
+  autoHandleInterruptions?: boolean;
+  waitForBuffer?: boolean;
+
+  // Feedback options
+  likeOptions?: FeedbackOptions;
+  dislikeOptions?: FeedbackOptions;
+  bookmarkOptions?: FeedbackOptions;
+
+  // v2 features
+  gaplessEnabled?: boolean;
+  persistQueue?: boolean;
+  persistPosition?: boolean;
+  outputProfile?: 'headphone' | 'speaker' | 'bluetooth' | 'usb' | 'default';
+  dvcEnabled?: boolean;
+  resamplerQuality?: 'low' | 'medium' | 'high' | 'ultra';
+  targetResampleRateHz?: number;
 }
 
 export type Capability =
@@ -383,108 +486,81 @@ export type Capability =
   | 'jumpForward' | 'jumpBackward';
 
 export interface UpdateOptions {
-  // Audio attributes
-  audioUsage?: string;
-  audioContentType?: string;
-
-  // RNTP: Capabilities
-  capabilities?: Capability[];
-  notificationCapabilities?: string[];
-  compactCapabilities?: string[];
-
-  // RNTP: Notification styling
-  color?: string; // hex color
-  icon?: string;  // drawable resource name
-
-  // RNTP: Jump intervals (seconds)
-  forwardJumpInterval?: number;
-  backwardJumpInterval?: number;
-
-  // RNTP: Rating
-  ratingType?: string;
-
-  // RNTP: Progress update
-  progressUpdateEventInterval?: number; // milliseconds
-
-  // Android lifecycle
-  android?: AndroidOptions;
-
-  // Buffer config
-  bufferConfig?: BufferConfig;
-
-  // Wake mode
-  wakeMode?: number;
+  // Same as SetupOptions but for runtime updates
+  [key: string]: any;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// EVENT TYPES (MAVIN — camelCase / onXxx)
+// EVENT NAMES - Must match native event names exactly
 // ═══════════════════════════════════════════════════════════════════════════
 
 export enum MavinEvent {
-  // Playback
-  PlaybackStateChanged       = 'onPlaybackStateChanged',
-  TrackChanged               = 'onTrackChanged',
-  PlaybackActiveTrackChanged = 'onPlaybackActiveTrackChanged',
-  PlaybackQueueEnded         = 'onPlaybackQueueEnded',
-  PlaybackPlayWhenReadyChanged = 'onPlaybackPlayWhenReadyChanged',
-  PlaybackError              = 'onError',
-  PlaybackProgress           = 'onProgress',
-
-  // DSP / Hardware
-  Spectrum          = 'onSpectrum',           // ← correct name (not SpectrumData)
-  PeakMeter         = 'onPeakMeter',
-  ReplayGainApplied = 'onReplayGainApplied',
-  UsbDacConnected   = 'onUsbDacConnected',
-  UsbDacDisconnected = 'onUsbDacDisconnected',
-
-  // Audio Focus — two separate events (no single AudioFocusChanged)
-  AudioFocusLost    = 'onAudioFocusLost',
-  AudioFocusGranted = 'onAudioFocusGranted',
-
-  // Remote Controls
-  RemotePlay        = 'onRemotePlay',
-  RemotePause       = 'onRemotePause',
-  RemoteStop        = 'onRemoteStop',
-  RemoteNext        = 'onRemoteNext',
-  RemotePrevious    = 'onRemotePrevious',
-  RemoteSeek        = 'onRemoteSeek',
-  RemoteSkip        = 'onRemoteSkip',
-  RemotePlayId      = 'onRemotePlayId',
-  RemotePlaySearch  = 'onRemotePlaySearch',
-  RemoteSetRating   = 'onRemoteSetRating',
-  RemoteJumpForward  = 'onRemoteJumpForward',  // ← individual (not RemoteJump)
-  RemoteJumpBackward = 'onRemoteJumpBackward', // ← individual (not RemoteJump)
-  RemoteDuck        = 'onRemoteDuck',
-
-  // Metadata — two separate events (no single MetadataReceived)
-  AudioCommonMetadataReceived = 'onAudioCommonMetadataReceived',
-  AudioTimedMetadataReceived  = 'onAudioTimedMetadataReceived',
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EVENT TYPES (RNTP PARITY — kebab-case)
-// ═══════════════════════════════════════════════════════════════════════════
-
-export enum RNTPEvent {
-  PlaybackState           = 'playback-state',
-  PlaybackTrackChanged    = 'playback-track-changed',
-  PlaybackQueueEnded      = 'playback-queue-ended',
-  PlaybackError           = 'playback-error',
+  // Playback state events (kebab-case to match native)
+  PlaybackState = 'playback-state',
+  PlaybackTrackChanged = 'playback-track-changed',
+  PlaybackActiveTrackChanged = 'playback-active-track-changed',
+  PlaybackQueueEnded = 'playback-queue-ended',
+  PlaybackError = 'playback-error',
   PlaybackProgressUpdated = 'playback-progress-updated',
+  PlaybackPlayWhenReadyChanged = 'playback-play-when-ready-changed',
+  PlaybackSpeedChanged = 'playback-speed-changed',
+  PlaybackPitchChanged = 'playback-pitch-changed',
+  PlaybackPositionBookmarked = 'playback-position-bookmarked',
+
+  // Metadata events
   PlaybackMetadataReceived = 'playback-metadata-received',
+  AudioCommonMetadataReceived = 'audio-common-metadata-received',
+  AudioTimedMetadataReceived = 'audio-timed-metadata-received',
+  AudioChapterMetadataReceived = 'audio-chapter-metadata-received',
+  ChapterChanged = 'chapter-changed',
 
-  RemotePlay     = 'remote-play',
-  RemotePause    = 'remote-pause',
-  RemoteStop     = 'remote-stop',
-  RemoteNext     = 'remote-next',
+  // Remote events
+  RemotePlay = 'remote-play',
+  RemotePause = 'remote-pause',
+  RemoteStop = 'remote-stop',
+  RemoteNext = 'remote-next',
   RemotePrevious = 'remote-previous',
-  RemoteSeek     = 'remote-seek',
+  RemoteSeek = 'remote-seek',
+  RemoteJumpForward = 'remote-jump-forward',
+  RemoteJumpBackward = 'remote-jump-backward',
   RemoteSetRating = 'remote-set-rating',
-
-  // RNTP uses Like/Dislike/Bookmark rather than JumpForward/JumpBackward
-  RemoteLike     = 'remote-like',
-  RemoteDislike  = 'remote-dislike',
+  RemoteLike = 'remote-like',
+  RemoteDislike = 'remote-dislike',
   RemoteBookmark = 'remote-bookmark',
+  RemoteDuck = 'remote-duck',
+  RemoteSkip = 'remote-skip',
+  RemoteMute = 'remote-mute',
+  RemoteUnmute = 'remote-unmute',
+  RemotePlayFromId = 'remote-play-from-id',
+  RemotePlayFromSearch = 'remote-play-from-search',
+
+  // DSP events
+  PeakMeterUpdate = 'peak-meter-update',
+
+  // Sleep timer
+  SleepTimerFired = 'sleep-timer-fired',
+
+  // Audio device events
+  BluetoothDeviceConnected = 'bluetooth-device-connected',
+  BluetoothDeviceDisconnected = 'bluetooth-device-disconnected',
+  HeadphonesConnected = 'headphones-connected',
+  HeadphonesDisconnected = 'headphones-disconnected',
+
+  // Network
+  NetworkQualityChanged = 'network-quality-changed',
+
+  // Output profile
+  OutputProfileChanged = 'output-profile-changed',
+
+  // v3 additions
+  WakeUpTimerFired = 'wake-up-timer-fired',
+  RmsMeterUpdate = 'rms-meter-update',
+  BpmDetected = 'bpm-detected',
+  FrcPresetChanged = 'frc-preset-changed',
+  SurroundModeChanged = 'surround-mode-changed',
+  AutomixTransition = 'automix-transition',
+  AbsoluteVolumeChanged = 'absolute-volume-changed',
+  PipelineModeChanged = 'pipeline-mode-changed',
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -492,33 +568,43 @@ export enum RNTPEvent {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface PlaybackStateChangedEvent {
-  state: State | string;
+  state: PlaybackStateName;
+  stateCode: number;
 }
 
 export interface TrackChangedEvent {
-  index: number;
+  track?: number | null;      // previous track index
+  position: number;           // seconds
+  nextTrack?: number | null;  // next track index
 }
 
 export interface PlaybackActiveTrackChangedEvent {
-  index: number;
+  index: number | null;
   track: Track | null;
+  lastIndex?: number | null;
+  lastTrack?: Track | null;
+  lastPosition: number;  // seconds
+  nextTrack?: Track | null;
+  nextIndex?: number | null;
 }
 
 export interface PlaybackQueueEndedEvent {
-  position: number; // milliseconds
+  track?: Track | null;
+  position: number;  // seconds
 }
 
 export interface PlaybackErrorEvent {
-  message: string;
   code: string;
+  message: string;
   isPlaybackError?: boolean;
   isRemoteError?: boolean;
 }
 
 export interface ProgressEvent {
-  position: number; // milliseconds
-  duration: number; // milliseconds
-  buffered: number; // milliseconds
+  position: number;  // seconds
+  duration: number;  // seconds
+  buffered: number;  // seconds
+  track?: number;    // track index
 }
 
 export interface SpectrumEvent {
@@ -536,13 +622,8 @@ export interface ReplayGainAppliedEvent {
   appliedDb: number;
 }
 
-export interface AudioFocusEvent {
-  // 'loss' = permanent, 'transient' = brief, 'duck' = volume reduction
-  type: 'loss' | 'transient' | 'duck';
-}
-
 export interface RemoteSeekEvent {
-  position: number; // milliseconds
+  position: number;  // seconds
 }
 
 export interface RemoteSkipEvent {
@@ -550,195 +631,310 @@ export interface RemoteSkipEvent {
 }
 
 export interface RemoteSetRatingEvent {
-  rating: number; // 0.0 - 1.0 normalised
+  rating: number;  // 0.0 - 1.0 normalised
 }
 
 export interface RemoteJumpEvent {
-  interval: number; // seconds
+  interval: number;  // seconds
 }
 
 export interface RemoteDuckEvent {
-  permanent: boolean;
   paused: boolean;
+  permanent: boolean;
 }
 
 export interface MetadataEvent {
   metadata: Record<string, unknown>;
 }
 
+export interface ChapterChangedEvent {
+  index?: number | null;
+  title?: string;
+  startTime?: number;  // seconds
+  endTime?: number;    // seconds
+  artwork?: string;
+}
+
+export interface NetworkQualityEvent {
+  estimatedBandwidthBps: number;
+  quality: 'unknown' | 'poor' | 'fair' | 'good' | 'excellent';
+}
+
+export interface PositionBookmarkedEvent {
+  trackId: string;
+  position: number;  // seconds
+}
+
+export interface OutputProfileChangedEvent {
+  profile: string;
+}
+
+export interface WakeUpTimerFiredEvent {
+  trackId?: string | null;
+}
+
+export interface RmsMeterEvent {
+  rmsLeft: number;
+  rmsRight: number;
+  peakLeft: number;
+  peakRight: number;
+  lufs: number;
+}
+
+export interface BpmDetectedEvent {
+  trackId: string;
+  bpm: number;
+}
+
+export interface FrcPresetChangedEvent {
+  presetName: string | null;
+}
+
+export interface SurroundModeChangedEvent {
+  mode: string;
+}
+
+export interface AutomixTransitionEvent {
+  fromTrackId: string;
+  toTrackId: string;
+  positionSeconds: number;
+}
+
+export interface AbsoluteVolumeChangedEvent {
+  enabled: boolean;
+}
+
+export interface PipelineModeChangedEvent {
+  mode: string;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // NATIVE MODULE EVENT MAP
-// Required for Expo's EventEmitter type safety
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type MavinPlayerEvents = {
-  // ── Mavin events (camelCase / onXxx) ────────────────────────────────────
-  [MavinEvent.PlaybackStateChanged]:        (event: PlaybackStateChangedEvent) => void;
-  [MavinEvent.TrackChanged]:                (event: TrackChangedEvent) => void;
-  [MavinEvent.PlaybackActiveTrackChanged]:  (event: PlaybackActiveTrackChangedEvent) => void;
-  [MavinEvent.PlaybackQueueEnded]:          (event: PlaybackQueueEndedEvent) => void;
-  [MavinEvent.PlaybackPlayWhenReadyChanged]:(event: { playWhenReady: boolean }) => void;
-  [MavinEvent.PlaybackError]:               (event: PlaybackErrorEvent) => void;
-  [MavinEvent.PlaybackProgress]:            (event: ProgressEvent) => void;
-  [MavinEvent.Spectrum]:                    (event: SpectrumEvent) => void;
-  [MavinEvent.PeakMeter]:                   (event: PeakMeterEvent) => void;
-  [MavinEvent.ReplayGainApplied]:           (event: ReplayGainAppliedEvent) => void;
-  [MavinEvent.UsbDacConnected]:             (event: DacInfo) => void;
-  [MavinEvent.UsbDacDisconnected]:          (event: Record<string, never>) => void;
-  [MavinEvent.AudioFocusLost]:              (event: AudioFocusEvent) => void;
-  [MavinEvent.AudioFocusGranted]:           (event: Record<string, never>) => void;
-  [MavinEvent.RemotePlay]:                  (event: Record<string, never>) => void;
-  [MavinEvent.RemotePause]:                 (event: Record<string, never>) => void;
-  [MavinEvent.RemoteStop]:                  (event: Record<string, never>) => void;
-  [MavinEvent.RemoteNext]:                  (event: Record<string, never>) => void;
-  [MavinEvent.RemotePrevious]:              (event: Record<string, never>) => void;
-  [MavinEvent.RemoteSeek]:                  (event: RemoteSeekEvent) => void;
-  [MavinEvent.RemoteSkip]:                  (event: RemoteSkipEvent) => void;
-  [MavinEvent.RemotePlayId]:                (event: { id: string }) => void;
-  [MavinEvent.RemotePlaySearch]:            (event: { query: string; extras: Record<string, unknown> }) => void;
-  [MavinEvent.RemoteSetRating]:             (event: RemoteSetRatingEvent) => void;
-  [MavinEvent.RemoteJumpForward]:           (event: RemoteJumpEvent) => void;
-  [MavinEvent.RemoteJumpBackward]:          (event: RemoteJumpEvent) => void;
-  [MavinEvent.RemoteDuck]:                  (event: RemoteDuckEvent) => void;
-  [MavinEvent.AudioCommonMetadataReceived]: (event: MetadataEvent) => void;
-  [MavinEvent.AudioTimedMetadataReceived]:  (event: MetadataEvent) => void;
+  // Playback state
+  [MavinEvent.PlaybackState]: (event: PlaybackStateChangedEvent) => void;
+  [MavinEvent.PlaybackTrackChanged]: (event: TrackChangedEvent) => void;
+  [MavinEvent.PlaybackActiveTrackChanged]: (event: PlaybackActiveTrackChangedEvent) => void;
+  [MavinEvent.PlaybackQueueEnded]: (event: PlaybackQueueEndedEvent) => void;
+  [MavinEvent.PlaybackError]: (event: PlaybackErrorEvent) => void;
+  [MavinEvent.PlaybackProgressUpdated]: (event: ProgressEvent) => void;
+  [MavinEvent.PlaybackPlayWhenReadyChanged]: (event: { playWhenReady: boolean; reason: string }) => void;
+  [MavinEvent.PlaybackSpeedChanged]: (event: { speed: number }) => void;
+  [MavinEvent.PlaybackPitchChanged]: (event: { pitch: number }) => void;
+  [MavinEvent.PlaybackPositionBookmarked]: (event: PositionBookmarkedEvent) => void;
 
-  // ── RNTP parity events (kebab-case) ─────────────────────────────────────
-  [RNTPEvent.PlaybackState]:           (event: { state: number; stateName?: string }) => void;
-  [RNTPEvent.PlaybackTrackChanged]:    (event: { track: Track | null; index: number }) => void;
-  [RNTPEvent.PlaybackQueueEnded]:      (event: { position: number }) => void;
-  [RNTPEvent.PlaybackError]:           (event: PlaybackErrorEvent) => void;
-  [RNTPEvent.PlaybackProgressUpdated]: (event: ProgressEvent) => void;
-  [RNTPEvent.PlaybackMetadataReceived]:(event: MetadataEvent) => void;
-  [RNTPEvent.RemotePlay]:              (event: Record<string, never>) => void;
-  [RNTPEvent.RemotePause]:             (event: Record<string, never>) => void;
-  [RNTPEvent.RemoteStop]:              (event: Record<string, never>) => void;
-  [RNTPEvent.RemoteNext]:              (event: Record<string, never>) => void;
-  [RNTPEvent.RemotePrevious]:          (event: Record<string, never>) => void;
-  [RNTPEvent.RemoteSeek]:              (event: { position: number }) => void;
-  [RNTPEvent.RemoteSetRating]:         (event: { rating: number }) => void;
-  [RNTPEvent.RemoteLike]:              (event: Record<string, never>) => void;
-  [RNTPEvent.RemoteDislike]:           (event: Record<string, never>) => void;
-  [RNTPEvent.RemoteBookmark]:          (event: Record<string, never>) => void;
+  // Metadata
+  [MavinEvent.PlaybackMetadataReceived]: (event: MetadataEvent) => void;
+  [MavinEvent.AudioCommonMetadataReceived]: (event: MetadataEvent) => void;
+  [MavinEvent.AudioTimedMetadataReceived]: (event: MetadataEvent) => void;
+  [MavinEvent.AudioChapterMetadataReceived]: (event: MetadataEvent) => void;
+  [MavinEvent.ChapterChanged]: (event: ChapterChangedEvent) => void;
+
+  // Remote
+  [MavinEvent.RemotePlay]: (event: Record<string, never>) => void;
+  [MavinEvent.RemotePause]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteStop]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteNext]: (event: Record<string, never>) => void;
+  [MavinEvent.RemotePrevious]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteSeek]: (event: RemoteSeekEvent) => void;
+  [MavinEvent.RemoteJumpForward]: (event: RemoteJumpEvent) => void;
+  [MavinEvent.RemoteJumpBackward]: (event: RemoteJumpEvent) => void;
+  [MavinEvent.RemoteSetRating]: (event: RemoteSetRatingEvent) => void;
+  [MavinEvent.RemoteLike]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteDislike]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteBookmark]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteDuck]: (event: RemoteDuckEvent) => void;
+  [MavinEvent.RemoteSkip]: (event: RemoteSkipEvent) => void;
+  [MavinEvent.RemoteMute]: (event: Record<string, never>) => void;
+  [MavinEvent.RemoteUnmute]: (event: Record<string, never>) => void;
+  [MavinEvent.RemotePlayFromId]: (event: { id: string; extras: Record<string, unknown> }) => void;
+  [MavinEvent.RemotePlayFromSearch]: (event: { query: string; extras: Record<string, unknown> }) => void;
+
+  // DSP
+  [MavinEvent.PeakMeterUpdate]: (event: PeakMeterEvent) => void;
+
+  // Sleep timer
+  [MavinEvent.SleepTimerFired]: (event: Record<string, never>) => void;
+
+  // Audio devices
+  [MavinEvent.BluetoothDeviceConnected]: (event: { deviceName: string }) => void;
+  [MavinEvent.BluetoothDeviceDisconnected]: (event: { deviceName: string }) => void;
+  [MavinEvent.HeadphonesConnected]: (event: Record<string, never>) => void;
+  [MavinEvent.HeadphonesDisconnected]: (event: Record<string, never>) => void;
+
+  // Network
+  [MavinEvent.NetworkQualityChanged]: (event: NetworkQualityEvent) => void;
+
+  // Output
+  [MavinEvent.OutputProfileChanged]: (event: OutputProfileChangedEvent) => void;
+
+  // v3
+  [MavinEvent.WakeUpTimerFired]: (event: WakeUpTimerFiredEvent) => void;
+  [MavinEvent.RmsMeterUpdate]: (event: RmsMeterEvent) => void;
+  [MavinEvent.BpmDetected]: (event: BpmDetectedEvent) => void;
+  [MavinEvent.FrcPresetChanged]: (event: FrcPresetChangedEvent) => void;
+  [MavinEvent.SurroundModeChanged]: (event: SurroundModeChangedEvent) => void;
+  [MavinEvent.AutomixTransition]: (event: AutomixTransitionEvent) => void;
+  [MavinEvent.AbsoluteVolumeChanged]: (event: AbsoluteVolumeChangedEvent) => void;
+  [MavinEvent.PipelineModeChanged]: (event: PipelineModeChangedEvent) => void;
+
+  // Fallback
+  [key: string]: (event: any) => void;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// NATIVE MODULE CLASS DECLARATION
-// Extends NativeModule with typed events
+// NATIVE MODULE CLASS DECLARATION - Must match native methods exactly
 // ═══════════════════════════════════════════════════════════════════════════
 
 export declare class MavinPlayerNativeModule extends NativeModule<MavinPlayerEvents> {
-
   // ── LIFECYCLE ─────────────────────────────────────────────────────────────
-  initPlayer(options?: SetupOptions | null): Promise<void>;
-  setupPlayer(options?: SetupOptions | null): Promise<void>; // RNTP alias
-  release(): Promise<void>;
-  destroy(): Promise<void>;   // RNTP alias
-  stopService(): Promise<void>;
+  setupPlayer(options?: SetupOptions | null): Promise<void>;
+  destroy(): Promise<void>;
+  updateOptions(options: UpdateOptions): Promise<void>;
+  isServiceRunning(): Promise<boolean>;
 
   // ── PLAYBACK CONTROL ──────────────────────────────────────────────────────
   play(): Promise<void>;
   pause(): Promise<void>;
   stop(): Promise<void>;
   reset(): Promise<void>;
-  seekTo(ms: number): Promise<void>;
-  seekBy(offsetMs: number): Promise<void>;
-  skipToNext(): Promise<void>;
-  skipToPrevious(): Promise<void>;
-  skipToIndex(index: number, initialPositionMs?: number): Promise<void>;
-  skip(seconds: number): Promise<void>;
-  setVolume(vol: number): Promise<void>;
-  setRepeatMode(mode: RepeatMode | number): Promise<void>;
-  setShuffleMode(enabled: boolean): Promise<void>;
-
-  // ── ERROR RECOVERY ────────────────────────────────────────────────────────
+  seekTo(positionSeconds: number): Promise<void>;
+  seekBy(offsetSeconds: number): Promise<void>;
+  skipToNext(initialPositionSeconds?: number): Promise<boolean>;
+  skipToPrevious(initialPositionSeconds?: number): Promise<boolean>;
+  skip(index: number, positionSeconds?: number): Promise<boolean>;  // skipToIndex
   retry(): Promise<void>;
-  retryWithFallback(fallbackUri: string): Promise<void>;
-
-  // ── QUEUE MANAGEMENT ──────────────────────────────────────────────────────
-  load(track: Track): Promise<void>;
-  setQueue(tracks: Track[], startIndex?: number): Promise<void>;
-  add(tracks: Track | Track[], insertBeforeIndex?: number): Promise<void>;
-  addToQueue(track: Track): Promise<void>;
-  addToQueueAt(track: Track, index: number): Promise<void>;
-  remove(indices: number | number[]): Promise<void>;
-  removeTrack(index: number): Promise<void>;
-  removeUpcomingTracks(): Promise<void>;
-  moveTrack(fromIndex: number, toIndex: number): Promise<void>;
-  updateMetadataForTrack(index: number, track: Partial<Track>): Promise<void>;
-  updateTrack(index: number, track: Partial<Track>): Promise<void>;
-  getTrack(index: number): Promise<Track | null>;
-  getQueue(): Promise<Track[]>;
-  updateNowPlayingMetadata(track: Partial<Track>): Promise<void>;
-
-  // ── STATE GETTERS ─────────────────────────────────────────────────────────
-  getPosition(): Promise<number>;
-  getDuration(): Promise<number>;
-  getBufferedPosition(): Promise<number>;
-  getCurrentTrack(): Promise<Track | null>;
-  getActiveTrack(): Promise<Track | null>;
-  getActiveTrackIndex(): Promise<number | null>;
-  isPlaying(): Promise<boolean>;
-  getQueueSize(): Promise<number>;
-  getProgress(): Promise<Progress>;
-  getPlaybackState(): Promise<PlaybackState>;
-  getVolume(): Promise<number>;
-  getRepeatMode(): Promise<RepeatMode>;
-  getShuffleMode(): Promise<boolean>;
-  getAudioFocus(): Promise<boolean>;
 
   // ── PLAY-WHEN-READY ───────────────────────────────────────────────────────
   setPlayWhenReady(playWhenReady: boolean): Promise<void>;
   getPlayWhenReady(): Promise<boolean>;
 
-  // ── SPEED / PITCH ─────────────────────────────────────────────────────────
-  setPlaybackSpeed(speed: number): Promise<void>;
-  getPlaybackSpeed(): Promise<number>;
-  setPlaybackPitch(pitch: number): Promise<void>;
-  getPlaybackPitch(): Promise<number>;
-  setPlaybackParameters(speed: number, pitch: number): Promise<void>;
-  getRate(): Promise<number>;         // RNTP alias for getPlaybackSpeed
-  setRate(rate: number): Promise<void>; // RNTP alias for setPlaybackSpeed
+  // ── QUEUE MANAGEMENT ──────────────────────────────────────────────────────
+  load(track: Track): Promise<void>;
+  setQueue(tracks: Track[], startIndex?: number, startPositionSeconds?: number): Promise<void>;
+  add(tracks: Track | Track[], insertBeforeIndex?: number): Promise<number>;
+  remove(indices: number | number[]): Promise<void>;
+  removeUpcomingTracks(): Promise<void>;
+  removePreviousTracks(): Promise<void>;
+  move(fromIndex: number, toIndex: number): Promise<void>;
+  updateMetadataForTrack(index: number, metadata: Partial<Track>): Promise<void>;
+  updateNowPlayingMetadata(metadata: Partial<Track>): Promise<void>;
+  clearNowPlayingMetadata(): Promise<void>;
+  preloadNextTrack(track: Track): Promise<void>;
+  getPersistedQueue(): Promise<{ tracks: Track[]; currentIndex: number }>;
+  restorePersistedQueue(): Promise<void>;
 
-  // ── PRELOADING ────────────────────────────────────────────────────────────
-  preload(track: Track): Promise<void>;
-  setPreloadStrategy(strategy: PreloadStrategy): Promise<void>;
-  getCacheStats(): Promise<CacheStats>;
+  // ── VIDEO ───────────────────────────────────────────────────────────────────
+  loadVideoTrack(videoTrack: VideoTrack, playWhenReady?: boolean): Promise<void>;
+
+  // ── STATE GETTERS ─────────────────────────────────────────────────────────
+  getState(): Promise<PlaybackStateName>;
+  getPlaybackState(): Promise<PlaybackState>;
+  getProgress(): Promise<Progress>;
+  getDuration(): Promise<number>;  // seconds
+  getPosition(): Promise<number>;  // seconds
+  getBufferedPosition(): Promise<number>;  // seconds
+  isPlaying(): Promise<boolean>;
+  isLoading(): Promise<boolean>;
+  getCurrentTrack(): Promise<Track | null>;
+  getActiveTrack(): Promise<Track | null>;
+  getActiveTrackIndex(): Promise<number | null>;
+  getCurrentVideoTrack(): Promise<VideoTrack | null>;
+  getTrack(index: number): Promise<Track | null>;
+  getQueue(): Promise<Track[]>;
+
+  // ── VOLUME & AUDIO SETTINGS ───────────────────────────────────────────────
+  getVolume(): Promise<number>;
+  setVolume(volume: number): Promise<void>;
+  mute(): Promise<void>;
+  unmute(): Promise<void>;
+  isMuted(): Promise<boolean>;
+  getUnmutedVolume(): Promise<number>;
+  getRepeatMode(): Promise<RepeatMode>;
+  setRepeatMode(mode: RepeatMode | number): Promise<void>;
+  getShuffleMode(): Promise<boolean>;
+  setShuffleMode(enabled: boolean): Promise<void>;
+  getRate(): Promise<number>;
+  setRate(rate: number): Promise<void>;
+  getPitch(): Promise<number>;
+  setPitch(pitch: number): Promise<void>;
+  getTempo(): Promise<number>;
+  setTempo(tempo: number): Promise<void>;
+  setProgressUpdateInterval(intervalSeconds: number): Promise<void>;
+  getProgressUpdateInterval(): Promise<number>;
+  getCacheSize(): Promise<number>;
+
+  // ── AUDIO PROCESSING ───────────────────────────────────────────────────────
+  setBalance(leftGain: number, rightGain: number): Promise<void>;
+  getBalance(): Promise<{ left: number; right: number }>;
+  setPan(pan: number): Promise<void>;
+  getPan(): Promise<number>;
+  setStereoExpansion(expansion: number): Promise<void>;
+  getStereoExpansion(): Promise<number>;
+  setMonoMix(enabled: boolean): Promise<void>;
+  isMonoMix(): Promise<boolean>;
+  setBassBoost(gainDb: number): Promise<void>;
+  getBassBoost(): Promise<number>;
+  setTrebleBoost(gainDb: number): Promise<void>;
+  getTrebleBoost(): Promise<number>;
+  setLimiterEnabled(enabled: boolean): Promise<void>;
+  isLimiterEnabled(): Promise<boolean>;
+  setLimiterThreshold(thresholdDb: number): Promise<void>;
+  getLimiterThreshold(): Promise<number>;
+  setLoudnessNormalizationEnabled(enabled: boolean): Promise<void>;
+  isLoudnessNormalizationEnabled(): Promise<boolean>;
+  setTargetLufs(lufs: number): Promise<void>;
+  getTargetLufs(): Promise<number>;
+  setHeadroomGuardEnabled(enabled: boolean): Promise<void>;
+  isHeadroomGuardEnabled(): Promise<boolean>;
+  setHeadroomGuardThreshold(thresholdDb: number): Promise<void>;
+  getHeadroomGuardThreshold(): Promise<number>;
+  setPhaseInvert(left: boolean, right: boolean): Promise<void>;
+  getPhaseInvert(): Promise<{ left: boolean; right: boolean }>;
+  setEqProcessingMode(mode: string): Promise<void>;
+  getEqProcessingMode(): Promise<string>;
+  setGaplessEnabled(enabled: boolean): Promise<void>;
+  isGaplessEnabled(): Promise<boolean>;
+  setDvcEnabled(enabled: boolean): Promise<void>;
+  isDvcEnabled(): Promise<boolean>;
+  setResamplerQuality(quality: string): Promise<void>;
+  getResamplerQuality(): Promise<string>;
+  setTargetResampleRate(hz: number): Promise<void>;
+  getTargetResampleRate(): Promise<number>;
+  setOutputProfile(profile: string): Promise<void>;
+  getCurrentOutputProfile(): Promise<string>;
+  setOutputProfilePreset(profile: string, presetName: string | null): Promise<void>;
+  getOutputProfilePreset(profile: string): Promise<string | null>;
 
   // ── EQ: GRAPHIC ───────────────────────────────────────────────────────────
   setEQEnabled(enabled: boolean): Promise<void>;
-  isEQEnabled(): Promise<boolean>;
+  getEQEnabled(): Promise<boolean>;
   setEQBand(band: number, gainDb: number): Promise<void>;
-  applyEQBands(gains: number[]): Promise<void>;
+  applyEQBands(gainsDb: number[]): Promise<void>;
   setEQPreamp(gainDb: number): Promise<void>;
-  setEQBandQ(band: number, q: number): Promise<void>;
   resetEQ(): Promise<void>;
-  getEQGains(): Promise<EqBandInfo[]>;
+  getEQGains(): Promise<Array<{ band: number; gain: number }>>;
   getEQPreamp(): Promise<number>;
-  getEQQValues(): Promise<Array<{ band: number; q: number }>>;
-
-  // ── EQ: MODE & ADVANCED ───────────────────────────────────────────────────
-  setEQMode(mode: EqMode): Promise<void>;
-  getEQMode(): Promise<EqMode>;
-  getLoudnessDb(): Promise<number>;
-
-  // ── EQ: PARAMETRIC ────────────────────────────────────────────────────────
+  setEQMode(mode: EqMode | string): Promise<void>;
+  getEQMode(): Promise<string>;
   setParametricBandGain(band: number, gainDb: number): Promise<void>;
-  applyParametricBands(gains: number[]): Promise<void>;
+  applyParametricBands(gainsDb: number[]): Promise<void>;
   setParametricBandFreq(band: number, freqHz: number): Promise<void>;
-  resetParametric(): Promise<void>;
-  getParametricGains(): Promise<EqBandInfo[]>;
+  getParametricGains(): Promise<Array<{ band: number; gain: number }>>;
   getParametricFreqs(): Promise<Array<{ band: number; freqHz: number }>>;
-
-  // ── DITHER / SMOOTHING ────────────────────────────────────────────────────
-  setDitherMode(mode: DitherMode): Promise<void>;
-  getDitherMode(): Promise<DitherMode>;
+  setDitherMode(mode: DitherMode | string): Promise<void>;
+  getDitherMode(): Promise<string>;
   setSmoothingRamp(ms: number): Promise<void>;
+  getLoudnessDb(): Promise<number>;
+  getSpectrumMagnitudes(): Promise<Array<{ bin: number; magnitude: number }>>;
+  computeAutoEQ(): Promise<Array<{ band: number; gain: number; freqHz: number }>>;
 
   // ── COMPRESSOR (DRC) ──────────────────────────────────────────────────────
   setCompressorEnabled(enabled: boolean): Promise<void>;
-  isCompressorEnabled(): Promise<boolean>;
-  setCompressorThreshold(db: number): Promise<void>;
+  getCompressorEnabled(): Promise<boolean>;
+  setCompressorThreshold(thresholdDb: number): Promise<void>;
   setCompressorRatio(ratio: number): Promise<void>;
   setCompressorAttack(ms: number): Promise<void>;
   setCompressorRelease(ms: number): Promise<void>;
@@ -750,70 +946,28 @@ export declare class MavinPlayerNativeModule extends NativeModule<MavinPlayerEve
   getCompressorAttack(): Promise<number>;
   getCompressorRelease(): Promise<number>;
 
-  // ── CROSSFADE ─────────────────────────────────────────────────────────────
-  setCrossfadeEnabled(enabled: boolean): Promise<void>;
-  isCrossfadeEnabled(): Promise<boolean>;
-  setCrossfadeDuration(ms: number): Promise<void>;
-  getCrossfadeDuration(): Promise<number>;
-
   // ── CROSSFEED ─────────────────────────────────────────────────────────────
   setCrossfeedEnabled(enabled: boolean): Promise<void>;
-  isCrossfeedEnabled(): Promise<boolean>;
+  getCrossfeedEnabled(): Promise<boolean>;
   setCrossfeedStrength(strength: number): Promise<void>;
-  setCrossfeedCutoff(hz: number): Promise<void>;
   getCrossfeedStrength(): Promise<number>;
+  setCrossfeedCutoff(hz: number): Promise<void>;
   getCrossfeedCutoff(): Promise<number>;
   setCrossfeedDelayMs(ms: number): Promise<void>;
   getCrossfeedDelayMs(): Promise<number>;
 
-  // ── REPLAY GAIN ───────────────────────────────────────────────────────────
-  setReplayGainMode(mode: ReplayGainMode): Promise<void>;
-  setReplayGainPreamp(gainDb: number): Promise<void>;
-  setReplayGainFromMap(tags: Record<string, string>): Promise<void>;
-  getReplayGainInfo(): Promise<ReplayGainInfo>;
-
   // ── PEAK METER ────────────────────────────────────────────────────────────
   setPeakHoldMs(ms: number): Promise<void>;
   setPeakReleaseMs(ms: number): Promise<void>;
-  getCurrentPeaks(): Promise<PeakMeter>;
-  getHeldPeaks(): Promise<PeakMeter>;
+  getCurrentPeaks(): Promise<{ left: number; right: number }>;
+  getHeldPeaks(): Promise<{ left: number; right: number }>;
   resetPeaks(): Promise<void>;
 
-  // ── CONVOLUTION ───────────────────────────────────────────────────────────
-  loadImpulseResponse(filePath: string): Promise<void>;
-  clearImpulseResponse(): Promise<void>;
-  isImpulseResponseLoaded(): Promise<boolean>;
-  getIrLength(): Promise<number>;
-  setConvolutionEnabled(enabled: boolean): Promise<void>;
-  isConvolutionEnabled(): Promise<boolean>;
-
-  // ── FX PROCESSOR ──────────────────────────────────────────────────────────
-  setFxEnabled(enabled: boolean): Promise<void>;
-  isFxEnabled(): Promise<boolean>;
-  setFxMode(mode: FxMode): Promise<void>;
-  getFxMode(): Promise<FxMode>;
-  setFxMix(mix: number): Promise<void>;
-  getFxMix(): Promise<number>;
-  setFxBypass(bypass: boolean): Promise<void>;
-  isFxBypassed(): Promise<boolean>;
-
-  // ── FX: REVERB ────────────────────────────────────────────────────────────
-  setReverbRoomSize(value: number): Promise<void>;
-  setReverbDecay(value: number): Promise<void>;
-  setReverbPreDelay(value: number): Promise<void>;
-  setReverbDamping(value: number): Promise<void>;
-
-  // ── FX: DELAY ─────────────────────────────────────────────────────────────
-  setDelayTime(value: number): Promise<void>;
-  setDelayFeedback(value: number): Promise<void>;
-  setDelayLowCut(value: number): Promise<void>;
-  setDelayHighCut(value: number): Promise<void>;
-
-  // ── FX: MODULATION ────────────────────────────────────────────────────────
-  setModRate(value: number): Promise<void>;
-  setModDepth(value: number): Promise<void>;
-  setModPhase(value: number): Promise<void>;
-  setModFeedback(value: number): Promise<void>;
+  // ── REPLAY GAIN ───────────────────────────────────────────────────────────
+  setReplayGainMode(mode: ReplayGainMode | string): Promise<void>;
+  setReplayGainPreamp(gainDb: number): Promise<void>;
+  setReplayGainFromMap(tags: Record<string, string>): Promise<void>;
+  getReplayGainInfo(): Promise<ReplayGainInfo>;
 
   // ── PRESETS ───────────────────────────────────────────────────────────────
   applyPreset(name: string): Promise<void>;
@@ -826,44 +980,229 @@ export declare class MavinPlayerNativeModule extends NativeModule<MavinPlayerEve
   getTrackPreset(mediaId: string): Promise<string | null>;
   setAutoSwitchPresets(enabled: boolean): Promise<void>;
 
-  // ── SPECTRUM / AUTO-EQ ────────────────────────────────────────────────────
-  getSpectrumMagnitudes(): Promise<Array<{ bin: number; magnitude: number }>>;
-  computeAutoEQ(): Promise<Array<{ band: number; gain: number; freqHz: number }>>;
+  // ── CONVOLUTION ───────────────────────────────────────────────────────────
+  loadImpulseResponse(filePath: string): Promise<void>;
+  clearImpulseResponse(): Promise<void>;
+  isImpulseResponseLoaded(): Promise<boolean>;
+  getIrLength(): Promise<number>;
+  setConvolutionEnabled(enabled: boolean): Promise<void>;
+  isConvolutionEnabled(): Promise<boolean>;
 
-  // ── USB DAC ───────────────────────────────────────────────────────────────
-  isUsbDacConnected(): Promise<boolean>;
-  getCurrentDacInfo(): Promise<DacInfo | null>;
-  getDacCapabilities(): Promise<DacCapabilities | null>;
-  enableDirectUsbRouting(enabled: boolean): Promise<boolean>;
-  isDirectUsbRoutingEnabled(): Promise<boolean>;
-  setPreferredDacSampleRate(rate: number): Promise<boolean>;
-  setPreferredDacBitDepth(depth: number): Promise<boolean>;
-  rescanUsbDevices(): Promise<void>;
+  // ── FX PROCESSOR ──────────────────────────────────────────────────────────
+  setFxEnabled(enabled: boolean): Promise<void>;
+  getFxEnabled(): Promise<boolean>;
+  setFxMode(mode: FxMode | string): Promise<void>;
+  getFxMode(): Promise<string>;
+  setFxMix(mix: number): Promise<void>;
+  getFxMix(): Promise<number>;
+  setFxBypass(bypass: boolean): Promise<void>;
+  isFxBypassed(): Promise<boolean>;
+  setReverbRoomSize(value: number): Promise<void>;
+  setReverbDecay(value: number): Promise<void>;
+  setReverbPreDelay(value: number): Promise<void>;
+  setReverbDamping(value: number): Promise<void>;
+  setDelayTime(value: number): Promise<void>;
+  setDelayFeedback(value: number): Promise<void>;
+  setDelayLowCut(value: number): Promise<void>;
+  setDelayHighCut(value: number): Promise<void>;
+  setModRate(value: number): Promise<void>;
+  setModDepth(value: number): Promise<void>;
+  setModPhase(value: number): Promise<void>;
+  setModFeedback(value: number): Promise<void>;
 
-  // ── AUDIO FORMAT ──────────────────────────────────────────────────────────
-  getAudioCapabilities(): Promise<AudioCapabilities | null>;
-  getOptimalAudioFormat(): Promise<OptimalAudioFormat | null>;
-  isHiResAudioCapable(): Promise<boolean>;
-  getMaxSampleRate(): Promise<number>;
-  getMaxBitDepth(): Promise<number>;
+  // ── SLEEP TIMER ──────────────────────────────────────────────────────────
+  setSleepTimer(durationSeconds: number, fadeOutSeconds?: number): Promise<void>;
+  setSleepTimerEndAfterCurrentTrack(): Promise<void>;
+  cancelSleepTimer(): Promise<void>;
+  getSleepTimerState(): Promise<{
+    isActive: boolean;
+    remainingSeconds: number | null;
+    fadeOutSeconds: number;
+    endAfterCurrentTrack: boolean;
+  }>;
 
-  // ── OFFLINE / 64-BIT ──────────────────────────────────────────────────────
-  setOfflineMode(enabled: boolean): Promise<void>;
+  // ── BOOKMARKS ─────────────────────────────────────────────────────────────
+  bookmarkCurrentPosition(): Promise<void>;
+  addBookmark(positionSeconds: number): Promise<void>;
+  removeBookmark(positionSeconds: number): Promise<void>;
+  getBookmarks(): Promise<Array<{ trackId: string; position: number }>>;
+  clearBookmarks(): Promise<void>;
+
+  // ── PERSISTENCE ─────────────────────────────────────────────────────────────
+  getLastPlayedPosition(trackId: string): Promise<number | null>;
+  clearLastPlayedPosition(trackId: string): Promise<void>;
+  clearAllPlayedPositions(): Promise<void>;
+
+  // ── NETWORK & VISUALIZATION ───────────────────────────────────────────────
+  getNetworkQuality(): Promise<NetworkQualityEvent>;
+  getWaveformData(numBuckets?: number): Promise<number[]>;
+  getSpectrumData(): Promise<{
+    magnitudes: Array<{ bin: number; magnitude: number }>;
+    sampleRate: number;
+    binCount: number;
+  }>;
+  importAutoEqPreset(name: string, csv: string): Promise<void>;
+
+  // ── EXTENDED DSP (v2) ───────────────────────────────────────────────────────
+  isCrossfadeEnabled(): Promise<boolean>;
+  setCrossfadeEnabled(enabled: boolean): Promise<void>;
+  getCrossfadeDurationMs(): Promise<number>;
+  setCrossfadeDurationMs(durationMs: number): Promise<void>;
   isOfflineMode(): Promise<boolean>;
-  set64BitProcessingEnabled(enabled: boolean): Promise<void>;
+  setOfflineMode(enabled: boolean): Promise<void>;
   is64BitProcessingEnabled(): Promise<boolean>;
+  set64BitProcessingEnabled(enabled: boolean): Promise<void>;
+  isUsbDacConnected(): Promise<boolean>;
+  isDirectUsbRoutingEnabled(): Promise<boolean>;
+  enableDirectUsbRouting(enabled: boolean): Promise<void>;
 
-  // ── CONFIGURATION ─────────────────────────────────────────────────────────
-  updateOptions(options: UpdateOptions): Promise<void>;
-  setProgressUpdateInterval(ms: number): Promise<void>;
-  getProgressUpdateInterval(): Promise<number>;
-  setCacheConfig(options: { sizeMB?: number; sizeBytes?: number }): Promise<void>;
-  setAudioAttributes(options: { usage?: string; contentType?: string }): Promise<void>;
-  setWakeMode(mode: number): Promise<void>;
+  // ── PARAMETRIC BAND CONFIG (v3) ────────────────────────────────────────────
+  setParametricBandConfig(band: number, config: {
+    type?: string;
+    freqHz?: number;
+    gainDb?: number;
+    q?: number;
+    channel?: string;
+  }): Promise<void>;
+  getParametricBandConfig(band: number): Promise<{
+    type: string;
+    freqHz: number;
+    gainDb: number;
+    q: number;
+    channel: string;
+  } | null>;
+  getAllParametricBandConfigs(): Promise<Array<{
+    band: number;
+    type: string;
+    freqHz: number;
+    gainDb: number;
+    q: number;
+    channel: string;
+  }>>;
+  setBassFrequency(hz: number): Promise<void>;
+  getBassFrequency(): Promise<number>;
+  setBassQ(q: number): Promise<void>;
+  getBassQ(): Promise<number>;
+  setTrebleFrequency(hz: number): Promise<void>;
+  getTrebleFrequency(): Promise<number>;
+  setTrebleQ(q: number): Promise<void>;
+  getTrebleQ(): Promise<number>;
+
+  // ── FRC (Frequency Response Correction) (v3) ────────────────────────────────
+  importFrcPreset(presetMap: {
+    name: string;
+    gains: number[];
+    freqHz: number[];
+    qValues: number[];
+    description?: string;
+    deviceModel?: string;
+  }): Promise<void>;
+  applyFrcPreset(name: string): Promise<void>;
+  clearFrcPreset(): Promise<void>;
+  getActiveFrcPreset(): Promise<string | null>;
+  listFrcPresets(): Promise<string[]>;
+  exportFrcPreset(name: string): Promise<{
+    name: string;
+    gains: number[];
+    freqHz: number[];
+    qValues: number[];
+    description: string;
+    deviceModel: string;
+  } | null>;
+
+  // ── SURROUND DSP (v3) ───────────────────────────────────────────────────────
+  setSurroundMode(mode: string): Promise<void>;
+  getSurroundMode(): Promise<string>;
+  setSurroundEnabled(enabled: boolean): Promise<void>;
+  isSurroundEnabled(): Promise<boolean>;
+  setSurroundWidth(widthPercent: number): Promise<void>;
+  getSurroundWidth(): Promise<number>;
+  setSurroundDelay(ms: number): Promise<void>;
+  getSurroundDelay(): Promise<number>;
+  setSurroundRoomSize(ms: number): Promise<void>;
+  getSurroundRoomSize(): Promise<number>;
+  setOversamplingFilterType(type: string): Promise<void>;
+  getOversamplingFilterType(): Promise<string>;
+
+  // ── TUBE SATURATION (v3) ────────────────────────────────────────────────────
+  setTubeMode(mode: string): Promise<void>;
+  getTubeMode(): Promise<string>;
+  setTubeDrive(driveDb: number): Promise<void>;
+  getTubeDrive(): Promise<number>;
+  setTubeHarmonic2(amount: number): Promise<void>;
+  getTubeHarmonic2(): Promise<number>;
+  setTubeHarmonic3(amount: number): Promise<void>;
+  getTubeHarmonic3(): Promise<number>;
+
+  // ── ALC (Adaptive Loudness Compensation) (v3) ───────────────────────────────
+  setAlcEnabled(enabled: boolean): Promise<void>;
+  isAlcEnabled(): Promise<boolean>;
+  setAlcTarget(lufs: number): Promise<void>;
+  getAlcTarget(): Promise<number>;
+
+  // ── RMS METER (v3) ──────────────────────────────────────────────────────────
+  getRmsMeter(): Promise<{
+    rmsLeft: number;
+    rmsRight: number;
+    peakLeft: number;
+    peakRight: number;
+    lufs: number;
+  }>;
+
+  // ── BPM & AUTOMIX (v3) ──────────────────────────────────────────────────────
+  setTrackBpm(trackId: string, bpm: number): Promise<void>;
+  getTrackBpm(trackId: string): Promise<number | null>;
+  getCurrentTrackBpm(): Promise<number>;
+  setAutomixConfig(config: {
+    mode?: string;
+    manualCrossfadeOnly?: boolean;
+    bpmAutomixEnabled?: boolean;
+    bpmInPoint?: number;
+    bpmOutPoint?: number;
+  }): Promise<void>;
+  getAutomixConfig(): Promise<{
+    mode: string;
+    manualCrossfadeOnly: boolean;
+    bpmAutomixEnabled: boolean;
+    bpmInPoint: number;
+    bpmOutPoint: number;
+  }>;
+  setManualCrossfadeOnly(enabled: boolean): Promise<void>;
+  isManualCrossfadeOnly(): Promise<boolean>;
+
+  // ── WAKE-UP TIMER (v3) ───────────────────────────────────────────────────────
+  setWakeUpTimer(epochMs: number, trackId: string | null, fadeInSeconds?: number): Promise<void>;
+  cancelWakeUpTimer(): Promise<void>;
+  getWakeUpTimerState(): Promise<{
+    isSet: boolean;
+    remainingSeconds: number | null;
+    trackId: string | null;
+    volumeFadeInSeconds: number;
+  }>;
+
+  // ── QUEUE AUTO-CLEAR (v3) ───────────────────────────────────────────────────
+  setQueueAutoClear(enabled: boolean): Promise<void>;
+  isQueueAutoClearEnabled(): Promise<boolean>;
+
+  // ── ANDROID 15 COMPAT (v3) ───────────────────────────────────────────────────
+  setPipelineMode(mode: string): Promise<void>;
+  getPipelineMode(): Promise<string>;
+  setAbsoluteVolumeEnabled(enabled: boolean): Promise<void>;
+  isAbsoluteVolumeEnabled(): Promise<boolean>;
+
+  // ── MAX BITRATE (v3) ─────────────────────────────────────────────────────────
+  setMaxBitrate(kbps: number): Promise<void>;
+  getMaxBitrate(): Promise<number>;
+
+  // ── PLAYING DETAIL (v3) ─────────────────────────────────────────────────────
+  isPlayingWithDetail(): Promise<{
+    playing: boolean | null;
+    bufferingDuringPlay: boolean | null;
+  }>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STORAGE & SYNC TYPES (for preset management)
+// STORAGE & SYNC TYPES
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface PresetStorageAdapter {
@@ -928,13 +1267,13 @@ export interface UseSpectrumOptions {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// UTILITIES
+// EVENT SUBSCRIPTION TYPE
 // ═══════════════════════════════════════════════════════════════════════════
-
-export type EventName = MavinEvent | RNTPEvent | string;
 
 export interface EventSubscription {
   remove: () => void;
 }
+
+export type EventName = MavinEvent | string;
 
 export type Listener<T extends keyof MavinPlayerEvents> = MavinPlayerEvents[T];

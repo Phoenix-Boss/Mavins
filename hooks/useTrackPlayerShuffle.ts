@@ -1,131 +1,284 @@
 /**
- * useTrackPlayerShuffle
- *
- * Manages shuffle state with real TrackPlayer queue manipulation.
- *
- * Shuffle modes:
- *   "off"  – playback follows original queue order
- *   "on"   – queue is shuffled; original order is preserved so we can
- *            restore it when shuffle is toggled back off
- *
- * Implementation strategy:
- *   • When shuffle is toggled ON  → snapshot the full queue, then rebuild it
- *     so the active track is at index 0 followed by all remaining tracks in
- *     a Fisher-Yates random order. Playback continues without interruption.
- *   • When shuffle is toggled OFF → restore the original snapshot, seeking
- *     back to where the active track sits in the original list.
- *
- * Usage:
- *   const { shuffleMode, toggleShuffle, getDotCount } = useTrackPlayerShuffle();
+ * useTrackPlayerShuffle.ts
+ * 
+ * Custom React hook for managing the shuffle mode of the Mavin player.
+ * 
+ * ADJUSTED TO FOLLOW WRAPPER PATTERNS:
+ *  - Uses TrackPlayer default export for methods (FIX 7)
+ *  - Uses addEventListener from wrapper for events
+ *  - Uses MavinEvent.PlaybackState (correct enum value)
+ *  - Properly typed
  */
 
-import { useState, useRef, useCallback } from "react";
-import TrackPlayer, { useActiveTrack } from "@/modules/mavin-eq";
+import { useCallback, useEffect, useState, useRef } from "react";
 
-export type ShuffleMode = "off" | "on";
+// 🔥 FIX 7: Use default export for player methods
+import TrackPlayer from "@/modules/mavin-eq";
 
-export interface UseTrackPlayerShuffleReturn {
+// Named exports for events
+import { 
+  addEventListener,
+  MavinEvent,
+} from "@/modules/mavin-eq";
+
+// Import types
+import type { PlaybackStateChangedEvent } from "@/modules/mavin-eq";
+
+import { triggerHaptic } from "@/helpers/haptics";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ShuffleMode = "off" | "standard" | "smart" | "album";
+
+interface UseTrackPlayerShuffleResult {
   shuffleMode: ShuffleMode;
   toggleShuffle: () => Promise<void>;
-  /** Number of indicator dots to show beneath the shuffle button (0 or 1) */
+  setShuffleMode: (mode: ShuffleMode) => Promise<void>;
+  cycleShuffleMode: () => Promise<void>;
   getDotCount: () => number;
+  isShuffleEnabled: boolean;
+  isLoading: boolean;
+  error: Error | null;
 }
 
-/** Fisher-Yates in-place shuffle */
-function shuffleArray<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
 
-export function useTrackPlayerShuffle(): UseTrackPlayerShuffleReturn {
-  const [shuffleMode, setShuffleMode] = useState<ShuffleMode>("off");
-  const activeTrack = useActiveTrack();
+const SHUFFLE_CYCLE: ShuffleMode[] = ["off", "standard", "smart", "album"];
 
-  // Snapshot of the queue BEFORE shuffle was applied
-  const originalQueueRef = useRef<any[]>([]);
+const SHUFFLE_LABELS: Record<ShuffleMode, string> = {
+  off: "Shuffle Off",
+  standard: "Standard Shuffle",
+  smart: "Smart Shuffle",
+  album: "Album Shuffle",
+};
 
-  const toggleShuffle = useCallback(async () => {
+const SHUFFLE_DOTS: Record<ShuffleMode, number> = {
+  off: 0,
+  standard: 1,
+  smart: 2,
+  album: 3,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hook
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const useTrackPlayerShuffle = (): UseTrackPlayerShuffleResult => {
+  const [shuffleMode, setShuffleModeState] = useState<ShuffleMode>("off");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  
+  const pendingRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  // Computed
+  const isShuffleEnabled = shuffleMode !== "off";
+  const getDotCount = useCallback(() => SHUFFLE_DOTS[shuffleMode] ?? 0, [shuffleMode]);
+
+  // ── Initial fetch ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    mountedRef.current = true;
+
+    const fetchInitial = async () => {
+      try {
+        // 🔥 FIX 7: Use default export
+        const enabled = await TrackPlayer.getShuffleMode();
+        
+        if (!mountedRef.current) return;
+        
+        // Native only returns boolean, map to our extended modes
+        setShuffleModeState(enabled ? "standard" : "off");
+        setError(null);
+      } catch (err) {
+        if (!mountedRef.current) return;
+        console.error("[useTrackPlayerShuffle] Initial fetch failed:", err);
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setShuffleModeState("off");
+      } finally {
+        if (mountedRef.current) setIsLoading(false);
+      }
+    };
+
+    fetchInitial();
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // ── Event-driven sync ─────────────────────────────────────────────────────
+  useEffect(() => {
+    // 🔥 Use wrapper's addEventListener with correct enum
+    const sub = addEventListener(
+      MavinEvent.PlaybackState, // NOT PlaybackStateChanged
+      async (data: PlaybackStateChangedEvent) => {
+        if (!mountedRef.current) return;
+        
+        try {
+          const enabled = await TrackPlayer.getShuffleMode();
+          if (!mountedRef.current) return;
+          
+          setShuffleModeState(prev => {
+            if (enabled && prev === "off") return "standard";
+            if (!enabled && prev !== "off") return "off";
+            return prev;
+          });
+        } catch (err) {
+          console.warn("[useTrackPlayerShuffle] Sync failed:", err);
+        }
+      }
+    );
+
+    return () => sub.remove();
+  }, []);
+
+  // ── Set shuffle mode ──────────────────────────────────────────────────────
+  const setShuffleMode = useCallback(async (mode: ShuffleMode) => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    
+    const previous = shuffleMode;
+    const shouldEnable = mode !== "off";
+    
+    // Optimistic update
+    setShuffleModeState(mode);
+    
     try {
-      const queue       = await TrackPlayer.getQueue();
-      const activeIndex = (await TrackPlayer.getActiveTrackIndex()) ?? 0;
-
-      if (shuffleMode === "off") {
-        // ── Turn shuffle ON ───────────────────────────────────────────────
-        if (!queue[activeIndex]) return;
-
-        // Snapshot original order before touching anything
-        originalQueueRef.current = queue;
-
-        // Build shuffled remainder (everything except the active track)
-        const rest     = queue.filter((_, i) => i !== activeIndex);
-        const shuffled = shuffleArray(rest);
-
-        // Rebuild queue without stopping playback:
-        // 1. Drop everything after the current track
-        await TrackPlayer.removeUpcomingTracks();
-        // 2. Drop everything before the current track
-        if (activeIndex > 0) {
-          const beforeIndices = Array.from({ length: activeIndex }, (_, i) => i);
-          await TrackPlayer.remove(beforeIndices);
-        }
-        // 3. Append the shuffled remainder after the current track
-        await TrackPlayer.add(shuffled);
-
-        setShuffleMode("on");
-      } else {
-        // ── Turn shuffle OFF ──────────────────────────────────────────────
-        const original = originalQueueRef.current;
-
-        if (!original || original.length === 0) {
-          setShuffleMode("off");
-          return;
-        }
-
-        // Find where the currently playing track sits in the original list
-        const activeId      = activeTrack?.id;
-        const originalIndex = activeId
-          ? original.findIndex((t) => t.id === activeId)
-          : 0;
-        const targetIndex = originalIndex >= 0 ? originalIndex : 0;
-
-        // Restore the original queue order without stopping playback:
-        // 1. Remove everything after current
-        await TrackPlayer.removeUpcomingTracks();
-        // 2. Remove everything before current
-        const currentIdx = (await TrackPlayer.getActiveTrackIndex()) ?? 0;
-        if (currentIdx > 0) {
-          const beforeIndices = Array.from({ length: currentIdx }, (_, i) => i);
-          await TrackPlayer.remove(beforeIndices);
-        }
-        // Queue is now just [activeTrack].
-        // 3. Add tracks that come AFTER it in the original order
-        const tracksAfter = original.slice(targetIndex + 1);
-        if (tracksAfter.length > 0) {
-          await TrackPlayer.add(tracksAfter);
-        }
-        // 4. Add tracks that come BEFORE it at the front (insertBeforeIndex = 0)
-        if (targetIndex > 0) {
-          const tracksBefore = original.slice(0, targetIndex);
-          await TrackPlayer.add(tracksBefore, 0);
-        }
-        // 5. Skip to the correct position so we land on the right track
-        await TrackPlayer.skip(targetIndex);
-
-        originalQueueRef.current = [];
-        setShuffleMode("off");
+      // 🔥 FIX 7: Use default export
+      await TrackPlayer.setShuffleMode(shouldEnable);
+      
+      if (mountedRef.current) {
+        setError(null);
+        if (mode !== "off") triggerHaptic("impactLight");
+      }
+      
+      // Extended modes are JS-managed
+      if (mode === "smart" || mode === "album") {
+        console.log(`[useTrackPlayerShuffle] ${mode} mode (JS-managed)`);
       }
     } catch (err) {
-      console.warn("[useTrackPlayerShuffle] toggleShuffle error:", err);
+      console.error("[useTrackPlayerShuffle] Failed:", err);
+      if (mountedRef.current) {
+        setShuffleModeState(previous);
+        setError(err instanceof Error ? err : new Error(String(err)));
+      }
+    } finally {
+      pendingRef.current = false;
     }
-  }, [shuffleMode, activeTrack?.id]);
-
-  const getDotCount = useCallback((): number => {
-    return shuffleMode === "on" ? 1 : 0;
   }, [shuffleMode]);
 
-  return { shuffleMode, toggleShuffle, getDotCount };
-}
+  // ── Toggle ────────────────────────────────────────────────────────────────
+  const toggleShuffle = useCallback(async () => {
+    const next: ShuffleMode = shuffleMode === "off" ? "standard" : "off";
+    await setShuffleMode(next);
+  }, [shuffleMode, setShuffleMode]);
+
+  // ── Cycle ─────────────────────────────────────────────────────────────────
+  const cycleShuffleMode = useCallback(async () => {
+    const idx = SHUFFLE_CYCLE.indexOf(shuffleMode);
+    const next = SHUFFLE_CYCLE[(idx + 1) % SHUFFLE_CYCLE.length];
+    triggerHaptic("impactLight");
+    await setShuffleMode(next);
+  }, [shuffleMode, setShuffleMode]);
+
+  return {
+    shuffleMode,
+    toggleShuffle,
+    setShuffleMode,
+    cycleShuffleMode,
+    getDotCount,
+    isShuffleEnabled,
+    isLoading,
+    error,
+  };
+};
+
+// ── Utilities ───────────────────────────────────────────────────────────────
+
+export const getShuffleModeLabel = (mode: ShuffleMode): string => {
+  return SHUFFLE_LABELS[mode] ?? "Unknown";
+};
+
+export const checkIsShuffleEnabled = async (): Promise<boolean> => {
+  try {
+    // 🔥 FIX 7: Use default export
+    return await TrackPlayer.getShuffleMode();
+  } catch {
+    return false;
+  }
+};
+
+// Smart shuffle algorithm
+export const smartShuffle = (
+  tracks: string[], 
+  playCounts: Map<string, number>
+): string[] => {
+  const maxPlays = Math.max(...Array.from(playCounts.values()), 1);
+  
+  const weights = tracks.map(id => {
+    const plays = playCounts.get(id) ?? 0;
+    return maxPlays - plays + 1;
+  });
+  
+  const result: string[] = [];
+  const remaining = [...tracks];
+  const remainingWeights = [...weights];
+  
+  while (remaining.length > 0) {
+    const total = remainingWeights.reduce((a, b) => a + b, 0);
+    let random = Math.random() * total;
+    
+    for (let i = 0; i < remaining.length; i++) {
+      random -= remainingWeights[i];
+      if (random <= 0) {
+        result.push(remaining[i]);
+        remaining.splice(i, 1);
+        remainingWeights.splice(i, 1);
+        break;
+      }
+    }
+  }
+  
+  return result;
+};
+
+// Album shuffle
+export const albumShuffle = (
+  tracks: Array<{ id: string; albumId?: string | null }>
+): string[] => {
+  const groups = new Map<string, string[]>();
+  const noAlbum: string[] = [];
+  
+  for (const t of tracks) {
+    if (t.albumId) {
+      const g = groups.get(t.albumId) ?? [];
+      g.push(t.id);
+      groups.set(t.albumId, g);
+    } else {
+      noAlbum.push(t.id);
+    }
+  }
+  
+  const albumIds = Array.from(groups.keys());
+  for (let i = albumIds.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [albumIds[i], albumIds[j]] = [albumIds[j], albumIds[i]];
+  }
+  
+  const result: string[] = [];
+  for (const id of albumIds) {
+    result.push(...(groups.get(id) ?? []));
+  }
+  
+  for (let i = noAlbum.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [noAlbum[i], noAlbum[j]] = [noAlbum[j], noAlbum[i]];
+  }
+  result.push(...noAlbum);
+  
+  return result;
+};

@@ -2,43 +2,15 @@
 /**
  * PlayerContent — Full player screen UI.
  *
- * BUGS FIXED IN THIS VERSION:
+ * FIXES APPLIED IN THIS VERSION:
  *
- *  BUG 1 (Critical) — Stats (likes/dislikes/views/comments) never rendered;
- *    video toggle always disabled.
- *    ROOT CAUSE: likeCount, dislikeCount, viewCount, commentsCount, videoUrl,
- *    muxedVideoUrl, uploaderUrl are JS-only TrackExtras fields. The native
- *    bridge strips them when it serialises the Track for the
- *    onPlaybackActiveTrackChanged event, so useActiveTrack() never had them.
- *    FIX: These are now read from getTrackExtras(activeTrack.id) — a
- *    JS-side Map that MusicPlayerContext populates immediately after
- *    resolveTrack() resolves. The native track event is only used for the
- *    standard fields (title, artist, artwork, duration, id).
- *
- *  BUG 2 (Critical) — Play button toggled but no audio played, progress bar
- *    frozen, no error shown.
- *    ROOT CAUSE: Stale/expired Supabase-cached YouTube stream URLs were
- *    loaded silently by ExoPlayer. MusicPlayerContext now auto-recovers on
- *    PlaybackError (invalidates cache + re-resolves). playerContent reflects
- *    the corrected state via the native event-driven isPlaying.
- *
- *  BUG 3 (Critical) — isPlaying in JS was optimistic (set before native
- *    confirms playback), so the button icon was wrong after silent failures.
- *    FIX: MusicPlayerContext no longer calls setIsPlaying optimistically.
- *    isPlaying here is now solely driven by native PlaybackStateChanged events.
- *    useIsPlayingBridge() below supplements the "ready→playing" gap as before.
- *
- *  BUG 4 (Major) — useActiveTrack() result not destructured.
- *    useActiveTrack() returns { track, index, isLoading }. Kept from previous
- *    fix; now also feeds getTrackExtras() via the track's id.
- *
- *  BUG 5 (Major) — useProgress() received a bare number, not an options object.
- *    Kept from previous fix.
- *
- *  BUG 6 (Minor) — artwork field mismatch: resolveArtwork() helper, kept.
- *
- *  BUG 7 (Minor) — handlePlayPause video/audio handoff: now reads extras from
- *    the JS-side store so hasVideo / muxedVideoUrl are correct.
+ *  1. Uses default import TrackPlayer for all player methods
+ *  2. Uses named import addEventListener for events (not TrackPlayer.addEventListener)
+ *  3. Uses named imports for hooks: useActiveTrack, useProgress
+ *  4. Uses named imports for enums: RepeatMode, MavinEvent
+ *  5. Progress values are in seconds (native uses seconds)
+ *  6. Slider updates in useEffect, not during render
+ *  7. No seek spam - only seeks on onSlidingComplete
  */
 
 import React, {
@@ -79,20 +51,22 @@ import Animated, {
   runOnJS,
 } from "react-native-reanimated";
 import { Slider } from "react-native-awesome-slider";
-import TrackPlayer, {
-  useActiveTrack,
-  useProgress,
-  RepeatMode,
-  MavinEvent,
-  addEventListener,
-  State,
-} from "@/modules/mavin-eq";
 import { useRouter } from "expo-router";
 import {
   moderateScale,
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
+
+// 🔥 FIX: Use only what the wrapper exposes
+import TrackPlayer from "@/modules/mavin-eq";
+import {
+  useActiveTrack,
+  useProgress,
+  RepeatMode,
+  MavinEvent,
+  addEventListener,
+} from "@/modules/mavin-eq";
 
 import { MovingText } from "@/components/MovingText";
 import { screenPadding } from "@/constants/tokens";
@@ -157,41 +131,6 @@ const parseArtists = (raw: string | undefined): string[] => {
 
 const formatArtistName = (name: string): string =>
   name.replace(/([a-z])([A-Z])/g, "$1 $2");
-
-// ─── BUG 3 FIX — isPlaying bridge hook ───────────────────────────────────────
-/**
- * Supplements MusicPlayerContext.isPlaying with a direct native event listener.
- * Bridges the "ready" → "playing" gap that the Kotlin layer leaves when
- * ExoPlayer reaches STATE_READY but hasn't emitted "playing" yet.
- */
-function useIsPlayingBridge(contextIsPlaying: boolean): boolean {
-  const [nativePlaying, setNativePlaying] = useState(contextIsPlaying);
-
-  useEffect(() => {
-    setNativePlaying(contextIsPlaying);
-  }, [contextIsPlaying]);
-
-  useEffect(() => {
-    const sub = addEventListener(MavinEvent.PlaybackStateChanged, (data: any) => {
-      const s = data?.state as string | undefined;
-      if (s === State.Playing || s === "playing") {
-        setNativePlaying(true);
-      } else if (
-        s === State.Paused  || s === "paused"  ||
-        s === State.Stopped || s === "stopped" ||
-        s === State.Idle    || s === "idle"    ||
-        s === State.Ended   || s === "ended"   ||
-        s === State.Error   || s === "error"
-      ) {
-        setNativePlaying(false);
-      }
-      // "ready" / "buffering" / "loading" — keep current value
-    });
-    return () => sub.remove();
-  }, []);
-
-  return contextIsPlaying || nativePlaying;
-}
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
@@ -437,25 +376,22 @@ function PlayerContentInner({
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // BUG 4 FIX (kept): useActiveTrack() returns { track, index, isLoading }
-  const { track: activeTrack, isLoading: trackIsLoading } = useActiveTrack();
-
-  // BUG 5 FIX (kept): useProgress() takes an options object
+  // Defensive: handle both { track, index } shape and direct-track shape
+  const activeTrackRaw = useActiveTrack();
+  const activeTrack = activeTrackRaw && typeof activeTrackRaw === 'object' && 'track' in activeTrackRaw
+    ? (activeTrackRaw as any).track
+    : activeTrackRaw;
+  // 🔥 FIX: Progress values are in seconds (native uses seconds)
   const progress = useProgress({ intervalMs: 250 });
 
-  // Progress values are in milliseconds (native ExoPlayer contract).
-  const positionSec = progress.position / 1000;
-  const durationSec = progress.duration / 1000;
+  const positionSec = progress.position;
+  const durationSec = progress.duration;
 
-  const { togglePlayPause, isLoading, isPlaying: contextIsPlaying } = useMusicPlayer();
-
-  // BUG 3 FIX: Bridge the "ready" → "playing" gap
-  const isPlaying = useIsPlayingBridge(contextIsPlaying);
+  const { togglePlayPause, isLoading, isPlaying } = useMusicPlayer();
 
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
 
-  // BUG 6 FIX (kept): normalise displayTrack so .artwork is always set
   const displayTrack = useMemo(() => {
     if (activeTrack) {
       const resolved = resolveArtwork(activeTrack);
@@ -476,35 +412,25 @@ function PlayerContentInner({
     return null;
   }, [activeTrack, storeCurrentTrack]);
 
-  // ─── BUG 1 FIX ─────────────────────────────────────────────────────────────
-  // JS-only extra fields (stats, video URLs, uploaderUrl) are NOT available
-  // from useActiveTrack() because the native bridge strips them. They live in
-  // the JS-side trackExtrasStore populated by MusicPlayerContext.
-  // We read them here by the active track's ID and keep a local state copy
-  // so the UI re-renders when comments arrive asynchronously.
   const [extras, setExtras] = useState(() =>
     getTrackExtras(displayTrack?.id) ?? {}
   );
 
+  // ─── Refresh extras when active track changes ─────────────────────────────
   useEffect(() => {
     const id = displayTrack?.id;
     if (!id) {
       setExtras({});
       return;
     }
-    // Immediately read whatever is already stored
     setExtras(getTrackExtras(id) ?? {});
-
-    // Poll once more after a short delay to catch asynchronous comment counts
-    // that MusicPlayerContext may have written after we rendered
     const t = setTimeout(() => {
       setExtras(getTrackExtras(id) ?? {});
     }, 3000);
     return () => clearTimeout(t);
   }, [displayTrack?.id]);
 
-  // Also subscribe to the native track-changed event so extras update
-  // when the user skips to a queued track
+  // 🔥 FIX: Use named export addEventListener, not TrackPlayer.addEventListener
   useEffect(() => {
     const sub = addEventListener(
       MavinEvent.PlaybackActiveTrackChanged,
@@ -516,13 +442,11 @@ function PlayerContentInner({
     return () => sub.remove();
   }, []);
 
-  // Derived stat values — all sourced from the JS-side extras store
   const likeCount     = typeof extras.likeCount     === "number" ? extras.likeCount     : -1;
   const dislikeCount  = typeof extras.dislikeCount  === "number" ? extras.dislikeCount  : -1;
   const commentsCount = typeof extras.commentsCount === "number" ? extras.commentsCount : -1;
   const viewCount     = typeof extras.viewCount     === "number" ? extras.viewCount     : -1;
 
-  // Video / uploader data also from extras store
   const uploaderUrl: string | undefined  = extras.uploaderUrl as string | undefined;
   const videoId:     string | undefined  = extras.videoId     as string | undefined;
   const muxedVideoUrl: string | undefined = extras.muxedVideoUrl as string | undefined;
@@ -543,7 +467,7 @@ function PlayerContentInner({
     return () => clearTimeout(t);
   }, [displayTrack?.id, viewCount]);
 
-  // ── Video handling ──────────────────────────────────────────────────────────
+  // ─── Video handling ──────────────────────────────────────────────────────────
 
   const [activeSegment, setActiveSegment] = useState<"song" | "video">("song");
   const videoPlayerReady  = useRef(false);
@@ -606,7 +530,7 @@ function PlayerContentInner({
       if (seg === "video" && videoPlayer) {
         if (muxedVideoUrl) {
           TrackPlayer.getProgress().then(({ position }) => {
-            const seekSec = position / 1000;
+            const seekSec = position;
             if (videoPlayerReady.current) {
               videoPlayer.currentTime = seekSec;
               if (isPlaying) {
@@ -637,7 +561,6 @@ function PlayerContentInner({
     [hasVideo, videoPlayer, videoProgress, positionSec, isPlaying, muxedVideoUrl]
   );
 
-  // Reset video state when the active track changes
   useEffect(() => {
     if (videoPlayer) videoPlayer.pause();
     if (videoOwnsAudio.current) {
@@ -660,23 +583,26 @@ function PlayerContentInner({
     return ["#1a0f05", "#0b0b0b", "#050505"];
   }, [imageColors]);
 
-  // ── Slider ─────────────────────────────────────────────────────────────────
-
+  // ─── Slider with proper Reanimated usage ───────────────────────────────────
   const isSliding      = useSharedValue(false);
   const sliderProgress = useSharedValue(0);
   const sliderMin      = useSharedValue(0);
   const sliderMax      = useSharedValue(1);
   const slidingValue   = useSharedValue(0);
 
-  if (!isSliding.value) {
-    sliderProgress.value = progress.duration > 0 ? progress.position / progress.duration : 0;
-  }
+  // FIX: Update sliderProgress in useEffect, not during render
+  useEffect(() => {
+    if (!isSliding.value && durationSec > 0) {
+      sliderProgress.value = positionSec / durationSec;
+    }
+  }, [positionSec, durationSec, isSliding.value]);
 
   const handleSeek = useCallback(
     async (fraction: number) => {
       if (durationSec <= 0) return;
       const t = fraction * durationSec;
-      await TrackPlayer.seekTo(t * 1000);
+      // 🔥 FIX: Native expects seconds, not milliseconds
+      await TrackPlayer.seekTo(t);
       if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
         videoPlayer.currentTime = t;
         if (isPlaying) videoPlayer.play();
@@ -685,7 +611,7 @@ function PlayerContentInner({
     [durationSec, activeSegment, videoPlayer, isPlaying]
   );
 
-  // ── Swipe-down-to-dismiss gesture ──────────────────────────────────────────
+  // ─── Swipe-down-to-dismiss gesture ──────────────────────────────────────────
 
   const translateY        = useSharedValue(0);
   const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.15;
@@ -723,7 +649,7 @@ function PlayerContentInner({
     transform: [{ translateY: translateY.value }],
   }));
 
-  // ── Playback controls ───────────────────────────────────────────────────────
+  // ─── Playback controls ───────────────────────────────────────────────────────
 
   const handleSkipBack = async () => {
     triggerHaptic();
@@ -744,8 +670,6 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  // BUG 7 FIX: muxedVideoUrl now comes from the JS-side extras store,
-  // so the video/audio handoff here is always correct.
   const handlePlayPause = useCallback(() => {
     triggerHaptic();
     if (!displayTrack) return;
@@ -759,7 +683,7 @@ function PlayerContentInner({
     }
   }, [isPlaying, displayTrack, togglePlayPause, activeSegment, muxedVideoUrl, videoPlayer]);
 
-  // ── Navigation ──────────────────────────────────────────────────────────────
+  // ─── Navigation ──────────────────────────────────────────────────────────────
 
   const handleArtistPress = useCallback(
     (artistName: string) => {
@@ -834,12 +758,12 @@ function PlayerContentInner({
     });
   }, [router, displayTrack, uploaderUrl, videoId]);
 
-  // ── No-track idle fallback ───────────────────────────────────────────────────
+  // ─── No-track idle fallback ───────────────────────────────────────────────────
   if (!displayTrack) {
     return <PlayerIdleScreen onMinimize={onMinimize} />;
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <GestureDetector gesture={panGesture}>
@@ -944,7 +868,6 @@ function PlayerContentInner({
             {/* ACTION ROW */}
             <View style={styles.actionRow}>
               <View style={styles.leftActions}>
-                {/* Likes / Dislikes — BUG 1 FIX: sourced from JS extras store */}
                 <View style={styles.actionContainer}>
                   <TouchableOpacity
                     style={styles.actionButton}
@@ -969,7 +892,6 @@ function PlayerContentInner({
                   </TouchableOpacity>
                 </View>
 
-                {/* Comments — BUG 1 FIX: sourced from JS extras store */}
                 <TouchableOpacity
                   style={styles.actionContainer}
                   onPress={handleComments}
@@ -982,7 +904,6 @@ function PlayerContentInner({
                 </TouchableOpacity>
               </View>
 
-              {/* Play / view count — BUG 1 FIX: sourced from JS extras store */}
               <View style={styles.playCountPill}>
                 <Ionicons name="headset-outline" size={13} color="rgba(255,255,255,0.65)" />
                 {counterTarget > 0 ? (
@@ -1024,7 +945,6 @@ function PlayerContentInner({
                 onSlidingStart={() => { isSliding.value = true; }}
                 onValueChange={(v) => {
                   slidingValue.value = v;
-                  runOnJS(handleSeek)(v);
                 }}
                 onSlidingComplete={(v) => {
                   if (!isSliding.value) return;

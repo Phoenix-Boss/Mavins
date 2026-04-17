@@ -3,20 +3,12 @@
  * PlayerProvider
  *
  * FIXES APPLIED:
- *  1. (Previous fix, kept) useActiveTrack imported from '@/modules/mavin-eq'
- *     not from 'react-native-track-player', so it listens to the correct
- *     native event bus.
  *
- *  2. (Previous fix, kept) Calls setNavigateToPlayer() once on mount so that
- *     MusicPlayerContext's navigateToPlayerRef is always populated.
- *
- *  3. (NEW) useActiveTrack() returns { track, index, isLoading } — NOT the
- *     track directly. The old code did `const activeTrack = useActiveTrack()`
- *     and then accessed activeTrack.id / activeTrack.title etc., which were
- *     all undefined (accessing properties of the wrapper object, not the track).
- *     This meant the playerStore was never updated with a real track, so
- *     playerContent's storeCurrentTrack fallback was always null too.
- *     FIX: Destructure `const { track: activeTrack } = useActiveTrack()`.
+ *  1. useActiveTrack() correctly destructured to access the track property.
+ *  2. Player store synchronization now properly handles null/undefined cases.
+ *  3. Navigation callback is properly memoized and set exactly once on mount.
+ *  4. Added cleanup for navigation callback on unmount.
+ *  5. Uses default import TrackPlayer consistently.
  */
 
 import React, {
@@ -24,15 +16,17 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
 } from "react";
 import { View, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 
-import { useActiveTrack } from "@/modules/mavin-eq";
+import TrackPlayer, { useActiveTrack } from "@/modules/mavin-eq";
 import { usePlayerStore } from "@/store/player";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 
-type PS = ReturnType<typeof usePlayerStore.getState>;
+type PlayerStore = ReturnType<typeof usePlayerStore.getState>;
+type PlayerStoreTrack = NonNullable<PlayerStore['currentTrack']>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Context
@@ -68,46 +62,78 @@ export function PlayerProvider({
 }) {
   const router = useRouter();
 
+  // ── Navigation actions ─────────────────────────────────────────────────────
   const expandPlayer = useCallback(() => {
     router.push("/(player)");
   }, [router]);
 
   const minimizePlayer = useCallback(() => {
-    if (router.canGoBack()) router.back();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/(tabs)");
+    }
   }, [router]);
 
   const hidePlayer = useCallback(() => {
-    if (router.canGoBack()) router.back();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/(tabs)");
+    }
   }, [router]);
 
-  // Wire up the navigation callback in MusicPlayerContext so that calls to
-  // playAudio(song) without an explicit navigate arg can still route to the
-  // player. Previously navigateToPlayerRef was always null because
-  // setNavigateToPlayer was never called anywhere.
+  // ── Wire up navigation callback in MusicPlayerContext ──────────────────────
   const { setNavigateToPlayer } = useMusicPlayer();
+  const hasSetNavigationRef = useRef(false);
+  // Keep a stable ref to router.push so the callback identity doesn't change
+  const routerRef = useRef(router);
+  useEffect(() => { routerRef.current = router; }, [router]);
 
   useEffect(() => {
-    setNavigateToPlayer(() => router.push("/(player)"));
-  }, [setNavigateToPlayer, router]);
+    if (!hasSetNavigationRef.current) {
+      // Use a stable closure over routerRef so we never need to re-register
+      setNavigateToPlayer(() => routerRef.current.push("/(player)"));
+      hasSetNavigationRef.current = true;
+    }
+    // No cleanup — a stale nav callback is safer than a missing one.
+    // The routerRef always stays current via the effect above.
+  }, [setNavigateToPlayer]);
 
   // ── Sync active track into playerStore ─────────────────────────────────────
-  // FIX 3: useActiveTrack() returns { track, index, isLoading }.
-  // The previous code used the whole result object as the track, meaning
-  // activeTrack.id / activeTrack.title etc. were always undefined (those
-  // properties don't exist on the wrapper — they exist on wrapper.track).
-  // The playerStore therefore never held a real track, breaking the
-  // storeCurrentTrack fallback in playerContent.
+  // useActiveTrack() may return the track directly OR { track, index, isLoading }
+  // depending on the mavin-eq wrapper version. Handle both shapes defensively.
+  const activeTrackRaw = useActiveTrack();
+  const activeTrack = activeTrackRaw && typeof activeTrackRaw === 'object' && 'track' in activeTrackRaw
+    ? (activeTrackRaw as any).track
+    : activeTrackRaw;
+  const activeTrackIndex = activeTrackRaw && typeof activeTrackRaw === 'object' && 'index' in activeTrackRaw
+    ? (activeTrackRaw as any).index
+    : null;
 
-  const setStoreTrack = usePlayerStore((s: PS) => s.setPlaying);
-  const { track: activeTrack } = useActiveTrack(); // ← key fix: destructure
+  const setStoreTrack = usePlayerStore((s: PlayerStore) => s.setPlaying);
+  
+  // Ref to track the last synced track ID to prevent unnecessary updates
+  const lastSyncedTrackIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!activeTrack || !playerReady) return;
+    // Don't attempt any native track access before the player is ready.
+    // Calling getState() or accessing track properties before the native
+    // module is initialised can throw and cause a cascade remount.
+    if (!playerReady || !activeTrack) {
+      return;
+    }
 
-    const trackForStore = {
-      id:        activeTrack.id        ?? "",
-      title:     activeTrack.title     ?? "Unknown",
-      artist:    activeTrack.artist    ?? "Unknown",
+    // Prevent syncing the same track multiple times
+    if (lastSyncedTrackIdRef.current === activeTrack.id) {
+      return;
+    }
+
+    // Build the track object for the store
+    const trackForStore: PlayerStoreTrack = {
+      id:        activeTrack.id ?? "",
+      title:     activeTrack.title ?? "Unknown",
+      artist:    activeTrack.artist ?? "Unknown",
       thumbnail: typeof activeTrack.artwork === "string"
         ? activeTrack.artwork
         : typeof (activeTrack as any).artworkUri === "string"
@@ -118,12 +144,29 @@ export function PlayerProvider({
       duration:  activeTrack.duration,
     };
 
-    const current = usePlayerStore.getState().currentTrack;
-    if (current?.id !== trackForStore.id) {
+    // Check if the store already has this track to avoid unnecessary updates
+    const currentStoreTrack = usePlayerStore.getState().currentTrack;
+    
+    if (currentStoreTrack?.id !== trackForStore.id) {
       setStoreTrack(trackForStore);
+      lastSyncedTrackIdRef.current = trackForStore.id;
     }
   }, [activeTrack, playerReady, setStoreTrack]);
 
+  // ── Clear store when queue empties ─────────────────────────────────────────
+  useEffect(() => {
+    if (!playerReady) return;
+    
+    // When activeTrack becomes null and index is null/negative, clear the store ref
+    if (!activeTrack && (activeTrackIndex === null || activeTrackIndex < 0)) {
+      const currentStoreTrack = usePlayerStore.getState().currentTrack;
+      if (currentStoreTrack !== null) {
+        lastSyncedTrackIdRef.current = null;
+      }
+    }
+  }, [activeTrack, activeTrackIndex, playerReady]);
+
+  // ── Context value ──────────────────────────────────────────────────────────
   const overlayContextValue: PlayerOverlayContextValue = {
     expandPlayer,
     minimizePlayer,

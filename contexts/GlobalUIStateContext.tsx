@@ -8,12 +8,26 @@ import React, {
   useEffect,
   useMemo,
 } from "react";
-import { usePlaybackState, State } from "@/modules/mavin-eq";
+import { usePlaybackState } from "@/modules/mavin-eq";
 import { triggerHaptic } from "@/helpers/haptics";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
+
+// 🔥 FIX: Define State locally as string union to avoid import issues
+type State = 
+  | 'none' 
+  | 'idle' 
+  | 'ready' 
+  | 'playing' 
+  | 'paused' 
+  | 'stopped' 
+  | 'buffering' 
+  | 'loading' 
+  | 'error' 
+  | 'ended' 
+  | 'connection-error';
 
 interface GlobalUIStateContextType {
   tabsVisible: boolean;
@@ -30,6 +44,11 @@ interface GlobalUIStateContextType {
 
 const GlobalUIStateContext =
   createContext<GlobalUIStateContextType | undefined>(undefined);
+
+// 🔥 FIX: Use string literals instead of State enum
+const PLAYING_STATE: State = 'playing';
+const BUFFERING_STATE: State = 'buffering';
+const NONE_STATE: State = 'none';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider
@@ -56,13 +75,13 @@ export const GlobalUIStateProvider: React.FC<{
 
   const currentState = useMemo<State>(() => {
     const raw = playbackState?.state;
-    if (!raw) return State.None;
-    // The inner .state field is already a State enum string value
+    if (!raw) return NONE_STATE;
+    // 🔥 FIX: Use string literal comparison instead of State enum
     return raw as State;
   }, [playbackState]);
 
   const isPlaying = useMemo(
-    () => currentState === State.Playing || currentState === State.Buffering,
+    () => currentState === PLAYING_STATE || currentState === BUFFERING_STATE,
     [currentState]
   );
 
