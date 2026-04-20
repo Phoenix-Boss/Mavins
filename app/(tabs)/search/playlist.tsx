@@ -7,6 +7,9 @@
  *
  * Route params:
  *   id — full playlist URL (e.g. "https://music.youtube.com/playlist?list=…")
+ * 
+ * NOTE: This file keeps mavin-engine as requested. Only the active track
+ * detection is updated to use RNTP's useActiveTrack instead of mavin-eq.
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -15,6 +18,7 @@ import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
+// mavin-engine kept as requested
 import MavinEngine, {
   PlaylistInfo,
   StreamInfoItem,
@@ -35,7 +39,9 @@ import {
   moderateScale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "@/modules/mavin-eq";
+
+// RNTP import - replacing mavin-eq for active track detection only
+import { useActiveTrack } from "react-native-track-player";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local types
@@ -102,7 +108,10 @@ const PlaylistView = () => {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
   const lastActiveTrack = useLastActiveTrack();
+  
+  // RNTP hook - replacing mavin-eq
   const activeTrack = useActiveTrack();
+  
   const { playAudio, playPlaylist } = useMusicPlayer();
   const { id } = useLocalSearchParams<{ id: string }>();
 
@@ -121,6 +130,7 @@ const PlaylistView = () => {
       setLoading(true);
       try {
         console.log(`[PlaylistView] fetching playlist: ${id}`);
+        // mavin-engine kept as requested
         const info: PlaylistInfo = await MavinEngine.getPlaylistInfo(id, 0);
         setPlaylistData(playlistInfoToPageData(info));
       } catch (error) {

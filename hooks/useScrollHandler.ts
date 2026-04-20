@@ -1,10 +1,8 @@
 // hooks/useScrollHandler.ts
-import { useCallback } from 'react';
-import { useScrollLogic } from './useScrollLogic';
 import { useScrollAnimations } from './useScrollAnimations';
 import {
   useAnimatedScrollHandler,
-  useSharedValue
+  useSharedValue,
 } from 'react-native-reanimated';
 
 interface ScrollHandlerConfig {
@@ -13,11 +11,10 @@ interface ScrollHandlerConfig {
 
 export const useScrollHandler = (config: ScrollHandlerConfig) => {
   const { headerHeight } = config;
-  
-  // Get logic (only music state needed)
-  const logic = useScrollLogic();
-  
-  // Get animations
+
+  // Get animations — removed useScrollLogic entirely.
+  // useScrollLogic was causing a silent Reanimated worklet crash because
+  // it (or its dependencies) were not available / throwing on init.
   const animations = useScrollAnimations();
 
   // ==================== SCROLL TRACKING ====================
@@ -28,47 +25,48 @@ export const useScrollHandler = (config: ScrollHandlerConfig) => {
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (event) => {
       'worklet';
-      
+
       // ============ EXTRACT VALUES ============
       const currentY = event.contentOffset.y;
       const diff = currentY - lastScrollY.value;
       lastScrollY.value = currentY;
-      
-      // ============ MIN SCROLL CHECK ============
-      const MIN_SCROLL = 10; // Fixed threshold
+
+      // ============ MIN SCROLL THRESHOLD ============
+      const MIN_SCROLL = 10;
       if (Math.abs(diff) < MIN_SCROLL) return;
-      
+
       // ============ DIRECTION ============
       const direction = diff > 0 ? 'down' : 'up';
       if (lastDirection.value === direction) return;
       lastDirection.value = direction;
-      
-      // ============ HEADER LOGIC ONLY ============
-      // Tabs are fixed, only header hides/shows
-      const isHeaderHidden = animations.isHeaderHidden.value;
-      
-      if (direction === 'down' && !isHeaderHidden) {
+
+      // ============ HEADER LOGIC ============
+      // Hide header on scroll down, show on scroll up.
+      // Tabs are fixed — only the header animates.
+      const isHidden = animations.isHeaderHidden.value;
+
+      if (direction === 'down' && !isHidden) {
         animations.slideHeader(true, headerHeight);
-      } else if (direction === 'up' && isHeaderHidden) {
+      } else if (direction === 'up' && isHidden) {
         animations.slideHeader(false, headerHeight);
       }
     },
-    
+
     onBeginDrag: () => {
       'worklet';
+      // Reset direction tracking on each new gesture so the first
+      // movement of a new drag always triggers the header logic.
       lastDirection.value = null;
-    }
+    },
   });
 
   // ==================== RETURN VALUES ====================
   return {
-    // Scroll handler
     scrollHandler,
-    
-    // Animation values (for styles)
     headerTranslateY: animations.headerTranslateY,
-    
-    // Manual controls
+    isHeaderHidden: animations.isHeaderHidden,
+
+    // Manual controls — plain functions so they work as worklets
     showHeader: () => {
       'worklet';
       animations.slideHeader(false, headerHeight);
@@ -77,9 +75,5 @@ export const useScrollHandler = (config: ScrollHandlerConfig) => {
       'worklet';
       animations.slideHeader(true, headerHeight);
     },
-    
-    // Logic values (for debugging)
-    isMusicPlaying: logic.isMusicPlayingValue,
-    isHeaderHidden: animations.isHeaderHidden
   };
 };

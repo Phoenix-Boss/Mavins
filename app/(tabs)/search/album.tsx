@@ -19,10 +19,6 @@ import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-import MavinEngine, {
-  PlaylistInfo,
-  StreamInfoItem,
-} from "@/modules/mavin-engine";
 import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
@@ -38,7 +34,7 @@ import {
   moderateScale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "@/modules/mavin-eq";
+import { useActiveTrack } from "react-native-track-player";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local types
@@ -72,35 +68,26 @@ const formatDuration = (seconds: number): string => {
   return `${m}:${s.toString().padStart(2, "0")}`;
 };
 
-const playlistInfoToAlbumData = (
-  info: PlaylistInfo,
-  artistOverride: string
-): AlbumPageData => {
-  const thumbnail =
-    info.thumbnails.find((t) => t.resolutionLevel === "HIGH")?.url ??
-    info.thumbnails[0]?.url ??
-    unknownTrackImageUri;
-
-  const songs: AlbumSong[] = info.items
-    .filter((i): i is StreamInfoItem => i.type === "stream")
-    .map((s) => ({
-      id: s.url.split("v=")[1]?.split("&")[0] ?? s.url,
+// Mock data fetcher - replace with your actual API
+const fetchAlbumData = async (id: string, artistOverride: string): Promise<AlbumPageData> => {
+  // TODO: Replace with actual API call
+  // For now, return mock data or fetch from your backend
+  const response = await fetch(`https://your-api.com/album?id=${encodeURIComponent(id)}`);
+  const data = await response.json();
+  
+  return {
+    title: data.name || "Unknown Album",
+    subtitle: data.uploaderName || artistOverride,
+    second_subtitle: `${data.streamCount || 0} songs`,
+    thumbnail: data.thumbnails?.[0]?.url || unknownTrackImageUri,
+    songs: data.items?.map((s: any) => ({
+      id: s.url?.split("v=")[1]?.split("&")[0] || s.url,
       title: s.name,
       artist: artistOverride || s.uploaderName,
-      thumbnail:
-        s.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
-        s.thumbnails[0]?.url ??
-        thumbnail,
+      thumbnail: s.thumbnails?.[0]?.url || data.thumbnails?.[0]?.url,
       url: s.url,
       duration: formatDuration(s.duration),
-    }));
-
-  return {
-    title: info.name,
-    subtitle: info.uploaderName,
-    second_subtitle: `${info.streamCount} songs`,
-    thumbnail,
-    songs,
+    })) || [],
   };
 };
 
@@ -128,23 +115,23 @@ export default function AlbumPageScreen() {
   const isFloatingPlayerNotVisible = !(activeTrack ?? lastActiveTrack);
 
   useEffect(() => {
-    const fetchAlbumData = async () => {
+    const loadAlbumData = async () => {
       if (!id) {
         setLoading(false);
         return;
       }
       setLoading(true);
       try {
-        console.log(`[AlbumPage] fetching playlist: ${id}`);
-        const info: PlaylistInfo = await MavinEngine.getPlaylistInfo(id, 0);
-        setAlbumData(playlistInfoToAlbumData(info, artist ?? ""));
+        console.log(`[AlbumPage] fetching album: ${id}`);
+        const data = await fetchAlbumData(id, artist ?? "");
+        setAlbumData(data);
       } catch (error) {
         console.error("[AlbumPage] error fetching album:", error);
       } finally {
         setLoading(false);
       }
     };
-    fetchAlbumData();
+    loadAlbumData();
   }, [id, artist]);
 
   const handleSongSelect = (song: AlbumSong, playlist?: AlbumSong[]) => {

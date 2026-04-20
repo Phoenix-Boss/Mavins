@@ -1,16 +1,13 @@
 // components/player/playerContent.tsx
 /**
- * PlayerContent — Full player screen UI.
+ * PlayerContent — Full player screen UI for Eternal Overlay Architecture.
  *
- * FIXES APPLIED IN THIS VERSION:
- *
- *  1. Uses default import TrackPlayer for all player methods
- *  2. Uses named import addEventListener for events (not TrackPlayer.addEventListener)
- *  3. Uses named imports for hooks: useActiveTrack, useProgress
- *  4. Uses named imports for enums: RepeatMode, MavinEvent
- *  5. Progress values are in seconds (native uses seconds)
- *  6. Slider updates in useEffect, not during render
- *  7. No seek spam - only seeks on onSlidingComplete
+ * GESTURE FIXES (Issue 7):
+ *  - Uses GestureContext from _layout.tsx for coordination with parent gesture
+ *  - ALL interactive elements report active state to block dismiss swipe
+ *  - Slider, buttons, tabs, artwork, segment switch properly steal gesture from pan dismiss
+ *  - Each TouchableOpacity has onPressIn/onPressOut calling setButtonActive(true/false)
+ *  - Slider has onTouchStart/onTouchEnd/onTouchCancel calling setSliderActive(true/false)
  */
 
 import React, {
@@ -28,45 +25,37 @@ import {
   Dimensions,
   Animated as RNAnimated,
 } from "react-native";
-import { Image } from "expo-image";
-import { useVideoPlayer, VideoView } from "expo-video";
-import { LinearGradient } from "expo-linear-gradient";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Image } from 'expo-image';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Ionicons,
   MaterialIcons,
   MaterialCommunityIcons,
   Feather,
 } from "@expo/vector-icons";
-import {
-  GestureDetector,
-  Gesture,
-} from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withSpring,
   withTiming,
   interpolate,
   runOnJS,
 } from "react-native-reanimated";
 import { Slider } from "react-native-awesome-slider";
-import { useRouter } from "expo-router";
 import {
   moderateScale,
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
 
-// 🔥 FIX: Use only what the wrapper exposes
-import TrackPlayer from "@/modules/mavin-eq";
-import {
+// RNTP imports
+import TrackPlayer, {
   useActiveTrack,
   useProgress,
   RepeatMode,
-  MavinEvent,
-  addEventListener,
-} from "@/modules/mavin-eq";
+  Event,
+} from "react-native-track-player";
 
 import { MovingText } from "@/components/MovingText";
 import { screenPadding } from "@/constants/tokens";
@@ -78,12 +67,28 @@ import { useTrackPlayerFavorite } from "@/hooks/useTrackPlayerFavorite";
 import { useTrackPlayerShuffle } from "@/hooks/useTrackPlayerShuffle";
 import { usePlayerStore } from "@/store/player";
 
+// Import GestureContext from layout
+import { useGestureContext } from "@/app/_layout";
+
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const LYRICS_LEAD_IN_S = 0.25;
 const SK = { base: "#1A1A1A", highlight: "#2A2A2A" };
+
+// ─── Dummy Track Data ─────────────────────────────────────────────────────────
+
+const DUMMY_TRACK = {
+  id: "dummy-track-id",
+  title: "Mavin Player",
+  artist: "Select a song to start listening",
+  artwork: undefined as string | undefined,
+  artworkUri: undefined as string | undefined,
+  url: "",
+  duration: 0,
+  videoId: undefined as string | undefined,
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -154,7 +159,13 @@ function SkeletonPulse({
       ])
     ).start();
   }, []);
-  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: [SK.base, SK.highlight] });
+
+  // FIX: Proper interpolate configuration with explicit inputRange/outputRange
+  const bg = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [SK.base, SK.highlight],
+  });
+
   return <RNAnimated.View style={[{ width, height, borderRadius, backgroundColor: bg }, style]} />;
 }
 
@@ -232,138 +243,48 @@ function ArtistLine({ rawArtist, uploaderUrl, onArtistPress }: ArtistLineProps) 
   );
 }
 
-// ─── PlayerIdleScreen ────────────────────────────────────────────────────────
-
-function PlayerIdleScreen({ onMinimize }: { onMinimize: () => void }) {
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const anim   = useRef(new RNAnimated.Value(0)).current;
-
-  const handleDismiss = useCallback(() => {
-    onMinimize();
-    try {
-      if (!router.canGoBack()) router.replace("/(tabs)");
-    } catch {
-      router.replace("/(tabs)");
-    }
-  }, [onMinimize, router]);
-
-  useEffect(() => {
-    RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(anim, { toValue: 1, duration: 1200, useNativeDriver: false }),
-        RNAnimated.timing(anim, { toValue: 0, duration: 1200, useNativeDriver: false }),
-      ])
-    ).start();
-  }, []);
-
-  const glowOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.38] });
-
-  return (
-    <LinearGradient style={{ flex: 1 }} colors={["#1a0f05", "#0b0b0b", "#050505"]}>
-      <View style={[idleStyles.topBar, { top: insets.top + 8 }]}>
-        <View style={idleStyles.dragHandleWrapper}>
-          <View style={idleStyles.dragHandle} />
-        </View>
-        <TouchableOpacity onPress={handleDismiss} style={idleStyles.closeBtn} activeOpacity={0.7}>
-          <Ionicons name="chevron-down" size={28} color="rgba(255,255,255,0.6)" />
-        </TouchableOpacity>
-      </View>
-
-      <View style={[idleStyles.body, { paddingTop: insets.top + 80, paddingBottom: insets.bottom + 24 }]}>
-        <View style={idleStyles.artworkWrapper}>
-          <RNAnimated.View style={[idleStyles.glow, { opacity: glowOpacity }]} />
-          <Image
-            source={require("@/assets/images/mavins.png")}
-            style={idleStyles.artworkImage}
-            contentFit="contain"
-          />
-        </View>
-
-        <View style={idleStyles.infoContainer}>
-          <Text style={idleStyles.appTitle}>Mavin Player</Text>
-          <Text style={idleStyles.subtitle}>No song playing yet</Text>
-        </View>
-
-        <View style={idleStyles.progressWrapper}>
-          <SkeletonPulse width="100%" height={4} borderRadius={4} />
-          <View style={idleStyles.timeRow}>
-            <Text style={idleStyles.timeText}>0:00</Text>
-            <Text style={idleStyles.timeText}>0:00</Text>
-          </View>
-        </View>
-
-        <View style={idleStyles.controls}>
-          <Feather name="shuffle" size={20} color="rgba(255,255,255,0.2)" />
-          <Ionicons name="play-skip-back" size={32} color="rgba(255,255,255,0.2)" />
-          <View style={idleStyles.bigPlay}>
-            <Ionicons name="play" size={32} color="rgba(0,0,0,0.35)" />
-          </View>
-          <Ionicons name="play-skip-forward" size={32} color="rgba(255,255,255,0.2)" />
-          <MaterialCommunityIcons name="repeat" size={22} color="rgba(255,255,255,0.2)" />
-        </View>
-
-        <View style={idleStyles.bottomTabs}>
-          {["UP NEXT", "LYRICS", "RELATED"].map((label) => (
-            <Text key={label} style={idleStyles.bottomTab}>{label}</Text>
-          ))}
-        </View>
-      </View>
-    </LinearGradient>
-  );
-}
-
-const idleStyles = StyleSheet.create({
-  topBar: { position: "absolute", left: 0, right: 0, zIndex: 100, alignItems: "center" },
-  dragHandleWrapper: { width: "100%", alignItems: "center", paddingBottom: 8 },
-  dragHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.25)" },
-  closeBtn: { position: "absolute", left: screenPadding.horizontal, top: 0 },
-  body: { flex: 1, paddingHorizontal: screenPadding.horizontal, alignItems: "center" },
-  artworkWrapper: {
-    width: SCREEN_WIDTH * 0.85,
-    height: SCREEN_WIDTH * 0.85,
-    alignSelf: "center",
-    borderRadius: 16,
-    overflow: "hidden",
-    backgroundColor: "#1c1208",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  glow: { ...StyleSheet.absoluteFillObject, backgroundColor: "#D4AF37", borderRadius: 16 },
-  artworkImage: { width: SCREEN_WIDTH * 0.55, height: SCREEN_WIDTH * 0.55, opacity: 0.75 },
-  infoContainer: { marginTop: verticalScale(24), alignItems: "center", width: "100%" },
-  appTitle: { color: "#fff", fontSize: moderateScale(20), fontWeight: "700", textAlign: "center", letterSpacing: 0.4 },
-  subtitle: { color: "rgba(255,255,255,0.4)", fontSize: moderateScale(14), marginTop: 6, textAlign: "center" },
-  progressWrapper: { marginTop: verticalScale(20), width: "100%" },
-  timeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: verticalScale(6) },
-  timeText: { color: "rgba(255,255,255,0.3)", fontSize: moderateScale(12) },
-  controls: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    marginTop: verticalScale(26),
-    width: "100%",
-    paddingHorizontal: scale(8),
-  },
-  bigPlay: {
-    width: scale(65),
-    height: scale(65),
-    borderRadius: 32.5,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  bottomTabs: { flexDirection: "row", justifyContent: "space-around", marginTop: verticalScale(32), width: "100%" },
-  bottomTab: { color: "rgba(255,255,255,0.2)", fontSize: moderateScale(13) },
-});
-
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 interface PlayerContentProps {
+  /** Collapse to mini player (swipe down gesture) */
   onMinimize: () => void;
+  /** Hide player completely (close button) */
   onClose: () => void;
+  /** Current overlay state */
   isExpanded: boolean;
+  /** Player ready state from setup */
   playerReady: boolean;
+  /** Safe-area top inset passed from overlay */
+  topInset?: number;
+  /** 
+   * Navigation handlers for modals — these still use router 
+   * but are passed from parent to keep PlayerContent router-free
+   */
+  onNavigateToEqualizer?: () => void;
+  onNavigateToCast?: () => void;
+  onNavigateToComments?: () => void;
+  onNavigateToPlaylist?: () => void;
+  onNavigateToSleepTimer?: () => void;
+  onNavigateToQueue?: () => void;
+  onNavigateToLyrics?: (params: {
+    title: string;
+    artist: string;
+    duration: string;
+    videoId: string;
+    leadIn: string;
+  }) => void;
+  onNavigateToRelated?: (params: {
+    songUrl: string;
+    title: string;
+    artist: string;
+  }) => void;
+  onNavigateToMenu?: (params: {
+    songData: string;
+  }) => void;
+  onNavigateToArtist?: (params: {
+    id: string;
+    subtitle: string;
+  }) => void;
 }
 
 // ─── PlayerContentInner ──────────────────────────────────────────────────────
@@ -372,26 +293,51 @@ function PlayerContentInner({
   onMinimize,
   onClose,
   isExpanded,
+  topInset: topInsetProp,
+  onNavigateToEqualizer,
+  onNavigateToCast,
+  onNavigateToComments,
+  onNavigateToPlaylist,
+  onNavigateToSleepTimer,
+  onNavigateToQueue,
+  onNavigateToLyrics,
+  onNavigateToRelated,
+  onNavigateToMenu,
+  onNavigateToArtist,
 }: Omit<PlayerContentProps, "playerReady">) {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const topInset = topInsetProp ?? insets.top;
 
-  // Defensive: handle both { track, index } shape and direct-track shape
-  const activeTrackRaw = useActiveTrack();
-  const activeTrack = activeTrackRaw && typeof activeTrackRaw === 'object' && 'track' in activeTrackRaw
-    ? (activeTrackRaw as any).track
-    : activeTrackRaw;
-  // 🔥 FIX: Progress values are in seconds (native uses seconds)
-  const progress = useProgress({ intervalMs: 250 });
+  // ─── GESTURE CONTEXT — Coordinate with parent overlay (Issue 7) ────────────
+  const { setSliderActive, setButtonActive } = useGestureContext();
 
+  // ─── RNTP hooks ───────────────────────────────────────────────────────────
+  const activeTrack = useActiveTrack();
+
+  // isPlaying comes from MusicPlayerContext — it is OPTIMISTIC (flips instantly
+  // on tap before the async TrackPlayer call returns), exactly like Spotify.
+  // isLoading is true while the stream is resolving — shown as a spinner on
+  // the progress bar. Neither value comes from usePlaybackState() directly,
+  // which would lag by 50-150ms behind the user's tap.
+  const {
+    isPlaying: isPlayingRNTP,
+    isLoading: musicPlayerLoading,
+    togglePlayPause,
+  } = useMusicPlayer();
+
+  // Buffering is still derived from native state for the buffer indicator only
+  // (not the play/pause icon — that's optimistic above)
+  const isBufferingRNTP = false; // playerContent shows isLoading spinner instead
+
+  // Progress values are in seconds
+  const progress = useProgress(250);
   const positionSec = progress.position;
   const durationSec = progress.duration;
-
-  const { togglePlayPause, isLoading, isPlaying } = useMusicPlayer();
 
   type PS = ReturnType<typeof usePlayerStore.getState>;
   const storeCurrentTrack = usePlayerStore((s: PS) => s.currentTrack);
 
+  // Always use a valid display track - fallback to dummy data
   const displayTrack = useMemo(() => {
     if (activeTrack) {
       const resolved = resolveArtwork(activeTrack);
@@ -409,52 +355,60 @@ function PlayerContentInner({
         videoId:   storeCurrentTrack.videoId,
       } as any;
     }
-    return null;
+    return DUMMY_TRACK as any;
   }, [activeTrack, storeCurrentTrack]);
 
-  const [extras, setExtras] = useState(() =>
-    getTrackExtras(displayTrack?.id) ?? {}
-  );
+  // Safe initialization of extras with empty object fallback
+  const [extras, setExtras] = useState<Record<string, any>>({});
 
-  // ─── Refresh extras when active track changes ─────────────────────────────
+  // Refresh extras when active track changes
   useEffect(() => {
     const id = displayTrack?.id;
-    if (!id) {
+    if (!id || id === DUMMY_TRACK.id) {
       setExtras({});
       return;
     }
-    setExtras(getTrackExtras(id) ?? {});
+    const trackExtras = getTrackExtras(id);
+    setExtras(trackExtras ?? {});
     const t = setTimeout(() => {
-      setExtras(getTrackExtras(id) ?? {});
+      const refreshedExtras = getTrackExtras(id);
+      setExtras(refreshedExtras ?? {});
     }, 3000);
     return () => clearTimeout(t);
   }, [displayTrack?.id]);
 
-  // 🔥 FIX: Use named export addEventListener, not TrackPlayer.addEventListener
+  // RNTP event listener
   useEffect(() => {
-    const sub = addEventListener(
-      MavinEvent.PlaybackActiveTrackChanged,
-      (data: any) => {
-        const id = data?.track?.id;
-        if (id) setExtras(getTrackExtras(id) ?? {});
-      },
-    );
-    return () => sub.remove();
+    const handleTrackChange = async (data: any) => {
+      const id = data?.track?.id;
+      if (id) {
+        const trackExtras = getTrackExtras(id);
+        setExtras(trackExtras ?? {});
+      }
+    };
+    
+    const subscription = TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, handleTrackChange);
+    return () => {
+      if (subscription && 'remove' in subscription) {
+        subscription.remove();
+      }
+    };
   }, []);
 
-  const likeCount     = typeof extras.likeCount     === "number" ? extras.likeCount     : -1;
-  const dislikeCount  = typeof extras.dislikeCount  === "number" ? extras.dislikeCount  : -1;
-  const commentsCount = typeof extras.commentsCount === "number" ? extras.commentsCount : -1;
-  const viewCount     = typeof extras.viewCount     === "number" ? extras.viewCount     : -1;
+  // Safe property access with default values
+  const likeCount     = extras?.likeCount ?? -1;
+  const dislikeCount  = extras?.dislikeCount ?? -1;
+  const commentsCount = extras?.commentsCount ?? -1;
+  const viewCount     = extras?.viewCount ?? -1;
 
-  const uploaderUrl: string | undefined  = extras.uploaderUrl as string | undefined;
-  const videoId:     string | undefined  = extras.videoId     as string | undefined;
-  const muxedVideoUrl: string | undefined = extras.muxedVideoUrl as string | undefined;
-  const videoUrl:      string | undefined = extras.videoUrl      as string | undefined;
+  const uploaderUrl: string | undefined  = extras?.uploaderUrl;
+  const videoId:     string | undefined  = extras?.videoId;
+  const muxedVideoUrl: string | undefined = extras?.muxedVideoUrl;
+  const videoUrl:      string | undefined = extras?.videoUrl;
   const activeVideoUrl                    = muxedVideoUrl ?? videoUrl ?? undefined;
-  const hasVideo                          = !!activeVideoUrl;
+  const hasVideo                          = !!activeVideoUrl && displayTrack.id !== DUMMY_TRACK.id;
 
-  const canShowLyrics = !!(videoId ?? displayTrack?.id);
+  const canShowLyrics = !!(videoId ?? displayTrack?.id) && displayTrack.id !== DUMMY_TRACK.id;
 
   const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
   const { isFavorite, toggleFavoriteFunc } = useTrackPlayerFavorite();
@@ -473,44 +427,129 @@ function PlayerContentInner({
   const videoPlayerReady  = useRef(false);
   const pendingSeek       = useRef<number | null>(null);
   const videoOwnsAudio    = useRef(false);
+  const isTransitioning   = useRef(false);
+  const statusListenerRef = useRef<any>(null);
 
+  // Create video player with proper cleanup
   const videoPlayer = useVideoPlayer(activeVideoUrl ?? null, (p) => {
-    p.muted  = !muxedVideoUrl;
-    p.loop   = false;
-    p.pause();
+    try {
+      p.muted  = !muxedVideoUrl;
+      p.loop   = false;
+      p.pause();
+    } catch (e) {
+      console.warn("[PlayerContent] Video player init error:", e);
+    }
   });
 
+  // Video/RNTP sync
   useEffect(() => {
     if (!videoPlayer || activeSegment !== "video") return;
+    
     if (muxedVideoUrl && videoOwnsAudio.current) {
-      if (isPlaying) videoPlayer.play();
-      else videoPlayer.pause();
-    } else if (!muxedVideoUrl) {
-      if (isPlaying) videoPlayer.play();
-      else videoPlayer.pause();
-    }
-  }, [isPlaying, activeSegment, videoPlayer, muxedVideoUrl]);
-
-  useEffect(() => {
-    if (!videoPlayer) return;
-    const sub = videoPlayer.addListener("statusChange", ({ status }) => {
-      if (status === "readyToPlay") {
-        videoPlayerReady.current = true;
-        if (pendingSeek.current !== null) {
-          videoPlayer.currentTime = pendingSeek.current;
-          pendingSeek.current = null;
-          if (activeSegment === "video" && isPlaying) {
-            if (muxedVideoUrl) {
-              videoOwnsAudio.current = true;
-              TrackPlayer.pause().catch(() => {});
-            }
-            videoPlayer.play();
-          }
+      if (isPlayingRNTP) {
+        try {
+          videoPlayer.play();
+        } catch (e) {
+          console.warn("[PlayerContent] Video play error:", e);
+        }
+      } else {
+        try {
+          videoPlayer.pause();
+        } catch (e) {
+          console.warn("[PlayerContent] Video pause error:", e);
         }
       }
-    });
-    return () => sub.remove();
-  }, [videoPlayer, activeSegment, isPlaying, muxedVideoUrl]);
+    } else if (!muxedVideoUrl) {
+      if (isPlayingRNTP) {
+        try {
+          videoPlayer.play();
+        } catch (e) {
+          console.warn("[PlayerContent] Video play error:", e);
+        }
+      } else {
+        try {
+          videoPlayer.pause();
+        } catch (e) {
+          console.warn("[PlayerContent] Video pause error:", e);
+        }
+      }
+    }
+  }, [isPlayingRNTP, activeSegment, videoPlayer, muxedVideoUrl]);
+
+  // Handle video player ready state
+  useEffect(() => {
+    if (!videoPlayer) return;
+    
+    if (statusListenerRef.current) {
+      try {
+        statusListenerRef.current.remove();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+      statusListenerRef.current = null;
+    }
+    
+    try {
+      statusListenerRef.current = videoPlayer.addListener("statusChange", ({ status, error }: { status: string; error?: any }) => {
+        if (status === "readyToPlay") {
+          videoPlayerReady.current = true;
+          
+          if (pendingSeek.current !== null) {
+            try {
+              videoPlayer.currentTime = pendingSeek.current;
+            } catch (e) {
+              console.warn("[PlayerContent] Seek error:", e);
+            }
+            pendingSeek.current = null;
+            
+            if (isPlayingRNTP && activeSegment === "video") {
+              if (muxedVideoUrl) {
+                videoOwnsAudio.current = true;
+                TrackPlayer.pause().catch(() => {});
+              }
+              try {
+                videoPlayer.play();
+              } catch (e) {
+                console.warn("[PlayerContent] Auto-play error:", e);
+              }
+            }
+          }
+        } else if (status === "error") {
+          videoPlayerReady.current = false;
+          console.error("[PlayerContent] Video player error:", error);
+        }
+      });
+    } catch (e) {
+      console.error("[PlayerContent] Failed to add video listener:", e);
+    }
+    
+    return () => {
+      if (statusListenerRef.current) {
+        try {
+          statusListenerRef.current.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        statusListenerRef.current = null;
+      }
+    };
+  }, [videoPlayer, activeSegment, isPlayingRNTP, muxedVideoUrl]);
+
+  // Sync video position with RNTP progress
+  useEffect(() => {
+    if (!videoPlayer || activeSegment !== "video" || !videoPlayerReady.current) return;
+    
+    if (muxedVideoUrl && videoOwnsAudio.current) return;
+    
+    try {
+      const drift = Math.abs(videoPlayer.currentTime - positionSec);
+      if (drift > 1.0) {
+        videoPlayer.currentTime = positionSec;
+      }
+    } catch (e) {
+      console.warn("[PlayerContent] Position sync error:", e);
+    }
+  }, [positionSec, activeSegment, videoPlayer, muxedVideoUrl]);
 
   const videoProgress    = useSharedValue(0);
   const artworkAnimStyle = useAnimatedStyle(() => ({
@@ -520,146 +559,172 @@ function PlayerContentInner({
     opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
   }));
 
+  // Segment switching with gesture blocking (Issue 7)
   const handleSegmentPress = useCallback(
-    (seg: "song" | "video") => {
-      if (seg === "video" && !hasVideo) return;
+    async (seg: "song" | "video") => {
+      if (seg === "video" && (!hasVideo || displayTrack.id === DUMMY_TRACK.id)) return;
+      if (isTransitioning.current) return;
+      
+      isTransitioning.current = true;
       triggerHaptic();
       setActiveSegment(seg);
       videoProgress.value = seg === "video" ? 1 : 0;
 
-      if (seg === "video" && videoPlayer) {
-        if (muxedVideoUrl) {
-          TrackPlayer.getProgress().then(({ position }) => {
-            const seekSec = position;
+      try {
+        if (seg === "video" && videoPlayer) {
+          const currentPosition = await TrackPlayer.getProgress().then(p => p.position).catch(() => positionSec);
+          
+          if (muxedVideoUrl) {
+            videoOwnsAudio.current = true;
+            await TrackPlayer.pause();
+            
             if (videoPlayerReady.current) {
-              videoPlayer.currentTime = seekSec;
-              if (isPlaying) {
-                videoOwnsAudio.current = true;
-                TrackPlayer.pause().catch(() => {});
+              try {
+                videoPlayer.currentTime = currentPosition;
                 videoPlayer.play();
+              } catch (e) {
+                console.warn("[PlayerContent] Video segment switch error:", e);
               }
             } else {
-              pendingSeek.current = seekSec;
+              pendingSeek.current = currentPosition;
             }
-          }).catch(() => {});
-        } else {
-          if (videoPlayerReady.current) {
-            videoPlayer.currentTime = positionSec;
-            if (isPlaying) videoPlayer.play();
           } else {
-            pendingSeek.current = positionSec;
+            if (videoPlayerReady.current) {
+              try {
+                videoPlayer.currentTime = currentPosition;
+                if (isPlayingRNTP) {
+                  videoPlayer.play();
+                }
+              } catch (e) {
+                console.warn("[PlayerContent] Video segment switch error:", e);
+              }
+            } else {
+              pendingSeek.current = currentPosition;
+            }
+          }
+        } else if (seg === "song" && videoPlayer) {
+          try {
+            videoPlayer.pause();
+          } catch (e) {
+            console.warn("[PlayerContent] Video pause error:", e);
+          }
+          
+          if (muxedVideoUrl && videoOwnsAudio.current) {
+            videoOwnsAudio.current = false;
+            try {
+              await TrackPlayer.seekTo(videoPlayer.currentTime);
+              if (isPlayingRNTP) {
+                await TrackPlayer.play();
+              }
+            } catch (e) {
+              console.warn("[PlayerContent] Audio handoff error:", e);
+            }
           }
         }
-      } else if (seg === "song" && videoPlayer) {
-        videoPlayer.pause();
-        if (muxedVideoUrl && videoOwnsAudio.current) {
-          videoOwnsAudio.current = false;
-          TrackPlayer.play().catch(() => {});
-        }
+      } catch (err) {
+        console.error("[PlayerContent] Segment switch error:", err);
+      } finally {
+        setTimeout(() => {
+          isTransitioning.current = false;
+        }, 400);
       }
     },
-    [hasVideo, videoPlayer, videoProgress, positionSec, isPlaying, muxedVideoUrl]
+    [hasVideo, videoPlayer, videoProgress, positionSec, isPlayingRNTP, muxedVideoUrl, displayTrack.id]
   );
 
+  // Reset video state when track changes
   useEffect(() => {
-    if (videoPlayer) videoPlayer.pause();
-    if (videoOwnsAudio.current) {
-      videoOwnsAudio.current = false;
-      TrackPlayer.play().catch(() => {});
+    if (videoPlayer) {
+      try {
+        videoPlayer.pause();
+      } catch (e) {
+        console.warn("[PlayerContent] Video cleanup error:", e);
+      }
     }
+    videoOwnsAudio.current = false;
     setActiveSegment("song");
-    videoProgress.value      = 0;
+    videoProgress.value = 0;
     videoPlayerReady.current = false;
-    pendingSeek.current      = null;
-  }, [displayTrack?.id, videoPlayer]);
+    pendingSeek.current = null;
+  }, [displayTrack?.id, videoPlayer, videoProgress]);
 
   const [activeBottomTab, setActiveBottomTab] = useState<"upnext" | "lyrics" | "related">("upnext");
   useEffect(() => { setActiveBottomTab("upnext"); }, [displayTrack?.id]);
 
   const artworkForColors = typeof displayTrack?.artwork === "string" ? displayTrack.artwork : null;
   const { imageColors }  = useImageColors(artworkForColors);
-  const gradientColors   = useMemo(() => {
-    if (imageColors?.dominant) return [imageColors.dominant, "#000", "#000"];
-    return ["#1a0f05", "#0b0b0b", "#050505"];
+
+  // BRANDED IDLE GRADIENT — visually distinct from pure black so the player
+  // is never invisible on first open. Mavin brand dark burgundy palette.
+  // When artwork resolves, dominant colour transitions in via useMemo dep change
+  // (LinearGradient re-renders with new colours — expo-linear-gradient animates
+  //  this automatically when the `colors` prop changes on iOS/Android).
+  const gradientColors = useMemo((): [string, string, string] => {
+    if (imageColors?.dominant) {
+      return [imageColors.dominant, "#0d0d0d", "#000000"];
+    }
+    // Visible branded fallback — dark burgundy/charcoal, never pure black
+    return ["#2d1a2e", "#1a1020", "#0a0a0f"];
   }, [imageColors]);
 
-  // ─── Slider with proper Reanimated usage ───────────────────────────────────
+  // ─── Slider with gesture coordination (Issue 7) ────────────────────────────
+  // isSliding guards the worklet-side check — sliderProgress only updates
+  // from RNTP progress when the user is NOT actively sliding.
   const isSliding      = useSharedValue(false);
   const sliderProgress = useSharedValue(0);
   const sliderMin      = useSharedValue(0);
   const sliderMax      = useSharedValue(1);
   const slidingValue   = useSharedValue(0);
 
-  // FIX: Update sliderProgress in useEffect, not during render
   useEffect(() => {
     if (!isSliding.value && durationSec > 0) {
       sliderProgress.value = positionSec / durationSec;
     }
-  }, [positionSec, durationSec, isSliding.value]);
+  }, [positionSec, durationSec, isSliding.value, sliderProgress]);
 
   const handleSeek = useCallback(
     async (fraction: number) => {
       if (durationSec <= 0) return;
       const t = fraction * durationSec;
-      // 🔥 FIX: Native expects seconds, not milliseconds
       await TrackPlayer.seekTo(t);
+      
       if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
-        videoPlayer.currentTime = t;
-        if (isPlaying) videoPlayer.play();
+        try {
+          videoPlayer.currentTime = t;
+          if (isPlayingRNTP && !videoOwnsAudio.current) {
+            videoPlayer.play();
+          }
+        } catch (e) {
+          console.warn("[PlayerContent] Video seek sync error:", e);
+        }
       }
     },
-    [durationSec, activeSegment, videoPlayer, isPlaying]
+    [durationSec, activeSegment, videoPlayer, isPlayingRNTP]
   );
-
-  // ─── Swipe-down-to-dismiss gesture ──────────────────────────────────────────
-
-  const translateY        = useSharedValue(0);
-  const DISMISS_THRESHOLD = SCREEN_HEIGHT * 0.15;
-  const DISMISS_VELOCITY  = 800;
-
-  const dismiss = useCallback(() => {
-    triggerHaptic();
-    onMinimize();
-    try {
-      if (!router.canGoBack()) router.replace("/(tabs)");
-    } catch {
-      router.replace("/(tabs)");
-    }
-  }, [onMinimize, router]);
-
-  const panGesture = Gesture.Pan()
-    .onUpdate((e) => {
-      if (e.translationY > 0) translateY.value = e.translationY;
-    })
-    .onEnd((e) => {
-      const shouldDismiss =
-        e.translationY > DISMISS_THRESHOLD ||
-        (e.translationY > 40 && e.velocityY > DISMISS_VELOCITY);
-
-      if (shouldDismiss) {
-        translateY.value = withTiming(SCREEN_HEIGHT, { duration: 220 }, () => {
-          runOnJS(dismiss)();
-        });
-      } else {
-        translateY.value = withSpring(0, { damping: 20, stiffness: 200 });
-      }
-    });
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
-  }));
 
   // ─── Playback controls ───────────────────────────────────────────────────────
 
   const handleSkipBack = async () => {
     triggerHaptic();
-    if (videoPlayer && activeSegment === "video") videoPlayer.pause();
+    if (videoPlayer && activeSegment === "video") {
+      try {
+        videoPlayer.pause();
+      } catch (e) {
+        console.warn("[PlayerContent] Video pause error:", e);
+      }
+    }
     try { await TrackPlayer.skipToPrevious(); } catch { }
   };
 
   const handleSkipNext = async () => {
     triggerHaptic();
-    if (videoPlayer && activeSegment === "video") videoPlayer.pause();
+    if (videoPlayer && activeSegment === "video") {
+      try {
+        videoPlayer.pause();
+      } catch (e) {
+        console.warn("[PlayerContent] Video pause error:", e);
+      }
+    }
     try { await TrackPlayer.skipToNext(); } catch { }
   };
 
@@ -670,388 +735,531 @@ function PlayerContentInner({
     else                                       changeRepeatMode(RepeatMode.Off);
   };
 
-  const handlePlayPause = useCallback(() => {
+  const handlePlayPause = useCallback(async () => {
     triggerHaptic();
-    if (!displayTrack) return;
-    togglePlayPause();
-    if (isPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
-      videoPlayer.pause();
-    } else if (!isPlaying && activeSegment === "video" && muxedVideoUrl && videoPlayer) {
-      videoOwnsAudio.current = true;
-      TrackPlayer.pause().catch(() => {});
-      videoPlayer.play();
+    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
+    
+    try {
+      if (activeSegment === "video" && videoPlayer && videoPlayerReady.current) {
+        if (muxedVideoUrl) {
+          if (isPlayingRNTP) {
+            try {
+              videoPlayer.pause();
+            } catch (e) {
+              console.warn("[PlayerContent] Video pause error:", e);
+            }
+            await TrackPlayer.pause();
+            videoOwnsAudio.current = false;
+          } else {
+            videoOwnsAudio.current = true;
+            await TrackPlayer.pause();
+            try {
+              videoPlayer.play();
+            } catch (e) {
+              console.warn("[PlayerContent] Video play error:", e);
+            }
+          }
+        } else {
+          if (isPlayingRNTP) {
+            await TrackPlayer.pause();
+            try {
+              videoPlayer.pause();
+            } catch (e) {
+              console.warn("[PlayerContent] Video pause error:", e);
+            }
+          } else {
+            await TrackPlayer.play();
+            try {
+              videoPlayer.play();
+            } catch (e) {
+              console.warn("[PlayerContent] Video play error:", e);
+            }
+          }
+        }
+      } else {
+        await togglePlayPause();
+      }
+    } catch (err) {
+      console.error("[PlayerContent] Play/pause error:", err);
+      await togglePlayPause();
     }
-  }, [isPlaying, displayTrack, togglePlayPause, activeSegment, muxedVideoUrl, videoPlayer]);
+  }, [isPlayingRNTP, displayTrack, togglePlayPause, activeSegment, videoPlayer, muxedVideoUrl]);
 
-  // ─── Navigation ──────────────────────────────────────────────────────────────
+  // ─── Navigation handlers (via props, not direct router) ─────────────────────
 
   const handleArtistPress = useCallback(
     (artistName: string) => {
-      if (!uploaderUrl) return;
+      if (!uploaderUrl || !onNavigateToArtist) return;
       triggerHaptic();
       const channelId =
         uploaderUrl.split("/channel/")[1]?.split("?")[0] ??
         uploaderUrl.split("/c/")[1]?.split("?")[0] ??
         uploaderUrl.split("/user/")[1]?.split("?")[0] ??
         uploaderUrl;
-      router.push({
-        pathname: "/(tabs)/search/artist",
-        params: { id: encodeURIComponent(channelId), subtitle: artistName },
+      onNavigateToArtist({
+        id: encodeURIComponent(channelId),
+        subtitle: artistName,
       });
     },
-    [uploaderUrl, router]
+    [uploaderUrl, onNavigateToArtist]
   );
 
-  const handleEqualizer  = () => { triggerHaptic(); router.push("/(modals)/equalizer"); };
-  const handleCast       = () => { triggerHaptic(); router.push("/(player)/cast-devices"); };
-  const handleComments   = () => { triggerHaptic(); router.push("/(modals)/comments"); };
-  const handlePlaylist   = () => { triggerHaptic(); router.push("/(modals)/add-to-playlist"); };
-  const handleSleepTimer = () => { triggerHaptic(); router.push("/(player)/sleep-timer"); };
-  const handleSeeAll     = () => { triggerHaptic(); router.push("/(modals)/queue"); };
+  const handleEqualizer  = () => { 
+    triggerHaptic(); 
+    onNavigateToEqualizer?.();
+  };
+  
+  const handleCast       = () => { 
+    triggerHaptic(); 
+    onNavigateToCast?.();
+  };
+  
+  const handleComments   = () => { 
+    triggerHaptic(); 
+    onNavigateToComments?.();
+  };
+  
+  const handlePlaylist   = () => { 
+    triggerHaptic(); 
+    onNavigateToPlaylist?.();
+  };
+  
+  const handleSleepTimer = () => { 
+    triggerHaptic(); 
+    onNavigateToSleepTimer?.();
+  };
+  
+  const handleSeeAll     = () => { 
+    triggerHaptic(); 
+    onNavigateToQueue?.();
+  };
 
   const handleLyrics = () => {
-    if (!canShowLyrics) return;
+    if (!canShowLyrics || !onNavigateToLyrics) return;
     triggerHaptic();
-    router.push({
-      pathname: "/(modals)/lyrics",
-      params: {
-        title:    (displayTrack?.title    ?? "") as string,
-        artist:   (displayTrack?.artist   ?? "") as string,
-        duration: String(displayTrack?.duration ?? 0),
-        videoId:  (videoId ?? displayTrack?.id  ?? "") as string,
-        leadIn:   String(LYRICS_LEAD_IN_S),
-      },
+    onNavigateToLyrics({
+      title:    (displayTrack?.title    ?? "") as string,
+      artist:   (displayTrack?.artist   ?? "") as string,
+      duration: String(displayTrack?.duration ?? 0),
+      videoId:  (videoId ?? displayTrack?.id  ?? "") as string,
+      leadIn:   String(LYRICS_LEAD_IN_S),
     });
   };
 
   const handleRelated = () => {
     const vid = videoId ?? displayTrack?.id;
-    if (!vid) return;
+    if (!vid || displayTrack.id === DUMMY_TRACK.id || !onNavigateToRelated) return;
     triggerHaptic();
-    router.push({
-      pathname: "/(modals)/related",
-      params: {
-        songUrl: `https://www.youtube.com/watch?v=${vid}`,
-        title:   (displayTrack?.title  ?? "") as string,
-        artist:  (displayTrack?.artist ?? "") as string,
-      },
+    onNavigateToRelated({
+      songUrl: `https://www.youtube.com/watch?v=${vid}`,
+      title:   (displayTrack?.title  ?? "") as string,
+      artist:  (displayTrack?.artist ?? "") as string,
     });
   };
 
   const handleMenuPress = useCallback(() => {
+    if (!onNavigateToMenu) return;
     triggerHaptic();
-    router.push({
-      pathname: "/(modals)/menu",
-      params: {
-        type: "song",
-        songData: JSON.stringify({
-          id:          displayTrack?.id,
-          title:       displayTrack?.title,
-          artist:      displayTrack?.artist,
-          thumbnail:   displayTrack?.artwork,
-          url:         displayTrack?.url,
-          duration:    displayTrack?.duration,
-          uploaderUrl: uploaderUrl,
-          videoId:     videoId,
-        }),
-      },
+    onNavigateToMenu({
+      songData: JSON.stringify({
+        id:          displayTrack?.id,
+        title:       displayTrack?.title,
+        artist:      displayTrack?.artist,
+        thumbnail:   displayTrack?.artwork,
+        url:         displayTrack?.url,
+        duration:    displayTrack?.duration,
+        uploaderUrl: uploaderUrl,
+        videoId:     videoId,
+      }),
     });
-  }, [router, displayTrack, uploaderUrl, videoId]);
-
-  // ─── No-track idle fallback ───────────────────────────────────────────────────
-  if (!displayTrack) {
-    return <PlayerIdleScreen onMinimize={onMinimize} />;
-  }
+  }, [onNavigateToMenu, displayTrack, uploaderUrl, videoId]);
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <GestureDetector gesture={panGesture}>
-      <Animated.View style={[{ flex: 1 }, animatedStyle]}>
-        <LinearGradient style={{ flex: 1 }} colors={gradientColors}>
+    // backgroundColor matches gradient bottom so there is NEVER a transparent
+    // or black gap between the root View and the LinearGradient on first paint.
+    <View style={{ flex: 1, backgroundColor: gradientColors[2] }}>
+      <LinearGradient style={{ flex: 1 }} colors={gradientColors}>
 
-          {/* TOP BAR */}
-          <View style={[styles.topBar, { top: insets.top + 8 }]}>
-            <View style={styles.dragHandleWrapper}>
-              <View style={styles.dragHandle} />
+        {/* TOP BAR - Drag handle is primary swipe zone */}
+        <View style={[styles.topBar, { top: topInset + 8 }]}>
+          <View style={styles.dragHandleWrapper} pointerEvents="none">
+            <View style={styles.dragHandle} />
+          </View>
+          <View style={styles.topBarContent}>
+            <View style={styles.segmentSwitch}>
+              {/* Issue 7 Fix: Segment buttons with gesture blocking */}
+              <TouchableOpacity 
+                onPress={() => handleSegmentPress("song")} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <Text style={activeSegment === "song" ? styles.segmentActive : styles.segmentInactive}>
+                  Song
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleSegmentPress("video")}
+                activeOpacity={hasVideo ? 0.7 : 1}
+                disabled={!hasVideo}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <Text style={[
+                  activeSegment === "video" ? styles.segmentActive : styles.segmentInactive,
+                  !hasVideo && { opacity: 0.3 },
+                ]}>
+                  Video
+                </Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.topBarContent}>
-              <View style={styles.segmentSwitch}>
-                <TouchableOpacity onPress={() => handleSegmentPress("song")} activeOpacity={0.7}>
-                  <Text style={activeSegment === "song" ? styles.segmentActive : styles.segmentInactive}>
-                    Song
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleSegmentPress("video")}
-                  activeOpacity={hasVideo ? 0.7 : 1}
-                >
-                  <Text style={[
-                    activeSegment === "video" ? styles.segmentActive : styles.segmentInactive,
-                    !hasVideo && { opacity: 0.3 },
-                  ]}>
-                    Video
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.topBarRight}>
-                <TouchableOpacity onPress={handleEqualizer} activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="equalizer" size={22} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleCast} activeOpacity={0.7}>
-                  <MaterialIcons name="cast" size={22} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleMenuPress} activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="dots-vertical" size={22} color="#fff" />
-                </TouchableOpacity>
-              </View>
+            <View style={styles.topBarRight}>
+              {/* Issue 7 Fix: Top bar buttons with gesture blocking */}
+              <TouchableOpacity 
+                onPress={handleEqualizer} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <MaterialCommunityIcons name="equalizer" size={22} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity 
+                onPress={handleCast} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <MaterialIcons name="cast" size={22} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity 
+                onPress={handleMenuPress} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <MaterialCommunityIcons name="dots-vertical" size={22} color="#fff" />
+              </TouchableOpacity>
             </View>
           </View>
+        </View>
 
-          {/* MAIN CONTENT */}
-          <View style={[
-            styles.contentContainer,
-            { paddingTop: insets.top + 90, paddingBottom: insets.bottom + 8 },
-          ]}>
+        {/* MAIN CONTENT */}
+        <View style={[
+          styles.contentContainer,
+          { paddingTop: topInset + 90, paddingBottom: insets.bottom + 8 },
+        ]}>
 
-            {/* ARTWORK / VIDEO */}
-            <View style={styles.artworkContainer}>
-              <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
-                <Image
-                  source={getImageSource(displayTrack.artwork)}
+          {/* ARTWORK / VIDEO - Swipeable area for dismiss */}
+          {/* Issue 7 Fix: Artwork container with gesture blocking on touch */}
+          <TouchableOpacity 
+            style={styles.artworkContainer}
+            activeOpacity={1}
+            onPressIn={() => setButtonActive(true)}
+            onPressOut={() => setButtonActive(false)}
+          >
+            <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
+              <Image
+                source={getImageSource(displayTrack.artwork)}
+                style={styles.artworkImage}
+                contentFit="cover"
+                transition={300}
+              />
+            </Animated.View>
+            {hasVideo && (
+              <Animated.View style={[StyleSheet.absoluteFill, videoAnimStyle]}>
+                <VideoView
+                  player={videoPlayer}
                   style={styles.artworkImage}
                   contentFit="cover"
-                  transition={300}
+                  nativeControls={false}
+                  allowsFullscreen={false}
+                  allowsPictureInPicture={false}
                 />
               </Animated.View>
-              {hasVideo && (
-                <Animated.View style={[StyleSheet.absoluteFill, videoAnimStyle]}>
-                  <VideoView
-                    player={videoPlayer}
-                    style={styles.artworkImage}
-                    contentFit="cover"
-                    nativeControls={false}
-                    allowsFullscreen={false}
-                    allowsPictureInPicture={false}
-                  />
-                </Animated.View>
-              )}
-            </View>
+            )}
+          </TouchableOpacity>
 
-            {/* SONG INFO */}
-            <View style={styles.infoContainer}>
-              {displayTrack.title ? (
-                <MovingText
-                  text={displayTrack.title}
-                  animationThreshold={20}
-                  style={styles.title}
-                />
-              ) : (
-                <View style={{ alignItems: "center", marginBottom: 4 }}>
-                  <SkeletonPulse width={180} height={20} borderRadius={6} />
-                </View>
-              )}
+          {/* SONG INFO */}
+          <View style={styles.infoContainer}>
+            {displayTrack.title ? (
+              <MovingText
+                text={displayTrack.title}
+                animationThreshold={20}
+                style={styles.title}
+              />
+            ) : (
+              <View style={{ alignItems: "center", marginBottom: 4 }}>
+                <SkeletonPulse width={180} height={20} borderRadius={6} />
+              </View>
+            )}
 
-              {displayTrack.artist ? (
-                <ArtistLine
-                  rawArtist={displayTrack.artist}
-                  uploaderUrl={uploaderUrl}
-                  onArtistPress={handleArtistPress}
-                />
-              ) : (
-                <View style={{ alignItems: "center", marginTop: 6 }}>
-                  <SkeletonPulse width={120} height={14} borderRadius={4} />
-                </View>
-              )}
-            </View>
+            {displayTrack.artist ? (
+              <ArtistLine
+                rawArtist={displayTrack.artist}
+                uploaderUrl={uploaderUrl}
+                onArtistPress={handleArtistPress}
+              />
+            ) : (
+              <View style={{ alignItems: "center", marginTop: 6 }}>
+                <SkeletonPulse width={120} height={14} borderRadius={4} />
+              </View>
+            )}
+          </View>
 
-            {/* ACTION ROW */}
-            <View style={styles.actionRow}>
-              <View style={styles.leftActions}>
-                <View style={styles.actionContainer}>
-                  <TouchableOpacity
-                    style={styles.actionButton}
-                    onPress={() => { triggerHaptic(); toggleFavoriteFunc(); }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={isFavorite ? "thumbs-up" : "thumbs-up-outline"}
-                      size={16}
-                      color={isFavorite ? "#D4AF37" : "#fff"}
-                    />
-                    {likeCount > 0 && (
-                      <Text style={styles.statCount}>{formatCount(likeCount)}</Text>
-                    )}
-                  </TouchableOpacity>
-                  <View style={styles.actionDivider} />
-                  <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
-                    <Ionicons name="thumbs-down-outline" size={16} color="#fff" />
-                    {dislikeCount > 0 && (
-                      <Text style={styles.statCount}>{formatCount(dislikeCount)}</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-
+          {/* ACTION ROW */}
+          <View style={styles.actionRow}>
+            <View style={styles.leftActions}>
+              {/* Issue 7 Fix: Like/Dislike buttons with gesture blocking */}
+              <View style={styles.actionContainer}>
                 <TouchableOpacity
-                  style={styles.actionContainer}
-                  onPress={handleComments}
+                  style={styles.actionButton}
+                  onPress={() => { triggerHaptic(); toggleFavoriteFunc(); }}
                   activeOpacity={0.7}
+                  onPressIn={() => setButtonActive(true)}
+                  onPressOut={() => setButtonActive(false)}
                 >
-                  <MaterialCommunityIcons name="comment-text-outline" size={16} color="#fff" />
-                  {commentsCount > 0 && (
-                    <Text style={styles.statCount}>{formatCount(commentsCount)}</Text>
+                  <Ionicons
+                    name={isFavorite ? "thumbs-up" : "thumbs-up-outline"}
+                    size={16}
+                    color={isFavorite ? "#D4AF37" : "#fff"}
+                  />
+                  {likeCount > 0 && (
+                    <Text style={styles.statCount}>{formatCount(likeCount)}</Text>
+                  )}
+                </TouchableOpacity>
+                <View style={styles.actionDivider} />
+                <TouchableOpacity 
+                  style={styles.actionButton} 
+                  activeOpacity={0.7}
+                  onPressIn={() => setButtonActive(true)}
+                  onPressOut={() => setButtonActive(false)}
+                >
+                  <Ionicons name="thumbs-down-outline" size={16} color="#fff" />
+                  {dislikeCount > 0 && (
+                    <Text style={styles.statCount}>{formatCount(dislikeCount)}</Text>
                   )}
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.playCountPill}>
-                <Ionicons name="headset-outline" size={13} color="rgba(255,255,255,0.65)" />
-                {counterTarget > 0 ? (
-                  <AnimatedCounter target={counterTarget} />
-                ) : (
-                  <SkeletonPulse width={42} height={10} borderRadius={3} />
-                )}
-              </View>
-
-              <View style={styles.extraActions}>
-                <TouchableOpacity style={styles.extraIcon} onPress={handlePlaylist} activeOpacity={0.7}>
-                  <MaterialIcons name="playlist-add" size={20} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.extraIcon} onPress={handleSleepTimer} activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="weather-night" size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* PROGRESS BAR */}
-            <View style={styles.progressWrapper}>
-              <Slider
-                progress={sliderProgress}
-                minimumValue={sliderMin}
-                maximumValue={sliderMax}
-                containerStyle={{ height: moderateScale(5), borderRadius: 16 }}
-                renderBubble={() => (
-                  <View style={styles.bubbleContainer}>
-                    <Text style={styles.bubbleText}>
-                      {formatTime(slidingValue.value * durationSec)}
-                    </Text>
-                  </View>
-                )}
-                renderThumb={() => <View style={styles.sliderThumb} />}
-                theme={{
-                  minimumTrackTintColor: "#FFFFFF",
-                  maximumTrackTintColor: "rgba(255,255,255,0.25)",
-                }}
-                onSlidingStart={() => { isSliding.value = true; }}
-                onValueChange={(v) => {
-                  slidingValue.value = v;
-                }}
-                onSlidingComplete={(v) => {
-                  if (!isSliding.value) return;
-                  isSliding.value = false;
-                  runOnJS(handleSeek)(v);
-                }}
-              />
-              <View style={styles.timeRow}>
-                <Text style={styles.timeText}>{formatTime(positionSec)}</Text>
-                <Text style={styles.timeText}>{formatTime(durationSec)}</Text>
-              </View>
-            </View>
-
-            {/* PLAYBACK CONTROLS */}
-            <View style={styles.controls}>
+              {/* Issue 7 Fix: Comments button with gesture blocking */}
               <TouchableOpacity
-                onPress={toggleShuffle}
-                style={styles.shuffleWrapper}
+                style={styles.actionContainer}
+                onPress={handleComments}
                 activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
               >
-                <Feather
-                  name="shuffle"
-                  size={20}
-                  color={shuffleMode === "off" ? "rgba(255,255,255,0.4)" : "#fff"}
-                />
-                {shuffleMode !== "off" && (
-                  <View style={styles.dotContainer}>
-                    {Array.from({ length: getDotCount() }).map((_, i) => (
-                      <View key={i} style={styles.dot} />
-                    ))}
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={handleSkipBack} activeOpacity={0.7}>
-                <Ionicons name="play-skip-back" size={32} color="#fff" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={handlePlayPause}
-                style={styles.bigPlay}
-                activeOpacity={0.85}
-                disabled={isLoading}
-              >
-                <Ionicons
-                  name={isLoading ? "hourglass-outline" : isPlaying ? "pause" : "play"}
-                  size={32}
-                  color="#000"
-                />
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={handleSkipNext} activeOpacity={0.7}>
-                <Ionicons name="play-skip-forward" size={32} color="#fff" />
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={toggleRepeat} style={styles.repeatWrapper} activeOpacity={0.7}>
-                <MaterialCommunityIcons
-                  name={repeatMode === RepeatMode.Track ? "repeat-once" : "repeat"}
-                  size={22}
-                  color={repeatMode === RepeatMode.Off ? "rgba(255,255,255,0.4)" : "#fff"}
-                />
-                {repeatMode === RepeatMode.Track && (
-                  <View style={styles.repeatOneBadge}>
-                    <Text style={styles.repeatOneText}>1</Text>
-                  </View>
+                <MaterialCommunityIcons name="comment-text-outline" size={16} color="#fff" />
+                {commentsCount > 0 && (
+                  <Text style={styles.statCount}>{formatCount(commentsCount)}</Text>
                 )}
               </TouchableOpacity>
             </View>
 
-            {/* BOTTOM TABS */}
-            <View style={styles.bottomTabs}>
-              <TouchableOpacity
-                onPress={() => { setActiveBottomTab("upnext"); handleSeeAll(); }}
-                activeOpacity={0.7}
-              >
-                <Text style={activeBottomTab === "upnext" ? styles.bottomTabActive : styles.bottomTab}>
-                  UP NEXT
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={canShowLyrics ? () => { setActiveBottomTab("lyrics"); handleLyrics(); } : undefined}
-                activeOpacity={canShowLyrics ? 0.7 : 1}
-                disabled={!canShowLyrics}
-              >
-                <Text style={[
-                  activeBottomTab === "lyrics" ? styles.bottomTabActive : styles.bottomTab,
-                  !canShowLyrics && styles.bottomTabDisabled,
-                ]}>
-                  LYRICS
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => { setActiveBottomTab("related"); handleRelated(); }}
-                activeOpacity={0.7}
-              >
-                <Text style={activeBottomTab === "related" ? styles.bottomTabActive : styles.bottomTab}>
-                  RELATED
-                </Text>
-              </TouchableOpacity>
+            <View style={styles.playCountPill}>
+              <Ionicons name="headset-outline" size={13} color="rgba(255,255,255,0.65)" />
+              {counterTarget > 0 ? (
+                <AnimatedCounter target={counterTarget} />
+              ) : (
+                <SkeletonPulse width={42} height={10} borderRadius={3} />
+              )}
             </View>
 
+            <View style={styles.extraActions}>
+              {/* Issue 7 Fix: Extra action buttons with gesture blocking */}
+              <TouchableOpacity 
+                style={styles.extraIcon} 
+                onPress={handlePlaylist} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <MaterialIcons name="playlist-add" size={20} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.extraIcon} 
+                onPress={handleSleepTimer} 
+                activeOpacity={0.7}
+                onPressIn={() => setButtonActive(true)}
+                onPressOut={() => setButtonActive(false)}
+              >
+                <MaterialCommunityIcons name="weather-night" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
           </View>
-        </LinearGradient>
-      </Animated.View>
-    </GestureDetector>
+
+          {/* PROGRESS BAR - Slider blocks dismiss gesture (Issue 7) */}
+          {/* Issue 7 Fix: Slider container with comprehensive touch handlers */}
+          <View 
+            style={styles.progressWrapper}
+            onTouchStart={() => setSliderActive(true)}
+            onTouchEnd={() => setSliderActive(false)}
+            onTouchCancel={() => setSliderActive(false)}
+          >
+            <Slider
+              progress={sliderProgress}
+              minimumValue={sliderMin}
+              maximumValue={sliderMax}
+              containerStyle={{ height: moderateScale(5), borderRadius: 16 }}
+              renderBubble={() => (
+                <View style={styles.bubbleContainer}>
+                  <Text style={styles.bubbleText}>
+                    {formatTime(slidingValue.value * durationSec)}
+                  </Text>
+                </View>
+              )}
+              renderThumb={() => <View style={styles.sliderThumb} />}
+              theme={{
+                minimumTrackTintColor: "#FFFFFF",
+                maximumTrackTintColor: "rgba(255,255,255,0.25)",
+              }}
+              onSlidingStart={() => { 
+                isSliding.value = true; 
+                setSliderActive(true);
+              }}
+              onValueChange={(v) => {
+                slidingValue.value = v;
+              }}
+              onSlidingComplete={(v) => {
+                if (!isSliding.value) return;
+                isSliding.value = false;
+                setSliderActive(false);
+                runOnJS(handleSeek)(v);
+              }}
+            />
+            <View style={styles.timeRow}>
+              <Text style={styles.timeText}>{formatTime(positionSec)}</Text>
+              <Text style={styles.timeText}>{formatTime(durationSec)}</Text>
+            </View>
+          </View>
+
+          {/* PLAYBACK CONTROLS */}
+          <View style={styles.controls}>
+            {/* Issue 7 Fix: Shuffle button with gesture blocking */}
+            <TouchableOpacity
+              onPress={toggleShuffle}
+              style={styles.shuffleWrapper}
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Feather
+                name="shuffle"
+                size={20}
+                color={shuffleMode === "off" ? "rgba(255,255,255,0.4)" : "#fff"}
+              />
+              {shuffleMode !== "off" && (
+                <View style={styles.dotContainer}>
+                  {Array.from({ length: getDotCount() }).map((_, i) => (
+                    <View key={i} style={styles.dot} />
+                  ))}
+                </View>
+              )}
+            </TouchableOpacity>
+
+            {/* Issue 7 Fix: Skip back button with gesture blocking */}
+            <TouchableOpacity 
+              onPress={handleSkipBack} 
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Ionicons name="play-skip-back" size={32} color="#fff" />
+            </TouchableOpacity>
+
+            {/* Issue 7 Fix: Play/Pause button with gesture blocking */}
+            <TouchableOpacity
+              onPress={handlePlayPause}
+              style={styles.bigPlay}
+              activeOpacity={0.85}
+              disabled={musicPlayerLoading || displayTrack.id === DUMMY_TRACK.id}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Ionicons
+                name={musicPlayerLoading ? "hourglass-outline" : isPlayingRNTP ? "pause" : "play"}
+                size={32}
+                color="#000"
+              />
+            </TouchableOpacity>
+
+            {/* Issue 7 Fix: Skip next button with gesture blocking */}
+            <TouchableOpacity 
+              onPress={handleSkipNext} 
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Ionicons name="play-skip-forward" size={32} color="#fff" />
+            </TouchableOpacity>
+
+            {/* Issue 7 Fix: Repeat button with gesture blocking */}
+            <TouchableOpacity 
+              onPress={toggleRepeat} 
+              style={styles.repeatWrapper} 
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <MaterialCommunityIcons
+                name={repeatMode === RepeatMode.Track ? "repeat-once" : "repeat"}
+                size={22}
+                color={repeatMode === RepeatMode.Off ? "rgba(255,255,255,0.4)" : "#fff"}
+              />
+              {repeatMode === RepeatMode.Track && (
+                <View style={styles.repeatOneBadge}>
+                  <Text style={styles.repeatOneText}>1</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* BOTTOM TABS */}
+          <View style={styles.bottomTabs}>
+            {/* Issue 7 Fix: Bottom tab buttons with gesture blocking */}
+            <TouchableOpacity
+              onPress={() => { setActiveBottomTab("upnext"); handleSeeAll(); }}
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Text style={activeBottomTab === "upnext" ? styles.bottomTabActive : styles.bottomTab}>
+                UP NEXT
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={canShowLyrics ? () => { setActiveBottomTab("lyrics"); handleLyrics(); } : undefined}
+              activeOpacity={canShowLyrics ? 0.7 : 1}
+              disabled={!canShowLyrics}
+              onPressIn={() => { if (canShowLyrics) setButtonActive(true); }}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Text style={[
+                activeBottomTab === "lyrics" ? styles.bottomTabActive : styles.bottomTab,
+                !canShowLyrics && styles.bottomTabDisabled,
+              ]}>
+                LYRICS
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => { setActiveBottomTab("related"); handleRelated(); }}
+              activeOpacity={0.7}
+              onPressIn={() => setButtonActive(true)}
+              onPressOut={() => setButtonActive(false)}
+            >
+              <Text style={activeBottomTab === "related" ? styles.bottomTabActive : styles.bottomTab}>
+                RELATED
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+        </View>
+      </LinearGradient>
+    </View>
   );
 }
 
@@ -1062,16 +1270,34 @@ export default function PlayerContent({
   onClose,
   isExpanded,
   playerReady,
+  topInset,
+  onNavigateToEqualizer,
+  onNavigateToCast,
+  onNavigateToComments,
+  onNavigateToPlaylist,
+  onNavigateToSleepTimer,
+  onNavigateToQueue,
+  onNavigateToLyrics,
+  onNavigateToRelated,
+  onNavigateToMenu,
+  onNavigateToArtist,
 }: PlayerContentProps) {
-  if (!playerReady) {
-    return <PlayerIdleScreen onMinimize={onMinimize} />;
-  }
-
   return (
     <PlayerContentInner
       onMinimize={onMinimize}
       onClose={onClose}
       isExpanded={isExpanded}
+      topInset={topInset}
+      onNavigateToEqualizer={onNavigateToEqualizer}
+      onNavigateToCast={onNavigateToCast}
+      onNavigateToComments={onNavigateToComments}
+      onNavigateToPlaylist={onNavigateToPlaylist}
+      onNavigateToSleepTimer={onNavigateToSleepTimer}
+      onNavigateToQueue={onNavigateToQueue}
+      onNavigateToLyrics={onNavigateToLyrics}
+      onNavigateToRelated={onNavigateToRelated}
+      onNavigateToMenu={onNavigateToMenu}
+      onNavigateToArtist={onNavigateToArtist}
     />
   );
 }

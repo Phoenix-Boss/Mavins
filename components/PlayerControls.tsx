@@ -3,6 +3,8 @@
  * PlayerControls.tsx
  * 
  * Uses playerStore.setIsPlaying() for INSTANT UI feedback
+ * 
+ * CONVERTED: Now uses react-native-track-player strictly instead of mavin-eq
  */
 
 import { Colors } from "@/constants/Colors";
@@ -26,10 +28,12 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { moderateScale } from "react-native-size-matters/extend";
+
+// RNTP imports - replacing mavin-eq
 import TrackPlayer, {
   RepeatMode,
   useActiveTrack,
-} from "@/modules/mavin-eq";
+} from "react-native-track-player";
 import { match } from "ts-pattern";
 
 export type PlayerControlsProps = {
@@ -173,6 +177,7 @@ export const SkipToNextButton = ({
     onPress={() => {
       triggerHaptic();
       onBeforeSkip?.();
+      // RNTP API - direct TrackPlayer call
       TrackPlayer.skipToNext();
     }}
   >
@@ -195,6 +200,7 @@ export const SkipToPreviousButton = ({
     onPress={() => {
       triggerHaptic();
       onBeforeSkip?.();
+      // RNTP API - direct TrackPlayer call
       TrackPlayer.skipToPrevious();
     }}
   >
@@ -210,6 +216,7 @@ export const SkipToPreviousButton = ({
 
 export const AddToPlaylistButton = ({ iconSize = moderateScale(30) }) => {
   const router = useRouter();
+  // RNTP hook - replacing mavin-eq
   const activeTrack = useActiveTrack();
 
   return (
@@ -244,6 +251,7 @@ export const DownloadSongButton = ({
   style,
   iconSize = moderateScale(25),
 }: PlayerButtonProps) => {
+  // RNTP hook - replacing mavin-eq
   const activeTrack = useActiveTrack();
   const downloaded = useIsSongDownloaded(activeTrack?.id || "");
   const downloading = useIsSongDownloading(activeTrack?.id || "");

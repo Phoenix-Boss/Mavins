@@ -1,19 +1,11 @@
 /**
  * useTrackPlayerRepeatMode.tsx
  * 
- * Custom React hook for managing the repeat mode of the Mavin player.
- *
- * FIXES APPLIED:
- *
- *  1. Uses default import TrackPlayer for player methods
- *  2. Uses named import for RepeatMode enum
- *  3. Uses named import addEventListener for events
- *  4. Uses correct MavinEvent enum value
+ * Custom React hook for managing the repeat mode using react-native-track-player.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import TrackPlayer from "@/modules/mavin-eq";
-import { RepeatMode, MavinEvent, addEventListener } from "@/modules/mavin-eq";
+import TrackPlayer, { RepeatMode, Event, useTrackPlayerEvents } from "react-native-track-player";
 
 /**
  * A custom hook that manages the repeat mode of the track player.
@@ -70,19 +62,15 @@ export const useTrackPlayerRepeatMode = () => {
     };
   }, []);
 
-  // Event-driven state synchronization
-  useEffect(() => {
-    const sub = addEventListener(MavinEvent.PlaybackState, async () => {
-      try {
-        const currentMode = await TrackPlayer.getRepeatMode();
-        setRepeatMode(currentMode);
-      } catch (err) {
-        console.warn("[useTrackPlayerRepeatMode] Failed to sync repeat mode:", err);
-      }
-    });
-
-    return () => sub.remove();
-  }, []);
+  // Event-driven state synchronization using RNTP's useTrackPlayerEvents
+  useTrackPlayerEvents([Event.PlaybackState], async () => {
+    try {
+      const currentMode = await TrackPlayer.getRepeatMode();
+      setRepeatMode(currentMode);
+    } catch (err) {
+      console.warn("[useTrackPlayerRepeatMode] Failed to sync repeat mode:", err);
+    }
+  });
 
   return { repeatMode, changeRepeatMode, isLoading, error };
 };

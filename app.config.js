@@ -3,6 +3,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
+
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
   owner: "wocof2",
@@ -18,7 +19,15 @@ module.exports = {
   icon: "./assets/images/icon.png",
   scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
+
+  // ── Architecture ───────────────────────────────────────────────────────────
+  // react-native-track-player 4.1.2 (stable) crashes on New Architecture due
+  // to a null eventType NPE in MusicModule.addListener. The 5.x alpha that
+  // claims New Arch support is itself broken (iOS can't play tracks at all).
+  // Disable New Arch here until RNTP ships a stable 5.x release, then re-enable.
+  // SDK 54 is the last Expo version where this opt-out is supported.
+  newArchEnabled: false,
+
   android: {
     softwareKeyboardLayoutMode: "pan",
     permissions: [
@@ -76,6 +85,7 @@ module.exports = {
     withIconXml,
     "expo-router",
     "expo-font",
+    "react-native-track-player",
     [
       "expo-notifications",
       {

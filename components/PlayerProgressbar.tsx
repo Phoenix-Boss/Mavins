@@ -2,13 +2,11 @@
  * PlayerProgressBar
  *
  * NOTE — unit contract:
- *   mavin-eq's useProgress() returns { position, duration, buffered } in MILLISECONDS.
- *   mavin-eq's seekTo(seconds) expects SECONDS.
+ *   RNTP's useProgress() returns { position, duration, buffered } in SECONDS (not milliseconds).
+ *   RNTP's seekTo(seconds) expects SECONDS.
  *   formatSecondsToMinutes() expects SECONDS.
  *
- *   We divide position/duration by 1000 once here (positionSec / durationSec) and use
- *   those throughout. The slider ratio (position/duration) is unit-agnostic so we
- *   compute it from raw ms values — the units cancel out.
+ *   RNTP v4+ returns values in seconds directly, so no conversion needed from ms.
  */
 
 import { fontSize } from "@/constants/tokens";
@@ -18,17 +16,15 @@ import { defaultStyles } from "@/styles";
 import { Text, View, ViewProps } from "react-native";
 import { Slider } from "react-native-awesome-slider";
 import { useSharedValue, runOnJS } from "react-native-reanimated";
-import TrackPlayer, { useProgress } from "@/modules/mavin-eq";
+
+// RNTP imports - replacing mavin-eq
+import TrackPlayer, { useProgress } from "react-native-track-player";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { useRef, useCallback } from "react";
 
 export const PlayerProgressBar = ({ style }: ViewProps) => {
-  // position and duration arrive in MILLISECONDS from mavin-eq.
-  const { duration: durationMs, position: positionMs } = useProgress(250);
-
-  // Convert to seconds for all time-display and seekTo calls.
-  const positionSec = positionMs / 1000;
-  const durationSec = durationMs / 1000;
+  // RNTP useProgress returns SECONDS directly in v4+ (not milliseconds)
+  const { duration: durationSec, position: positionSec } = useProgress(250);
 
   // All shared values live on the UI thread — zero JS bridge for slider motion.
   const isSliding    = useSharedValue(false);
@@ -38,7 +34,7 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const max = useSharedValue(1);
 
   // 80ms debounce: rapid drags batch into one seek instead of hammering the player.
-  // seekTo() expects seconds — fraction * durationSec gives the correct value.
+  // seekTo() expects seconds.
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitSeek = useCallback((fraction: number) => {
     if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
@@ -52,9 +48,9 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const trackRemainingTime = formatSecondsToMinutes(durationSec - positionSec);
   const trackDuration      = formatSecondsToMinutes(durationSec);
 
-  // Slider ratio is unit-agnostic (ms/ms = sec/sec) — leave raw ms values here.
+  // Slider ratio calculation - using seconds directly since RNTP returns seconds
   if (!isSliding.value) {
-    progress.value = durationMs > 0 ? positionMs / durationMs : 0;
+    progress.value = durationSec > 0 ? positionSec / durationSec : 0;
   }
 
   return (

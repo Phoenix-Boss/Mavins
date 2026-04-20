@@ -1,10 +1,5 @@
 // hooks/useScrollAnimations.ts
-import { useCallback } from 'react';
-import {
-  useSharedValue,
-  withTiming,
-  cancelAnimation
-} from 'react-native-reanimated';
+import { useSharedValue, withTiming, cancelAnimation } from 'react-native-reanimated';
 
 interface AnimationConfig {
   duration?: number;
@@ -18,37 +13,31 @@ export const useScrollAnimations = (config: AnimationConfig = {}) => {
   const isHeaderHidden = useSharedValue(false);
 
   // ==================== WORKLET FUNCTIONS ====================
-  const slideHeader = useCallback((hide: boolean, headerHeight: number) => {
-    'worklet';
-    
-    cancelAnimation(headerTranslateY);
-    
-    headerTranslateY.value = withTiming(
-      hide ? -headerHeight : 0,
-      { duration }
-    );
-    
-    isHeaderHidden.value = hide;
-  }, [duration]);
+  // IMPORTANT: Must be plain named functions (not useCallback) so Reanimated
+  // can correctly inline them as worklets when called from scroll handlers.
+  // Using useCallback with 'worklet' directive causes the directive to be
+  // ignored, making these run on the JS thread and causing silent crashes.
 
-  const resetHeader = useCallback(() => {
+  function slideHeader(hide: boolean, headerHeight: number) {
     'worklet';
     cancelAnimation(headerTranslateY);
-    headerTranslateY.value = 0;
+    headerTranslateY.value = withTiming(hide ? -headerHeight : 0, { duration });
+    isHeaderHidden.value = hide;
+  }
+
+  function resetHeader() {
+    'worklet';
+    cancelAnimation(headerTranslateY);
+    headerTranslateY.value = withTiming(0, { duration });
     isHeaderHidden.value = false;
-  }, []);
+  }
 
   // ==================== RETURN VALUES ====================
   return {
-    // Animation worklets
     slideHeader,
     resetHeader,
-    
-    // Animation values
     headerTranslateY,
     isHeaderHidden,
-    
-    // Config
-    animationDuration: duration
+    animationDuration: duration,
   };
 };

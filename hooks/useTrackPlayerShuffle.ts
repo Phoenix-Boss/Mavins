@@ -1,187 +1,143 @@
+// hooks/useTrackPlayerShuffle.ts
 /**
- * useTrackPlayerShuffle.ts
+ * useTrackPlayerShuffle - RNTP v4 Compatible
  * 
- * Custom React hook for managing the shuffle mode of the Mavin player.
- * 
- * ADJUSTED TO FOLLOW WRAPPER PATTERNS:
- *  - Uses TrackPlayer default export for methods (FIX 7)
- *  - Uses addEventListener from wrapper for events
- *  - Uses MavinEvent.PlaybackState (correct enum value)
- *  - Properly typed
+ * RNTP v4 does NOT have getShuffleMode/setShuffleMode methods.
+ * Shuffle is implemented purely in JavaScript by reordering the queue.
  */
 
-import { useCallback, useEffect, useState, useRef } from "react";
-
-// 🔥 FIX 7: Use default export for player methods
-import TrackPlayer from "@/modules/mavin-eq";
-
-// Named exports for events
-import { 
-  addEventListener,
-  MavinEvent,
-} from "@/modules/mavin-eq";
-
-// Import types
-import type { PlaybackStateChangedEvent } from "@/modules/mavin-eq";
-
+import { useCallback, useState, useRef } from "react";
+import TrackPlayer from "react-native-track-player";
 import { triggerHaptic } from "@/helpers/haptics";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type ShuffleMode = "off" | "standard" | "smart" | "album";
+export type ShuffleMode = "off" | "on";
 
 interface UseTrackPlayerShuffleResult {
   shuffleMode: ShuffleMode;
   toggleShuffle: () => Promise<void>;
   setShuffleMode: (mode: ShuffleMode) => Promise<void>;
-  cycleShuffleMode: () => Promise<void>;
   getDotCount: () => number;
   isShuffleEnabled: boolean;
   isLoading: boolean;
-  error: Error | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constants
+// Module-level state (persists across hook instances)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SHUFFLE_CYCLE: ShuffleMode[] = ["off", "standard", "smart", "album"];
-
-const SHUFFLE_LABELS: Record<ShuffleMode, string> = {
-  off: "Shuffle Off",
-  standard: "Standard Shuffle",
-  smart: "Smart Shuffle",
-  album: "Album Shuffle",
-};
-
-const SHUFFLE_DOTS: Record<ShuffleMode, number> = {
-  off: 0,
-  standard: 1,
-  smart: 2,
-  album: 3,
-};
+let globalShuffleMode: ShuffleMode = "off";
+const originalQueueOrder = new Map<string, any[]>(); // Store original order per session
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const useTrackPlayerShuffle = (): UseTrackPlayerShuffleResult => {
-  const [shuffleMode, setShuffleModeState] = useState<ShuffleMode>("off");
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const [shuffleMode, setShuffleModeState] = useState<ShuffleMode>(globalShuffleMode);
+  const [isLoading, setIsLoading] = useState(false);
   
-  const pendingRef = useRef(false);
-  const mountedRef = useRef(true);
+  const isShufflingRef = useRef(false);
 
   // Computed
-  const isShuffleEnabled = shuffleMode !== "off";
-  const getDotCount = useCallback(() => SHUFFLE_DOTS[shuffleMode] ?? 0, [shuffleMode]);
+  const isShuffleEnabled = shuffleMode === "on";
+  const getDotCount = useCallback(() => (shuffleMode === "on" ? 1 : 0), [shuffleMode]);
 
-  // ── Initial fetch ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    mountedRef.current = true;
+  /**
+   * Fisher-Yates shuffle algorithm
+   */
+  const shuffleArray = <T,>(array: T[]): T[] => {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  };
 
-    const fetchInitial = async () => {
-      try {
-        // 🔥 FIX 7: Use default export
-        const enabled = await TrackPlayer.getShuffleMode();
-        
-        if (!mountedRef.current) return;
-        
-        // Native only returns boolean, map to our extended modes
-        setShuffleModeState(enabled ? "standard" : "off");
-        setError(null);
-      } catch (err) {
-        if (!mountedRef.current) return;
-        console.error("[useTrackPlayerShuffle] Initial fetch failed:", err);
-        setError(err instanceof Error ? err : new Error(String(err)));
-        setShuffleModeState("off");
-      } finally {
-        if (mountedRef.current) setIsLoading(false);
+  /**
+   * Set shuffle mode - reorders queue in-place
+   */
+  const setShuffleMode = useCallback(async (mode: ShuffleMode) => {
+    if (isShufflingRef.current) return;
+    isShufflingRef.current = true;
+    setIsLoading(true);
+
+    try {
+      const currentTrack = await TrackPlayer.getActiveTrack();
+      const queue = await TrackPlayer.getQueue();
+      
+      if (!queue.length) {
+        globalShuffleMode = mode;
+        setShuffleModeState(mode);
+        return;
       }
-    };
 
-    fetchInitial();
+      const sessionKey = currentTrack?.id ?? "default";
 
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+      if (mode === "on") {
+        // Store original order before shuffling
+        if (!originalQueueOrder.has(sessionKey)) {
+          originalQueueOrder.set(sessionKey, [...queue]);
+        }
 
-  // ── Event-driven sync ─────────────────────────────────────────────────────
-  useEffect(() => {
-    // 🔥 Use wrapper's addEventListener with correct enum
-    const sub = addEventListener(
-      MavinEvent.PlaybackState, // NOT PlaybackStateChanged
-      async (data: PlaybackStateChangedEvent) => {
-        if (!mountedRef.current) return;
+        // Shuffle queue but keep current track first
+        const shuffled = shuffleArray(queue);
+        if (currentTrack) {
+          const currentIndex = shuffled.findIndex(t => t.id === currentTrack.id);
+          if (currentIndex > 0) {
+            [shuffled[0], shuffled[currentIndex]] = [shuffled[currentIndex], shuffled[0]];
+          }
+        }
+
+        // Replace queue while maintaining playback
+        await TrackPlayer.reset();
+        await TrackPlayer.add(shuffled);
         
-        try {
-          const enabled = await TrackPlayer.getShuffleMode();
-          if (!mountedRef.current) return;
+        // Resume from beginning of current track
+        if (currentTrack) {
+          await TrackPlayer.skip(0);
+          await TrackPlayer.play();
+        }
+
+        triggerHaptic("impactLight");
+      } else {
+        // Restore original order
+        const original = originalQueueOrder.get(sessionKey);
+        if (original && original.length) {
+          const currentId = currentTrack?.id;
+          await TrackPlayer.reset();
+          await TrackPlayer.add(original);
           
-          setShuffleModeState(prev => {
-            if (enabled && prev === "off") return "standard";
-            if (!enabled && prev !== "off") return "off";
-            return prev;
-          });
-        } catch (err) {
-          console.warn("[useTrackPlayerShuffle] Sync failed:", err);
+          // Restore position
+          if (currentId) {
+            const newIndex = original.findIndex(t => t.id === currentId);
+            if (newIndex >= 0) {
+              await TrackPlayer.skip(newIndex);
+              await TrackPlayer.play();
+            }
+          }
         }
       }
-    );
 
-    return () => sub.remove();
-  }, []);
-
-  // ── Set shuffle mode ──────────────────────────────────────────────────────
-  const setShuffleMode = useCallback(async (mode: ShuffleMode) => {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    
-    const previous = shuffleMode;
-    const shouldEnable = mode !== "off";
-    
-    // Optimistic update
-    setShuffleModeState(mode);
-    
-    try {
-      // 🔥 FIX 7: Use default export
-      await TrackPlayer.setShuffleMode(shouldEnable);
-      
-      if (mountedRef.current) {
-        setError(null);
-        if (mode !== "off") triggerHaptic("impactLight");
-      }
-      
-      // Extended modes are JS-managed
-      if (mode === "smart" || mode === "album") {
-        console.log(`[useTrackPlayerShuffle] ${mode} mode (JS-managed)`);
-      }
+      globalShuffleMode = mode;
+      setShuffleModeState(mode);
     } catch (err) {
       console.error("[useTrackPlayerShuffle] Failed:", err);
-      if (mountedRef.current) {
-        setShuffleModeState(previous);
-        setError(err instanceof Error ? err : new Error(String(err)));
-      }
     } finally {
-      pendingRef.current = false;
+      isShufflingRef.current = false;
+      setIsLoading(false);
     }
-  }, [shuffleMode]);
+  }, []);
 
-  // ── Toggle ────────────────────────────────────────────────────────────────
+  /**
+   * Toggle shuffle on/off
+   */
   const toggleShuffle = useCallback(async () => {
-    const next: ShuffleMode = shuffleMode === "off" ? "standard" : "off";
-    await setShuffleMode(next);
-  }, [shuffleMode, setShuffleMode]);
-
-  // ── Cycle ─────────────────────────────────────────────────────────────────
-  const cycleShuffleMode = useCallback(async () => {
-    const idx = SHUFFLE_CYCLE.indexOf(shuffleMode);
-    const next = SHUFFLE_CYCLE[(idx + 1) % SHUFFLE_CYCLE.length];
-    triggerHaptic("impactLight");
+    const next: ShuffleMode = shuffleMode === "off" ? "on" : "off";
     await setShuffleMode(next);
   }, [shuffleMode, setShuffleMode]);
 
@@ -189,96 +145,16 @@ export const useTrackPlayerShuffle = (): UseTrackPlayerShuffleResult => {
     shuffleMode,
     toggleShuffle,
     setShuffleMode,
-    cycleShuffleMode,
     getDotCount,
     isShuffleEnabled,
     isLoading,
-    error,
   };
 };
 
-// ── Utilities ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const getShuffleModeLabel = (mode: ShuffleMode): string => {
-  return SHUFFLE_LABELS[mode] ?? "Unknown";
-};
-
-export const checkIsShuffleEnabled = async (): Promise<boolean> => {
-  try {
-    // 🔥 FIX 7: Use default export
-    return await TrackPlayer.getShuffleMode();
-  } catch {
-    return false;
-  }
-};
-
-// Smart shuffle algorithm
-export const smartShuffle = (
-  tracks: string[], 
-  playCounts: Map<string, number>
-): string[] => {
-  const maxPlays = Math.max(...Array.from(playCounts.values()), 1);
-  
-  const weights = tracks.map(id => {
-    const plays = playCounts.get(id) ?? 0;
-    return maxPlays - plays + 1;
-  });
-  
-  const result: string[] = [];
-  const remaining = [...tracks];
-  const remainingWeights = [...weights];
-  
-  while (remaining.length > 0) {
-    const total = remainingWeights.reduce((a, b) => a + b, 0);
-    let random = Math.random() * total;
-    
-    for (let i = 0; i < remaining.length; i++) {
-      random -= remainingWeights[i];
-      if (random <= 0) {
-        result.push(remaining[i]);
-        remaining.splice(i, 1);
-        remainingWeights.splice(i, 1);
-        break;
-      }
-    }
-  }
-  
-  return result;
-};
-
-// Album shuffle
-export const albumShuffle = (
-  tracks: Array<{ id: string; albumId?: string | null }>
-): string[] => {
-  const groups = new Map<string, string[]>();
-  const noAlbum: string[] = [];
-  
-  for (const t of tracks) {
-    if (t.albumId) {
-      const g = groups.get(t.albumId) ?? [];
-      g.push(t.id);
-      groups.set(t.albumId, g);
-    } else {
-      noAlbum.push(t.id);
-    }
-  }
-  
-  const albumIds = Array.from(groups.keys());
-  for (let i = albumIds.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [albumIds[i], albumIds[j]] = [albumIds[j], albumIds[i]];
-  }
-  
-  const result: string[] = [];
-  for (const id of albumIds) {
-    result.push(...(groups.get(id) ?? []));
-  }
-  
-  for (let i = noAlbum.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [noAlbum[i], noAlbum[j]] = [noAlbum[j], noAlbum[i]];
-  }
-  result.push(...noAlbum);
-  
-  return result;
+  return mode === "on" ? "Shuffle On" : "Shuffle Off";
 };

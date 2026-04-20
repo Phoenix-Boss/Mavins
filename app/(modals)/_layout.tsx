@@ -27,7 +27,7 @@ export default function ModalsLayout() {
       <Stack.Screen name="comments" />
       <Stack.Screen name="createPlaylist" />
       <Stack.Screen name="deletePlaylist" />
-      <Stack.Screen name="equalizer" />
+      {/* Equalizer removed — RNTP does not provide EQ/DSP functionality */}
       <Stack.Screen name="lyrics" />
       <Stack.Screen name="menu" />
       <Stack.Screen name="premium" />

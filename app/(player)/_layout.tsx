@@ -1,32 +1,40 @@
 // app/(player)/_layout.tsx
+//
+// SPOTIFY-STYLE TRANSPARENT OVERLAY — compositor chain:
+//
+//  app/_layout.tsx → Stack.Screen name="(player)"
+//    presentation:  'transparentModal'  ← keeps (tabs) rendered & visible behind
+//    animation:     'none'              ← no React Navigation compositor involvement
+//    contentStyle:  { backgroundColor: 'transparent' }
+//
+//  This inner NativeStack must ALSO be fully transparent — any backgroundColor
+//  here adds an opaque compositor layer visible during swipe-down.
+//
+//  IMPORTANT: `cardStyle` does NOT exist on NativeStackNavigationOptions.
+//  Expo Router uses NativeStack by default. Only `contentStyle` is valid.
+//  The ONLY visual fill is PlayerContent's LinearGradient.
+
 import { Stack } from 'expo-router';
-import { Colors } from '@/constants/Colors';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 export default function PlayerLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <Stack
-        screenOptions={{
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        animation: 'none',
+        gestureEnabled: false,
+        contentStyle: { backgroundColor: 'transparent' },
+      }}
+    >
+      <Stack.Screen
+        name="index"
+        options={{
           headerShown: false,
-          animation: 'slide_from_bottom',
-          gestureEnabled: true,
-          gestureDirection: 'vertical',
-          contentStyle: {
-            backgroundColor: Colors.background,
-          },
-          animationDuration: 300,
+          animation: 'none',
+          gestureEnabled: false,
+          contentStyle: { backgroundColor: 'transparent' },
         }}
-      >
-        <Stack.Screen 
-          name="index" 
-          options={{
-            animation: 'slide_from_bottom',
-            gestureEnabled: true,
-            gestureDirection: 'vertical',
-          }}
-        />
-      </Stack>
-    </GestureHandlerRootView>
+      />
+    </Stack>
   );
 }

@@ -48,7 +48,6 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as MediaLibrary from "expo-media-library";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { useActiveTrack } from "react-native-track-player";
 import { useMediaStore, type LocalTrack, type WatchedFolder } from "@/hooks/useMediaStore";
 import { MMKV } from "react-native-mmkv";
 
@@ -518,8 +517,10 @@ type SubTab = (typeof SUB_TABS)[number];
 export default function LocalMusicScreen() {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
-  const activeTrack = useActiveTrack();
-  const { playDownloadedSong } = useMusicPlayer();
+  
+  // CRITICAL FIX: Use useMusicPlayer context instead of useActiveTrack from RNTP
+  // This avoids importing react-native-track-player at the top level
+  const { currentTrack, playDownloadedSong } = useMusicPlayer();
 
   // `fromTab` is set when LibraryScreen redirects here via the smart-resume
   // path (router.replace). It tells us to suppress the back button.
@@ -591,7 +592,7 @@ export default function LocalMusicScreen() {
       shuffled.map(t => ({ ...t, localTrackUri: t.uri, localArtworkUri: t.artworkUri })),
     );
     router.navigate("/player");
-  }, [displayTracks]);
+  }, [displayTracks, playDownloadedSong, router]);
 
   const hasFolders = folders.length > 0;
 
@@ -794,7 +795,8 @@ export default function LocalMusicScreen() {
                   renderItem={({ item }) => (
                     <TrackRow
                       item={item}
-                      isPlaying={activeTrack?.id === item.id}
+                      // CRITICAL FIX: Use currentTrack from useMusicPlayer instead of useActiveTrack
+                      isPlaying={currentTrack?.id === item.id}
                       onPress={async () => {
                         await playDownloadedSong(
                           { ...item, localTrackUri: item.uri, localArtworkUri: item.artworkUri },

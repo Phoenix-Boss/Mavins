@@ -1,11 +1,11 @@
 /**
  * useTrackPlayerFavorite.tsx
  * 
- * ADJUSTED: Added safety guards for when player isn't ready
+ * ADJUSTED for react-native-track-player
  */
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useActiveTrack } from "@/modules/mavin-eq";
+import { useActiveTrack } from "react-native-track-player";
 import { useLibraryStore, useIsSongFavorite } from "@/store/library";
 import { triggerHaptic, type HapticStrength } from "@/helpers/haptics";
 
@@ -18,10 +18,9 @@ interface UseTrackPlayerFavoriteResult {
 }
 
 export const useTrackPlayerFavorite = (): UseTrackPlayerFavoriteResult => {
-  // 🔥 SAFETY: useActiveTrack might return null/undefined initially
-  const activeTrackResult = useActiveTrack();
-  const activeTrack = activeTrackResult?.track ?? null;
-  const trackLoading = activeTrackResult?.isLoading ?? true;
+  // useActiveTrack from RNTP returns the track directly or null
+  const activeTrack = useActiveTrack();
+  const trackLoading = !activeTrack;
   
   const currentTrackId = activeTrack?.id ?? null;
   

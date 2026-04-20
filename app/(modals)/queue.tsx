@@ -1,6 +1,11 @@
-// app/(modals)/queue.tsx
+/**
+ * (modals)/queue.tsx
+ * 
+ * STRICT RNTP APPROACH - No native modules
+ * Uses react-native-track-player for all queue operations
+ */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,14 +13,12 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
-import {
+import TrackPlayer, { 
+  useActiveTrack, 
+  usePlaybackState,
+  State,
   Track,
-  useActiveTrack,
-  getQueue,
-  skip,
-  play,
-  remove,
-} from "@/modules/mavin-eq";
+} from "react-native-track-player";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -39,7 +42,7 @@ const C = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QueueModal
+// QueueModal - Strictly RNTP
 // ─────────────────────────────────────────────────────────────────────────────
 export default function QueueModal() {
   const router = useRouter();
@@ -47,25 +50,50 @@ export default function QueueModal() {
 
   const [queue, setQueue] = useState<Track[]>([]);
   const activeTrack = useActiveTrack();
+  const playbackState = usePlaybackState();
 
   // ── Load queue ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    getQueue().then(setQueue).catch(() => setQueue([]));
+  const loadQueue = useCallback(async () => {
+    try {
+      const currentQueue = await TrackPlayer.getQueue();
+      setQueue(currentQueue);
+    } catch (error) {
+      console.warn("[Queue] Failed to load queue:", error);
+      setQueue([]);
+    }
   }, []);
+
+  useEffect(() => {
+    loadQueue();
+    
+    // Refresh queue when playback state changes
+    const interval = setInterval(loadQueue, 1000);
+    return () => clearInterval(interval);
+  }, [loadQueue]);
 
   // ── Play a track by index ──────────────────────────────────────────────────
   const handlePlay = async (index: number) => {
     triggerHaptic();
-    await skip(index);
-    await play();
+    try {
+      await TrackPlayer.skip(index);
+      const currentState = playbackState.state;
+      if (currentState !== State.Playing) {
+        await TrackPlayer.play();
+      }
+    } catch (error) {
+      console.warn("[Queue] Skip failed:", error);
+    }
   };
 
   // ── Remove a track from queue ──────────────────────────────────────────────
   const handleRemove = async (index: number) => {
     triggerHaptic();
-    await remove(index);
-    const updated = await getQueue();
-    setQueue(updated);
+    try {
+      await TrackPlayer.remove(index);
+      await loadQueue(); // Refresh queue after removal
+    } catch (error) {
+      console.warn("[Queue] Remove failed:", error);
+    }
   };
 
   // ── Render each track row ──────────────────────────────────────────────────

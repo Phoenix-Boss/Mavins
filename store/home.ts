@@ -1,17 +1,7 @@
 // store/home.ts
-/**
- * HomeStore — Centralized home screen state
- * 
- * All home sections data is pre-loaded here at app startup by HomePreloader.
- * Components read from this store for instant rendering.
- * Persists to AsyncStorage for instant app launches.
- */
-
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// ─── Types (matching your existing data structures) ────────────────────────────
 
 export interface Song {
   id: string;
@@ -21,32 +11,24 @@ export interface Song {
   thumbnail: string;
   url?: string;
   duration?: number;
-  uploaderUrl?: string;
-  uploaderName?: string;
-  likeCount?: number;
-  dislikeCount?: number;
-  viewCount?: number;
-  views?: number; // alias for viewCount used in some hooks
-  commentsCount?: number;
+  views?: number;
+  playedAt?: number;
 }
 
 export interface Mix {
   id: string;
   title: string;
-  description?: string;
   thumbnail: string;
   artist?: string;
   trackCount?: number;
-  songs?: Song[];
 }
 
 export interface Channel {
   id: string;
   name: string;
-  title?: string; // alias
+  title?: string;
   thumbnail: string;
   artistId?: string;
-  subscriberCount?: number;
   isVerified?: boolean;
 }
 
@@ -55,7 +37,6 @@ export interface Podcast {
   title: string;
   artist: string;
   thumbnail: string;
-  duration?: number;
   episodeCount?: number;
   type?: string;
 }
@@ -63,7 +44,7 @@ export interface Podcast {
 export interface RadioStation {
   id: string;
   name: string;
-  title?: string; // alias
+  title?: string;
   thumbnail: string;
   streamUrl?: string;
 }
@@ -78,10 +59,7 @@ export interface EditorPick {
   views: number;
 }
 
-// ─── HomeState Interface ─────────────────────────────────────────────────────
-
 interface HomeState {
-  // Data sections
   trending: Song[];
   biggestHits: Song[];
   peoplesChoice: Song[];
@@ -93,13 +71,12 @@ interface HomeState {
   channels: Channel[];
   podcasts: Podcast[];
   radioStations: RadioStation[];
+  recentSongs: Song[];
   
-  // Metadata
   lastUpdated: number | null;
   isStale: boolean;
-  isLoading: boolean; // Background loading state
+  isLoading: boolean;
   
-  // Actions
   setTrending: (songs: Song[]) => void;
   setBiggestHits: (songs: Song[]) => void;
   setPeoplesChoice: (songs: Song[]) => void;
@@ -111,13 +88,17 @@ interface HomeState {
   setChannels: (channels: Channel[]) => void;
   setPodcasts: (podcasts: Podcast[]) => void;
   setRadioStations: (stations: RadioStation[]) => void;
+  setRecentSongs: (songs: Song[]) => void;
+  addRecentSong: (song: Song) => void;
+  removeRecentSong: (songId: string) => void;
+  clearRecentSongs: () => void;
   
-  // Bulk updates
   setAllData: (data: Partial<Omit<HomeState, 
     | 'setTrending' | 'setBiggestHits' | 'setPeoplesChoice' 
     | 'setTop10Month' | 'setMavinsBest' | 'setNewReleases' 
     | 'setThrowbacks' | 'setMixes' | 'setChannels' 
-    | 'setPodcasts' | 'setRadioStations' 
+    | 'setPodcasts' | 'setRadioStations' | 'setRecentSongs'
+    | 'addRecentSong' | 'removeRecentSong' | 'clearRecentSongs'
     | 'setAllData' | 'markFresh' | 'markStale' | 'setLoading'
     | 'getExcludedIdsForTop10' | 'hasAnyData'
   >>) => void;
@@ -126,93 +107,184 @@ interface HomeState {
   markStale: () => void;
   setLoading: (loading: boolean) => void;
   
-  // Selectors
   getExcludedIdsForTop10: () => string[];
   hasAnyData: () => boolean;
 }
 
-// ─── Zustand Store Creation ──────────────────────────────────────────────────
-
 export const useHomeStore = create<HomeState>()(
   persist(
-    (set, get) => ({
-      // Initial empty state
-      trending: [],
-      biggestHits: [],
-      peoplesChoice: [],
-      top10Month: [],
-      mavinsBest: [],
-      newReleases: [],
-      throwbacks: [],
-      mixes: [],
-      channels: [],
-      podcasts: [],
-      radioStations: [],
+    (set, get) => {
+      console.log('🏪 [HomeStore] Store initialized');
       
-      lastUpdated: null,
-      isStale: true,
-      isLoading: false,
-      
-      // Individual setters
-      setTrending: (trending) => set({ trending, lastUpdated: Date.now() }),
-      setBiggestHits: (biggestHits) => set({ biggestHits, lastUpdated: Date.now() }),
-      setPeoplesChoice: (peoplesChoice) => set({ peoplesChoice, lastUpdated: Date.now() }),
-      setTop10Month: (top10Month) => set({ top10Month, lastUpdated: Date.now() }),
-      setMavinsBest: (mavinsBest) => set({ mavinsBest, lastUpdated: Date.now() }),
-      setNewReleases: (newReleases) => set({ newReleases, lastUpdated: Date.now() }),
-      setThrowbacks: (throwbacks) => set({ throwbacks, lastUpdated: Date.now() }),
-      setMixes: (mixes) => set({ mixes, lastUpdated: Date.now() }),
-      setChannels: (channels) => set({ channels, lastUpdated: Date.now() }),
-      setPodcasts: (podcasts) => set({ podcasts, lastUpdated: Date.now() }),
-      setRadioStations: (radioStations) => set({ radioStations, lastUpdated: Date.now() }),
-      
-      // Bulk update for preloader
-      setAllData: (data) => set({ 
-        ...data, 
-        lastUpdated: Date.now(),
-        isStale: false,
+      return {
+        trending: [],
+        biggestHits: [],
+        peoplesChoice: [],
+        top10Month: [],
+        mavinsBest: [],
+        newReleases: [],
+        throwbacks: [],
+        mixes: [],
+        channels: [],
+        podcasts: [],
+        radioStations: [],
+        recentSongs: [], // This starts empty on every app launch
+        
+        lastUpdated: null,
+        isStale: true,
         isLoading: false,
-      }),
-      
-      markFresh: () => set({ isStale: false, lastUpdated: Date.now() }),
-      markStale: () => set({ isStale: true }),
-      setLoading: (isLoading) => set({ isLoading }),
-      
-      // Selector: Get IDs to exclude from Top 10 (for deduplication)
-      getExcludedIdsForTop10: () => {
-        const state = get();
-        const ids = new Set<string>();
         
-        [...state.trending, ...state.biggestHits, ...state.peoplesChoice].forEach((item) => {
-          if (item.id) ids.add(item.id);
-          if (item.videoId) ids.add(item.videoId);
-        });
+        setTrending: (trending) => {
+          console.log(`📊 [HomeStore] setTrending: ${trending.length} items`);
+          set({ trending, lastUpdated: Date.now() });
+        },
         
-        return Array.from(ids);
-      },
-      
-      // Selector: Check if any data exists
-      hasAnyData: () => {
-        const state = get();
-        return (
-          state.trending.length > 0 ||
-          state.biggestHits.length > 0 ||
-          state.peoplesChoice.length > 0 ||
-          state.top10Month.length > 0 ||
-          state.mavinsBest.length > 0 ||
-          state.newReleases.length > 0 ||
-          state.throwbacks.length > 0 ||
-          state.mixes.length > 0 ||
-          state.channels.length > 0 ||
-          state.podcasts.length > 0 ||
-          state.radioStations.length > 0
-        );
-      },
-    }),
+        setBiggestHits: (biggestHits) => {
+          console.log(`📊 [HomeStore] setBiggestHits: ${biggestHits.length} items`);
+          set({ biggestHits, lastUpdated: Date.now() });
+        },
+        
+        setPeoplesChoice: (peoplesChoice) => {
+          console.log(`📊 [HomeStore] setPeoplesChoice: ${peoplesChoice.length} items`);
+          set({ peoplesChoice, lastUpdated: Date.now() });
+        },
+        
+        setTop10Month: (top10Month) => {
+          console.log(`📊 [HomeStore] setTop10Month: ${top10Month.length} items`);
+          set({ top10Month, lastUpdated: Date.now() });
+        },
+        
+        setMavinsBest: (mavinsBest) => {
+          console.log(`📊 [HomeStore] setMavinsBest: ${mavinsBest.length} items`);
+          set({ mavinsBest, lastUpdated: Date.now() });
+        },
+        
+        setNewReleases: (newReleases) => {
+          console.log(`📊 [HomeStore] setNewReleases: ${newReleases.length} items`);
+          set({ newReleases, lastUpdated: Date.now() });
+        },
+        
+        setThrowbacks: (throwbacks) => {
+          console.log(`📊 [HomeStore] setThrowbacks: ${throwbacks.length} items`);
+          set({ throwbacks, lastUpdated: Date.now() });
+        },
+        
+        setMixes: (mixes) => {
+          console.log(`📊 [HomeStore] setMixes: ${mixes.length} items`);
+          set({ mixes, lastUpdated: Date.now() });
+        },
+        
+        setChannels: (channels) => {
+          console.log(`📊 [HomeStore] setChannels: ${channels.length} items`);
+          set({ channels, lastUpdated: Date.now() });
+        },
+        
+        setPodcasts: (podcasts) => {
+          console.log(`📊 [HomeStore] setPodcasts: ${podcasts.length} items`);
+          set({ podcasts, lastUpdated: Date.now() });
+        },
+        
+        setRadioStations: (radioStations) => {
+          console.log(`📊 [HomeStore] setRadioStations: ${radioStations.length} items`);
+          set({ radioStations, lastUpdated: Date.now() });
+        },
+        
+        setRecentSongs: (recentSongs) => {
+          console.log(`📊 [HomeStore] setRecentSongs: ${recentSongs.length} items (FROM DATABASE ONLY)`);
+          set({ recentSongs, lastUpdated: Date.now() });
+        },
+        
+        addRecentSong: (song) => set((state) => {
+          const filtered = state.recentSongs.filter(s => s.id !== song.id);
+          const newSong = { ...song, playedAt: Date.now() };
+          const newRecent = [newSong, ...filtered].slice(0, 20);
+          console.log(`📊 [HomeStore] addRecentSong: ${song.title}, total: ${newRecent.length}`);
+          return { recentSongs: newRecent, lastUpdated: Date.now() };
+        }),
+        
+        removeRecentSong: (songId) => set((state) => {
+          console.log(`📊 [HomeStore] removeRecentSong: ${songId}`);
+          return {
+            recentSongs: state.recentSongs.filter(s => s.id !== songId),
+            lastUpdated: Date.now(),
+          };
+        }),
+        
+        clearRecentSongs: () => {
+          console.log(`📊 [HomeStore] clearRecentSongs`);
+          set({ recentSongs: [], lastUpdated: Date.now() });
+        },
+        
+        setAllData: (data) => {
+          console.log('📊 [HomeStore] setAllData called with sections:', Object.keys(data));
+          set({ 
+            ...data, 
+            lastUpdated: Date.now(),
+            isStale: false,
+            isLoading: false,
+          });
+          console.log('📊 [HomeStore] setAllData complete - hasAnyData:', get().hasAnyData());
+        },
+        
+        markFresh: () => {
+          console.log('📊 [HomeStore] markFresh');
+          set({ isStale: false, lastUpdated: Date.now() });
+        },
+        
+        markStale: () => {
+          console.log('📊 [HomeStore] markStale called');
+          set({ isStale: true });
+        },
+        
+        setLoading: (isLoading) => {
+          console.log(`📊 [HomeStore] setLoading: ${isLoading}`);
+          set({ isLoading });
+        },
+        
+        getExcludedIdsForTop10: () => {
+          const state = get();
+          const ids = new Set<string>();
+          
+          state.trending.forEach((item) => {
+            if (item.id) ids.add(item.id);
+            if (item.videoId) ids.add(item.videoId);
+          });
+          
+          state.biggestHits.forEach((item) => {
+            if (item.id) ids.add(item.id);
+            if (item.videoId) ids.add(item.videoId);
+          });
+          
+          state.peoplesChoice.forEach((item) => {
+            if (item.id) ids.add(item.id);
+            if (item.videoId) ids.add(item.videoId);
+          });
+          
+          return Array.from(ids);
+        },
+        
+        hasAnyData: () => {
+          const state = get();
+          return (
+            state.trending.length > 0 ||
+            state.biggestHits.length > 0 ||
+            state.peoplesChoice.length > 0 ||
+            state.top10Month.length > 0 ||
+            state.mavinsBest.length > 0 ||
+            state.newReleases.length > 0 ||
+            state.throwbacks.length > 0 ||
+            state.mixes.length > 0 ||
+            state.channels.length > 0 ||
+            state.podcasts.length > 0 ||
+            state.radioStations.length > 0
+          );
+        },
+      };
+    },
     {
-      name: 'home-store-v1',
+      name: 'home-store-v5',
       storage: createJSONStorage(() => AsyncStorage),
-      // Only persist data, not functions
+      // CRITICAL: recentSongs is NOT persisted - always fresh from database
       partialize: (state) => ({
         trending: state.trending,
         biggestHits: state.biggestHits,
@@ -225,6 +297,7 @@ export const useHomeStore = create<HomeState>()(
         channels: state.channels,
         podcasts: state.podcasts,
         radioStations: state.radioStations,
+        // recentSongs is EXCLUDED from persistence - always fresh from DB
         lastUpdated: state.lastUpdated,
         isStale: state.isStale,
       }),
