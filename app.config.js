@@ -85,7 +85,7 @@ module.exports = {
     withIconXml,
     "expo-router",
     "expo-font",
-    "react-native-track-player",
+  
     [
       "expo-notifications",
       {
