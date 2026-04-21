@@ -109,3 +109,4 @@ temp/
 *.pid
 *.seed
 *.pid.lock
+!android/gradle.properties
