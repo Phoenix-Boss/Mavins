@@ -43,7 +43,7 @@ type RNTPModule = {
   State: any;
   TrackPlayer: {
     setupPlayer: (options?: any) => Promise<void>;
-    getPlaybackState: () => Promise<any>;
+    getPlaybackState: () => Promise<{ state: any }>;
     reset: () => Promise<void>;
     add: (tracks: any | any[]) => Promise<void>;
     load: (track: any) => Promise<void>;
@@ -55,8 +55,7 @@ type RNTPModule = {
     seekTo: (position: number) => Promise<void>;
     getPosition: () => Promise<number>;
     getDuration: () => Promise<number>;
-    getActiveTrack: () => Promise<any>;
-    getState: () => Promise<number>;
+    getQueue: () => Promise<any[]>;
     addEventListener: (event: string, listener: (data: any) => void) => { remove: () => void };
     updateOptions: (options: any) => Promise<void>;
   };
@@ -68,13 +67,15 @@ async function getRNTP(): Promise<RNTPModule | null> {
   if (!_rntpModule) {
     try {
       const module = await import('react-native-track-player');
-      // Map the module to our expected type
+      // The default export IS the TrackPlayer object in RNTP 4.x.
+      // module.TrackPlayer does not exist — use module.default instead.
+      const player = (module.default ?? module) as unknown as RNTPModule['TrackPlayer'];
       _rntpModule = {
         Capability: module.Capability,
         AppKilledPlaybackBehavior: module.AppKilledPlaybackBehavior,
         Event: module.Event,
         State: module.State,
-        TrackPlayer: module.TrackPlayer,
+        TrackPlayer: player,
       };
     } catch (e) {
       console.error('[MusicPlayer] Failed to load RNTP:', e);
@@ -286,14 +287,14 @@ async function getCachedAudioStream(
 ): Promise<{ url: string; duration: number } | null> {
   try {
     const uuid = await videoIdToUuid(trackId);
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('streams')
       .select('stream_url, expiry, duration')
       .eq('track_id', uuid)
       .eq('stream_type', 'audio')
       .eq('is_active', true)
       .gt('expiry', new Date().toISOString())
-      .maybeSingle();
+      .maybeSingle() as { data: StreamCacheRow | null; error: any };
     if (error || !data) return null;
     return { url: data.stream_url, duration: data.duration ?? 0 };
   } catch { return null; }
@@ -302,14 +303,14 @@ async function getCachedAudioStream(
 async function getCachedVideoStream(trackId: string): Promise<string | null> {
   try {
     const uuid = await videoIdToUuid(trackId);
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('streams')
       .select('stream_url, expiry')
       .eq('track_id', uuid)
       .eq('stream_type', 'video')
       .eq('is_active', true)
       .gt('expiry', new Date().toISOString())
-      .maybeSingle();
+      .maybeSingle() as { data: Pick<StreamCacheRow, 'stream_url' | 'expiry'> | null; error: any };
     if (error || !data) return null;
     return data.stream_url;
   } catch { return null; }
@@ -318,7 +319,7 @@ async function getCachedVideoStream(trackId: string): Promise<string | null> {
 async function invalidateStreamCache(trackId: string): Promise<void> {
   try {
     const uuid = await videoIdToUuid(trackId);
-    await supabase.from('streams').update({ is_active: false }).eq('track_id', uuid);
+    await (supabase as any).from('streams').update({ is_active: false }).eq('track_id', uuid);
   } catch (e) {
     console.warn('[MusicPlayer] invalidateStreamCache error:', e);
   }
@@ -366,7 +367,7 @@ async function cacheStreamsToSupabase(
       }] : []),
     ];
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('streams')
       .upsert(rows, { onConflict: 'track_id,stream_type' });
 
@@ -767,15 +768,17 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   children, 
   playerReady: playerReadyProp = false 
 }) => {
-  const [nativePlaybackState, setNativePlaybackState] = useState<number>(0);
+  const [nativePlaybackState, setNativePlaybackState] = useState<number | string>(0);
   const [currentTrack, setCurrentTrack] = useState<Song | null>(null);
   const [optimisticPlaying, setOptimisticPlaying] = useState<boolean | null>(null);
   const [progress, setProgress] = useState({ position: 0, duration: 0, buffered: 0 });
   const [isLoading, setIsLoading] = useState(false);
 
-  const nativeIsPlaying = nativePlaybackState === 3;
+  // Use both string and number state comparisons for New Architecture compatibility
+  // New Arch uses string states ('playing', 'buffering') while old used numbers (3, 6, 7, 8)
+  const nativeIsPlaying = nativePlaybackState === 'playing' || nativePlaybackState === 3;
   const isPlaying = optimisticPlaying !== null ? optimisticPlaying : nativeIsPlaying;
-  const isBuffering = [6, 8, 7].includes(nativePlaybackState);
+  const isBuffering = ['buffering', 'loading', 6, 8, 7].includes(nativePlaybackState as any);
 
   const currentSongIdRef = useRef<string | null>(null);
   const currentSongRef = useRef<Song | null>(null);
@@ -843,9 +846,8 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       });
       eventUnsubscribersRef.current.push(() => stateSub.remove());
 
-      const trackSub = TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, async () => {
+      const trackSub = TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, async ({ track }: any) => {
         try {
-          const track = await TrackPlayer.getActiveTrack();
           if (track && !cancelled) {
             const song: Song = {
               id: track.id,
@@ -874,7 +876,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
       const errorSub = TrackPlayer.addEventListener(Event.PlaybackError, async (event: any) => {
         log(`Playback error: ${event.message || 'unknown'}`);
-        if (!cancelled) setNativePlaybackState(State.Error);
+        if (!cancelled) setNativePlaybackState('error');
 
         const song = currentSongRef.current;
         if (!song || isRecoveringRef.current) return;
@@ -919,7 +921,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       eventUnsubscribersRef.current.forEach(unsub => unsub());
       eventUnsubscribersRef.current = [];
     };
-  }, [playerReadyProp, log, progress.position]);
+  }, [playerReadyProp, log]);
 
   // ─── AUTO-EXPAND ON APP RESUME ─────────────────────────────────────────────
   useEffect(() => {
@@ -928,10 +930,10 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         try {
           const rntp = await getRNTP();
           if (!rntp) return;
-          const activeTrack = await rntp.TrackPlayer.getActiveTrack();
-          const playbackState = await rntp.TrackPlayer.getState();
+          const queue = await rntp.TrackPlayer.getQueue();
+          const { state: playbackState } = await rntp.TrackPlayer.getPlaybackState();
           
-          if (activeTrack && playbackState === 3 && expandPlayerRef.current) {
+          if (queue?.length > 0 && (playbackState === 'playing' || playbackState === 3) && expandPlayerRef.current) {
             log('App resumed with active track - auto-expanding player');
             setTimeout(() => expandPlayer(), 100);
           }
@@ -945,38 +947,31 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   }, [expandPlayer, log]);
 
   // ─── RESTORE PLAYING STATE ON APP START ─────────────────────────────────────
+  // playerReadyProp is set true by _layout.tsx after setupPlayerGlobal() resolves.
+  // No polling needed — react to the prop flipping, the layout owns readiness.
   useEffect(() => {
+    if (!playerReadyProp) return;
+
     const initializeAndRestore = async () => {
-      let retries = 0;
-      while (!playerReadyRef.current && retries < 50) {
-        await delay(100);
-        retries++;
-      }
-
-      if (!playerReadyRef.current) {
-        log('Player not ready after timeout, skipping restore');
-        return;
-      }
-
       try {
         const rntp = await getRNTP();
         if (!rntp) return;
 
-        const activeTrack = await rntp.TrackPlayer.getActiveTrack();
-        if (activeTrack) {
+        const queue = await rntp.TrackPlayer.getQueue();
+        if (queue?.length > 0) {
           log('Active track already exists, skipping restore');
           isInitializedRef.current = true;
           return;
         }
 
         const { track, position } = await restoreLastPlayingState();
-        
+
         if (track) {
           log(`Restoring last playing track: ${track.title}`);
           setCurrentTrack(track);
           currentSongRef.current = track;
           currentSongIdRef.current = track.id;
-          
+
           const resolvedTrack = await resolveTrack(track);
           if (resolvedTrack) {
             await rntp.TrackPlayer.load(resolvedTrack);
@@ -986,7 +981,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
             await rntp.TrackPlayer.pause();
           }
         }
-        
+
         isInitializedRef.current = true;
       } catch (e) {
         log(`Restore error: ${e}`);
@@ -994,7 +989,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     };
 
     initializeAndRestore();
-  }, [log]);
+  }, [playerReadyProp, log]);
 
   useEffect(() => {
     if (currentTrack) {
@@ -1325,8 +1320,8 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         return;
       }
 
-      const activeTrack = await rntp.TrackPlayer.getActiveTrack();
-      if (!activeTrack) {
+      const queue = await rntp.TrackPlayer.getQueue();
+      if (!queue?.length) {
         Alert.alert('Nothing to Play', 'Please select a song first.');
         return;
       }

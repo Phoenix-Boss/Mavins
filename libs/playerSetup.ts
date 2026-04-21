@@ -5,7 +5,7 @@
 // API pattern confirmed from official RNTP 4.1.2 example:
 // - setupPlayer() only accepts: autoHandleInterruptions, alwaysPauseOnInterruption
 // - ALL capabilities/notification options go into updateOptions() only
-// - Hot reload detection via getCurrentTrack() (returns null when set up, throws when not)
+// - Hot reload detection via getActiveTrack() — getCurrentTrack() removed in 4.x
 
 import TrackPlayer, {
   Capability,
@@ -30,13 +30,16 @@ export async function setupPlayerGlobal(): Promise<boolean> {
     try {
       console.log('[PlayerSetup] Starting...');
 
-      // Hot reload detection: getCurrentTrack() succeeds if player is already set up
+      // Hot reload detection: getQueue() succeeds if player is already set up
+      // getActiveTrack/getCurrentTrack both removed in RNTP 4.x — use getQueue() instead
       try {
-        await TrackPlayer.getCurrentTrack();
-        console.log('[PlayerSetup] Already set up (hot reload detected)');
-        isInitialized = true;
-        initPromise = null;
-        return true;
+        const queue = await TrackPlayer.getQueue();
+        if (Array.isArray(queue)) {
+          console.log('[PlayerSetup] Already set up (hot reload detected via queue)');
+          isInitialized = true;
+          initPromise = null;
+          return true;
+        }
       } catch {
         // Expected on cold launch — player not initialized yet
       }

@@ -1,11 +1,6 @@
 // libs/service.ts
 //
 // RNTP 4.1.2 Playback Service — New Architecture compatible
-//
-// Key changes for 4.1.2 New Architecture (bridgeless mode):
-// - Use Event enum directly (no defensive string fallbacks needed in New Arch)
-// - PlaybackActiveTrackChanged replaces PlaybackTrackChanged for active track
-// - AudioChapterMetadataReceived replaces deprecated AudioCommonMetadataReceived
 
 import TrackPlayer, { Event, State } from 'react-native-track-player';
 
@@ -30,19 +25,16 @@ async function safe(fn: () => Promise<unknown>, label: string, retries = 1): Pro
 export async function PlaybackService(): Promise<void> {
   console.log('[PlaybackService] Started');
 
-  // Track playback state for toggle logic
-  TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
-    _isPlaying = state === State.Playing;
+  TrackPlayer.addEventListener(Event.PlaybackState, ({ state }: { state: string | number }) => {
+    _isPlaying = state === State.Playing || state === 'playing';
     console.log(`[PlaybackService] State → ${state}`);
   });
 
-  // Track position/duration for seek bounds checking
-  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }) => {
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }: { position: number; duration: number; buffered: number }) => {
     _position = position;
     _duration = duration;
   });
 
-  // Remote control events
   TrackPlayer.addEventListener(Event.RemotePlay, () => {
     safe(() => TrackPlayer.play(), 'RemotePlay');
   });
@@ -75,19 +67,19 @@ export async function PlaybackService(): Promise<void> {
     }
   });
 
-  TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => {
+  TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }: { position: number }) => {
     if (typeof position === 'number' && !isNaN(position) && position >= 0 && position <= _duration) {
       safe(() => TrackPlayer.seekTo(position), 'RemoteSeek');
     }
   });
 
-  TrackPlayer.addEventListener(Event.RemoteJumpForward, ({ interval = 10 }) => {
-    const newPos = Math.min(_position + interval, _duration);
+  TrackPlayer.addEventListener(Event.RemoteJumpForward, ({ interval }: { interval: number }) => {
+    const newPos = Math.min(_position + (interval ?? 10), _duration);
     safe(() => TrackPlayer.seekTo(newPos), 'JumpForward');
   });
 
-  TrackPlayer.addEventListener(Event.RemoteJumpBackward, ({ interval = 10 }) => {
-    const newPos = Math.max(0, _position - interval);
+  TrackPlayer.addEventListener(Event.RemoteJumpBackward, ({ interval }: { interval: number }) => {
+    const newPos = Math.max(0, _position - (interval ?? 10));
     safe(() => TrackPlayer.seekTo(newPos), 'JumpBackward');
   });
 
@@ -103,11 +95,11 @@ export async function PlaybackService(): Promise<void> {
     console.log('[PlaybackService] 📱 RemoteBookmark');
   });
 
-  TrackPlayer.addEventListener(Event.RemoteSetRating, ({ rating }) => {
+  TrackPlayer.addEventListener(Event.RemoteSetRating, ({ rating }: { rating: number }) => {
     console.log(`[PlaybackService] 📱 RemoteSetRating: ${rating}`);
   });
 
-  TrackPlayer.addEventListener(Event.RemoteDuck, ({ paused, permanent }) => {
+  TrackPlayer.addEventListener(Event.RemoteDuck, ({ paused, permanent }: { paused: boolean; permanent: boolean }) => {
     console.log(`[PlaybackService] 🎧 Duck (paused: ${paused}, permanent: ${permanent})`);
     if (permanent || paused) {
       safe(() => TrackPlayer.pause(), 'DuckPause');
@@ -116,17 +108,15 @@ export async function PlaybackService(): Promise<void> {
     }
   });
 
-  // Playback lifecycle events
-  TrackPlayer.addEventListener(Event.PlaybackError, ({ code, message }) => {
+  TrackPlayer.addEventListener(Event.PlaybackError, ({ code, message }: { code: string; message: string }) => {
     console.error('[PlaybackService] ❌ PlaybackError:', code, message);
   });
 
-  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ track, position }) => {
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ track, position }: { track: number; position: number }) => {
     console.log(`[PlaybackService] ⏹️ Queue ended at track ${track}, pos ${position}`);
   });
 
-  // PlaybackActiveTrackChanged is the correct event in 4.1.2
-  TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, ({ index, track }) => {
+  TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, ({ index, track }: { index: number; track: { title?: string } | undefined }) => {
     console.log(`[PlaybackService] 🎵 Active track [${index}]: ${track?.title ?? 'Unknown'}`);
   });
 
@@ -134,16 +124,15 @@ export async function PlaybackService(): Promise<void> {
     console.log('[PlaybackService] ✅ Playback ready');
   });
 
-  // Metadata events (4.1.2 uses these three)
-  TrackPlayer.addEventListener(Event.AudioChapterMetadataReceived, ({ metadata }) => {
+  TrackPlayer.addEventListener(Event.AudioChapterMetadataReceived, ({ metadata }: { metadata: unknown }) => {
     console.log('[PlaybackService] 📝 Chapter metadata:', metadata);
   });
 
-  TrackPlayer.addEventListener(Event.AudioTimedMetadataReceived, ({ metadata }) => {
+  TrackPlayer.addEventListener(Event.AudioTimedMetadataReceived, ({ metadata }: { metadata: unknown }) => {
     console.log('[PlaybackService] 📝 Timed metadata:', metadata);
   });
 
-  TrackPlayer.addEventListener(Event.AudioCommonMetadataReceived, ({ metadata }) => {
+  TrackPlayer.addEventListener(Event.AudioCommonMetadataReceived, ({ metadata }: { metadata: unknown }) => {
     console.log('[PlaybackService] 📝 Common metadata:', metadata);
   });
 
