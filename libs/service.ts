@@ -1,7 +1,11 @@
 // libs/service.ts
 //
-// RNTP Playback Service — handles all remote-control events.
-// Uses State enum for comparison instead of PlaybackState type.
+// RNTP 4.1.2 Playback Service — New Architecture compatible
+//
+// Key changes for 4.1.2 New Architecture (bridgeless mode):
+// - Use Event enum directly (no defensive string fallbacks needed in New Arch)
+// - PlaybackActiveTrackChanged replaces PlaybackTrackChanged for active track
+// - AudioChapterMetadataReceived replaces deprecated AudioCommonMetadataReceived
 
 import TrackPlayer, { Event, State } from 'react-native-track-player';
 
@@ -23,42 +27,35 @@ async function safe(fn: () => Promise<unknown>, label: string, retries = 1): Pro
   }
 }
 
-// Safe enum accessor — prevents null reference during hot reload
-const getEvent = (eventName: keyof typeof Event): any => {
-  return Event?.[eventName] ?? eventName;
-};
-
-const getStateValue = (stateName: keyof typeof State): any => {
-  return State?.[stateName] ?? stateName;
-};
-
 export async function PlaybackService(): Promise<void> {
   console.log('[PlaybackService] Started');
 
-  TrackPlayer.addEventListener(getEvent('PlaybackState'), ({ state }: any) => {
-    // Compare against State.Playing value (typically 3)
-    _isPlaying = state === getStateValue('Playing');
+  // Track playback state for toggle logic
+  TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
+    _isPlaying = state === State.Playing;
     console.log(`[PlaybackService] State → ${state}`);
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackProgressUpdated'), ({ position, duration }: any) => {
+  // Track position/duration for seek bounds checking
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }) => {
     _position = position;
     _duration = duration;
   });
 
-  TrackPlayer.addEventListener(getEvent('RemotePlay'), () => {
+  // Remote control events
+  TrackPlayer.addEventListener(Event.RemotePlay, () => {
     safe(() => TrackPlayer.play(), 'RemotePlay');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemotePause'), () => {
+  TrackPlayer.addEventListener(Event.RemotePause, () => {
     safe(() => TrackPlayer.pause(), 'RemotePause');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteStop'), () => {
+  TrackPlayer.addEventListener(Event.RemoteStop, () => {
     safe(() => TrackPlayer.stop(), 'RemoteStop');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteTogglePlayback'), () => {
+  TrackPlayer.addEventListener(Event.RemoteTogglePlayback, () => {
     if (_isPlaying) {
       safe(() => TrackPlayer.pause(), 'TogglePause');
     } else {
@@ -66,11 +63,11 @@ export async function PlaybackService(): Promise<void> {
     }
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteNext'), () => {
+  TrackPlayer.addEventListener(Event.RemoteNext, () => {
     safe(() => TrackPlayer.skipToNext(), 'RemoteNext');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemotePrevious'), () => {
+  TrackPlayer.addEventListener(Event.RemotePrevious, () => {
     if (_position > 3) {
       safe(() => TrackPlayer.seekTo(0), 'SeekToStart');
     } else {
@@ -78,39 +75,39 @@ export async function PlaybackService(): Promise<void> {
     }
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteSeek'), ({ position }: any) => {
+  TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => {
     if (typeof position === 'number' && !isNaN(position) && position >= 0 && position <= _duration) {
       safe(() => TrackPlayer.seekTo(position), 'RemoteSeek');
     }
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteJumpForward'), ({ interval = 10 }: any) => {
+  TrackPlayer.addEventListener(Event.RemoteJumpForward, ({ interval = 10 }) => {
     const newPos = Math.min(_position + interval, _duration);
     safe(() => TrackPlayer.seekTo(newPos), 'JumpForward');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteJumpBackward'), ({ interval = 10 }: any) => {
+  TrackPlayer.addEventListener(Event.RemoteJumpBackward, ({ interval = 10 }) => {
     const newPos = Math.max(0, _position - interval);
     safe(() => TrackPlayer.seekTo(newPos), 'JumpBackward');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteLike'), () => {
+  TrackPlayer.addEventListener(Event.RemoteLike, () => {
     console.log('[PlaybackService] 📱 RemoteLike');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteDislike'), () => {
+  TrackPlayer.addEventListener(Event.RemoteDislike, () => {
     console.log('[PlaybackService] 📱 RemoteDislike');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteBookmark'), () => {
+  TrackPlayer.addEventListener(Event.RemoteBookmark, () => {
     console.log('[PlaybackService] 📱 RemoteBookmark');
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteSetRating'), ({ rating }: any) => {
+  TrackPlayer.addEventListener(Event.RemoteSetRating, ({ rating }) => {
     console.log(`[PlaybackService] 📱 RemoteSetRating: ${rating}`);
   });
 
-  TrackPlayer.addEventListener(getEvent('RemoteDuck'), ({ paused, permanent }: any) => {
+  TrackPlayer.addEventListener(Event.RemoteDuck, ({ paused, permanent }) => {
     console.log(`[PlaybackService] 🎧 Duck (paused: ${paused}, permanent: ${permanent})`);
     if (permanent || paused) {
       safe(() => TrackPlayer.pause(), 'DuckPause');
@@ -119,32 +116,35 @@ export async function PlaybackService(): Promise<void> {
     }
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackError'), ({ code, message }: any) => {
+  // Playback lifecycle events
+  TrackPlayer.addEventListener(Event.PlaybackError, ({ code, message }) => {
     console.error('[PlaybackService] ❌ PlaybackError:', code, message);
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackQueueEnded'), ({ track, position }: any) => {
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ track, position }) => {
     console.log(`[PlaybackService] ⏹️ Queue ended at track ${track}, pos ${position}`);
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackActiveTrackChanged'), ({ index, track }: any) => {
+  // PlaybackActiveTrackChanged is the correct event in 4.1.2
+  TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, ({ index, track }) => {
     console.log(`[PlaybackService] 🎵 Active track [${index}]: ${track?.title ?? 'Unknown'}`);
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackReady'), () => {
+  TrackPlayer.addEventListener(Event.PlaybackReady, () => {
     console.log('[PlaybackService] ✅ Playback ready');
   });
 
-  TrackPlayer.addEventListener(getEvent('AudioCommonMetadataReceived'), ({ metadata }: any) => {
-    console.log('[PlaybackService] 📝 Common metadata:', metadata);
+  // Metadata events (4.1.2 uses these three)
+  TrackPlayer.addEventListener(Event.AudioChapterMetadataReceived, ({ metadata }) => {
+    console.log('[PlaybackService] 📝 Chapter metadata:', metadata);
   });
 
-  TrackPlayer.addEventListener(getEvent('AudioTimedMetadataReceived'), ({ metadata }: any) => {
+  TrackPlayer.addEventListener(Event.AudioTimedMetadataReceived, ({ metadata }) => {
     console.log('[PlaybackService] 📝 Timed metadata:', metadata);
   });
 
-  TrackPlayer.addEventListener(getEvent('PlaybackTrackChanged'), ({ track, position, nextTrack }: any) => {
-    console.log(`[PlaybackService] 🔄 Track transition: ${track} → ${nextTrack} at ${position}s`);
+  TrackPlayer.addEventListener(Event.AudioCommonMetadataReceived, ({ metadata }) => {
+    console.log('[PlaybackService] 📝 Common metadata:', metadata);
   });
 
   console.log('[PlaybackService] ✅ All listeners registered');
