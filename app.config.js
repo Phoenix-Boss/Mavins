@@ -26,7 +26,7 @@ module.exports = {
   // claims New Arch support is itself broken (iOS can't play tracks at all).
   // Disable New Arch here until RNTP ships a stable 5.x release, then re-enable.
   // SDK 54 is the last Expo version where this opt-out is supported.
-  newArchEnabled: false,
+  newArchEnabled: true,
 
   android: {
     softwareKeyboardLayoutMode: "pan",
