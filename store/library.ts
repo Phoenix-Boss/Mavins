@@ -25,6 +25,9 @@ import { immer } from 'zustand/middleware/immer';
 import { useShallow } from 'zustand/shallow';
 import { MMKV } from 'react-native-mmkv';
 
+// Safe import for MediaLibrary - will be loaded dynamically
+let MediaLibrary: any = null;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MMKV storage adapter for Zustand persist middleware
 // ─────────────────────────────────────────────────────────────────────────────
@@ -865,10 +868,22 @@ function matchRule(rule: SmartPlaylistRule, song: Song): boolean {
 
 export async function scanLocalLibrary(): Promise<void> {
   const store = useLibraryStore.getState();
+  
+  // Check if already scanning
+  if (store.isScanning) {
+    console.log('Scan already in progress');
+    return;
+  }
+  
   try {
-    const MediaLibrary = await import('expo-media-library');
+    // Dynamically import MediaLibrary to avoid issues
+    const MediaLibraryModule = await import('expo-media-library');
+    MediaLibrary = MediaLibraryModule.default || MediaLibraryModule;
+    
     const { status } = await MediaLibrary.requestPermissionsAsync();
-    if (status !== 'granted') throw new Error('Media library permission not granted');
+    if (status !== 'granted') {
+      throw new Error('Media library permission not granted');
+    }
 
     store.setScanning(true);
     store.setScanProgress(0);
@@ -884,14 +899,16 @@ export async function scanLocalLibrary(): Promise<void> {
         after,
         sortBy: MediaLibrary.SortBy.default,
       });
+      
       total = page.totalCount;
       store.setTotalLocalTracks(total);
+      
       for (const asset of page.assets) {
         songs.push({
           id: `local_${asset.id}`,
           title: asset.filename.replace(/\.[^/.]+$/, ''),
-          artist: 'Unknown Artist',
-          album: 'Unknown Album',
+          artist: asset.artist || 'Unknown Artist',
+          album: asset.albumId || 'Unknown Album',
           thumbnail: undefined,
           url: asset.uri,
           localUri: asset.uri,
@@ -906,12 +923,18 @@ export async function scanLocalLibrary(): Promise<void> {
           source: 'local',
         });
       }
+      
       store.setScanProgress(Math.round((songs.length / (total || 1)) * 100));
       after = page.hasNextPage ? page.endCursor : undefined;
     } while (after);
 
     store.importLocalSongs({ songs });
     store.setLastScanTime(new Date().toISOString());
+    console.log(`Scan completed: ${songs.length} songs found`);
+    
+  } catch (error) {
+    console.error('Error scanning local library:', error);
+    throw error;
   } finally {
     store.setScanning(false);
   }
@@ -925,9 +948,17 @@ export async function scanLocalLibrary(): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function initializeLibrary(): Promise<void> {
-  // MMKV persistence is already applied synchronously before this runs.
-  // Add async startup work here if needed, e.g.:
-  //   const { downloadedSongIds, songs } = useLibraryStore.getState();
-  //   await pruneStaleDownloadPaths(downloadedSongIds, songs);
-  return Promise.resolve();
+  try {
+    // MMKV persistence is already applied synchronously before this runs.
+    const state = useLibraryStore.getState();
+    console.log(`Library initialized with ${state.songIds.length} songs`);
+    
+    // Add any async startup work here if needed, e.g.:
+    // await validateDownloadedFiles(state.downloadedSongIds, state.songs);
+    
+    return Promise.resolve();
+  } catch (error) {
+    console.error('Error initializing library:', error);
+    return Promise.resolve();
+  }
 }
