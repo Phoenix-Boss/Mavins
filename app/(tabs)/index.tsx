@@ -7,16 +7,12 @@
 //   The home screen never re-mounts, never loses scroll position, never re-fetches.
 //   Dismiss = isPlayerVisible → false → overlay unmounts. That's it.
 //
-// Issue 2 & 9 Fix: Lock Screen Navigation to Home + Auto-expand
-//   - AppState listener to auto-expand player when app resumes with active track
-//   - Notification launch detection to expand player when opened from lock screen
-//   - AsyncStorage restoration of last playing state
-//
-// Issue 5 Fix: Added ALL navigation handlers to PlayerScreenOverlay
-//   - onNavigateToLyrics, onNavigateToRelated, onNavigateToArtist
-//   - onNavigateToMenu, onNavigateToEqualizer, onNavigateToQueue
-//   - onNavigateToPlaylist, onNavigateToComments, onNavigateToSleepTimer
-//   - onNavigateToCast
+// PLAYBACK STATE:
+//   usePlaybackState() hook drives all state — no AppState listeners, no polling,
+//   no Linking.getInitialURL(). RNTP notifies React automatically on every state
+//   change from any source (notification tap, lock screen, Bluetooth, resume).
+//   The floating mini-player (TabsLayout via useActiveTrack) is the re-entry point
+//   after backgrounding — the full player is never auto-expanded on resume.
 
 import React, { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import {
@@ -31,9 +27,6 @@ import {
   Dimensions,
   BackHandler,
   Platform,
-  AppState,
-  AppStateStatus,
-  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -48,7 +41,7 @@ import ReAnimated, {
   interpolate,
   Extrapolation,
 } from "react-native-reanimated";
-import TrackPlayer, { State, useActiveTrack } from "react-native-track-player";
+import { State, useActiveTrack, usePlaybackState } from "react-native-track-player";
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
 import { useHomeStore, Song } from "@/store/home";
@@ -564,11 +557,6 @@ function NewReleasesWrapper({ data }: NewReleasesWrapperProps) {
 //
 //  The (player) route in app/_layout.tsx can stay for deep-link support,
 //  but the primary UI path never touches it.
-//
-// Issue 2 & 9 Fix: Lock Screen Navigation to Home + Auto-expand
-//   - AppState listener detects app coming to foreground
-//   - If track is playing, auto-expands player overlay
-//   - Checks notification launch on app start
 
 export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
@@ -600,68 +588,14 @@ export default function HomeScreen() {
 
   const top10ExcludedIds = getExcludedIdsForTop10();
 
-  // ─── Issue 2 & 9: Auto-expand player when app opens from lock screen ───────
-  // Check if app was opened from notification click
-  useEffect(() => {
-    const checkNotificationLaunch = async () => {
-      try {
-        const initialURL = await Linking.getInitialURL();
-        console.log('[HomeScreen] Initial URL:', initialURL);
-        
-        // If app opened from notification click, check if track is playing
-        if (initialURL?.includes('main') || initialURL?.includes('playback')) {
-          console.log('[HomeScreen] Opened from notification, checking active track');
-          const playbackState = await TrackPlayer.getState();
-          const track = await TrackPlayer.getActiveTrack();
-          
-          if (track && playbackState === State.Playing && !isPlayerVisible) {
-            console.log('[HomeScreen] Auto-expanding player from notification launch');
-            setTimeout(() => {
-              expandPlayer();
-            }, 500);
-          }
-        }
-      } catch (error) {
-        console.warn('[HomeScreen] Failed to check notification launch:', error);
-      }
-    };
-    
-    checkNotificationLaunch();
-  }, [expandPlayer, isPlayerVisible]);
-
-  // ─── Issue 2 & 9: AppState listener for auto-expand when app resumes ───────
-  useEffect(() => {
-    let lastAppState = AppState.currentState;
-    
-    const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
-      console.log('[HomeScreen] App state changed:', lastAppState, '->', nextAppState);
-      
-      // When app comes to foreground from background
-      if (lastAppState.match(/inactive|background/) && nextAppState === 'active') {
-        // Small delay to ensure everything is ready
-        setTimeout(async () => {
-          try {
-            const playbackState = await TrackPlayer.getState();
-            const track = await TrackPlayer.getActiveTrack();
-            
-            console.log('[HomeScreen] App resumed - playbackState:', playbackState, 'track:', track?.title);
-            
-            // If a track is playing and player overlay is not visible, auto-expand
-            if (track && playbackState === State.Playing && !isPlayerVisible && playerReady) {
-              console.log('[HomeScreen] Auto-expanding player on app resume');
-              expandPlayer();
-            }
-          } catch (error) {
-            console.warn('[HomeScreen] Failed to check playback state on resume:', error);
-          }
-        }, 300);
-      }
-      
-      lastAppState = nextAppState;
-    });
-    
-    return () => subscription.remove();
-  }, [expandPlayer, isPlayerVisible, playerReady]);
+  // ─── Industry-standard playback state — hook-driven, no polling ─────────────
+  // usePlaybackState re-renders automatically whenever RNTP state changes.
+  // This covers notification taps, lock screen controls, Bluetooth resume,
+  // and cold launch — all sources handled identically, zero AppState listeners.
+  // Spotify / Apple Music pattern: the floating mini-player (already present via
+  // useActiveTrack in TabsLayout) is the user's re-entry point. We do NOT
+  // auto-expand the full player on resume — that is considered disruptive UX.
+  const { state: playbackState } = usePlaybackState();
 
   // Log store data on mount (for debugging)
   useEffect(() => {

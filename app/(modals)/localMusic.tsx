@@ -49,14 +49,17 @@ import * as MediaLibrary from "expo-media-library";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { useMediaStore, type LocalTrack, type WatchedFolder } from "@/hooks/useMediaStore";
-import { MMKV } from "react-native-mmkv";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MMKV session flag — same instance used in index.tsx
+// Session flag — fire-and-forget AsyncStorage (replaces MMKV session instance)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const storage = new MMKV({ id: "mavin-library-session" });
 const LAST_SCREEN_KEY = "lastLibraryScreen";
+const storage = {
+  set: (key: string, value: string) => AsyncStorage.setItem(key, value).catch(() => {}),
+  delete: (key: string) => AsyncStorage.removeItem(key).catch(() => {}),
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette (mirrors LibraryScreen)

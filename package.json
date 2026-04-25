@@ -72,6 +72,7 @@
     "expo-video": "~3.0.16",
     "firebase": "^12.7.0",
     "honeygain-sdk": "file:./modules/honeygain",
+    "immer": "^10.2.0",
     "lrclib-api": "^2.0.4",
     "mavin-engine": "file:./modules/mavin-engine",
     "react": "19.1.0",

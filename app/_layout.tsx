@@ -1,12 +1,4 @@
 // app/_layout.tsx
-//
-// ROOT LAYOUT — Poweramp-Style Transparent Initialization
-//
-// CRITICAL FIX:
-//   - react-native-track-player is NEVER imported at top level
-//   - playerReady state is passed down to MusicPlayerProvider
-//   - All RNTP initialization is deferred to useEffect with dynamic import
-//   - PlaybackService registration is deferred
 
 import React, {
   createContext,
@@ -24,7 +16,6 @@ import {
   Linking,
   StatusBar,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import {
@@ -56,8 +47,6 @@ import { HomePreloader } from '@/components/HomePreloader';
 import { queryClient } from '@/libs/supabase';
 import { initCache } from '@/libs/cache';
 import HoneygainConsentGate from '@/components/HoneygainConsentGate';
-
-// NO react-native-track-player import here
 
 SplashScreen.preventAutoHideAsync();
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
@@ -91,34 +80,61 @@ export function useGestureContext(): GestureContextValue {
 export { GestureContext };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FastInitScreen
+// PulsingLogoOverlay
+// Shows the app icon with a gentle pulse animation.
+// Fades out smoothly once the app is ready. No text.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type InitStatus = 'initializing' | 'mavins' | 'engine' | 'ready';
+function PulsingLogoOverlay({ visible }: { visible: boolean }) {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const fadeAnim  = useRef(new Animated.Value(1)).current;
+  const pulseRef  = useRef<Animated.CompositeAnimation | null>(null);
+  const [hidden, setHidden] = useState(false);
 
-function FastInitScreen({
-  status,
-  fadeAnim,
-}: {
-  status: InitStatus;
-  fadeAnim: Animated.Value;
-}) {
-  const getMessage = () => {
-    switch (status) {
-      case 'initializing': return 'Initializing';
-      case 'mavins':       return 'Mavins Player';
-      case 'engine':       return 'Starting Engine';
-      case 'ready':        return 'Ready';
-      default:             return 'Initializing';
+  // Start continuous pulse on mount
+  useEffect(() => {
+    pulseRef.current = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.12,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulseRef.current.start();
+    return () => pulseRef.current?.stop();
+  }, [pulseAnim]);
+
+  // Fade out when app is ready
+  useEffect(() => {
+    if (!visible) {
+      pulseRef.current?.stop();
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => setHidden(true));
     }
-  };
+  }, [visible, fadeAnim]);
+
+  if (hidden) return null;
 
   return (
     <Animated.View
-      style={[styles.initOverlay, { opacity: fadeAnim }]}
+      style={[styles.logoOverlay, { opacity: fadeAnim }]}
       pointerEvents="none"
     >
-      <Text style={styles.initText}>{getMessage()}</Text>
+      <Animated.Image
+        source={require('../assets/images/icon.png')}
+        style={[styles.logoImage, { transform: [{ scale: pulseAnim }] }]}
+        resizeMode="contain"
+      />
     </Animated.View>
   );
 }
@@ -174,7 +190,7 @@ function AppShell({
       >
         <Stack.Screen
           name="(tabs)"
-          options={{ animation: 'none', contentStyle: { backgroundColor: '#000' } }}
+          options={{ animation: 'none', contentStyle: { backgroundColor: 'transparent' } }}
         />
         <Stack.Screen
           name="(player)"
@@ -228,14 +244,11 @@ export default function RootLayout() {
   const [playerReady, setPlayerReady]                   = useState(false);
   const [appReady, setAppReady]                         = useState(false);
   const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
-  const [initStatus, setInitStatus]                     = useState<InitStatus>('initializing');
-  const [fontsCompleted, setFontsCompleted]             = useState(false);
   const [navReady, setNavReady]                         = useState(false);
 
   const navigationState   = useRootNavigationState();
   const setupAttemptedRef = useRef(false);
   const appStateRef       = useRef<AppStateStatus>(AppState.currentState);
-  const initFadeAnim      = useRef(new Animated.Value(1)).current;
 
   const sliderActiveRef  = useRef(false);
   const buttonActiveRef  = useRef(false);
@@ -257,49 +270,25 @@ export default function RootLayout() {
   // ── Navigation readiness ──────────────────────────────────────────────────
   useEffect(() => {
     if (navigationState?.key && !navReady) {
-      console.log('[RootLayout] Navigation ready');
       setNavReady(true);
     }
   }, [navigationState?.key, navReady]);
 
-  // ── Font loading → status update ──────────────────────────────────────────
+  // ── Hide splash screen as soon as fonts are done ──────────────────────────
   useEffect(() => {
-    if (fontsLoaded && !fontsCompleted) {
-      console.log('[RootLayout] Fonts loaded');
-      setFontsCompleted(true);
-      setInitStatus(prev => prev === 'initializing' ? 'mavins' : prev);
+    if (fontsLoaded || fontError) {
       SplashScreen.hideAsync().catch(console.warn);
     }
-    if (fontError) {
-      console.error('[RootLayout] Font error:', fontError);
-      SplashScreen.hideAsync().catch(console.warn);
-    }
-  }, [fontsLoaded, fontsCompleted, fontError]);
+  }, [fontsLoaded, fontError]);
 
-  // ── Player readiness → status update ─────────────────────────────────────
-  useEffect(() => {
-    if (playerReady) {
-      console.log('[RootLayout] Player ready');
-      setInitStatus(prev =>
-        prev === 'initializing' || prev === 'mavins' ? 'engine' : prev
-      );
-    }
-  }, [playerReady]);
-
-  // ── Both ready → fade out init overlay ───────────────────────────────────
+  // ── Mark app ready once player + nav are both up ──────────────────────────
   useEffect(() => {
     if (playerReady && navReady && !appReady) {
-      console.log('[RootLayout] Fully ready — transitioning');
-      setInitStatus('ready');
-      Animated.timing(initFadeAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }).start(() => setAppReady(true));
+      setAppReady(true);
     }
-  }, [playerReady, navReady, appReady, initFadeAnim]);
+  }, [playerReady, navReady, appReady]);
 
-  // ── DEFERRED Player initialization (CRITICAL FIX) ─────────────────────────
+  // ── DEFERRED Player initialization ────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
@@ -307,15 +296,11 @@ export default function RootLayout() {
       if (setupAttemptedRef.current) return;
       setupAttemptedRef.current = true;
 
-      console.log('[RootLayout] Init RNTP');
-      
       try {
-        // DEFERRED IMPORT: Only load RNTP after React Native runtime is ready
         const { setupPlayerGlobal } = await import('@/libs/playerSetup');
         const ready = await setupPlayerGlobal();
         if (!cancelled) setPlayerReady(ready);
 
-        // Fire-and-forget — don't block player readiness on these
         initializeLibrary().catch(e => console.warn('[Library]', e));
         try {
           const cr = initCache({ startBackgroundJobs: true });
@@ -338,9 +323,7 @@ export default function RootLayout() {
         !playerReady
       ) {
         import('@/libs/playerSetup').then(({ isPlayerReady }) => {
-          if (isPlayerReady() && !playerReady) {
-            setPlayerReady(true);
-          }
+          if (isPlayerReady() && !playerReady) setPlayerReady(true);
         });
       }
       appStateRef.current = next;
@@ -352,32 +335,31 @@ export default function RootLayout() {
     };
   }, [playerReady]);
 
-  // ── DEFERRED PlaybackService registration (CRITICAL FIX) ──────────────────
+  // ── DEFERRED PlaybackService registration ────────────────────────────────
   useEffect(() => {
     let registered = false;
-    
+
     async function registerService() {
       if (registered) return;
       registered = true;
-      
+
       const _g = global as any;
       if (!_g.__rntp_service_registered) {
         try {
           const { PlaybackService } = await import('@/libs/service');
           AppRegistry.registerHeadlessTask('TrackPlayer', () => PlaybackService);
           _g.__rntp_service_registered = true;
-          console.log('[RootLayout] PlaybackService registered');
         } catch (e) {
           console.error('[RootLayout] Service registration failed:', e);
         }
       }
     }
-    
+
     const timer = setTimeout(registerService, 500);
     return () => clearTimeout(timer);
   }, []);
 
-  // ── Premium banner (fires after app is ready) ─────────────────────────────
+  // ── Premium banner ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!appReady) return;
     const t = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
@@ -405,27 +387,21 @@ export default function RootLayout() {
             <ThemeProvider value={DarkTheme}>
               <StatusBar hidden />
               <GestureContext.Provider value={gestureContextValue}>
-                {/* CRITICAL: Pass playerReady down to MusicPlayerProvider */}
                 <MusicPlayerProvider playerReady={playerReady}>
                   <PlayerProvider playerReady={playerReady}>
                     <GlobalUIStateProvider>
                       <LyricsProvider>
 
-                        {!appReady ? (
-                          <View style={styles.transparentRoot}>
-                            <FastInitScreen
-                              status={initStatus}
-                              fadeAnim={initFadeAnim}
-                            />
-                          </View>
-                        ) : (
-                          <AppShell
-                            premiumBannerVisible={premiumBannerVisible}
-                            setPremiumBannerVisible={setPremiumBannerVisible}
-                            playerReady={playerReady}
-                            fontsLoaded={fontsLoaded}
-                          />
-                        )}
+                        {/* App renders immediately — no gate */}
+                        <AppShell
+                          premiumBannerVisible={premiumBannerVisible}
+                          setPremiumBannerVisible={setPremiumBannerVisible}
+                          playerReady={playerReady}
+                          fontsLoaded={fontsLoaded}
+                        />
+
+                        {/* Pulsing logo overlays until ready, then fades out */}
+                        <PulsingLogoOverlay visible={!appReady} />
 
                       </LyricsProvider>
                     </GlobalUIStateProvider>
@@ -449,31 +425,21 @@ const styles = StyleSheet.create({
 
   appShell: {
     flex: 1,
-    backgroundColor: '#000',
-  },
-
-  transparentRoot: {
-    flex: 1,
     backgroundColor: 'transparent',
   },
-  initOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+
+  logoOverlay: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 9999,
   },
 
-  initText: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '800',
-    letterSpacing: 2,
-    textAlign: 'center',
-    fontFamily: 'Meriva',
-    textShadowColor: 'rgba(0, 0, 0, 0.9)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
+  logoImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 24,
   },
 
   floatingPlayerWrapper: {

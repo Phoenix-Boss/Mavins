@@ -48,7 +48,8 @@ export const MessageModal = () => {
 
       if (docSnap.exists()) {
         const data = docSnap.data();
-        const storedMessageId = storage.getString("lastSeenMessageId");
+        // storage.getString is now async
+        const storedMessageId = await storage.getString("lastSeenMessageId");
 
         // Check if the message is new or if it should always be shown.
         if (storedMessageId !== data.id || !data.showOnce) {
@@ -56,7 +57,7 @@ export const MessageModal = () => {
           setIsModalVisible(true);
 
           // Store the ID of the message that was just shown.
-          storage.set("lastSeenMessageId", data.id);
+          await storage.set("lastSeenMessageId", data.id);
         }
       }
     };

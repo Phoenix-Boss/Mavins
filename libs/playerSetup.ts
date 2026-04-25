@@ -52,7 +52,10 @@ export async function setupPlayerGlobal(): Promise<boolean> {
 
       console.log('[PlayerSetup] ✅ setupPlayer complete');
 
-      // All capabilities and notification config go into updateOptions
+      // All capabilities and notification config go into updateOptions.
+      // NOTE: Capability.Like / Dislike / Bookmark / SetRating were removed
+      // in react-native-track-player v5 alpha and cause a NullPointerException
+      // on Android if included. Only use capabilities confirmed in v5 alpha.
       await TrackPlayer.updateOptions({
         android: {
           appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
@@ -66,10 +69,6 @@ export async function setupPlayerGlobal(): Promise<boolean> {
           Capability.SeekTo,
           Capability.JumpForward,
           Capability.JumpBackward,
-          Capability.SetRating,
-          Capability.Like,
-          Capability.Dislike,
-          Capability.Bookmark,
         ],
         compactCapabilities: [
           Capability.Play,
@@ -87,8 +86,6 @@ export async function setupPlayerGlobal(): Promise<boolean> {
           Capability.SeekTo,
           Capability.JumpForward,
           Capability.JumpBackward,
-          Capability.Like,
-          Capability.Dislike,
         ],
         progressUpdateEventInterval: 2,
       });

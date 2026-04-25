@@ -5,7 +5,6 @@
 // Why this over Redux + redux-persist:
 //   • MMKV is 30× faster than AsyncStorage — synchronous reads, no await
 //   • Zustand needs zero Provider boilerplate — hooks work anywhere
-//   • Immer middleware gives the same mutating reducer style as RTK
 //   • Same ergonomics as before: selector hooks are drop-in replacements
 //
 // Architecture:
@@ -21,23 +20,22 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
-import { immer } from 'zustand/middleware/immer';
 import { useShallow } from 'zustand/shallow';
-import { MMKV } from 'react-native-mmkv';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Safe import for MediaLibrary - will be loaded dynamically
 let MediaLibrary: any = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MMKV storage adapter for Zustand persist middleware
+// AsyncStorage adapter for Zustand persist middleware
+// (react-native-mmkv v4 native module not linked in this build;
+//  swap back to MMKV once the native module is properly linked)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const mmkv = new MMKV({ id: 'mavin-library' });
-
 const mmkvStorage: StateStorage = {
-  getItem: (key) => mmkv.getString(key) ?? null,
-  setItem: (key, value) => mmkv.set(key, value),
-  removeItem: (key) => mmkv.delete(key),
+  getItem: (key) => AsyncStorage.getItem(key),
+  setItem: (key, value) => AsyncStorage.setItem(key, value),
+  removeItem: (key) => AsyncStorage.removeItem(key),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,274 +366,515 @@ const initialState: LibraryState = {
 // Helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-function rebuildMostPlayed(state: LibraryState) {
-  state.mostPlayedSongIds = Object.values(state.songs)
+function buildMostPlayed(songs: Record<string, Song>): string[] {
+  return Object.values(songs)
     .sort((a, b) => (b.playCount || 0) - (a.playCount || 0))
     .slice(0, 50)
     .map((s) => s.id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Store
+// Store  (plain Zustand v5 — no immer dependency)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const useLibraryStore = create<LibraryState & LibraryActions>()(
   persist(
-    immer((set) => ({
+    (set) => ({
       ...initialState,
 
       // ── Songs ──────────────────────────────────────────────────────────────
       addSongs: (songs) => set((s) => {
+        const nextSongs = { ...s.songs };
+        const nextIds = [...s.songIds];
         songs.forEach((song) => {
-          s.songs[song.id] = song;
-          if (!s.songIds.includes(song.id)) s.songIds.push(song.id);
+          nextSongs[song.id] = song;
+          if (!nextIds.includes(song.id)) nextIds.push(song.id);
         });
+        return { songs: nextSongs, songIds: nextIds };
       }),
+
       updateSong: (id, updates) => set((s) => {
-        if (s.songs[id]) Object.assign(s.songs[id], updates);
+        if (!s.songs[id]) return {};
+        return { songs: { ...s.songs, [id]: { ...s.songs[id], ...updates } } };
       }),
+
       removeSong: (id) => set((s) => {
-        delete s.songs[id];
-        s.songIds = s.songIds.filter((x) => x !== id);
-        s.favoriteSongIds = s.favoriteSongIds.filter((x) => x !== id);
-        s.downloadedSongIds = s.downloadedSongIds.filter((x) => x !== id);
-        s.recentlyPlayedSongIds = s.recentlyPlayedSongIds.filter((x) => x !== id);
-        s.mostPlayedSongIds = s.mostPlayedSongIds.filter((x) => x !== id);
+        const nextSongs = { ...s.songs };
+        delete nextSongs[id];
+        return {
+          songs: nextSongs,
+          songIds: s.songIds.filter((x) => x !== id),
+          favoriteSongIds: s.favoriteSongIds.filter((x) => x !== id),
+          downloadedSongIds: s.downloadedSongIds.filter((x) => x !== id),
+          recentlyPlayedSongIds: s.recentlyPlayedSongIds.filter((x) => x !== id),
+          mostPlayedSongIds: s.mostPlayedSongIds.filter((x) => x !== id),
+        };
       }),
 
       // ── Artists ────────────────────────────────────────────────────────────
       addArtists: (artists) => set((s) => {
+        const nextArtists = { ...s.artists };
+        const nextIds = [...s.artistIds];
         artists.forEach((a) => {
-          s.artists[a.id] = a;
-          if (!s.artistIds.includes(a.id)) s.artistIds.push(a.id);
+          nextArtists[a.id] = a;
+          if (!nextIds.includes(a.id)) nextIds.push(a.id);
         });
+        return { artists: nextArtists, artistIds: nextIds };
       }),
+
       updateArtist: (id, updates) => set((s) => {
-        if (s.artists[id]) Object.assign(s.artists[id], updates);
+        if (!s.artists[id]) return {};
+        return { artists: { ...s.artists, [id]: { ...s.artists[id], ...updates } } };
       }),
+
       followArtist: (id) => set((s) => {
-        if (s.artists[id]) s.artists[id].isFollowed = true;
-        if (!s.favoriteArtistIds.includes(id)) s.favoriteArtistIds.unshift(id);
+        const nextArtists = s.artists[id]
+          ? { ...s.artists, [id]: { ...s.artists[id], isFollowed: true } }
+          : s.artists;
+        const nextFavArtistIds = s.favoriteArtistIds.includes(id)
+          ? s.favoriteArtistIds
+          : [id, ...s.favoriteArtistIds];
+        return { artists: nextArtists, favoriteArtistIds: nextFavArtistIds };
       }),
+
       unfollowArtist: (id) => set((s) => {
-        if (s.artists[id]) s.artists[id].isFollowed = false;
-        s.favoriteArtistIds = s.favoriteArtistIds.filter((x) => x !== id);
+        const nextArtists = s.artists[id]
+          ? { ...s.artists, [id]: { ...s.artists[id], isFollowed: false } }
+          : s.artists;
+        return {
+          artists: nextArtists,
+          favoriteArtistIds: s.favoriteArtistIds.filter((x) => x !== id),
+        };
       }),
 
       // ── Albums ─────────────────────────────────────────────────────────────
       addAlbums: (albums) => set((s) => {
+        const nextAlbums = { ...s.albums };
+        const nextIds = [...s.albumIds];
         albums.forEach((a) => {
-          s.albums[a.id] = a;
-          if (!s.albumIds.includes(a.id)) s.albumIds.push(a.id);
+          nextAlbums[a.id] = a;
+          if (!nextIds.includes(a.id)) nextIds.push(a.id);
         });
+        return { albums: nextAlbums, albumIds: nextIds };
       }),
+
       updateAlbum: (id, updates) => set((s) => {
-        if (s.albums[id]) Object.assign(s.albums[id], updates);
+        if (!s.albums[id]) return {};
+        return { albums: { ...s.albums, [id]: { ...s.albums[id], ...updates } } };
       }),
+
       saveAlbum: (id) => set((s) => {
-        if (s.albums[id]) s.albums[id].isSaved = true;
-        if (!s.favoriteAlbumIds.includes(id)) s.favoriteAlbumIds.unshift(id);
+        const nextAlbums = s.albums[id]
+          ? { ...s.albums, [id]: { ...s.albums[id], isSaved: true } }
+          : s.albums;
+        const nextFavAlbumIds = s.favoriteAlbumIds.includes(id)
+          ? s.favoriteAlbumIds
+          : [id, ...s.favoriteAlbumIds];
+        return { albums: nextAlbums, favoriteAlbumIds: nextFavAlbumIds };
       }),
+
       unsaveAlbum: (id) => set((s) => {
-        if (s.albums[id]) s.albums[id].isSaved = false;
-        s.favoriteAlbumIds = s.favoriteAlbumIds.filter((x) => x !== id);
+        const nextAlbums = s.albums[id]
+          ? { ...s.albums, [id]: { ...s.albums[id], isSaved: false } }
+          : s.albums;
+        return {
+          albums: nextAlbums,
+          favoriteAlbumIds: s.favoriteAlbumIds.filter((x) => x !== id),
+        };
       }),
 
       // ── Playlists ──────────────────────────────────────────────────────────
       addPlaylist: (playlist) => set((s) => {
-        s.playlists[playlist.id] = playlist;
-        if (!s.playlistIds.includes(playlist.id)) s.playlistIds.push(playlist.id);
+        const nextIds = s.playlistIds.includes(playlist.id)
+          ? s.playlistIds
+          : [...s.playlistIds, playlist.id];
+        return {
+          playlists: { ...s.playlists, [playlist.id]: playlist },
+          playlistIds: nextIds,
+        };
       }),
+
       updatePlaylist: (id, updates) => set((s) => {
-        if (s.playlists[id]) {
-          Object.assign(s.playlists[id], updates);
-          s.playlists[id].updatedAt = new Date().toISOString();
-        }
+        if (!s.playlists[id]) return {};
+        return {
+          playlists: {
+            ...s.playlists,
+            [id]: { ...s.playlists[id], ...updates, updatedAt: new Date().toISOString() },
+          },
+        };
       }),
+
       deletePlaylist: (id) => set((s) => {
-        delete s.playlists[id];
-        s.playlistIds = s.playlistIds.filter((x) => x !== id);
-        s.favoritePlaylistIds = s.favoritePlaylistIds.filter((x) => x !== id);
+        const nextPlaylists = { ...s.playlists };
+        delete nextPlaylists[id];
+        return {
+          playlists: nextPlaylists,
+          playlistIds: s.playlistIds.filter((x) => x !== id),
+          favoritePlaylistIds: s.favoritePlaylistIds.filter((x) => x !== id),
+        };
       }),
+
       addTrackToPlaylist: (playlistId, songId) => set((s) => {
         const pl = s.playlists[playlistId];
-        if (!pl || pl.trackIds.includes(songId)) return;
-        pl.trackIds.push(songId);
-        pl.trackCount = pl.trackIds.length;
-        if (s.songs[songId]) pl.duration += s.songs[songId].duration;
-        pl.updatedAt = new Date().toISOString();
+        if (!pl || pl.trackIds.includes(songId)) return {};
+        const songDuration = s.songs[songId]?.duration ?? 0;
+        const nextTrackIds = [...pl.trackIds, songId];
+        return {
+          playlists: {
+            ...s.playlists,
+            [playlistId]: {
+              ...pl,
+              trackIds: nextTrackIds,
+              trackCount: nextTrackIds.length,
+              duration: pl.duration + songDuration,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        };
       }),
+
       removeTrackFromPlaylist: (playlistId, songId) => set((s) => {
         const pl = s.playlists[playlistId];
-        if (!pl) return;
+        if (!pl) return {};
         const idx = pl.trackIds.indexOf(songId);
-        if (idx === -1) return;
-        if (s.songs[songId]) pl.duration = Math.max(0, pl.duration - s.songs[songId].duration);
-        pl.trackIds.splice(idx, 1);
-        pl.trackCount = pl.trackIds.length;
-        pl.updatedAt = new Date().toISOString();
+        if (idx === -1) return {};
+        const songDuration = s.songs[songId]?.duration ?? 0;
+        const nextTrackIds = pl.trackIds.filter((_, i) => i !== idx);
+        return {
+          playlists: {
+            ...s.playlists,
+            [playlistId]: {
+              ...pl,
+              trackIds: nextTrackIds,
+              trackCount: nextTrackIds.length,
+              duration: Math.max(0, pl.duration - songDuration),
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        };
       }),
+
       reorderPlaylistTracks: (playlistId, fromIndex, toIndex) => set((s) => {
         const pl = s.playlists[playlistId];
-        if (!pl) return;
-        const [moved] = pl.trackIds.splice(fromIndex, 1);
-        pl.trackIds.splice(toIndex, 0, moved);
-        pl.updatedAt = new Date().toISOString();
+        if (!pl) return {};
+        const nextTrackIds = [...pl.trackIds];
+        const [moved] = nextTrackIds.splice(fromIndex, 1);
+        nextTrackIds.splice(toIndex, 0, moved);
+        return {
+          playlists: {
+            ...s.playlists,
+            [playlistId]: { ...pl, trackIds: nextTrackIds, updatedAt: new Date().toISOString() },
+          },
+        };
       }),
 
       // ── Folders ────────────────────────────────────────────────────────────
       addFolder: (folder) => set((s) => {
-        s.folders[folder.id] = folder;
-        if (!s.folderIds.includes(folder.id)) s.folderIds.push(folder.id);
+        const nextIds = s.folderIds.includes(folder.id)
+          ? s.folderIds
+          : [...s.folderIds, folder.id];
+        return {
+          folders: { ...s.folders, [folder.id]: folder },
+          folderIds: nextIds,
+        };
       }),
+
       updateFolder: (id, updates) => set((s) => {
-        if (s.folders[id]) Object.assign(s.folders[id], updates);
+        if (!s.folders[id]) return {};
+        return { folders: { ...s.folders, [id]: { ...s.folders[id], ...updates } } };
       }),
+
       scanFolder: (folderId, trackIds) => set((s) => {
-        if (!s.folders[folderId]) return;
-        s.folders[folderId].trackIds = trackIds;
-        s.folders[folderId].trackCount = trackIds.length;
+        if (!s.folders[folderId]) return {};
         let dur = 0;
         trackIds.forEach((tid) => { if (s.songs[tid]) dur += s.songs[tid].duration; });
-        s.folders[folderId].duration = dur;
-        s.folders[folderId].dateModified = new Date().toISOString();
+        return {
+          folders: {
+            ...s.folders,
+            [folderId]: {
+              ...s.folders[folderId],
+              trackIds,
+              trackCount: trackIds.length,
+              duration: dur,
+              dateModified: new Date().toISOString(),
+            },
+          },
+        };
       }),
 
       // ── Genres ─────────────────────────────────────────────────────────────
       addGenre: (genre) => set((s) => {
-        s.genres[genre.id] = genre;
-        if (!s.genreIds.includes(genre.id)) s.genreIds.push(genre.id);
+        const nextIds = s.genreIds.includes(genre.id)
+          ? s.genreIds
+          : [...s.genreIds, genre.id];
+        return {
+          genres: { ...s.genres, [genre.id]: genre },
+          genreIds: nextIds,
+        };
       }),
+
       updateGenre: (id, updates) => set((s) => {
-        if (s.genres[id]) Object.assign(s.genres[id], updates);
+        if (!s.genres[id]) return {};
+        return { genres: { ...s.genres, [id]: { ...s.genres[id], ...updates } } };
       }),
 
       // ── Favourites ─────────────────────────────────────────────────────────
       addFavorite: (type, id) => set((s) => {
         if (type === 'song') {
-          if (!s.favoriteSongIds.includes(id)) s.favoriteSongIds.unshift(id);
-          if (s.songs[id]) s.songs[id].isFavorite = true;
-        } else if (type === 'album') {
-          if (!s.favoriteAlbumIds.includes(id)) s.favoriteAlbumIds.unshift(id);
-          if (s.albums[id]) s.albums[id].isSaved = true;
-        } else if (type === 'artist') {
-          if (!s.favoriteArtistIds.includes(id)) s.favoriteArtistIds.unshift(id);
-          if (s.artists[id]) s.artists[id].isFollowed = true;
-        } else {
-          if (!s.favoritePlaylistIds.includes(id)) s.favoritePlaylistIds.unshift(id);
+          return {
+            favoriteSongIds: s.favoriteSongIds.includes(id)
+              ? s.favoriteSongIds
+              : [id, ...s.favoriteSongIds],
+            songs: s.songs[id]
+              ? { ...s.songs, [id]: { ...s.songs[id], isFavorite: true } }
+              : s.songs,
+          };
         }
+        if (type === 'album') {
+          return {
+            favoriteAlbumIds: s.favoriteAlbumIds.includes(id)
+              ? s.favoriteAlbumIds
+              : [id, ...s.favoriteAlbumIds],
+            albums: s.albums[id]
+              ? { ...s.albums, [id]: { ...s.albums[id], isSaved: true } }
+              : s.albums,
+          };
+        }
+        if (type === 'artist') {
+          return {
+            favoriteArtistIds: s.favoriteArtistIds.includes(id)
+              ? s.favoriteArtistIds
+              : [id, ...s.favoriteArtistIds],
+            artists: s.artists[id]
+              ? { ...s.artists, [id]: { ...s.artists[id], isFollowed: true } }
+              : s.artists,
+          };
+        }
+        // playlist
+        return {
+          favoritePlaylistIds: s.favoritePlaylistIds.includes(id)
+            ? s.favoritePlaylistIds
+            : [id, ...s.favoritePlaylistIds],
+        };
       }),
+
       removeFavorite: (type, id) => set((s) => {
         if (type === 'song') {
-          s.favoriteSongIds = s.favoriteSongIds.filter((x) => x !== id);
-          if (s.songs[id]) s.songs[id].isFavorite = false;
-        } else if (type === 'album') {
-          s.favoriteAlbumIds = s.favoriteAlbumIds.filter((x) => x !== id);
-          if (s.albums[id]) s.albums[id].isSaved = false;
-        } else if (type === 'artist') {
-          s.favoriteArtistIds = s.favoriteArtistIds.filter((x) => x !== id);
-          if (s.artists[id]) s.artists[id].isFollowed = false;
-        } else {
-          s.favoritePlaylistIds = s.favoritePlaylistIds.filter((x) => x !== id);
+          return {
+            favoriteSongIds: s.favoriteSongIds.filter((x) => x !== id),
+            songs: s.songs[id]
+              ? { ...s.songs, [id]: { ...s.songs[id], isFavorite: false } }
+              : s.songs,
+          };
         }
+        if (type === 'album') {
+          return {
+            favoriteAlbumIds: s.favoriteAlbumIds.filter((x) => x !== id),
+            albums: s.albums[id]
+              ? { ...s.albums, [id]: { ...s.albums[id], isSaved: false } }
+              : s.albums,
+          };
+        }
+        if (type === 'artist') {
+          return {
+            favoriteArtistIds: s.favoriteArtistIds.filter((x) => x !== id),
+            artists: s.artists[id]
+              ? { ...s.artists, [id]: { ...s.artists[id], isFollowed: false } }
+              : s.artists,
+          };
+        }
+        // playlist
+        return {
+          favoritePlaylistIds: s.favoritePlaylistIds.filter((x) => x !== id),
+        };
       }),
+
       toggleFavoriteSong: (id) => set((s) => {
-        if (!s.songs[id]) return;
+        if (!s.songs[id]) return {};
         const isFav = s.songs[id].isFavorite;
-        s.songs[id].isFavorite = !isFav;
-        if (isFav) {
-          s.favoriteSongIds = s.favoriteSongIds.filter((x) => x !== id);
-        } else {
-          if (!s.favoriteSongIds.includes(id)) s.favoriteSongIds.unshift(id);
-        }
+        return {
+          songs: { ...s.songs, [id]: { ...s.songs[id], isFavorite: !isFav } },
+          favoriteSongIds: isFav
+            ? s.favoriteSongIds.filter((x) => x !== id)
+            : s.favoriteSongIds.includes(id)
+              ? s.favoriteSongIds
+              : [id, ...s.favoriteSongIds],
+        };
       }),
 
       // ── Downloads ──────────────────────────────────────────────────────────
       addDownload: (songId, metadata) => set((s) => {
-        if (!s.downloadedSongIds.includes(songId)) s.downloadedSongIds.unshift(songId);
-        if (s.songs[songId]) {
-          s.songs[songId].isDownloaded = true;
-          s.songs[songId].source = 'downloaded';
-          Object.assign(s.songs[songId], metadata);
-        }
+        const nextIds = s.downloadedSongIds.includes(songId)
+          ? s.downloadedSongIds
+          : [songId, ...s.downloadedSongIds];
+        const nextSongs = s.songs[songId]
+          ? {
+              ...s.songs,
+              [songId]: {
+                ...s.songs[songId],
+                isDownloaded: true,
+                source: 'downloaded' as const,
+                ...metadata,
+              },
+            }
+          : s.songs;
+        return { downloadedSongIds: nextIds, songs: nextSongs };
       }),
+
       removeDownload: (songId) => set((s) => {
-        s.downloadedSongIds = s.downloadedSongIds.filter((x) => x !== songId);
-        if (s.songs[songId]) {
-          s.songs[songId].isDownloaded = false;
-          s.songs[songId].source = 'streaming';
-          s.songs[songId].localUri = undefined;
-          s.songs[songId].localTrackUri = undefined;
-          s.songs[songId].localArtworkUri = undefined;
-          s.songs[songId].localMetadata = undefined;
-        }
+        const nextSongs = s.songs[songId]
+          ? {
+              ...s.songs,
+              [songId]: {
+                ...s.songs[songId],
+                isDownloaded: false,
+                source: 'streaming' as const,
+                localUri: undefined,
+                localTrackUri: undefined,
+                localArtworkUri: undefined,
+                localMetadata: undefined,
+              },
+            }
+          : s.songs;
+        return {
+          downloadedSongIds: s.downloadedSongIds.filter((x) => x !== songId),
+          songs: nextSongs,
+        };
       }),
 
       // ── Active downloads (runtime — not persisted) ─────────────────────────
-      addActiveDownload: (d) => set((s) => {
-        s.activeDownloads[d.id] = { ...d, progress: 0, speed: 0, estimatedTimeRemaining: 0, status: 'pending' };
-      }),
+      addActiveDownload: (d) => set((s) => ({
+        activeDownloads: {
+          ...s.activeDownloads,
+          [d.id]: { ...d, progress: 0, speed: 0, estimatedTimeRemaining: 0, status: 'pending' },
+        },
+      })),
+
       updateActiveDownload: (id, updates) => set((s) => {
-        if (s.activeDownloads[id]) Object.assign(s.activeDownloads[id], updates);
+        if (!s.activeDownloads[id]) return {};
+        return {
+          activeDownloads: {
+            ...s.activeDownloads,
+            [id]: { ...s.activeDownloads[id], ...updates },
+          },
+        };
       }),
-      removeActiveDownload: (id) => set((s) => { delete s.activeDownloads[id]; }),
+
+      removeActiveDownload: (id) => set((s) => {
+        const next = { ...s.activeDownloads };
+        delete next[id];
+        return { activeDownloads: next };
+      }),
 
       // ── History ────────────────────────────────────────────────────────────
       addToPlayHistory: (item) => set((s) => {
-        s.playHistory.unshift(item);
-        if (s.playHistory.length > 100) s.playHistory.pop();
-        const idx = s.recentlyPlayedSongIds.indexOf(item.songId);
-        if (idx !== -1) s.recentlyPlayedSongIds.splice(idx, 1);
-        s.recentlyPlayedSongIds.unshift(item.songId);
-        if (s.recentlyPlayedSongIds.length > 50) s.recentlyPlayedSongIds.pop();
+        // play history (cap 100)
+        const nextHistory = [item, ...s.playHistory].slice(0, 100);
+
+        // recently played (cap 50, deduplicated)
+        const filtered = s.recentlyPlayedSongIds.filter((x) => x !== item.songId);
+        const nextRecent = [item.songId, ...filtered].slice(0, 50);
+
+        // update song play count + lastPlayed
+        let nextSongs = s.songs;
         if (s.songs[item.songId]) {
-          s.songs[item.songId].playCount = (s.songs[item.songId].playCount || 0) + 1;
-          s.songs[item.songId].lastPlayed = new Date().toISOString();
-          rebuildMostPlayed(s);
+          const song = s.songs[item.songId];
+          nextSongs = {
+            ...s.songs,
+            [item.songId]: {
+              ...song,
+              playCount: (song.playCount || 0) + 1,
+              lastPlayed: new Date().toISOString(),
+            },
+          };
         }
+
+        // rebuild mostPlayed from updated songs
+        const nextMostPlayed = buildMostPlayed(nextSongs);
+
+        return {
+          playHistory: nextHistory,
+          recentlyPlayedSongIds: nextRecent,
+          songs: nextSongs,
+          mostPlayedSongIds: nextMostPlayed,
+        };
       }),
-      clearPlayHistory: () => set((s) => {
-        s.playHistory = [];
-        s.recentlyPlayedSongIds = [];
-      }),
+
+      clearPlayHistory: () => set(() => ({
+        playHistory: [],
+        recentlyPlayedSongIds: [],
+      })),
 
       // ── Local scan ─────────────────────────────────────────────────────────
       importLocalSongs: ({ songs, folders = [], genres = [] }) => set((s) => {
+        const nextSongs = { ...s.songs };
+        const nextSongIds = [...s.songIds];
         songs.forEach((song) => {
           const local = { ...song, source: 'local' as const };
-          s.songs[local.id] = local;
-          if (!s.songIds.includes(local.id)) s.songIds.push(local.id);
+          nextSongs[local.id] = local;
+          if (!nextSongIds.includes(local.id)) nextSongIds.push(local.id);
         });
+
+        const nextFolders = { ...s.folders };
+        const nextFolderIds = [...s.folderIds];
         folders.forEach((folder) => {
-          s.folders[folder.id] = folder;
-          if (!s.folderIds.includes(folder.id)) s.folderIds.push(folder.id);
+          nextFolders[folder.id] = folder;
+          if (!nextFolderIds.includes(folder.id)) nextFolderIds.push(folder.id);
         });
+
+        const nextGenres = { ...s.genres };
+        const nextGenreIds = [...s.genreIds];
         genres.forEach((genre) => {
-          if (s.genres[genre.id]) {
+          if (nextGenres[genre.id]) {
+            const existing = nextGenres[genre.id];
+            const mergedTrackIds = [...existing.trackIds];
             genre.trackIds.forEach((tid) => {
-              if (!s.genres[genre.id].trackIds.includes(tid)) s.genres[genre.id].trackIds.push(tid);
+              if (!mergedTrackIds.includes(tid)) mergedTrackIds.push(tid);
             });
-            s.genres[genre.id].trackCount = s.genres[genre.id].trackIds.length;
+            nextGenres[genre.id] = { ...existing, trackIds: mergedTrackIds, trackCount: mergedTrackIds.length };
           } else {
-            s.genres[genre.id] = genre;
-            if (!s.genreIds.includes(genre.id)) s.genreIds.push(genre.id);
+            nextGenres[genre.id] = genre;
+            if (!nextGenreIds.includes(genre.id)) nextGenreIds.push(genre.id);
           }
         });
-        s.totalLocalTracks = songs.length;
-        s.lastScanTime = new Date().toISOString();
+
+        return {
+          songs: nextSongs,
+          songIds: nextSongIds,
+          folders: nextFolders,
+          folderIds: nextFolderIds,
+          genres: nextGenres,
+          genreIds: nextGenreIds,
+          totalLocalTracks: songs.length,
+          lastScanTime: new Date().toISOString(),
+        };
       }),
-      setScanning: (value) => set((s) => { s.isScanning = value; if (!value) s.scanProgress = 0; }),
-      setScanProgress: (value) => set((s) => { s.scanProgress = Math.min(100, Math.max(0, value)); }),
-      setLastScanTime: (value) => set((s) => { s.lastScanTime = value; }),
-      setTotalLocalTracks: (value) => set((s) => { s.totalLocalTracks = value; }),
+
+      setScanning: (value) => set(() => ({
+        isScanning: value,
+        ...(value ? {} : { scanProgress: 0 }),
+      })),
+
+      setScanProgress: (value) => set(() => ({
+        scanProgress: Math.min(100, Math.max(0, value)),
+      })),
+
+      setLastScanTime: (value) => set(() => ({ lastScanTime: value })),
+
+      setTotalLocalTracks: (value) => set(() => ({ totalLocalTracks: value })),
 
       // ── Settings & loading ─────────────────────────────────────────────────
-      updateSettings: (updates) => set((s) => { Object.assign(s.settings, updates); }),
-      setLoading: (key, value) => set((s) => { s.loading[key] = value; }),
+      updateSettings: (updates) => set((s) => ({
+        settings: { ...s.settings, ...updates },
+      })),
+
+      setLoading: (key, value) => set((s) => ({
+        loading: { ...s.loading, [key]: value },
+      })),
 
       // ── Reset ──────────────────────────────────────────────────────────────
       clearLibrary: () => set(() => ({ ...initialState })),
-    })),
+    }),
     {
       name: 'mavin-library',
       storage: createJSONStorage(() => mmkvStorage),
@@ -665,13 +904,9 @@ export const useLibraryStore = create<LibraryState & LibraryActions>()(
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Songs ─────────────────────────────────────────────────────────────────────
-// Raw record — stable reference, no useShallow needed
 export const useSongs = () => useLibraryStore((s) => s.songs);
-// Primitive arrays of IDs — useShallow so we only re-render when IDs change
 export const useSongIds = () => useLibraryStore(useShallow((s) => s.songIds));
-// Single item — primitive lookup, stable if the item object doesn't change
 export const useSong = (id: string) => useLibraryStore((s) => s.songs[id]);
-// Derived Song[] — MUST use useShallow
 export const useAllSongsList = () =>
   useLibraryStore(useShallow((s) => s.songIds.map((id) => s.songs[id]).filter(Boolean) as Song[]));
 export const useLocalSongs = () =>
@@ -748,16 +983,13 @@ export const useFavorites = () => {
       s.favoritePlaylistIds.map((id) => s.playlists[id]).filter(Boolean) as (Playlist | SmartPlaylist)[],
     ),
   );
-  // toggleFavoriteTrack — action from the store, stable reference, no useShallow
   const toggleFavoriteTrack = useLibraryStore((s) => s.toggleFavoriteSong);
 
   return { songs, albums, artists, playlists, favoriteTracks: songs, toggleFavoriteTrack };
 };
 
-// Raw ID array — useShallow because it's an array
 export const useFavoriteSongIds = () => useLibraryStore(useShallow((s) => s.favoriteSongIds));
 
-// Convenience: is a specific song ID currently favourited? Returns a boolean — no useShallow needed
 export const useIsSongFavorite = (id: string) =>
   useLibraryStore((s) => s.favoriteSongIds.includes(id));
 
@@ -780,7 +1012,6 @@ export const useActiveDownloads = () =>
   useLibraryStore(useShallow((s) => Object.values(s.activeDownloads)));
 
 // ── History ───────────────────────────────────────────────────────────────────
-// playHistory is a large array stored directly — useShallow compares items
 export const usePlayHistory = () => useLibraryStore(useShallow((s) => s.playHistory));
 export const useRecentlyPlayed = (limit?: number) =>
   useLibraryStore(useShallow((s) => {
@@ -794,7 +1025,6 @@ export const useMostPlayed = (limit?: number) =>
   }));
 
 // ── Scan status ───────────────────────────────────────────────────────────────
-// Returns a plain-object literal — MUST use useShallow
 export const useScanStatus = () =>
   useLibraryStore(useShallow((s) => ({
     isScanning: s.isScanning,
@@ -804,12 +1034,9 @@ export const useScanStatus = () =>
   })));
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-// s.settings is the stored object reference — stable between renders unless
-// updateSettings() is called, so no useShallow needed here
 export const useLibrarySettings = () => useLibraryStore((s) => s.settings);
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
-// Returns a plain-object literal with computed values — MUST use useShallow
 export const useLibraryStats = () =>
   useLibraryStore(useShallow((s) => ({
     totalSongs: s.songIds.length,
@@ -826,7 +1053,6 @@ export const useLibraryStats = () =>
   })));
 
 // ── Loading flags ─────────────────────────────────────────────────────────────
-// Returns a primitive boolean — no useShallow needed
 export const useLibraryLoading = (key: keyof LibraryState['loading']) =>
   useLibraryStore((s) => s.loading[key]);
 
@@ -868,18 +1094,16 @@ function matchRule(rule: SmartPlaylistRule, song: Song): boolean {
 
 export async function scanLocalLibrary(): Promise<void> {
   const store = useLibraryStore.getState();
-  
-  // Check if already scanning
+
   if (store.isScanning) {
     console.log('Scan already in progress');
     return;
   }
-  
+
   try {
-    // Dynamically import MediaLibrary to avoid issues
     const MediaLibraryModule = await import('expo-media-library');
     MediaLibrary = MediaLibraryModule.default || MediaLibraryModule;
-    
+
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
       throw new Error('Media library permission not granted');
@@ -899,10 +1123,10 @@ export async function scanLocalLibrary(): Promise<void> {
         after,
         sortBy: MediaLibrary.SortBy.default,
       });
-      
+
       total = page.totalCount;
       store.setTotalLocalTracks(total);
-      
+
       for (const asset of page.assets) {
         songs.push({
           id: `local_${asset.id}`,
@@ -923,7 +1147,7 @@ export async function scanLocalLibrary(): Promise<void> {
           source: 'local',
         });
       }
-      
+
       store.setScanProgress(Math.round((songs.length / (total || 1)) * 100));
       after = page.hasNextPage ? page.endCursor : undefined;
     } while (after);
@@ -931,7 +1155,7 @@ export async function scanLocalLibrary(): Promise<void> {
     store.importLocalSongs({ songs });
     store.setLastScanTime(new Date().toISOString());
     console.log(`Scan completed: ${songs.length} songs found`);
-    
+
   } catch (error) {
     console.error('Error scanning local library:', error);
     throw error;
@@ -943,19 +1167,13 @@ export async function scanLocalLibrary(): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 // initializeLibrary — called from _layout.tsx after TrackPlayer.setupPlayer().
 // MMKV rehydrates synchronously on the JS thread so the store already has
-// persisted state by the time any component mounts. This is an extension
-// point for any additional async bootstrap work.
+// persisted state by the time any component mounts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function initializeLibrary(): Promise<void> {
   try {
-    // MMKV persistence is already applied synchronously before this runs.
     const state = useLibraryStore.getState();
     console.log(`Library initialized with ${state.songIds.length} songs`);
-    
-    // Add any async startup work here if needed, e.g.:
-    // await validateDownloadedFiles(state.downloadedSongIds, state.songs);
-    
     return Promise.resolve();
   } catch (error) {
     console.error('Error initializing library:', error);

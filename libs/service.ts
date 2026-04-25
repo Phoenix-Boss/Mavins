@@ -83,21 +83,8 @@ export async function PlaybackService(): Promise<void> {
     safe(() => TrackPlayer.seekTo(newPos), 'JumpBackward');
   });
 
-  TrackPlayer.addEventListener(Event.RemoteLike, () => {
-    console.log('[PlaybackService] 📱 RemoteLike');
-  });
-
-  TrackPlayer.addEventListener(Event.RemoteDislike, () => {
-    console.log('[PlaybackService] 📱 RemoteDislike');
-  });
-
-  TrackPlayer.addEventListener(Event.RemoteBookmark, () => {
-    console.log('[PlaybackService] 📱 RemoteBookmark');
-  });
-
-  TrackPlayer.addEventListener(Event.RemoteSetRating, ({ rating }: { rating: number }) => {
-    console.log(`[PlaybackService] 📱 RemoteSetRating: ${rating}`);
-  });
+  // Note: RemoteLike / RemoteDislike / RemoteBookmark / RemoteSetRating
+  // were removed in react-native-track-player v5 alpha — listeners omitted.
 
   TrackPlayer.addEventListener(Event.RemoteDuck, ({ paused, permanent }: { paused: boolean; permanent: boolean }) => {
     console.log(`[PlaybackService] 🎧 Duck (paused: ${paused}, permanent: ${permanent})`);

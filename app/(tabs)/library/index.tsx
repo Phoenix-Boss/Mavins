@@ -57,13 +57,11 @@ import {
   type SmartPlaylist,
 } from "@/store/library";
 import { unknownTrackImageUri } from "@/constants/images";
-import { MMKV } from "react-native-mmkv";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MMKV storage (same instance key used in localMusic.tsx)
+// Session flag storage (replaces MMKV — same key used in localMusic.tsx)
 // ─────────────────────────────────────────────────────────────────────────────
-
-const storage = new MMKV({ id: "mavin-library-session" });
 
 /** Key that localMusic.tsx writes when the user enters that screen. */
 const LAST_SCREEN_KEY = "lastLibraryScreen";
@@ -911,12 +909,13 @@ export default function LibraryScreen() {
 
   // ── Smart resume: if the user was last on Local Music, go straight there ──
   useEffect(() => {
-    const lastScreen = storage.getString(LAST_SCREEN_KEY);
-    if (lastScreen === "localMusic") {
-      // Replace so pressing back from localMusic returns here properly.
-      // fromTab=1 tells LocalMusicScreen to show the compact header (no back arrow).
-      router.replace({ pathname: "/(modals)/localMusic", params: { fromTab: "1" } });
-    }
+    AsyncStorage.getItem(LAST_SCREEN_KEY).then((lastScreen) => {
+      if (lastScreen === "localMusic") {
+        // Replace so pressing back from localMusic returns here properly.
+        // fromTab=1 tells LocalMusicScreen to show the compact header (no back arrow).
+        router.replace({ pathname: "/(modals)/localMusic", params: { fromTab: "1" } });
+      }
+    });
   }, []);
 
   const onRefresh = useCallback(async () => {
