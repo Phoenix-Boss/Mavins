@@ -118,5 +118,6 @@ module.exports = {
   },
   autolinking: {
     modulesPaths: ["./modules"],
+    exclude: ["react-native-track-player"],
   },
 };
