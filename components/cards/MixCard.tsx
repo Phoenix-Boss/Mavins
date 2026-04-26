@@ -1,14 +1,14 @@
-/**
+﻿/**
  * MixCard
  *
  * Universal card component used across all home screen sections.
  *
  * Routing behaviour by itemType:
- *   song     → playAudio(song, queue) via MusicPlayerContext
- *   artist   → /artist/[id]
- *   playlist → /playlist/[id]
- *   album    → /album/[id]
- *   channel  → /channel/[id]
+ *   song     â†’ playAudio(song, queue) via MusicPlayerContext
+ *   artist   â†’ /artist/[id]
+ *   playlist â†’ /playlist/[id]
+ *   album    â†’ /album/[id]
+ *   channel  â†’ /channel/[id]
  *
  * The `queue` prop is the full list of songs from the current section so
  * RNTP gets a proper queue with skip forward/back context.
@@ -30,9 +30,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
-// ─── Colors ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Colors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const COLORS = {
   background:   "#000000",
@@ -45,7 +45,7 @@ const COLORS = {
   textMuted:    "#808080",
 };
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type MixCardItemType = "song" | "artist" | "playlist" | "album" | "channel";
 
@@ -68,7 +68,7 @@ export interface MixCardProps {
     artist?: string;
     thumbnail?: string;
     reason?: string;
-    /** Full YouTube watch URL — required when itemType === "song" */
+    /** Full YouTube watch URL â€” required when itemType === "song" */
     url?: string;
   };
   /**
@@ -77,7 +77,7 @@ export interface MixCardProps {
    */
   itemType?: MixCardItemType;
   /**
-   * Full list of songs in the current section — passed as the queue to
+   * Full list of songs in the current section â€” passed as the queue to
    * MusicPlayerContext.playAudio() so skip forward/back works correctly.
    * Only used when itemType === "song".
    */
@@ -89,7 +89,7 @@ export interface MixCardProps {
   fallbackTitle?: string;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const MixCard = ({
   item,
@@ -104,7 +104,7 @@ export const MixCard = ({
   const { playAudio } = useMusicPlayer();
   const activeTrack = useActiveTrack();
 
-  // ── Safe defaults ──────────────────────────────────────────────────────────
+  // â”€â”€ Safe defaults â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const safeItem = {
     id:        item?.id        || "",
     title:     item?.title     || fallbackTitle,
@@ -120,7 +120,7 @@ export const MixCard = ({
   // Whether this card is the track currently loaded in RNTP
   const isActive = activeTrack?.id === safeItem.id;
 
-  // ── Press handler ──────────────────────────────────────────────────────────
+  // â”€â”€ Press handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handlePress = async () => {
     triggerHaptic();
 
@@ -161,7 +161,7 @@ export const MixCard = ({
     }
   };
 
-  // ── Play button (song type only) ───────────────────────────────────────────
+  // â”€â”€ Play button (song type only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handlePlayPress = async (e: any) => {
     e.stopPropagation();
     triggerHaptic();
@@ -179,7 +179,7 @@ export const MixCard = ({
     }
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
     <TouchableOpacity
       style={[
@@ -211,7 +211,7 @@ export const MixCard = ({
         </View>
       )}
 
-      {/* Play/navigate button — top right */}
+      {/* Play/navigate button â€” top right */}
       {hasValidImage && (
         <View style={styles.mixCardPlayButtonContainer}>
           <TouchableOpacity
@@ -254,7 +254,7 @@ export const MixCard = ({
   );
 };
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const styles = StyleSheet.create({
   mixCard: {

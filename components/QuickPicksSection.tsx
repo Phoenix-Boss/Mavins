@@ -1,4 +1,4 @@
-/**
+﻿/**
  * This file defines the `QuickPicksSection` component, which displays a horizontally
  * scrollable list of recommended songs, often referred to as "Quick Picks".
  * It shows song artwork, title, and artist, and indicates the currently playing track.
@@ -14,7 +14,7 @@ import { useRouter } from "expo-router";
 import { Text, TouchableOpacity, View } from "react-native";
 import LoaderKit from "react-native-loader-kit";
 import { ScaledSheet } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
 /**
  * @interface QuickPicksSectionProps

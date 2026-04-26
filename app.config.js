@@ -3,6 +3,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
+
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
   owner: "wocof2",
@@ -34,8 +35,6 @@ module.exports = {
       "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.RECEIVE_BOOT_COMPLETED",
-      // Required by DynamicsProcessing (mavin-eq) to attach to the
-      // TrackPlayer audio session. Without this the EQ silently does nothing.
       "android.permission.MODIFY_AUDIO_SETTINGS",
     ],
     usesCleartextTraffic: true,
@@ -97,9 +96,15 @@ module.exports = {
       "expo-build-properties",
       {
         android: {
+          kotlinVersion: "1.9.25",
+          compileSdkVersion: 35,
+          targetSdkVersion: 35,
+          minSdkVersion: 24,
           extraProguardRules:
             "-keep class com.honeygain.hgsdk.** { *; }\n" +
-            "-dontwarn com.honeygain.hgsdk.**\n",
+            "-dontwarn com.honeygain.hgsdk.**\n" +
+            "-keep class com.doublesymmetry.trackplayer.dsp.** { *; }\n" +
+            "-keep class com.doublesymmetry.trackplayer.engine.** { *; }\n",
           foregroundServiceTypes: [
             "dataSync",
             "mediaPlayback",
@@ -112,10 +117,6 @@ module.exports = {
   experiments: {
     typedRoutes: true,
   },
-  // ── Local native modules ───────────────────────────────────────────────────
-  // expo-modules-autolinking v3.x uses "modulesPaths" (array), not
-  // "nativeModulesDir". Scans ./modules/ directly so mavin-engine, mavin-eq,
-  // and honeygain are all discovered without node_modules symlinks.
   autolinking: {
     modulesPaths: ["./modules"],
   },

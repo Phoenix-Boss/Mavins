@@ -1,11 +1,11 @@
-/**
+﻿/**
  * This file contains a custom React hook that keeps track of the last active track
  * in the music player. This is useful for scenarios where you need to reference the previously
  * playing track even after the player has stopped and the active track becomes undefined.
  */
 
 import { useEffect, useState } from "react";
-import { Track, useActiveTrack } from "react-native-track-player";
+import { Track, useActiveTrack } from "@/modules/mavin-eq";
 
 /**
  * A custom hook that returns the last track that was active in the player.

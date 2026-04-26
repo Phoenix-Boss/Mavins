@@ -1,0 +1,29 @@
+﻿{
+  "name": "react-native-track-player",
+  "version": "5.0.0-mavin0",
+  "description": "Mavin Player - RNTP skeleton + Mavin DSP engine",
+  "main": "./lib/module/index.js",
+  "types": "./lib/typescript/src/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.tsx",
+      "types": "./lib/typescript/src/index.d.ts",
+      "default": "./lib/module/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["src","lib","android","ios","web","*.podspec"],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "codegenConfig": {
+    "name": "TrackPlayerSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "com.doublesymmetry.trackplayer"
+    }
+  }
+}

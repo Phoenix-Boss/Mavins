@@ -1,4 +1,4 @@
-/**
+﻿/**
  * This file defines the `ItemList` component, a generic screen for displaying
  * lists of various media types (songs, videos, albums, artists). It dynamically renders
  * items based on the `type` parameter passed via navigation, and provides playback
@@ -24,7 +24,7 @@ import {
   moderateScale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
 /**
  * `ItemList` component.
@@ -224,7 +224,7 @@ const ItemList = () => {
               {item.title}
             </Text>
             <Text style={styles.resultArtist} numberOfLines={1}>
-              {item.artist} • {item.year}
+              {item.artist} â€¢ {item.year}
             </Text>
           </View>
         </TouchableOpacity>

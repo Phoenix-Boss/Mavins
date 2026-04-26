@@ -1,10 +1,10 @@
-/**
- * LibraryScreen — Mavin Music Platform
+﻿/**
+ * LibraryScreen â€” Mavin Music Platform
  *
  * Unified library for both streaming (online) and local device music.
  *
- * Tabs:     Playlists · Albums · Artists · Songs · Downloads
- * Quick Access: Favourites · Recently Played · Most Played · Local Music
+ * Tabs:     Playlists Â· Albums Â· Artists Â· Songs Â· Downloads
+ * Quick Access: Favourites Â· Recently Played Â· Most Played Â· Local Music
  *
  * Features:
  *   - Real data from Redux store hooks (playlists, favorites, downloads, local)
@@ -19,7 +19,7 @@
  *   - Empty states per tab
  *   - Smart resume: if user was last on Local Music, redirect straight there
  *
- * Design: dark luxury — black base, gold accents, Meriva display font.
+ * Design: dark luxury â€” black base, gold accents, Meriva display font.
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from "react";
@@ -45,7 +45,7 @@ import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 import {
   usePlaylists,
   useFavorites,
@@ -59,18 +59,18 @@ import {
 import { unknownTrackImageUri } from "@/constants/images";
 import { MMKV } from "react-native-mmkv";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MMKV storage (same instance key used in localMusic.tsx)
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const storage = new MMKV({ id: "mavin-library-session" });
 
 /** Key that localMusic.tsx writes when the user enters that screen. */
 const LAST_SCREEN_KEY = "lastLibraryScreen";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Palette
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const C = {
   bg: "#000000",
@@ -90,28 +90,28 @@ const C = {
   local: "#4A90E2",
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Tabs
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const TABS = ["Playlists", "Albums", "Artists", "Songs", "Downloads"] as const;
 type Tab = (typeof TABS)[number];
 
 const SORT_OPTIONS: Record<Tab, string[]> = {
-  Playlists: ["Recent", "A–Z", "By You", "Saved"],
-  Albums: ["Recent", "A–Z", "By Artist", "Year"],
-  Artists: ["Recent", "A–Z", "Most Played"],
-  Songs: ["Recent", "A–Z", "Artist", "Duration"],
-  Downloads: ["Recent", "A–Z", "Size", "Duration"],
+  Playlists: ["Recent", "Aâ€“Z", "By You", "Saved"],
+  Albums: ["Recent", "Aâ€“Z", "By Artist", "Year"],
+  Artists: ["Recent", "Aâ€“Z", "Most Played"],
+  Songs: ["Recent", "Aâ€“Z", "Artist", "Duration"],
+  Downloads: ["Recent", "Aâ€“Z", "Size", "Duration"],
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Derives a sorted array of playlist entries from the playlists map. */
 function useSortedPlaylists(sort: string) {
-  // usePlaylists() returns Record<id, Playlist|SmartPlaylist> directly — not { playlists }
+  // usePlaylists() returns Record<id, Playlist|SmartPlaylist> directly â€” not { playlists }
   const playlists = usePlaylists();
   return useMemo(() => {
     if (!playlists) return [];
@@ -122,7 +122,7 @@ function useSortedPlaylists(sort: string) {
       count: pl.trackCount,
       createdBy: pl.createdBy,
     }));
-    if (sort === "A–Z") return entries.sort((a, b) => a.name.localeCompare(b.name));
+    if (sort === "Aâ€“Z") return entries.sort((a, b) => a.name.localeCompare(b.name));
     if (sort === "By You") return entries.filter((p) => p.createdBy === "user");
     if (sort === "Saved") return entries.filter((p) => p.createdBy === "shared");
     return entries; // "Recent" keeps insertion order
@@ -134,7 +134,7 @@ function useSortedDownloads(sort: string) {
   const raw = useDownloadedTracks();
   return useMemo(() => {
     const copy = [...raw];
-    if (sort === "A–Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
+    if (sort === "Aâ€“Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "Duration") return copy.sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0));
     return copy.reverse(); // Recent first by default
   }, [raw, sort]);
@@ -145,7 +145,7 @@ function useSortedFavorites(sort: string) {
   const { favoriteTracks } = useFavorites();
   return useMemo(() => {
     const copy: Song[] = [...favoriteTracks];
-    if (sort === "A–Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
+    if (sort === "Aâ€“Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "Artist") return copy.sort((a, b) => a.artist.localeCompare(b.artist));
     return copy;
   }, [favoriteTracks, sort]);
@@ -159,7 +159,7 @@ function useDerivedAlbums(sort: string) {
     const map = new Map<string, { id: string; title: string; artist: string; cover?: string; count: number }>();
     const allSongs = [...downloads, ...favorites] as any[];
     allSongs.forEach((s) => {
-      const key = s.album ?? `${s.artist ?? "Unknown"} – Singles`;
+      const key = s.album ?? `${s.artist ?? "Unknown"} â€“ Singles`;
       if (!map.has(key)) {
         map.set(key, {
           id: key,
@@ -173,7 +173,7 @@ function useDerivedAlbums(sort: string) {
       }
     });
     const arr = Array.from(map.values());
-    if (sort === "A–Z") return arr.sort((a, b) => a.title.localeCompare(b.title));
+    if (sort === "Aâ€“Z") return arr.sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "By Artist") return arr.sort((a, b) => a.artist.localeCompare(b.artist));
     return arr;
   }, [downloads, favorites, sort]);
@@ -200,14 +200,14 @@ function useDerivedArtists(sort: string) {
       }
     });
     const arr = Array.from(map.values());
-    if (sort === "A–Z") return arr.sort((a, b) => a.name.localeCompare(b.name));
+    if (sort === "Aâ€“Z") return arr.sort((a, b) => a.name.localeCompare(b.name));
     return arr;
   }, [downloads, favorites, sort]);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // QuickPill
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface QuickPillProps {
   icon: string;
@@ -275,9 +275,9 @@ const qStyles = ScaledSheet.create({
   badgeText: { fontSize: "11@ms", fontWeight: "700" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Sort + View toggle row
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SortRow({
   options, active, onSelect,
@@ -359,9 +359,9 @@ const sStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // CoverArt
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function CoverArt({
   uri, size, radius = 10, placeholder,
@@ -383,9 +383,9 @@ function CoverArt({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Source badge (streaming vs local)
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SourceBadge({ isLocal }: { isLocal?: boolean }) {
   if (!isLocal) return null;
@@ -412,9 +412,9 @@ const badgeStyles = ScaledSheet.create({
   text: { fontSize: "9@ms", color: C.local, fontWeight: "600" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Empty state
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function EmptyState({
   icon, title, sub, actionLabel, onAction,
@@ -463,9 +463,9 @@ const emStyles = ScaledSheet.create({
   btnText: { fontSize: "14@ms", color: C.gold, fontWeight: "700" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Row components
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PlaylistRow({
   name, cover, count,
@@ -511,7 +511,7 @@ function AlbumRow({
       <CoverArt uri={item.cover} size={COVER} placeholder="disc-outline" />
       <View style={rowStyles.info}>
         <Text style={rowStyles.title} numberOfLines={1}>{item.title}</Text>
-        <Text style={rowStyles.sub} numberOfLines={1}>{item.artist} · {item.count} tracks</Text>
+        <Text style={rowStyles.sub} numberOfLines={1}>{item.artist} Â· {item.count} tracks</Text>
       </View>
     </TouchableOpacity>
   );
@@ -551,9 +551,9 @@ const gridStyles = ScaledSheet.create({
   cellSub: { fontSize: "11@ms", color: C.textSub, marginTop: "2@vs", textAlign: "center" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Section count label
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SectionCount({ count, label }: { count: number; label: string }) {
   if (count === 0) return null;
@@ -577,9 +577,9 @@ const scStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Active download row
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ActiveDownloadItem({ song }: { song: any }) {
   return (
@@ -615,9 +615,9 @@ const adStyles = ScaledSheet.create({
   pct: { fontSize: "10@ms", color: C.textMuted, marginTop: "3@vs" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Download row
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function DownloadRow({
   item, isPlaying, onPress, onMore,
@@ -659,9 +659,9 @@ const dlStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Tab panels
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PlaylistsPanel({ sort, router, onCreatePlaylist }: {
   sort: string; router: ReturnType<typeof useRouter>; onCreatePlaylist: () => void;
@@ -878,9 +878,9 @@ function DownloadsPanel({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // LibraryScreen
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function LibraryScreen() {
   const { top, bottom } = useSafeAreaInsets();
@@ -909,7 +909,7 @@ export default function LibraryScreen() {
 
   const isFloatingPlayerVisible = !!(activeTrack ?? lastActiveTrack);
 
-  // ── Smart resume: if the user was last on Local Music, go straight there ──
+  // â”€â”€ Smart resume: if the user was last on Local Music, go straight there â”€â”€
   useEffect(() => {
     const lastScreen = storage.getString(LAST_SCREEN_KEY);
     if (lastScreen === "localMusic") {
@@ -956,7 +956,7 @@ export default function LibraryScreen() {
   return (
     <View style={[lStyles.container, { paddingTop: top }]}>
 
-      {/* ── Page header ──────────────────────────────────────────────────── */}
+      {/* â”€â”€ Page header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <View style={lStyles.pageHeader}>
         <Text style={lStyles.pageTitle}>Your Library</Text>
         <View style={lStyles.headerActions}>
@@ -977,13 +977,13 @@ export default function LibraryScreen() {
         </View>
       </View>
 
-      {/* ── Inline search bar ─────────────────────────────────────────────── */}
+      {/* â”€â”€ Inline search bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {searchFocused && (
         <View style={lStyles.searchWrap}>
           <Ionicons name="search" size={moderateScale(16)} color={C.textMuted} style={{ marginRight: 8 }} />
           <TextInput
             style={lStyles.searchInput}
-            placeholder={`Search in ${activeTab.toLowerCase()}…`}
+            placeholder={`Search in ${activeTab.toLowerCase()}â€¦`}
             placeholderTextColor={C.textMuted}
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -998,7 +998,7 @@ export default function LibraryScreen() {
         </View>
       )}
 
-      {/* ── Gold hairline ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Gold hairline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <View style={lStyles.divider} />
 
       <ScrollView
@@ -1016,7 +1016,7 @@ export default function LibraryScreen() {
         keyboardShouldPersistTaps="handled"
       >
 
-        {/* ── Quick access pills ─────────────────────────────────────────── */}
+        {/* â”€â”€ Quick access pills â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {!searchFocused && (
           <View style={lStyles.quickSection}>
             <QuickPill
@@ -1056,7 +1056,7 @@ export default function LibraryScreen() {
           </View>
         )}
 
-        {/* ── Tab row ───────────────────────────────────────────────────── */}
+        {/* â”€â”€ Tab row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -1077,7 +1077,7 @@ export default function LibraryScreen() {
           })}
         </ScrollView>
 
-        {/* ── Sort + view row ────────────────────────────────────────────── */}
+        {/* â”€â”€ Sort + view row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <SortRow
           options={SORT_OPTIONS[activeTab]}
           active={activeSort}
@@ -1086,7 +1086,7 @@ export default function LibraryScreen() {
           onShuffle={showShuffle ? handleShuffleAll : undefined}
         />
 
-        {/* ── Tab content ───────────────────────────────────────────────── */}
+        {/* â”€â”€ Tab content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <View style={lStyles.panel}>
           {activeTab === "Playlists" && (
             <PlaylistsPanel sort={activeSort} router={router} onCreatePlaylist={handleCreatePlaylist} />
@@ -1107,7 +1107,7 @@ export default function LibraryScreen() {
 
       </ScrollView>
 
-      {/* ── Create playlist FAB ─────────────────────────────────────────── */}
+      {/* â”€â”€ Create playlist FAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {activeTab === "Playlists" && (
         <TouchableOpacity
           style={[lStyles.fab, { bottom: (isFloatingPlayerVisible ? verticalScale(138) : 60) + bottom + 8 }]}
@@ -1122,9 +1122,9 @@ export default function LibraryScreen() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Styles
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const lStyles = ScaledSheet.create({
   container: {

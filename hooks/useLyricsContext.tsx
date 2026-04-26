@@ -1,33 +1,33 @@
-/**
- * Lyrics Context — v3
+﻿/**
+ * Lyrics Context â€” v3
  *
  * ROOT-CAUSE FIXES:
  *
- *   [1] "client.getPlain is not a function" — lrclib-api's Client class
+ *   [1] "client.getPlain is not a function" â€” lrclib-api's Client class
  *       does NOT expose .getSynced() or .getPlain() methods. The package
  *       only provides .get() and .search(). We now bypass the npm wrapper
  *       entirely and call the lrclib REST API directly via fetch(), which
  *       gives us full control and 100% API compatibility forever.
  *
- *   [2] "Track was not found" in submitUserLyrics — the original code called
+ *   [2] "Track was not found" in submitUserLyrics â€” the original code called
  *       TrackPlayer.getActiveTrack() inside the submit helper, which throws
  *       when RNTP hasn't fully loaded yet. Removed. The caller passes videoId
- *       directly — zero RNTP calls needed inside this function.
+ *       directly â€” zero RNTP calls needed inside this function.
  *
- *   [3] 99% lyrics coverage — five-tier fetch strategy using the real
+ *   [3] 99% lyrics coverage â€” five-tier fetch strategy using the real
  *       lrclib.net REST API:
  *
- *         Tier 1  GET /api/get  — exact: title + artist + duration
- *         Tier 2  GET /api/get  — title + artist (no duration)
- *         Tier 3  GET /api/get  — cleaned title + cleaned artist
- *         Tier 4  GET /api/search?track_name=&artist_name= → best match
- *         Tier 5  GET /api/search?q=<cleaned title>        → broad match
+ *         Tier 1  GET /api/get  â€” exact: title + artist + duration
+ *         Tier 2  GET /api/get  â€” title + artist (no duration)
+ *         Tier 3  GET /api/get  â€” cleaned title + cleaned artist
+ *         Tier 4  GET /api/search?track_name=&artist_name= â†’ best match
+ *         Tier 5  GET /api/search?q=<cleaned title>        â†’ broad match
  *
  *       Each tier prefers synced lyrics and falls back to plain before
  *       moving to the next tier.
  *
- *   [4] Title/artist cleaning — strips "(Official Video)", "[Lyrics]",
- *       "feat. …", "ft. …", "- Topic" etc. before querying so lrclib can
+ *   [4] Title/artist cleaning â€” strips "(Official Video)", "[Lyrics]",
+ *       "feat. â€¦", "ft. â€¦", "- Topic" etc. before querying so lrclib can
  *       find tracks using their canonical studio title.
  */
 
@@ -39,16 +39,16 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 import { supabase } from "@/libs/supabase";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type LyricLine = {
   text:       string;
-  startTime?: number;   // present → synced (animated); absent → plain (static)
+  startTime?: number;   // present â†’ synced (animated); absent â†’ plain (static)
   synced:     boolean;
 };
 
@@ -62,10 +62,10 @@ export type LyricsContextType = {
   _setIsFetchingLyrics: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// lrclib REST API — direct fetch, no npm wrapper
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// lrclib REST API â€” direct fetch, no npm wrapper
 // API docs: https://lrclib.net/docs
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const LRCLIB_BASE   = "https://lrclib.net/api";
 const LRCLIB_CLIENT = "MavinApp/3.0 (lrclib-direct)";
@@ -93,7 +93,7 @@ function buildLrclibUrl(
   return url.toString();
 }
 
-/** GET /api/get — returns a single exact-match track or null. */
+/** GET /api/get â€” returns a single exact-match track or null. */
 async function lrclibGet(params: {
   track_name:   string;
   artist_name:  string;
@@ -112,7 +112,7 @@ async function lrclibGet(params: {
   }
 }
 
-/** GET /api/search — returns an array of matching tracks. */
+/** GET /api/search â€” returns an array of matching tracks. */
 async function lrclibSearch(params: {
   track_name?:  string;
   artist_name?: string;
@@ -130,17 +130,17 @@ async function lrclibSearch(params: {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Title / artist cleaning
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function cleanTitle(raw: string): string {
   return raw
     // Strip parenthetical / bracketed qualifiers like (Official Video), [Lyrics]
-    .replace(/\s*[\(\[【][^\)\]】]*?(official|lyric|video|audio|hd|4k|mv|music\s*video|visualizer|lyrics|full|live|remake|remake|remaster(ed)?|slowed|sped\s*up|reverb)[\s\S]*?[\)\]】]/gi, "")
+    .replace(/\s*[\(\[ã€][^\)\]ã€‘]*?(official|lyric|video|audio|hd|4k|mv|music\s*video|visualizer|lyrics|full|live|remake|remake|remaster(ed)?|slowed|sped\s*up|reverb)[\s\S]*?[\)\]ã€‘]/gi, "")
     // Strip feat / ft suffix
     .replace(/\s*(ft\.|feat\.?|featuring)\s+[^,(\[]+/gi, "")
-    // Strip "- Official …" type suffixes
+    // Strip "- Official â€¦" type suffixes
     .replace(/\s+-\s+(official|lyric|video|audio|remaster(ed)?|live|remix|cover).*/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -151,9 +151,9 @@ function cleanArtist(raw: string): string {
   return raw.replace(/\s*-\s*Topic$/i, "").trim();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // LRC / plain parsers
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function parseLrcToLines(raw: string): LyricLine[] {
   const lines: Array<{ startTime: number; text: string }> = [];
@@ -197,9 +197,9 @@ function extractLines(track: LrclibTrack): ExtractResult {
   return { lines: [], syncedLrc: null, plainText: null };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Five-tier lrclib fetch
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function fetchFromLrclib(
   title:    string,
@@ -209,30 +209,30 @@ async function fetchFromLrclib(
   const cleanT = cleanTitle(title);
   const cleanA = cleanArtist(artist);
 
-  // Tier 1 — exact: original title + artist + duration
+  // Tier 1 â€” exact: original title + artist + duration
   if (duration && duration > 0) {
     const t = await lrclibGet({ track_name: title, artist_name: artist, duration: Math.round(duration) });
     if (t) { const r = extractLines(t); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 2 — original title + artist, no duration
+  // Tier 2 â€” original title + artist, no duration
   const t2 = await lrclibGet({ track_name: title, artist_name: artist });
   if (t2) { const r = extractLines(t2); if (r.lines.length > 0) return r; }
 
-  // Tier 3 — cleaned title + cleaned artist
+  // Tier 3 â€” cleaned title + cleaned artist
   if (cleanT !== title || cleanA !== artist) {
     const t3 = await lrclibGet({ track_name: cleanT, artist_name: cleanA });
     if (t3) { const r = extractLines(t3); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 4 — fuzzy search: track_name + artist_name
+  // Tier 4 â€” fuzzy search: track_name + artist_name
   const s4 = await lrclibSearch({ track_name: cleanT, artist_name: cleanA });
   if (s4.length > 0) {
     const best = s4.find((t) => t.syncedLyrics?.trim()) ?? s4.find((t) => t.plainLyrics?.trim());
     if (best) { const r = extractLines(best); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 5 — broad: free-text search on cleaned title only
+  // Tier 5 â€” broad: free-text search on cleaned title only
   const s5 = await lrclibSearch({ q: cleanT });
   if (s5.length > 0) {
     const best = s5.find((t) => t.syncedLyrics?.trim()) ?? s5.find((t) => t.plainLyrics?.trim());
@@ -242,9 +242,9 @@ async function fetchFromLrclib(
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Supabase helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface DbLyrics { synced_lrc: string | null; plain_text: string | null; }
 
@@ -288,9 +288,9 @@ async function saveToSupabase(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Context
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const LyricsContext = createContext<LyricsContextType | undefined>(undefined);
 
@@ -317,9 +317,9 @@ export const LyricsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LyricsFetcher — mount ONLY after playerReady.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// LyricsFetcher â€” mount ONLY after playerReady.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const LyricsFetcher: React.FC = () => {
   const { _setLyrics, _setIsFetchingLyrics, resetHeights } = useLyricsContext();
@@ -344,7 +344,7 @@ export const LyricsFetcher: React.FC = () => {
     const guard = () => activeTrackIdRef.current !== trackId;
 
     try {
-      // ── 1. Supabase cache ───────────────────────────────────────────────────
+      // â”€â”€ 1. Supabase cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       if (trackId) {
         const cached = await fetchFromSupabase(trackId);
         if (cached && !guard()) {
@@ -361,7 +361,7 @@ export const LyricsFetcher: React.FC = () => {
 
       if (!trackName || guard()) { _setLyrics([]); resetHeights(0); return; }
 
-      // ── 2. lrclib REST API (5 tiers) ────────────────────────────────────────
+      // â”€â”€ 2. lrclib REST API (5 tiers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const result = await fetchFromLrclib(trackName, artistName, duration);
 
       if (guard()) return;
@@ -375,7 +375,7 @@ export const LyricsFetcher: React.FC = () => {
         return;
       }
 
-      // ── 3. Nothing found ────────────────────────────────────────────────────
+      // â”€â”€ 3. Nothing found â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       _setLyrics([]);
       resetHeights(0);
 
@@ -402,12 +402,12 @@ export const LyricsFetcher: React.FC = () => {
   return null;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // submitUserLyrics
 //
 // FIX [2]: No RNTP calls. The caller passes all data directly. The old code
 // called TrackPlayer.getActiveTrack() here which threw "Track was not found".
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function submitUserLyrics(
   videoId:    string,
@@ -416,7 +416,7 @@ export async function submitUserLyrics(
   lyricsText: string,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    if (!videoId)            return { ok: false, error: "No video ID — cannot save." };
+    if (!videoId)            return { ok: false, error: "No video ID â€” cannot save." };
     if (!lyricsText.trim())  return { ok: false, error: "Lyrics text is empty." };
 
     const isSynced = /^\[\d{2}:\d{2}\.\d{2,3}\]/m.test(lyricsText.trim());
@@ -432,9 +432,9 @@ export async function submitUserLyrics(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // useLyricsContext
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const useLyricsContext = () => {
   const ctx = useContext(LyricsContext);

@@ -1,11 +1,11 @@
-/**
- * (modals)/lyrics.tsx  — v2
+﻿/**
+ * (modals)/lyrics.tsx  â€” v2
  *
  * Lyrics priority:
- *   1. Supabase cache (via LyricsFetcher context)   — fastest
- *   2. LRCLib synced  → animated karaoke display
- *   3. LRCLib plain   → static scrollable text
- *   4. Nothing found  → "No lyrics" state with ➕ Add Lyrics button
+ *   1. Supabase cache (via LyricsFetcher context)   â€” fastest
+ *   2. LRCLib synced  â†’ animated karaoke display
+ *   3. LRCLib plain   â†’ static scrollable text
+ *   4. Nothing found  â†’ "No lyrics" state with âž• Add Lyrics button
  *
  * Add Lyrics:
  *   - User pastes plain text or LRC-formatted lyrics.
@@ -19,7 +19,7 @@
  *   title:    string
  *   artist:   string
  *   duration: string  (seconds)
- *   videoId:  string  (bare YouTube ID — used as Supabase key)
+ *   videoId:  string  (bare YouTube ID â€” used as Supabase key)
  */
 
 import React, {
@@ -45,7 +45,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useProgress } from "react-native-track-player";
+import { useProgress } from "@/modules/mavin-eq";
 import { useSharedValue } from "react-native-reanimated";
 import Animated, {
   useAnimatedStyle,
@@ -57,7 +57,7 @@ import { triggerHaptic } from "@/helpers/haptics";
 import { useLyricsContext, submitUserLyrics } from "@/hooks/useLyricsContext";
 import type { LyricLine } from "@/hooks/useLyricsContext";
 
-// ─── Colours ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Colours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const C = {
   bg:         "#000000",
@@ -73,9 +73,9 @@ const C = {
   textPlain:  "rgba(255,255,255,0.80)",
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Main screen
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function LyricsModal() {
   const router          = useRouter();
@@ -89,7 +89,7 @@ export default function LyricsModal() {
     leadIn?:  string;   // seconds to add ahead of position for early highlight
   }>();
 
-  // [7] Parse lead-in — PlayerScreen passes LYRICS_LEAD_IN_S (default 0.25 s)
+  // [7] Parse lead-in â€” PlayerScreen passes LYRICS_LEAD_IN_S (default 0.25 s)
   const LEAD_IN = leadIn ? parseFloat(leadIn) : 0.25;
 
   // Poll RNTP every 100 ms
@@ -104,28 +104,28 @@ export default function LyricsModal() {
   // Modal for adding lyrics
   const [addModalVisible, setAddModalVisible] = useState(false);
 
-  // ── Derived state ──────────────────────────────────────────────────────────
+  // â”€â”€ Derived state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const hasSynced = lyrics.length > 0 && lyrics.some((l) => l.synced);
   const hasPlain  = lyrics.length > 0 && lyrics.every((l) => !l.synced);
   const isEmpty   = !isFetchingLyrics && lyrics.length === 0;
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
+  // â”€â”€ Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleLyricsSubmitted = useCallback((newLines: LyricLine[]) => {
     // The context will be updated automatically on next track change;
-    // for instant feedback we just close the modal — the user will see
+    // for instant feedback we just close the modal â€” the user will see
     // the new lyrics next time they open this screen.
     setAddModalVisible(false);
     Alert.alert("Thanks!", "Your lyrics have been saved and will appear for future listeners.");
   }, []);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => { triggerHaptic(); router.back(); }}
@@ -156,15 +156,15 @@ export default function LyricsModal() {
 
       <View style={styles.divider} />
 
-      {/* ── Loading ─────────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {isFetchingLyrics && (
         <View style={styles.centered}>
           <ActivityIndicator color={C.gold} size="large" />
-          <Text style={styles.statusText}>Fetching lyrics…</Text>
+          <Text style={styles.statusText}>Fetching lyricsâ€¦</Text>
         </View>
       )}
 
-      {/* ── Synced karaoke ──────────────────────────────────────────────────── */}
+      {/* â”€â”€ Synced karaoke â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {!isFetchingLyrics && hasSynced && (
         <SyncedView
           lines={lyrics}
@@ -175,12 +175,12 @@ export default function LyricsModal() {
         />
       )}
 
-      {/* ── Plain text ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Plain text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {!isFetchingLyrics && hasPlain && (
         <PlainView lines={lyrics} bottom={bottom} />
       )}
 
-      {/* ── Nothing found ───────────────────────────────────────────────────── */}
+      {/* â”€â”€ Nothing found â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {isEmpty && (
         <View style={styles.centered}>
           <Ionicons
@@ -210,7 +210,7 @@ export default function LyricsModal() {
         </View>
       )}
 
-      {/* ── Add Lyrics Modal ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Add Lyrics Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <AddLyricsModal
         visible={addModalVisible}
         title={title ?? ""}
@@ -224,9 +224,9 @@ export default function LyricsModal() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SyncedView — animated karaoke, auto-scrolls to active line
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// SyncedView â€” animated karaoke, auto-scrolls to active line
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SyncedViewProps {
   lines:    LyricLine[];
@@ -304,9 +304,9 @@ function SyncedView({ lines, seekTime, position, bottom, leadIn }: SyncedViewPro
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AnimatedLyricLine — single synced line with colour animation
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// AnimatedLyricLine â€” single synced line with colour animation
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface AnimatedLyricLineProps {
   text:      string;
@@ -333,9 +333,9 @@ function AnimatedLyricLine({ text, startTime, endTime, seekTime }: AnimatedLyric
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PlainView — static scrollable plain lyrics
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// PlainView â€” static scrollable plain lyrics
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface PlainViewProps {
   lines:  LyricLine[];
@@ -361,9 +361,9 @@ function PlainView({ lines, bottom }: PlainViewProps) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AddLyricsModal — inline modal for submitting lyrics to Supabase
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// AddLyricsModal â€” inline modal for submitting lyrics to Supabase
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface AddLyricsModalProps {
   visible:     boolean;
@@ -385,7 +385,7 @@ function AddLyricsModal({
 
   const handleSave = async () => {
     if (!text.trim()) { setError("Please paste the lyrics first."); return; }
-    if (!videoId)     { setError("No video ID — cannot save."); return; }
+    if (!videoId)     { setError("No video ID â€” cannot save."); return; }
 
     triggerHaptic();
     setSaving(true);
@@ -460,7 +460,7 @@ function AddLyricsModal({
 
           {/* Track info */}
           <Text style={addStyles.trackInfo} numberOfLines={1}>
-            {title}{artist ? ` · ${artist}` : ""}
+            {title}{artist ? ` Â· ${artist}` : ""}
           </Text>
 
           {/* Format hint */}
@@ -472,7 +472,7 @@ function AddLyricsModal({
             />
             <Text style={[addStyles.hintText, isSynced && { color: C.gold }]}>
               {isSynced
-                ? "LRC format detected — will display as synced karaoke"
+                ? "LRC format detected â€” will display as synced karaoke"
                 : "Paste plain lyrics or LRC format (with [mm:ss.xx] timestamps)"}
             </Text>
           </View>
@@ -505,7 +505,7 @@ function AddLyricsModal({
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const styles = ScaledSheet.create({
   container: { flex: 1, backgroundColor: C.bg },

@@ -1,5 +1,5 @@
-/**
- * Search Screen — app/(tabs)/search/index.tsx  v13
+﻿/**
+ * Search Screen â€” app/(tabs)/search/index.tsx  v13
  *
  * Changes from v12:
  *   [F] Fixed ReferenceError: Property 'setQuery' doesn't exist.
@@ -24,7 +24,7 @@ import { Ionicons, Entypo } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import LoaderKit from "react-native-loader-kit";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 import { moderateScale, verticalScale } from "react-native-size-matters/extend";
 
 import { setPendingTrack } from '@/helpers/pendingTrack';
@@ -38,7 +38,7 @@ import { cache, supabaseCache } from "@/libs/cache";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { triggerHaptic } from "@/helpers/haptics";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const COLORS = {
   background:    "#000000",
@@ -70,7 +70,7 @@ const PREDEFINED_GENRES = [
 
 type FilterTab = "all" | "songs" | "albums" | "artists" | "playlists";
 
-// ─── Result types ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Result types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SongResult {
   type: "song";
@@ -137,7 +137,7 @@ interface SongWithMetadata extends SongResult {
   genre?: string[];
 }
 
-// ─── Skeleton row ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Skeleton row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SkeletonResultRow() {
   const anim = useRef(new RNAnimated.Value(0)).current;
@@ -177,7 +177,7 @@ const skRow = StyleSheet.create({
   badge: { width: 44, height: 20, borderRadius: 6 },
 });
 
-// ─── Skeleton list ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Skeleton list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SkeletonResultList() {
   return (
@@ -187,7 +187,7 @@ function SkeletonResultList() {
   );
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const bestThumb = (thumbs: { url: string; resolutionLevel: string }[]): string =>
   thumbs.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
@@ -278,7 +278,7 @@ const removeHistoryItem = async (query: string, existing: string[]): Promise<str
   return next;
 };
 
-// ─── Genre Helpers ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Genre Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Fetch all songs from search history (real implementation)
 const fetchSongsFromHistory = async (): Promise<SongWithMetadata[]> => {
@@ -374,7 +374,7 @@ const getGenreFolders = async (): Promise<DynamicFolder[]> => {
     .filter(Boolean) as DynamicFolder[];
 };
 
-// ─── Folder Component ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Folder Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const GenreFolder = ({ folder, onPress }: { folder: DynamicFolder; onPress: () => void }) => (
   <TouchableOpacity style={folderStyles.container} onPress={onPress}>
@@ -388,7 +388,7 @@ const GenreFolder = ({ folder, onPress }: { folder: DynamicFolder; onPress: () =
         {folder.artistNames}
       </Text>
       <Text style={folderStyles.subtitle} numberOfLines={1}>
-        {folder.groupKey} • {folder.itemCount} {folder.itemCount === 1 ? "song" : "songs"}
+        {folder.groupKey} â€¢ {folder.itemCount} {folder.itemCount === 1 ? "song" : "songs"}
       </Text>
     </View>
   </TouchableOpacity>
@@ -402,7 +402,7 @@ const folderStyles = StyleSheet.create({
   subtitle: { color: COLORS.textTertiary, fontSize: moderateScale(11), marginTop: 2, },
 });
 
-// ─── Genre Folder Grid Component ───────────────────────────────────────────────
+// â”€â”€â”€ Genre Folder Grid Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // [F] Fixed: Added props interface to receive setQuery and performSearch
 
 interface GenreFolderGridProps {
@@ -457,7 +457,7 @@ const GenreFolderGrid = ({ setQuery, performSearch }: GenreFolderGridProps) => {
   );
 };
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -481,7 +481,7 @@ export default function SearchScreen() {
     setTimeout(() => inputRef.current?.focus(), 150);
   }, []);
 
-  // ── Suggestions ─────────────────────────────────────────────────────────────
+  // â”€â”€ Suggestions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (query.trim().length < 2) { setSuggestions([]); return; }
@@ -494,7 +494,7 @@ export default function SearchScreen() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
 
-  // ── Core search ──────────────────────────────────────────────────────────────
+  // â”€â”€ Core search â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const performSearch = useCallback(async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) return;
@@ -590,7 +590,7 @@ export default function SearchScreen() {
   const handleClearHistory = async () => { await clearAllHistory(); setHistory([]); };
   const handleRemoveHistory = async (q: string) => setHistory(await removeHistoryItem(q, history));
 
-  // ── [B] Song press — FloatingPlayer-first playback ───────────────────────────
+  // â”€â”€ [B] Song press â€” FloatingPlayer-first playback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleSongPress = useCallback(async (song: SongResult) => {
     triggerHaptic();
     setPendingTrack({ title: song.title, artist: song.artist, artwork: song.thumbnail });
@@ -606,12 +606,12 @@ export default function SearchScreen() {
     }, queue);
   }, [results, playAudio]);
 
-  // ── Non-song routing ─────────────────────────────────────────────────────────
+  // â”€â”€ Non-song routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleAlbumPress = (a: AlbumResult) => { triggerHaptic(); router.push(`/album/${encodeURIComponent(a.url)}`); };
   const handleArtistPress = (a: ArtistResult) => { triggerHaptic(); router.push({ pathname: "/artist/[id]", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } }); };
   const handlePlaylistPress = (p: PlaylistResult) => { triggerHaptic(); router.push(`/playlist/${encodeURIComponent(p.url)}`); };
 
-  // ── Visible items by tab ─────────────────────────────────────────────────────
+  // â”€â”€ Visible items by tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const getVisible = (): SearchResult[] => {
     if (!results) return [];
     switch (activeTab) {
@@ -633,7 +633,7 @@ export default function SearchScreen() {
       results.artists.length + results.playlists.length
     : 0;
 
-  // ── Render result row ─────────────────────────────────────────────────────────
+  // â”€â”€ Render result row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const renderResult = ({ item }: { item: SearchResult }) => {
     const isActive = item.type === "song" && activeTrack?.id === item.id;
     return (
@@ -681,9 +681,9 @@ export default function SearchScreen() {
             {item.title}
           </Text>
           <Text style={styles.resultSub} numberOfLines={1}>
-            {item.type === "song" ? `${item.artist}${item.duration ? ` • ${formatDuration(item.duration)}` : ""}` :
-             item.type === "album" ? `Album • ${item.artist}` :
-             item.type === "artist" ? item.subtitle : `Playlist • ${item.streamCount} songs`}
+            {item.type === "song" ? `${item.artist}${item.duration ? ` â€¢ ${formatDuration(item.duration)}` : ""}` :
+             item.type === "album" ? `Album â€¢ ${item.artist}` :
+             item.type === "artist" ? item.subtitle : `Playlist â€¢ ${item.streamCount} songs`}
           </Text>
         </View>
 
@@ -716,15 +716,15 @@ export default function SearchScreen() {
     );
   };
 
-  // ── State booleans ───────────────────────────────────────────────────────────
+  // â”€â”€ State booleans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const showHistory = !query && !results && history.length > 0;
   const showSuggestions = query.length >= 2 && suggestions.length > 0 && !results && !loading;
   const showResults = !!results && !loading;
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* ── Search bar ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Search bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <View style={styles.searchBarRow}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={10}>
           <Ionicons name="arrow-back" size={24} color={COLORS.text} />
@@ -753,7 +753,7 @@ export default function SearchScreen() {
         </View>
       </View>
 
-      {/* ── Suggestions ─────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Suggestions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showSuggestions && (
         <View style={styles.suggestionsBox}>
           {suggestions.map((s) => (
@@ -765,7 +765,7 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── Genre Folders ────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Genre Folders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {/* [F] Fixed: Pass setQuery and performSearch as props */}
       {showHistory && (
         <View style={styles.historySection}>
@@ -774,7 +774,7 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── Empty placeholder ───────────────────────────────────────────────── */}
+      {/* â”€â”€ Empty placeholder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {!query && !results && history.length === 0 && (
         <View style={styles.emptyState}>
           <Ionicons name="search" size={48} color={COLORS.textTertiary} />
@@ -782,10 +782,10 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── [A] Skeleton loading ─────────────────────────────────────────────── */}
+      {/* â”€â”€ [A] Skeleton loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {loading && <SkeletonResultList />}
 
-      {/* ── Error ───────────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {!!error && !loading && (
         <View style={styles.errorBox}>
           <Ionicons name="alert-circle-outline" size={28} color={COLORS.danger} />
@@ -796,7 +796,7 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── Results ─────────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showResults && (
         <>
           <ScrollView
@@ -847,7 +847,7 @@ export default function SearchScreen() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },

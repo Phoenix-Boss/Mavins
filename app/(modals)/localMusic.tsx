@@ -1,12 +1,12 @@
-/**
- * localMusic.tsx — Local Music Library
+﻿/**
+ * localMusic.tsx â€” Local Music Library
  *
  * PowerAmp-style folder management:
  *   - On first launch: "Add Folders" prompt (no spinner, no auto-scan)
  *   - Folder picker browses MediaLibrary albums
  *   - Each registered folder is watched via MediaStore ContentObserver
  *   - File additions/deletions reflect instantly (no manual refresh)
- *   - Tracks are grouped by folder with sub-tabs: All · Albums · Artists
+ *   - Tracks are grouped by folder with sub-tabs: All Â· Albums Â· Artists
  *   - Swipe folder card to remove (also purges its tracks from store)
  *
  * Smart resume behaviour:
@@ -15,10 +15,10 @@
  *   - When the user explicitly goes back: clears the flag so LibraryScreen
  *     shows the normal menu again.
  *   - Header adapts: when arrived via tab redirect (fromTab param), the back
- *     button and title are hidden — only the right-hand action icons remain,
+ *     button and title are hidden â€” only the right-hand action icons remain,
  *     giving a cleaner "home" feel for the screen.
  *
- * Design: matches Mavin dark luxury — black base, gold accents, Meriva font.
+ * Design: matches Mavin dark luxury â€” black base, gold accents, Meriva font.
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from "react";
@@ -48,20 +48,20 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as MediaLibrary from "expo-media-library";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 import { useMediaStore, type LocalTrack, type WatchedFolder } from "@/hooks/useMediaStore";
 import { MMKV } from "react-native-mmkv";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MMKV session flag — same instance used in index.tsx
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// MMKV session flag â€” same instance used in index.tsx
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const storage = new MMKV({ id: "mavin-library-session" });
 const LAST_SCREEN_KEY = "lastLibraryScreen";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Palette (mirrors LibraryScreen)
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const C = {
   bg: "#000000",
@@ -83,9 +83,9 @@ const C = {
   danger: "#E05C5C",
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -100,9 +100,9 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // CoverArt
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function CoverArt({ uri, size, radius = 8, circle = false }: {
   uri?: string; size: number; radius?: number; circle?: boolean;
@@ -120,9 +120,9 @@ function CoverArt({ uri, size, radius = 8, circle = false }: {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // First-launch empty state
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function NoFoldersState({ onAddFolder }: { onAddFolder: () => void }) {
   return (
@@ -137,7 +137,7 @@ function NoFoldersState({ onAddFolder }: { onAddFolder: () => void }) {
 
       <Text style={emStyles.headline}>Your Local Library</Text>
       <Text style={emStyles.body}>
-        Mavin watches folders you choose — just like PowerAmp. Add a folder once and any
+        Mavin watches folders you choose â€” just like PowerAmp. Add a folder once and any
         music you copy in or delete will automatically appear or disappear. No refresh needed.
       </Text>
 
@@ -145,7 +145,7 @@ function NoFoldersState({ onAddFolder }: { onAddFolder: () => void }) {
         {[
           { icon: "eye-outline", text: "Real-time sync via MediaStore" },
           { icon: "folder-open-outline", text: "You control which folders are scanned" },
-          { icon: "cloud-offline-outline", text: "Plays fully offline — no internet needed" },
+          { icon: "cloud-offline-outline", text: "Plays fully offline â€” no internet needed" },
           { icon: "flash-outline", text: "Zero-spinner instant launch from cache" },
         ].map(({ icon, text }) => (
           <View key={icon} style={emStyles.featureRow}>
@@ -218,9 +218,9 @@ const emStyles = ScaledSheet.create({
   addBtnText: { fontSize: "15@ms", color: C.bg, fontWeight: "700" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Folder picker modal
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function FolderPickerModal({
   visible,
@@ -270,7 +270,7 @@ function FolderPickerModal({
         {loading ? (
           <View style={fpStyles.loadingWrap}>
             <ActivityIndicator color={C.local} size="small" />
-            <Text style={fpStyles.loadingText}>Scanning device…</Text>
+            <Text style={fpStyles.loadingText}>Scanning deviceâ€¦</Text>
           </View>
         ) : (
           <FlatList
@@ -381,9 +381,9 @@ const fpStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Watched folder card
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function FolderCard({ folder, trackCount, onRemove, onPress }: {
   folder: WatchedFolder;
@@ -416,7 +416,7 @@ function FolderCard({ folder, trackCount, onRemove, onPress }: {
       </View>
       <View style={{ flex: 1 }}>
         <Text style={fcStyles.name} numberOfLines={1}>{folder.name}</Text>
-        <Text style={fcStyles.meta}>{trackCount} tracks · watching</Text>
+        <Text style={fcStyles.meta}>{trackCount} tracks Â· watching</Text>
       </View>
       <View style={fcStyles.liveDot} />
       <Ionicons name="chevron-forward" size={moderateScale(14)} color={C.textMuted} />
@@ -445,9 +445,9 @@ const fcStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Track row
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function TrackRow({ item, isPlaying, onPress, onMore }: {
   item: LocalTrack;
@@ -478,7 +478,7 @@ function TrackRow({ item, isPlaying, onPress, onMore }: {
           {item.title}
         </Text>
         <Text style={trStyles.sub} numberOfLines={1}>
-          {item.artist} · {formatDuration(item.duration)}
+          {item.artist} Â· {formatDuration(item.duration)}
         </Text>
       </View>
       <TouchableOpacity hitSlop={12} onPress={() => { triggerHaptic(); onMore(); }}>
@@ -504,16 +504,16 @@ const trStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-tabs: All Tracks · Albums · Artists
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Sub-tabs: All Tracks Â· Albums Â· Artists
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SUB_TABS = ["All Tracks", "Albums", "Artists"] as const;
 type SubTab = (typeof SUB_TABS)[number];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Main screen
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function LocalMusicScreen() {
   const { top, bottom } = useSafeAreaInsets();
@@ -537,13 +537,13 @@ export default function LocalMusicScreen() {
 
   const watchedIds = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
 
-  // ── Session flag management ───────────────────────────────────────────────
+  // â”€â”€ Session flag management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     // Mark that the user is currently on Local Music so LibraryScreen can
     // redirect here next time the Library tab is pressed.
     storage.set(LAST_SCREEN_KEY, "localMusic");
 
-    // No cleanup needed here — we clear the flag only when the user
+    // No cleanup needed here â€” we clear the flag only when the user
     // explicitly navigates back via the back button (see handleBack).
   }, []);
 
@@ -598,10 +598,10 @@ export default function LocalMusicScreen() {
   return (
     <View style={[scStyles.container, { paddingTop: top }]}>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {arrivedViaTab ? (
         /**
-         * COMPACT HEADER — no back button, no title text.
+         * COMPACT HEADER â€” no back button, no title text.
          * Just the action icons on the right, giving the screen a "home" feel
          * when the user landed here via the Library tab re-press.
          */
@@ -647,7 +647,7 @@ export default function LocalMusicScreen() {
         </View>
       ) : (
         /**
-         * FULL HEADER — back arrow + title + action icons.
+         * FULL HEADER â€” back arrow + title + action icons.
          * Used when navigating here normally from the LibraryScreen menu.
          */
         <View style={scStyles.header}>
@@ -843,7 +843,7 @@ export default function LocalMusicScreen() {
                 >
                   <CoverArt uri={item.cover} size={moderateScale(90)} />
                   <Text style={gridStyles.cellTitle} numberOfLines={1}>{item.name}</Text>
-                  <Text style={gridStyles.cellSub} numberOfLines={1}>{item.artist} · {item.count} tracks</Text>
+                  <Text style={gridStyles.cellSub} numberOfLines={1}>{item.artist} Â· {item.count} tracks</Text>
                 </TouchableOpacity>
               )}
             />

@@ -7,18 +7,30 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
       "env": {
         "EXPO_NO_CACHE": "1"
       }
     },
     "preview": {
       "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
       "env": {
         "EXPO_NO_CACHE": "1"
       }
     },
     "production": {
       "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleRelease"
+      },
       "env": {
         "EXPO_NO_CACHE": "1"
       }

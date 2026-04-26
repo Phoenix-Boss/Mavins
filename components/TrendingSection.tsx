@@ -1,4 +1,4 @@
-/**
+﻿/**
  * This file defines the `TrendingSection` component, which displays a horizontally
  * scrollable grid of trending songs. Each song is presented with its rank, artwork, title, and artist,
  * and includes an option to open a menu for additional actions.
@@ -14,7 +14,7 @@ import React, { useMemo, useCallback } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
 import LoaderKit from "react-native-loader-kit";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
 /**
  * @interface TrendingSectionProps

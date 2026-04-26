@@ -1,15 +1,15 @@
-/**
+﻿/**
  * useLogTrackPlayerState
  *
- * Safe TrackPlayer logging hook — dev-only, version-safe (v3 + v4).
+ * Safe TrackPlayer logging hook â€” dev-only, version-safe (v3 + v4).
  *
  * FIX: useTrackPlayerEvents was called INSIDE an `if (safeEvents.length > 0)`
- * block — a direct Rules of Hooks violation. React requires hooks to be called
+ * block â€” a direct Rules of Hooks violation. React requires hooks to be called
  * unconditionally on every render. Conditional hook calls cause subtle state
  * desync crashes and are caught by the exhaustive-deps / react-hooks ESLint rules.
  *
  * Fix: useTrackPlayerEvents is always called. We pass it the filtered event
- * list (which may be empty). An empty array is a valid no-op for the hook —
+ * list (which may be empty). An empty array is a valid no-op for the hook â€”
  * it simply won't fire any callbacks, which is exactly the desired behaviour
  * when none of the Event.* constants are defined on the current RNTP version.
  */
@@ -19,7 +19,7 @@ import {
   Event,
   useTrackPlayerEvents,
   usePlaybackState,
-} from "react-native-track-player";
+} from "@/modules/mavin-eq";
 
 export const useLogTrackPlayerState = () => {
   // Build the event list at module scope (outside any condition).
@@ -29,12 +29,12 @@ export const useLogTrackPlayerState = () => {
     Event?.PlaybackState,
     Event?.PlaybackError,
     Event?.PlaybackTrackChanged,
-    Event?.PlaybackActiveTrackChanged, // v4+ only — undefined in v3, filtered out
+    Event?.PlaybackActiveTrackChanged, // v4+ only â€” undefined in v3, filtered out
     Event?.PlaybackQueueEnded,
     Event?.PlaybackMetadataReceived,
   ].filter(Boolean) as Event[];
 
-  // ── Playback state logging ─────────────────────────────────────────────────
+  // â”€â”€ Playback state logging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const playbackState = usePlaybackState();
 
   useEffect(() => {
@@ -42,8 +42,8 @@ export const useLogTrackPlayerState = () => {
     console.log("[TrackPlayer] Playback state:", playbackState);
   }, [playbackState]);
 
-  // ── Event logging ──────────────────────────────────────────────────────────
-  // ALWAYS called unconditionally — satisfies Rules of Hooks.
+  // â”€â”€ Event logging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ALWAYS called unconditionally â€” satisfies Rules of Hooks.
   // Passing an empty array is safe: the hook simply registers no listeners.
   useTrackPlayerEvents(safeEvents, async (event) => {
     if (!__DEV__) return;
@@ -61,7 +61,7 @@ export const useLogTrackPlayerState = () => {
         console.log(
           "[TrackPlayer] Track changed:",
           event.prevTrack,
-          "→",
+          "â†’",
           event.nextTrack,
         );
         break;

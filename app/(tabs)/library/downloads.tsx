@@ -1,9 +1,9 @@
-/**
+﻿/**
  * DownloadsScreen
  *
  * Displays songs downloaded to the device for offline playback.
  * - Active download progress cards
- * - Sort: Recent · A–Z · Duration
+ * - Sort: Recent Â· Aâ€“Z Â· Duration
  * - Play individual song, play all, or shuffle all
  * - Song options menu via `/(modals)/menu`
  * - Active playback indicator
@@ -36,14 +36,14 @@ import {
   moderateScale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/modules/mavin-eq";
 
-// ─── Sort options ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Sort options â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const SORT_OPTIONS = ["Recent", "A–Z", "Duration"] as const;
+const SORT_OPTIONS = ["Recent", "Aâ€“Z", "Duration"] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
 
-// ─── DownloadsScreen ────────────────────────────────────────────────────────
+// â”€â”€â”€ DownloadsScreen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DownloadsScreen = () => {
   const [isScrolling, setIsScrolling] = useState<boolean>(false);
@@ -63,9 +63,9 @@ const DownloadsScreen = () => {
   // Sort and format downloaded tracks (pure memo, no side-effect setState)
   const formattedTracks: DownloadedSongMetadata[] = useMemo(() => {
     const copy = [...downloadedTracksMeta];
-    if (activeSort === "A–Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
+    if (activeSort === "Aâ€“Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
     if (activeSort === "Duration") return copy.sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0));
-    return copy.reverse(); // "Recent" — newest first
+    return copy.reverse(); // "Recent" â€” newest first
   }, [downloadedTracksMeta, activeSort]);
 
   const handleSongSelect = useCallback(
@@ -115,7 +115,7 @@ const DownloadsScreen = () => {
     [downloadedTracksMeta, router],
   );
 
-  // ─── List header (sort pills + active downloads) ──────────────────────────
+  // â”€â”€â”€ List header (sort pills + active downloads) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const ListHeader = useMemo(
     () => (
@@ -181,7 +181,7 @@ const DownloadsScreen = () => {
     [activeDownloads, formattedTracks, activeSort],
   );
 
-  // ─── Render item ──────────────────────────────────────────────────────────
+  // â”€â”€â”€ Render item â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const renderItem = useCallback(
     ({ item }: { item: DownloadedSongMetadata }) => {
@@ -233,7 +233,7 @@ const DownloadsScreen = () => {
     [handleSongSelect, handleOpenMenu, activeTrack],
   );
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return (
     <View style={defaultStyles.container}>
@@ -328,7 +328,7 @@ const DownloadsScreen = () => {
 
 export default DownloadsScreen;
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const styles = ScaledSheet.create({
   header: {
