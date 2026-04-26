@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.dsp
+package com.doublesymmetry.trackplayer.dsp
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -471,9 +471,4 @@ class UsbDacController(private val context: Context) {
             }
         }
     }
-
-    data class DacInfo(val preferredSampleRate: Int, val supportedBitDepths: List<Int>)
-
-    fun getConnectedDacInfo(): DacInfo? = null
-
 }
