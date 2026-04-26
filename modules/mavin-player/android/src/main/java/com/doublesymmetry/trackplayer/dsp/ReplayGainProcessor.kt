@@ -4,6 +4,7 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.FloatBuffer
+import kotlin.math.pow
 
 /**
  * ReplayGainProcessor â€” pre-gain normalization before EQ.
@@ -37,6 +38,7 @@ class ReplayGainProcessor : AudioProcessor {
     }
 
     override fun isActive(): Boolean = active
+    override fun isEnded(): Boolean = false
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!active || !inputBuffer.hasRemaining()) {
@@ -50,7 +52,7 @@ class ReplayGainProcessor : AudioProcessor {
         buffer.clear()
         val floatBuffer = inputBuffer.asFloatBuffer()
         val outFloat = buffer.asFloatBuffer()
-        val gainLinear = kotlin.math.pow(10f, gainDb / 20f)
+        val gainLinear = 10f.pow(gainDb / 20f)
         while (floatBuffer.hasRemaining()) {
             outFloat.put(floatBuffer.get() * gainLinear)
         }

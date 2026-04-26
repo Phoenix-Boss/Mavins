@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.Rating
+import com.doublesymmetry.trackplayer.extensions.NumberExt.Companion.toMilliseconds
 import com.doublesymmetry.trackplayer.utils.BundleUtils
 
 abstract class TrackMetadata {
@@ -27,7 +28,7 @@ abstract class TrackMetadata {
         mediaId = bundle.getString("mediaId")
 
         duration = if (bundle.containsKey("duration")) {
-            (bundle.getDouble("duration") * 1000L).toLong()
+            bundle.getDouble("duration").toMilliseconds()
         } else {
             null
         }

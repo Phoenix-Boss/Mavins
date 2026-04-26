@@ -7,7 +7,6 @@ import android.media.AudioTrack
 import android.os.Build
 import androidx.media3.common.util.UnstableApi
 import com.doublesymmetry.trackplayer.dsp.UsbDacController
-import java.nio.ByteBuffer
 
 /**
  * MavinAudioOutput - Direct AAudio/OpenSL ES output controller.

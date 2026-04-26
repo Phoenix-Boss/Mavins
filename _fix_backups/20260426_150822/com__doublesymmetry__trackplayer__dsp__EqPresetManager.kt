@@ -6,7 +6,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileNotFoundException
-import com.doublesymmetry.trackplayer.dsp.EqualizerProcessor
 
 /**
  * EqPresetManager â€” Save, load, export, import, and assign EQ presets.

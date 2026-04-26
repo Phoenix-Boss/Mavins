@@ -6,12 +6,12 @@ const withIconXml = require("./plugins/withIconXml");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "wocof2",
-  slug: "wocof2",
+  owner: "jipaw90638-1",
+  slug: "jipaw90638",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "8968f586-c2de-4f2b-91ac-a08008acd380",
+      projectId: "89e778f0-63aa-4cea-bf82-3de33ee90551",
     },
   },
   platforms: ["android"],
@@ -96,8 +96,8 @@ module.exports = {
       "expo-build-properties",
       {
         android: {
-          compileSdkVersion: 35,
-          targetSdkVersion: 35,
+          compileSdkVersion: 36,
+          targetSdkVersion: 36,
           minSdkVersion: 24,
           extraProguardRules:
             "-keep class com.honeygain.hgsdk.** { *; }\n" +

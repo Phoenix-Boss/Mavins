@@ -9,10 +9,10 @@ import android.os.Build
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.Util.isBitmapFactorySupportedMimeType
 import androidx.media3.common.util.UnstableApi
-import coil3.ImageLoader
-import coil3.request.ImageRequest
+import coil.ImageLoader
+import coil.request.ImageRequest
 import com.google.common.util.concurrent.ListenableFuture
-import coil3.transform.Transformation
+import jp.wasabeef.transformers.coil.CropSquareTransformation
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.guava.future
 import java.io.IOException
@@ -46,24 +46,10 @@ class CoilBitmapLoader @Inject constructor(
             .allowHardware(false)
         // HACK: header implementation should be done via parsed data from uri
         if (Build.MANUFACTURER == "samsung" || cropSquare) {
-            imageRequest = imageRequest.transformations(CropSquareTransformation)
+            imageRequest = imageRequest.transformations(CropSquareTransformation())
         }
         val response = imageLoader.execute(imageRequest.build())
         val bitmap = (response.drawable as? BitmapDrawable)?.bitmap
         bitmap ?: throw IOException("Unable to load bitmap: $uri")
-    }
-}
-
-// Coil 3 replacement for jp.wasabeef CropSquareTransformation
-private object CropSquareTransformation : Transformation() {
-    override val cacheKey: String = "CropSquareTransformation"
-    override suspend fun transform(
-        input: android.graphics.Bitmap,
-        size: coil3.size.Size
-    ): android.graphics.Bitmap {
-        val min = minOf(input.width, input.height)
-        val x = (input.width - min) / 2
-        val y = (input.height - min) / 2
-        return android.graphics.Bitmap.createBitmap(input, x, y, min, min)
     }
 }

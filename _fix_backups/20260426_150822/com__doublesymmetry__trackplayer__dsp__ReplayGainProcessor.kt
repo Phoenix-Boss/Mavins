@@ -4,21 +4,25 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.FloatBuffer
-import kotlin.random.Random
 
 /**
- * DitherProcessor â€” triangular dither + noise shaping.
- * Position: last in chain before hardware output.
- * Converts float32 to target bit depth with minimal quantization error.
+ * ReplayGainProcessor â€” pre-gain normalization before EQ.
+ * Position 0 in the DSP chain. Applies track/album gain offset.
  */
 @UnstableApi
-class DitherProcessor : AudioProcessor {
+class ReplayGainProcessor : AudioProcessor {
+    private var gainDb: Float = 0f
+    private var enabled: Boolean = false
     private var inputAudioFormat: AudioProcessor.AudioFormat = AudioProcessor.AudioFormat.NOT_SET
     private var outputAudioFormat: AudioProcessor.AudioFormat = AudioProcessor.AudioFormat.NOT_SET
     private var active: Boolean = false
     private var buffer: ByteBuffer = EMPTY_BUFFER
     private var pendingOutput: ByteBuffer = EMPTY_BUFFER
-    private var noiseShaping: Float = 0f
+
+    fun setGain(gainDb: Float) {
+        this.gainDb = gainDb
+        this.enabled = gainDb != 0f
+    }
 
     override fun configure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != androidx.media3.common.C.ENCODING_PCM_FLOAT) {
@@ -26,7 +30,7 @@ class DitherProcessor : AudioProcessor {
         }
         this.inputAudioFormat = inputAudioFormat
         outputAudioFormat = inputAudioFormat
-        active = true
+        active = enabled
         buffer = EMPTY_BUFFER
         pendingOutput = EMPTY_BUFFER
         return outputAudioFormat
@@ -47,15 +51,9 @@ class DitherProcessor : AudioProcessor {
         buffer.clear()
         val floatBuffer = inputBuffer.asFloatBuffer()
         val outFloat = buffer.asFloatBuffer()
+        val gainLinear = kotlin.math.pow(10f, gainDb / 20f)
         while (floatBuffer.hasRemaining()) {
-            val sample = floatBuffer.get()
-            // Triangular dither: (-1 to 1) scaled to 1 LSB at 24-bit
-            val dither = (Random.nextFloat() - Random.nextFloat()) * (1f / (1 shl 23))
-            // Simple 1st-order noise shaping
-            val shaped = sample + noiseShaping
-            val quantized = shaped + dither
-            noiseShaping = shaped - quantized
-            outFloat.put(quantized.coerceIn(-1f, 1f))
+            outFloat.put(floatBuffer.get() * gainLinear)
         }
         buffer.limit(capacity)
         buffer.rewind()
@@ -71,7 +69,6 @@ class DitherProcessor : AudioProcessor {
     override fun flush() {
         buffer = EMPTY_BUFFER
         pendingOutput = EMPTY_BUFFER
-        noiseShaping = 0f
     }
 
     override fun reset() {

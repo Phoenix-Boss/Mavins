@@ -33,7 +33,6 @@ class DitherProcessor : AudioProcessor {
     }
 
     override fun isActive(): Boolean = active
-    override fun isEnded(): Boolean = false
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!active || !inputBuffer.hasRemaining()) {

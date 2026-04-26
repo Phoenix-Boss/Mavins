@@ -60,7 +60,7 @@ class MavinRenderersFactory(
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean
     ): AudioSink {
-        dspSink = MavinDspAudioSink(
+        +
             context,
             replayGain,
             sampleRateConverter,

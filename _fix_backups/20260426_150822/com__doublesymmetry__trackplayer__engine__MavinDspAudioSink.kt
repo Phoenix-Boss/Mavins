@@ -94,6 +94,7 @@ class MavinDspAudioSink(
                 .setAudioProcessorChain(chain)
                 // Disable offload â€” offload bypasses AudioProcessor chain
                 // This is what Poweramp does to guarantee DSP runs on every buffer
+                .setOffloadMode(DefaultAudioSink.OFFLOAD_MODE_DISABLED)
                 // Enable float output for maximum precision through DSP chain
                 .setEnableFloatOutput(true)
                 .build()

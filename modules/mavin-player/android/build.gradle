@@ -11,11 +11,11 @@ def getExtOrIntegerDefault(name) {
 
 android {
   namespace "com.doublesymmetry.trackplayer"
-  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+  compileSdkVersion 36
 
   defaultConfig {
     minSdkVersion getExtOrIntegerDefault("minSdkVersion")
-    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+    targetSdkVersion 36
   }
 
   buildFeatures {
