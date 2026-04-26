@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.dsp.audio
+package com.doublesymmetry.trackplayer.dsp.audio
 
 import android.content.Context
 import android.util.Log

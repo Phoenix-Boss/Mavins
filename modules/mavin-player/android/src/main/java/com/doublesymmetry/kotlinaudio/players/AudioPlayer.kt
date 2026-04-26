@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.kotlinaudio.players
+package com.doublesymmetry.kotlinaudio.players
 
 import com.doublesymmetry.trackplayer.engine.MavinRenderersFactory
 import android.content.Context

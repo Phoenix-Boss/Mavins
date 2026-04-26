@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.engine
+package com.doublesymmetry.trackplayer.engine
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.engine
+package com.doublesymmetry.trackplayer.engine
 
 import android.content.Context
 import android.media.AudioAttributes

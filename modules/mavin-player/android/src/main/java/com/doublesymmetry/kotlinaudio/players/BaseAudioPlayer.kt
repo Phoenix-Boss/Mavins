@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.kotlinaudio.players
+package com.doublesymmetry.kotlinaudio.players
 
 import android.content.Context
 import android.media.AudioManager
