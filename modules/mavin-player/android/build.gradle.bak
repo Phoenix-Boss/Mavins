@@ -56,9 +56,6 @@ repositories {
 def kotlin_version = getExtOrDefault("kotlinVersion")
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
-    implementation("io.coil-kt:coil-base:2.7.0")
-    implementation("io.coil-kt:coil:2.7.0")
   implementation "com.facebook.react:react-android"
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
 

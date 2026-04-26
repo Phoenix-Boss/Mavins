@@ -9,16 +9,19 @@ import android.os.Build
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.Util.isBitmapFactorySupportedMimeType
 import androidx.media3.common.util.UnstableApi
-import coil3.ImageLoader
-import coil3.request.ImageRequest
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.transform.Transformation
 import com.google.common.util.concurrent.ListenableFuture
-import coil3.transform.Transformation
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.guava.future
 import java.io.IOException
 import javax.inject.Inject
 
 // https://github.com/androidx/media/issues/121
+// Fixed (April 2026): replaced coil3.* imports with coil.* (Coil 2.x API).
+// coil3 is a separate artifact requiring explicit migration; this project
+// uses Coil 2.x on the classpath.
 
 @UnstableApi
 class CoilBitmapLoader @Inject constructor(
@@ -26,44 +29,42 @@ class CoilBitmapLoader @Inject constructor(
     private val cropSquare: Boolean = false,
 ) : BitmapLoader {
 
-    private val scope = MainScope()
+    private val scope       = MainScope()
     private val imageLoader = ImageLoader(context)
 
-    override fun supportsMimeType(mimeType: String): Boolean {
-        return isBitmapFactorySupportedMimeType(mimeType)
-    }
+    override fun supportsMimeType(mimeType: String): Boolean =
+        isBitmapFactorySupportedMimeType(mimeType)
 
-    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
-        val bitmap = BitmapFactory.decodeByteArray(data,  /* offset= */0, data.size)
-        return scope.future {
-            bitmap ?: throw IOException("Unable to decode bitmap")
-        }
+    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = scope.future {
+        BitmapFactory.decodeByteArray(data, 0, data.size)
+            ?: throw IOException("Unable to decode bitmap")
     }
 
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> = scope.future {
-        var imageRequest = ImageRequest.Builder(context)
+        val requestBuilder = ImageRequest.Builder(context)
             .data(uri)
             .allowHardware(false)
-        // HACK: header implementation should be done via parsed data from uri
-        if (Build.MANUFACTURER == "samsung" || cropSquare) {
-            imageRequest = imageRequest.transformations(CropSquareTransformation)
+
+        val request = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true) || cropSquare) {
+            requestBuilder.transformations(CropSquareTransformation).build()
+        } else {
+            requestBuilder.build()
         }
-        val response = imageLoader.execute(imageRequest.build())
-        val bitmap = (response.drawable as? BitmapDrawable)?.bitmap
-        bitmap ?: throw IOException("Unable to load bitmap: $uri")
+
+        val response = imageLoader.execute(request)
+        (response.drawable as? BitmapDrawable)?.bitmap
+            ?: throw IOException("Unable to load bitmap: $uri")
     }
 }
 
-// Coil 3 replacement for jp.wasabeef CropSquareTransformation
-private object CropSquareTransformation : Transformation() {
+/** Coil 2.x square-crop transformation (no external jp.wasabeef dependency). */
+private object CropSquareTransformation : Transformation {
     override val cacheKey: String = "CropSquareTransformation"
-    override suspend fun transform(
-        input: android.graphics.Bitmap,
-        size: coil3.size.Size
-    ): android.graphics.Bitmap {
+
+    override suspend fun transform(input: Bitmap, size: coil.size.Size): Bitmap {
         val min = minOf(input.width, input.height)
-        val x = (input.width - min) / 2
-        val y = (input.height - min) / 2
-        return android.graphics.Bitmap.createBitmap(input, x, y, min, min)
+        val x   = (input.width  - min) / 2
+        val y   = (input.height - min) / 2
+        return Bitmap.createBitmap(input, x, y, min, min)
     }
 }
