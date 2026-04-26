@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.service
+package com.doublesymmetry.trackplayer.service
 
 import android.annotation.SuppressLint
 import android.app.*
@@ -231,6 +231,7 @@ class MusicService : HeadlessJsMediaService() {
             skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
             wakeMode = playerOptions?.getInt(WAKE_MODE, 0) ?: 0
         )
+        renderersFactory = MavinRenderersFactory(
         renderersFactory = MavinRenderersFactory(
             this@MusicService,
             replayGain,
