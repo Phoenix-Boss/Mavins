@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.service
+package com.doublesymmetry.trackplayer.service
 
 import android.annotation.SuppressLint
 import android.app.*
@@ -27,6 +27,8 @@ import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibrarySession
 import androidx.media3.session.SessionResult
 import com.doublesymmetry.kotlinaudio.models.*
 import com.doublesymmetry.kotlinaudio.players.QueuedAudioPlayer
