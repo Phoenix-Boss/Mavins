@@ -1,23 +1,24 @@
 {
-    "cli":  {
-                "version":  "\u003e= 14.2.0",
-                "appVersionSource":  "remote"
-            },
-    "build":  {
-                  "development":  {
-                                      "developmentClient":  true,
-                                      "distribution":  "internal"
-                                  },
-                  "preview":  {
-                                  "distribution":  "internal"
-                              },
-                  "production":  {
-                                     "autoIncrement":  true
-                                 }
-              },
-    "submit":  {
-                   "production":  {
-
-                                  }
-               }
+    "cli": {
+        "version": ">= 14.2.0",
+        "appVersionSource": "remote"
+    },
+    "build": {
+        "development": {
+            "developmentClient": true,
+            "distribution": "internal",
+            "cache": {
+                "disabled": true
+            }
+        },
+        "preview": {
+            "distribution": "internal"
+        },
+        "production": {
+            "autoIncrement": true
+        }
+    },
+    "submit": {
+        "production": {}
+    }
 }
