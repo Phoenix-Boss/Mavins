@@ -1,4 +1,4 @@
-package com.doublesymmetry.trackplayer.service
+﻿package com.doublesymmetry.trackplayer.service
 
 import android.annotation.SuppressLint
 import android.app.*
@@ -24,11 +24,13 @@ import androidx.media3.common.Rating
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
+
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
-import androidx.media3.session.MediaLibraryService
-import androidx.media3.session.MediaLibrarySession
+
+
 import androidx.media3.session.SessionResult
 import com.doublesymmetry.kotlinaudio.models.*
 import com.doublesymmetry.kotlinaudio.players.QueuedAudioPlayer
@@ -72,7 +74,7 @@ class MusicService : HeadlessJsMediaService() {
     private lateinit var player: QueuedAudioPlayer
     private val binder = MusicBinder()
 
-    // â”€â”€ Mavin DSP processors â€” shared instances, live for the service lifetime â”€â”€
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Mavin DSP processors Ã¢â‚¬â€ shared instances, live for the service lifetime Ã¢â€â‚¬Ã¢â€â‚¬
     // Instantiated here so MusicModule can access them via service reference
     // for real-time parameter updates from JS (setEqBand, setCompressor, etc.)
     val replayGain          = ReplayGainProcessor()

@@ -1,4 +1,4 @@
-﻿package com.doublesymmetry.trackplayer.engine
+package com.doublesymmetry.trackplayer.engine
 
 import android.content.Context
 import androidx.media3.common.audio.AudioProcessor
