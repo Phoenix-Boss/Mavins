@@ -1,6 +1,1 @@
-{
-  "platforms": ["android"],
-  "android": {
-    "modules": ["expo.modules.mavinplayer.MavinPlayerModule"]
-  }
-}
+{"platforms":["android"]}
