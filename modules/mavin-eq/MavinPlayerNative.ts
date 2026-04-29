@@ -1,11 +1,8 @@
 // mavin-eq/MavinPlayerNative.ts
-// mavin-player registers as a React Native bridge module named "TrackPlayer"
-// NOT an Expo module — must use NativeModules, not requireNativeModule
-import { NativeModules, Platform } from "react-native";
+import { TurboModuleRegistry, Platform } from "react-native";
 import type { MavinPlayerNativeModule } from "./types";
 
 const MODULE_NAME = "TrackPlayer";
-
 let _nativeModule: MavinPlayerNativeModule | null = null;
 
 export function getNativeModule(): MavinPlayerNativeModule {
@@ -13,13 +10,14 @@ export function getNativeModule(): MavinPlayerNativeModule {
     throw new Error("[MavinPlayer] This module is Android-only.");
   }
   if (!_nativeModule) {
-    _nativeModule = NativeModules[MODULE_NAME] as MavinPlayerNativeModule;
-    if (!_nativeModule) {
+    try {
+      _nativeModule = TurboModuleRegistry.getEnforcing<any>(MODULE_NAME) as MavinPlayerNativeModule;
+    } catch {
       console.warn(
         `[MavinPlayer] Native module "${MODULE_NAME}" not found. ` +
         "Ensure mavin-player is installed and properly linked."
       );
-      return {} as MavinPlayerNativeModule; // return empty object instead of throwing
+      return {} as MavinPlayerNativeModule;
     }
   }
   return _nativeModule;
@@ -28,7 +26,7 @@ export function getNativeModule(): MavinPlayerNativeModule {
 export function isNativeModuleAvailable(): boolean {
   if (Platform.OS !== "android") return false;
   try {
-    return NativeModules[MODULE_NAME] != null;
+    return TurboModuleRegistry.get<any>(MODULE_NAME) != null;
   } catch {
     return false;
   }
