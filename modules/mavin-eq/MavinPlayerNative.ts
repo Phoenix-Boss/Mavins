@@ -1,35 +1,36 @@
 // mavin-eq/MavinPlayerNative.ts
-import { TurboModuleRegistry, Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 import type { MavinPlayerNativeModule } from "./types";
 
 const MODULE_NAME = "TrackPlayer";
-let _nativeModule: MavinPlayerNativeModule | null = null;
+
+const silentProxy = new Proxy({} as MavinPlayerNativeModule, {
+  get(_target, prop) {
+    return () => Promise.resolve(null);
+  },
+});
 
 export function getNativeModule(): MavinPlayerNativeModule {
   if (Platform.OS !== "android") {
-    throw new Error("[MavinPlayer] This module is Android-only.");
+    return silentProxy;
   }
-  if (!_nativeModule) {
-    try {
-      _nativeModule = TurboModuleRegistry.getEnforcing<any>(MODULE_NAME) as MavinPlayerNativeModule;
-    } catch {
-      console.warn(
-        `[MavinPlayer] Native module "${MODULE_NAME}" not found. ` +
-        "Ensure mavin-player is installed and properly linked."
-      );
-      return {} as MavinPlayerNativeModule;
-    }
+
+  const mod = NativeModules[MODULE_NAME];
+  
+  if (!mod) {
+    console.warn(
+      `[MavinPlayer] Native module "${MODULE_NAME}" not found. ` +
+      "Ensure mavin-player is installed and properly linked."
+    );
+    return silentProxy;
   }
-  return _nativeModule;
+
+  return mod as MavinPlayerNativeModule;
 }
 
 export function isNativeModuleAvailable(): boolean {
   if (Platform.OS !== "android") return false;
-  try {
-    return TurboModuleRegistry.get<any>(MODULE_NAME) != null;
-  } catch {
-    return false;
-  }
+  return !!NativeModules[MODULE_NAME];
 }
 
 export const getMavinPlayer = getNativeModule;
