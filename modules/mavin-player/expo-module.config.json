@@ -1,1 +1,1 @@
-{"platforms":["android"]}
+{"platforms":["android"],"android":{"modules":["com.doublesymmetry.trackplayer.TrackPlayerExpoModule"]}}

@@ -9,15 +9,10 @@ def getExtOrIntegerDefault(name) {
   return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["TrackPlayer_" + name]).toInteger()
 }
 
-// ─── Dependency versions ──────────────────────────────────────────────────────
-// Pin all versions here. Update intentionally and test before committing.
-// Media3 modules MUST all use the same version to avoid runtime conflicts.
-// 1.7.0 is broken (accidentally published) — do not use. 1.8.0 does not exist.
 def media3_version          = "1.6.1"
 def lifecycle_version       = "2.8.6"
 def coroutines_version      = "1.9.0"
 def coil_version            = "2.7.0"
-// ─────────────────────────────────────────────────────────────────────────────
 
 android {
   namespace "com.doublesymmetry.trackplayer"
@@ -26,15 +21,9 @@ android {
   defaultConfig {
     minSdkVersion getExtOrIntegerDefault("minSdkVersion")
     targetSdkVersion 36
-    externalNativeBuild {
-      cmake {
-        arguments "-DANDROID_STL=c++_shared"
-      }
-    }
   }
 
   buildFeatures {
-    prefab true
     buildConfig true
   }
 
@@ -56,19 +45,6 @@ android {
   kotlinOptions {
     jvmTarget = "17"
   }
-
-  sourceSets {
-    main {
-      java.srcDirs += ["generated/java", "generated/jni"]
-    }
-  }
-
-  externalNativeBuild {
-    cmake {
-      path "CMakeLists.txt"
-      version "3.22.1"
-    }
-  }
 }
 
 repositories {
@@ -79,6 +55,9 @@ repositories {
 def kotlin_version = getExtOrDefault("kotlinVersion")
 
 dependencies {
+  // Expo Modules Core - required for New Architecture bridgeless support
+  implementation project(':expo-modules-core')
+
   // React Native
   implementation "com.facebook.react:react-android"
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
@@ -90,8 +69,7 @@ dependencies {
   implementation "androidx.lifecycle:lifecycle-runtime-ktx:$lifecycle_version"
   implementation "androidx.media:media:1.7.0"
 
-  // Media3 — all modules must be pinned to the exact same version.
-  // See: https://developer.android.com/jetpack/androidx/releases/media3
+  // Media3
   implementation "androidx.media3:media3-exoplayer:$media3_version"
   implementation "androidx.media3:media3-exoplayer-hls:$media3_version"
   implementation "androidx.media3:media3-exoplayer-dash:$media3_version"
