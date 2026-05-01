@@ -26,7 +26,7 @@ class TrackPlayerPackage : BaseReactPackage() {
         false,  // canOverrideExistingModule
         false,  // needsEagerInit
         false,  // isCxxModule
-        false // isTurboModule
+        true // isTurboModule
       )
       moduleInfos
     }
