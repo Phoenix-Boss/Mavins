@@ -19,7 +19,7 @@ module.exports = {
   icon: "./assets/images/icon.png",
   scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
+  newArchEnabled: false,
   android: {
     softwareKeyboardLayoutMode: "pan",
     permissions: [
