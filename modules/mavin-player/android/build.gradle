@@ -24,13 +24,13 @@ android {
   compileSdkVersion 36
 
   defaultConfig {
+    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
+    targetSdkVersion 36
     externalNativeBuild {
       cmake {
         arguments "-DANDROID_STL=c++_shared"
       }
     }
-    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
-    targetSdkVersion 36
   }
 
   buildFeatures {
@@ -60,6 +60,13 @@ android {
   sourceSets {
     main {
       java.srcDirs += ["generated/java", "generated/jni"]
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+      version "3.13.0+"
     }
   }
 }
@@ -113,11 +120,4 @@ react {
   jsRootDir = file("../src/")
   libraryName = "TrackPlayer"
   codegenJavaPackageName = "com.doublesymmetry.trackplayer"
-}
-
-externalNativeBuild {
-  cmake {
-    path "CMakeLists.txt"
-    version "3.13.0+"
-  }
 }
