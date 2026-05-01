@@ -31,14 +31,13 @@ import timber.log.Timber
 import java.util.*
 import javax.annotation.Nonnull
 
-import com.doublesymmetry.trackplayer.NativeTrackPlayerSpec
 
 
 /**
  * @author Milen Pivchev @mpivchev
  */
 @ReactModule(name = MusicModule.NAME)
-class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec(reactContext),
+class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext),
     ServiceConnection {
     private lateinit var browser: MediaBrowser
     private var playerOptions: Bundle? = null
@@ -569,3 +568,4 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
         }
     }
 }
+
