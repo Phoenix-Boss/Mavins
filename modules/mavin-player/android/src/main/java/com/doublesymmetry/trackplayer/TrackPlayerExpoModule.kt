@@ -6,9 +6,9 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.WritableMap
 import expo.modules.kotlin.Promise as ExpoPromise
 import com.facebook.react.bridge.Promise as RNPromise
-import com.facebook.react.bridge.WritableMap
 
 class TrackPlayerExpoModule : Module() {
 
@@ -195,19 +195,45 @@ class TrackPlayerExpoModule : Module() {
   }
 }
 
-// Converts an Expo promise to the RN Promise interface MusicModule expects
+// Converts an Expo promise to the RN Promise interface MusicModule expects.
+// All overloads from the RNPromise interface must be implemented.
 private fun ExpoPromise.toRN(): RNPromise = object : RNPromise {
-  override fun resolve(value: Any?) = this@toRN.resolve(value)
-  override fun reject(code: String, message: String?, e: Throwable?) =
-    this@toRN.reject(code, message ?: "", e)
-  override fun reject(code: String, e: Throwable?) =
-    this@toRN.reject(code, e?.message ?: "", e)
+
+  override fun resolve(value: Any?) =
+    this@toRN.resolve(value)
+
+  // ── Core 3-arg overload everything else routes through ────────────
+  override fun reject(code: String, message: String?, throwable: Throwable?) =
+    this@toRN.reject(code, message ?: "", throwable)
+
+  // ── 2-arg overloads ───────────────────────────────────────────────
   override fun reject(code: String, message: String?) =
     this@toRN.reject(code, message ?: "", null)
-  override fun reject(e: Throwable?) =
-    this@toRN.reject("error", e?.message ?: "", e)
-  override fun reject(
-    code: String, message: String?,
-    userInfo: WritableMap?, e: Throwable?
-  ) = this@toRN.reject(code, message ?: "", e)
+
+  override fun reject(code: String, throwable: Throwable?) =
+    this@toRN.reject(code, throwable?.message ?: "", throwable)
+
+  // ── Throwable-only overloads ──────────────────────────────────────
+  override fun reject(throwable: Throwable) =
+    this@toRN.reject("error", throwable.message ?: "", throwable)
+
+  override fun reject(throwable: Throwable, userInfo: WritableMap) =
+    this@toRN.reject("error", throwable.message ?: "", throwable)
+
+  // ── Message-only overload ─────────────────────────────────────────
+  override fun reject(message: String) =
+    this@toRN.reject("error", message, null)
+
+  // ── WritableMap overloads (userInfo ignored — Expo doesn't support it) ──
+  override fun reject(code: String, userInfo: WritableMap) =
+    this@toRN.reject(code, "", null)
+
+  override fun reject(code: String, throwable: Throwable?, userInfo: WritableMap) =
+    this@toRN.reject(code, throwable?.message ?: "", throwable)
+
+  override fun reject(code: String, message: String?, userInfo: WritableMap) =
+    this@toRN.reject(code, message ?: "", null)
+
+  override fun reject(code: String?, message: String?, throwable: Throwable?, userInfo: WritableMap?) =
+    this@toRN.reject(code ?: "error", message ?: "", throwable)
 }
