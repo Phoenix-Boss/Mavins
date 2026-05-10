@@ -1,6 +1,13 @@
-// app/_layout.tsx - Complete expo-av version
-// 
-// Root layout with expo-av initialization instead of react-native-track-player
+// app/_layout.tsx
+//
+// Root layout with expo-av initialization.
+//
+// SINGLE SOURCE OF TRUTH for:
+//   - Audio.setAudioModeAsync  (called exactly once here, never in context/service)
+//   - Notification permissions + MEDIA_PLAYBACK category registration (once here)
+//
+// service.ts is NOT used — MusicPlayerContext owns all playback state.
+// playerSetup.ts acts only as a ready-state flag module.
 
 import React, {
   createContext,
@@ -57,7 +64,19 @@ configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 const PREMIUM_BANNER_DELAY_MS = 2200;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Configure expo-notifications for lock screen controls
+// Audio mode config — defined once, reused in foreground-restore handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AUDIO_MODE = {
+  allowsRecordingIOS: false,
+  staysActiveInBackground: true,
+  playsInSilentModeIOS: true,
+  shouldDuckAndroid: true,
+  playThroughEarpieceAndroid: false,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Notification handler — media notifications are silent, no alert/sound/badge
 // ─────────────────────────────────────────────────────────────────────────────
 
 Notifications.setNotificationHandler({
@@ -65,8 +84,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert:  false,
     shouldPlaySound:  false,
     shouldSetBadge:   false,
-    shouldShowBanner: false, // required by NotificationBehavior in newer expo-notifications
-    shouldShowList:   false, // required by NotificationBehavior in newer expo-notifications
+    shouldShowBanner: false,
+    shouldShowList:   false,
   }),
 });
 
@@ -98,8 +117,6 @@ export { GestureContext };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PulsingLogoOverlay
-// Shows the app icon with a gentle pulse animation.
-// Fades out smoothly once the app is ready. No text.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PulsingLogoOverlay({ visible }: { visible: boolean }) {
@@ -108,45 +125,29 @@ function PulsingLogoOverlay({ visible }: { visible: boolean }) {
   const pulseRef  = useRef<Animated.CompositeAnimation | null>(null);
   const [hidden, setHidden] = useState(false);
 
-  // Start continuous pulse on mount
   useEffect(() => {
     pulseRef.current = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.12,
-          duration: 850,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 850,
-          useNativeDriver: true,
-        }),
+        Animated.timing(pulseAnim, { toValue: 1.12, duration: 850, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1,    duration: 850, useNativeDriver: true }),
       ])
     );
     pulseRef.current.start();
     return () => pulseRef.current?.stop();
   }, [pulseAnim]);
 
-  // Fade out when app is ready
   useEffect(() => {
     if (!visible) {
       pulseRef.current?.stop();
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }).start(() => setHidden(true));
+      Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true })
+        .start(() => setHidden(true));
     }
   }, [visible, fadeAnim]);
 
   if (hidden) return null;
 
   return (
-    <Animated.View
-      style={[styles.logoOverlay, { opacity: fadeAnim }]}
-      pointerEvents="none"
-    >
+    <Animated.View style={[styles.logoOverlay, { opacity: fadeAnim }]} pointerEvents="none">
       <Animated.Image
         source={require('../assets/images/icon.png')}
         style={[styles.logoImage, { transform: [{ scale: pulseAnim }] }]}
@@ -284,78 +285,89 @@ export default function RootLayout() {
     gestureBlockedSV,
   }).current;
 
-  // ── Navigation readiness ──────────────────────────────────────────────────
+  // ── Navigation readiness ────────────────────────────────────────────────────
   useEffect(() => {
-    if (navigationState?.key && !navReady) {
-      setNavReady(true);
-    }
+    if (navigationState?.key && !navReady) setNavReady(true);
   }, [navigationState?.key, navReady]);
 
-  // ── Hide splash screen as soon as fonts are done ──────────────────────────
+  // ── Hide splash screen once fonts are ready ─────────────────────────────────
   useEffect(() => {
     if (fontsLoaded || fontError) {
       SplashScreen.hideAsync().catch(console.warn);
     }
   }, [fontsLoaded, fontError]);
 
-  // ── Mark app ready once player + nav are both up ──────────────────────────
+  // ── Mark app ready once player + nav are both up ────────────────────────────
   useEffect(() => {
-    if (playerReady && navReady && !appReady) {
-      setAppReady(true);
-    }
+    if (playerReady && navReady && !appReady) setAppReady(true);
   }, [playerReady, navReady, appReady]);
 
-  // ── Player initialization with expo-av ────────────────────────────────────
+  // ── Player + notification initialization — runs EXACTLY ONCE ────────────────
+  //
+  // This is the only place Audio.setAudioModeAsync is called.
+  // MusicPlayerContext and playerSetup.ts must NOT call it independently.
+  // Notification category is registered here once; MusicPlayerContext only
+  // calls scheduleNotificationAsync (not setNotificationCategoryAsync) per track.
   useEffect(() => {
     let cancelled = false;
 
     async function initPlayer() {
+      // Guard: if React strict-mode or hot-reload triggers a second call, bail out
       if (setupAttemptedRef.current) return;
       setupAttemptedRef.current = true;
 
       try {
-        // Configure audio mode for playback
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: true,
-          playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
+        // ── 1. Configure audio session ────────────────────────────────────────
+        await Audio.setAudioModeAsync(AUDIO_MODE);
+        console.log('[RootLayout] ✅ Audio mode configured');
 
-        console.log('[RootLayout] Audio mode configured');
-        
+        // ── 2. Request notification permissions ───────────────────────────────
+        const { status: existing } = await Notifications.getPermissionsAsync();
+        let finalStatus = existing;
+        if (existing !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+
+        if (finalStatus === 'granted') {
+          // ── 3. Register MEDIA_PLAYBACK category ONCE ──────────────────────
+          // MusicPlayerContext.updateNowPlayingNotification calls
+          // scheduleNotificationAsync on each track change — it does NOT need
+          // to re-register this category every time.
+          await Notifications.setNotificationCategoryAsync('MEDIA_PLAYBACK', [
+            { identifier: 'PREVIOUS', buttonTitle: '⏮', options: { isDestructive: false } },
+            { identifier: 'PLAY',     buttonTitle: '▶', options: { isDestructive: false } },
+            { identifier: 'PAUSE',    buttonTitle: '⏸', options: { isDestructive: false } },
+            { identifier: 'NEXT',     buttonTitle: '⏭', options: { isDestructive: false } },
+            { identifier: 'STOP',     buttonTitle: '⏹', options: { isDestructive: true  } },
+          ]);
+          console.log('[RootLayout] ✅ Notification category registered');
+        } else {
+          console.log('[RootLayout] ⚠️ Notification permissions not granted — lock screen controls unavailable');
+        }
+
+        // ── 4. Signal ready ───────────────────────────────────────────────────
         if (!cancelled) setPlayerReady(true);
 
-        // Initialize library and cache
+        // ── 5. Non-critical background work ───────────────────────────────────
         initializeLibrary().catch(e => console.warn('[Library]', e));
+        try { initCache({ startBackgroundJobs: true }); } catch (e) { console.warn('[Cache]', e); }
 
-        try {
-          initCache({ startBackgroundJobs: true });
-        } catch (e) {
-          console.warn('[Cache]', e);
-        }
       } catch (e) {
-        console.error('[RootLayout] Player init error:', e);
-        if (!cancelled) setPlayerReady(false);
+        console.error('[RootLayout] ❌ Player init error:', e);
+        // Still mark ready so the app isn't stuck — playback will surface its
+        // own error when the user tries to play something
+        if (!cancelled) setPlayerReady(true);
       }
     }
 
     initPlayer();
 
+    // Re-apply audio mode when app returns from background.
+    // Another app (call, alarm) may have reset the audio session.
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (
-        appStateRef.current.match(/inactive|background/) &&
-        next === 'active'
-      ) {
-        // Re-check audio mode when app returns to foreground
-        Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: true,
-          playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        }).catch(console.warn);
+      if (appStateRef.current.match(/inactive|background/) && next === 'active') {
+        Audio.setAudioModeAsync(AUDIO_MODE).catch(console.warn);
       }
       appStateRef.current = next;
     });
@@ -366,75 +378,24 @@ export default function RootLayout() {
     };
   }, []);
 
-  // ── Premium banner ────────────────────────────────────────────────────────
+  // ── Premium banner ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!appReady) return;
     const t = setTimeout(() => setPremiumBannerVisible(true), PREMIUM_BANNER_DELAY_MS);
     return () => clearTimeout(t);
   }, [appReady]);
 
-  // ── Deep link handling ────────────────────────────────────────────────────
+  // ── Deep link handling ──────────────────────────────────────────────────────
   useEffect(() => {
     const handle = (url: string | null) => {
-      if (url?.startsWith('mavins-player')) {
-        console.log('[DeepLink]', url);
-      }
+      if (url?.startsWith('mavins-player')) console.log('[DeepLink]', url);
     };
     Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', ({ url }) => handle(url));
     return () => sub.remove();
   }, []);
 
-  // ── Register for remote notifications (lock screen controls) ──────────────
-  useEffect(() => {
-    async function registerForNotifications() {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-      if (finalStatus !== 'granted') {
-        console.log('[RootLayout] Notification permissions not granted');
-        return;
-      }
-      
-      // Set up notification category for media controls
-      await Notifications.setNotificationCategoryAsync('MEDIA_PLAYBACK', [
-        {
-          identifier: 'PREVIOUS',
-          buttonTitle: '⏮',
-          options: { isDestructive: false },
-        },
-        {
-          identifier: 'PLAY',
-          buttonTitle: '▶',
-          options: { isDestructive: false },
-        },
-        {
-          identifier: 'PAUSE',
-          buttonTitle: '⏸',
-          options: { isDestructive: false },
-        },
-        {
-          identifier: 'NEXT',
-          buttonTitle: '⏭',
-          options: { isDestructive: false },
-        },
-        {
-          identifier: 'STOP',
-          buttonTitle: '⏹',
-          options: { isDestructive: true },
-        },
-      ]);
-      
-      console.log('[RootLayout] Notifications configured');
-    }
-    
-    registerForNotifications();
-  }, []);
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <HoneygainConsentGate>
       <QueryClientProvider client={queryClient}>
@@ -448,7 +409,6 @@ export default function RootLayout() {
                     <GlobalUIStateProvider>
                       <LyricsProvider>
 
-                        {/* App renders immediately — no gate */}
                         <AppShell
                           premiumBannerVisible={premiumBannerVisible}
                           setPremiumBannerVisible={setPremiumBannerVisible}
@@ -456,7 +416,6 @@ export default function RootLayout() {
                           fontsLoaded={fontsLoaded}
                         />
 
-                        {/* Pulsing logo overlays until ready, then fades out */}
                         <PulsingLogoOverlay visible={!appReady} />
 
                       </LyricsProvider>

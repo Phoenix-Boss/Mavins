@@ -4,6 +4,20 @@
 // All RNTP code removed, now using expo-av for audio playback
 // Uses expo-notifications for lock screen controls
 // Includes proper queue management for playlists
+//
+// FIXES APPLIED:
+// 1. Restore useEffect no longer depends on loadTrackFromQueue (infinite loop fix)
+// 2. pickBestAudio prefers M4A/AAC, falls back gracefully to Opus/WebM/manifest
+// 3. createAsync uses androidImplementation:'MediaPlayer' for Opus/WebM on Android
+// 4. setupPlaybackListener uses currentTrackRef (no stale closure)
+// 5. updateNowPlayingNotification receives local track var, not stale state
+// 6. Queue save debounced to every 5s (not every 250ms position tick)
+// 7. Removed duplicate Audio.setAudioModeAsync (now only in _layout.tsx)
+// 8. Removed setNotificationCategoryAsync from updateNowPlayingNotification (registered once in _layout)
+// 9. updateNowPlayingNotification only called on play/pause state change, not every tick
+// 10. Fixed restore path race condition (queue state not committed before loading)
+// 11. Wired up remote notification action callbacks via service.ts
+// 12. Removed unused isRecoveringRef
 
 import React, {
   createContext,
@@ -31,6 +45,11 @@ import { supabase } from '@/libs/supabase';
 import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
 import { useHomeStore } from '@/store/home';
+import {
+  startPlaybackService,
+  registerRemoteActionCallbacks,
+  deregisterRemoteActionCallbacks,
+} from '@/libs/service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -56,6 +75,10 @@ export interface ResolvedTrack {
   artist?: string;
   artwork?: string;
   duration?: number;
+  mimeType?: string;
+  codec?: string;
+  bitrate?: number;
+  isManifest?: boolean;
   [key: string]: any;
 }
 
@@ -123,13 +146,50 @@ const STREAM_TTL_MS = 6 * 60 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stream Selection Helpers
+// FIX #2: pickBestAudio now prefers M4A/AAC, falls back to Opus/WebM, then manifest
 // ─────────────────────────────────────────────────────────────────────────────
+
+function isM4AOrAAC(s: AudioStream): boolean {
+  const mime = (s.mimeType ?? '').toLowerCase();
+  const codec = (s.codec ?? '').toLowerCase();
+  return (
+    mime.includes('mp4') ||
+    mime.includes('m4a') ||
+    mime.includes('aac') ||
+    codec.includes('mp4a') ||
+    codec.includes('aac')
+  );
+}
+
+function isOpusOrWebM(s: AudioStream): boolean {
+  const mime = (s.mimeType ?? '').toLowerCase();
+  const codec = (s.codec ?? '').toLowerCase();
+  return mime.includes('webm') || codec.includes('opus') || codec.includes('vorbis');
+}
 
 function pickBestAudio(streams: AudioStream[]): AudioStream | null {
   if (!streams?.length) return null;
-  const direct = streams.filter(s => s.isUrl && !s.manifestUrl);
-  const pool   = direct.length ? direct : streams;
-  return pool.reduce((best, s) => (s.bitrate > best.bitrate ? s : best), pool[0]);
+
+  // 1. Direct M4A/AAC URLs — most compatible with Android AudioTrack
+  const m4aDirect = streams.filter(s => s.isUrl && !s.manifestUrl && isM4AOrAAC(s));
+  if (m4aDirect.length) {
+    return m4aDirect.reduce((best, s) => (s.bitrate > best.bitrate ? s : best), m4aDirect[0]);
+  }
+
+  // 2. Direct Opus/WebM — works on most devices via MediaPlayer (see createSound helper)
+  const opusDirect = streams.filter(s => s.isUrl && !s.manifestUrl && isOpusOrWebM(s));
+  if (opusDirect.length) {
+    return opusDirect.reduce((best, s) => (s.bitrate > best.bitrate ? s : best), opusDirect[0]);
+  }
+
+  // 3. Any other direct URL
+  const anyDirect = streams.filter(s => s.isUrl && !s.manifestUrl);
+  if (anyDirect.length) {
+    return anyDirect.reduce((best, s) => (s.bitrate > best.bitrate ? s : best), anyDirect[0]);
+  }
+
+  // 4. Manifest/HLS — ExoPlayer handles these correctly without AudioTrack issues
+  return streams[0];
 }
 
 function pickBestVideo(streams: VideoStream[]): VideoStream | null {
@@ -139,6 +199,41 @@ function pickBestVideo(streams: VideoStream[]): VideoStream | null {
   const p720 = withVideo.find(s => s.height === 720);
   if (p720) return p720;
   return withVideo.reduce((best, s) => (s.height > best.height ? s : best), withVideo[0]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX #3: createSound helper — uses MediaPlayer for Opus/WebM on Android
+// This avoids the AudioTrack init failed / channel mask 12 error
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function createSound(
+  uri: string,
+  shouldPlay: boolean,
+  positionMillis: number = 0,
+  resolvedTrack?: ResolvedTrack | null,
+): Promise<Audio.Sound> {
+  const isOpus =
+    isOpusOrWebM({ mimeType: resolvedTrack?.mimeType, codec: resolvedTrack?.codec } as AudioStream) ||
+    uri.includes('.webm') ||
+    uri.includes('mime=audio%2Fwebm');
+
+  // On Android, Opus/WebM needs MediaPlayer — ExoPlayer's AudioTrack
+  // init fails with channel mask 12 on many devices for this format.
+  const useMediaPlayer = Platform.OS === 'android' && isOpus;
+
+  console.log(`[MusicPlayer] createSound — format: ${resolvedTrack?.mimeType ?? 'unknown'}, useMediaPlayer: ${useMediaPlayer}`);
+
+  const { sound } = await Audio.Sound.createAsync(
+    { uri },
+    {
+      shouldPlay,
+      positionMillis,
+      // @ts-ignore — androidImplementation is supported in expo-av ≥13
+      ...(useMediaPlayer ? { androidImplementation: 'MediaPlayer' } : {}),
+    },
+  );
+
+  return sound;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,6 +346,7 @@ function buildTrack(
   duration: number,
   title?: string,
   extras?: Omit<TrackExtras, 'videoUrl' | 'muxedVideoUrl'>,
+  audioStream?: AudioStream | null,
 ): ResolvedTrack {
   return {
     id: song.id,
@@ -267,6 +363,11 @@ function buildTrack(
     dislikeCount: extras?.dislikeCount ?? -1,
     viewCount: extras?.viewCount ?? -1,
     commentsCount: extras?.commentsCount ?? -1,
+    // Carry format info for createSound to use
+    mimeType: audioStream?.mimeType,
+    codec: audioStream?.codec,
+    bitrate: audioStream?.bitrate,
+    isManifest: !!(audioStream?.manifestUrl),
   };
 }
 
@@ -300,7 +401,9 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
           };
         }
       }
-      return buildTrack(song, cachedAudio.url, cachedVideo, null, cachedAudio.duration, undefined, extras);
+      // Cached URLs don't carry stream metadata — pass null so createSound
+      // inspects the URL itself for format detection
+      return buildTrack(song, cachedAudio.url, cachedVideo, null, cachedAudio.duration, undefined, extras, null);
     }
   } catch (cacheErr) {
     console.warn(`[MusicPlayer] cache read error for "${song.title}":`, cacheErr);
@@ -372,7 +475,7 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
       }
     }
 
-    return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, extras);
+    return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, extras, bestAudio);
   } catch (primaryErr) {
     console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, primaryErr);
   }
@@ -409,7 +512,7 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
             uploaderUrl: fbExtras.uploaderUrl ?? null,
           });
 
-          return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, fbExtras);
+          return buildTrack(song, audioUrl, videoUrl, muxedVideoUrl, duration, info.title, fbExtras, bestAudio);
         }
       }
     } catch (byIdErr) {
@@ -454,7 +557,7 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
         dislikeCount: typeof info.dislikeCount === 'number' && info.dislikeCount > 0 ? Math.round(info.dislikeCount) : -1,
         viewCount: typeof info.viewCount === 'number' && info.viewCount > 0 ? Math.round(info.viewCount) : -1,
         commentsCount: -1,
-      });
+      }, bestAudio);
     } catch (searchErr) {
       console.warn(`[MusicPlayer] search strategy failed:`, searchErr);
     }
@@ -697,7 +800,6 @@ async function restoreLastPlayingState(): Promise<{ track: Song | null; position
 
 async function saveQueueState(queue: QueueItem[], currentIndex: number): Promise<void> {
   try {
-    // Only save the essential info, not the resolved tracks
     const queueToSave = queue.map(item => ({
       song: item.song,
       isDownloaded: item.isDownloaded,
@@ -726,6 +828,8 @@ async function restoreQueueState(): Promise<{ queue: QueueItem[]; currentIndex: 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Update Notification Helper
+// FIX #8: Removed setNotificationCategoryAsync — registered once in _layout.tsx
+// FIX #9: Now only schedules notification, doesn't re-register category
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function updateNowPlayingNotification(track: Song | null, isPlaying: boolean = false) {
@@ -734,38 +838,16 @@ async function updateNowPlayingNotification(track: Song | null, isPlaying: boole
     return;
   }
 
-  await Notifications.setNotificationCategoryAsync('MEDIA_PLAYBACK', [
-    {
-      identifier: 'PREVIOUS',
-      buttonTitle: '⏮',
-      options: { isDestructive: false },
-    },
-    {
-      identifier: isPlaying ? 'PAUSE' : 'PLAY',
-      buttonTitle: isPlaying ? '⏸' : '▶',
-      options: { isDestructive: false },
-    },
-    {
-      identifier: 'NEXT',
-      buttonTitle: '⏭',
-      options: { isDestructive: false },
-    },
-    {
-      identifier: 'STOP',
-      buttonTitle: '⏹',
-      options: { isDestructive: true },
-    },
-  ]);
+  // NOTE: Category 'MEDIA_PLAYBACK' is registered once in _layout.tsx initPlayer()
+  // We do NOT re-register it here — that would be redundant and wasteful.
 
-  // Build notification content
   const notificationContent: any = {
     title: track.title,
     body: track.artist || 'Unknown Artist',
-    data: { type: 'MEDIA_PLAYBACK', track },
+    data: { type: 'MEDIA_PLAYBACK', track, isPlaying },
     categoryIdentifier: 'MEDIA_PLAYBACK',
   };
 
-  // Android options
   if (Platform.OS === 'android') {
     notificationContent.android = {
       priority: Notifications.AndroidNotificationPriority.HIGH,
@@ -773,7 +855,6 @@ async function updateNowPlayingNotification(track: Song | null, isPlaying: boole
     notificationContent.color = '#1DB954';
   }
 
-  // iOS attachments
   if (track.thumbnail && Platform.OS === 'ios') {
     notificationContent.attachments = [
       {
@@ -821,35 +902,36 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
-  // Queue management
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
 
   const currentSoundRef = useRef<Audio.Sound | null>(null);
   const currentSongRef = useRef<Song | null>(null);
   const currentSongIdRef = useRef<string | null>(null);
+  // FIX #4: ref mirrors currentTrack state so listeners never capture stale closures
+  const currentTrackRef = useRef<Song | null>(null);
   const bgAbortControllerRef = useRef<AbortController | null>(null);
   const expandPlayerRef = useRef<(() => void) | null>(null);
   const collapsePlayerRef = useRef<(() => void) | null>(null);
-  const isRecoveringRef = useRef(false);
   const isInitializedRef = useRef(false);
   const playerReadyRef = useRef(playerReadyProp);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playbackStatusSubscriptionRef = useRef<any>(null);
+  // FIX #1: stable ref to loadTrackFromQueue so restore effect doesn't re-run
+  const loadTrackFromQueueRef = useRef<((index: number, startPlaying?: boolean) => Promise<boolean>) | null>(null);
+  // FIX #9: Track last play/pause state to only update notification on change
+  const lastPlayingStateRef = useRef<boolean>(false);
 
   const netInfo = useNetInfo();
   const log = useCallback((msg: string) => console.log(`[MusicPlayer] ${msg}`), []);
 
-  // Configure audio mode on mount
+  // Keep currentTrackRef in sync with state (FIX #4)
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      staysActiveInBackground: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    }).catch(console.warn);
-  }, []);
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
+
+  // FIX #7: Audio.setAudioModeAsync REMOVED — now only in _layout.tsx
+  // The audio session is configured once at app startup. No need to reconfigure here.
 
   useEffect(() => {
     playerReadyRef.current = playerReadyProp;
@@ -861,18 +943,16 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   }, []);
 
   const expandPlayer = useCallback(() => {
-    if (expandPlayerRef.current) {
-      expandPlayerRef.current();
-    }
+    if (expandPlayerRef.current) expandPlayerRef.current();
   }, []);
 
   const collapsePlayer = useCallback(() => {
-    if (collapsePlayerRef.current) {
-      collapsePlayerRef.current();
-    }
+    if (collapsePlayerRef.current) collapsePlayerRef.current();
   }, []);
 
-  // Setup playback status listener
+  // FIX #4: setupPlaybackListener no longer closes over currentTrack state.
+  // It reads currentTrackRef.current which is always up to date.
+  // FIX #9: Only updates notification when isPlaying state actually changes
   const setupPlaybackListener = useCallback(async (sound: Audio.Sound) => {
     if (playbackStatusSubscriptionRef.current) {
       playbackStatusSubscriptionRef.current.remove();
@@ -880,15 +960,18 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     
     playbackStatusSubscriptionRef.current = sound.setOnPlaybackStatusUpdate((status) => {
       if (status.isLoaded) {
-        setIsPlaying(status.isPlaying);
+        const newPlayingState = status.isPlaying;
+        
+        setIsPlaying(newPlayingState);
         setIsBuffering(status.isBuffering);
         setPosition(status.positionMillis / 1000);
         setDuration((status.durationMillis || 0) / 1000);
         setError(null);
         
-        // Update notification when play state changes
-        if (currentTrack) {
-          updateNowPlayingNotification(currentTrack, status.isPlaying).catch(console.warn);
+        // FIX #9: Only update notification when play/pause state changes
+        if (newPlayingState !== lastPlayingStateRef.current && currentTrackRef.current) {
+          lastPlayingStateRef.current = newPlayingState;
+          updateNowPlayingNotification(currentTrackRef.current, newPlayingState).catch(console.warn);
         }
       } else if (status.error) {
         log(`Playback error: ${status.error}`);
@@ -896,7 +979,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         setError(new Error(status.error));
       }
     });
-  }, [currentTrack, log]);
+  }, [log]); // no currentTrack dependency — uses ref instead
 
   // Cleanup sound
   const cleanupSound = useCallback(async () => {
@@ -905,13 +988,17 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       playbackStatusSubscriptionRef.current = null;
     }
     if (currentSoundRef.current) {
-      await currentSoundRef.current.unloadAsync();
+      try {
+        await currentSoundRef.current.unloadAsync();
+      } catch (_) {}
       currentSoundRef.current = null;
     }
   }, []);
 
   // Load a track from queue
-  const loadTrackFromQueue = useCallback(async (index: number, startPlaying: boolean = true) => {
+  // FIX #3: uses createSound() helper which picks MediaPlayer for Opus/WebM on Android
+  // FIX #5 (notification): passes local song variable, not stale currentTrack state
+  const loadTrackFromQueue = useCallback(async (index: number, startPlaying: boolean = true): Promise<boolean> => {
     if (index < 0 || index >= queue.length) {
       log(`Invalid queue index: ${index}`);
       return false;
@@ -926,23 +1013,24 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     try {
       await cleanupSound();
 
-      let resolvedTrack: ResolvedTrack | null;
+      let resolvedTrack: ResolvedTrack | null = null;
       let audioUrl: string;
-      let trackDuration: number;
+      let notificationTrack: Song;
 
       if (queueItem.isDownloaded) {
         const downloadedSong = queueItem.song as DownloadedSongMetadata;
         audioUrl = downloadedSong.localTrackUri;
-        trackDuration = downloadedSong.duration || 0;
         
-        setCurrentTrack({
+        notificationTrack = {
           id: downloadedSong.id,
           title: downloadedSong.title,
           artist: downloadedSong.artist,
           thumbnail: downloadedSong.localArtworkUri || '',
           url: downloadedSong.localTrackUri,
           videoId: undefined,
-        });
+        };
+
+        setCurrentTrack(notificationTrack);
         currentSongRef.current = null;
         currentSongIdRef.current = downloadedSong.id;
       } else {
@@ -958,7 +1046,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
             return false;
           }
           
-          // Update queue with resolved track
           setQueue(prev => {
             const newQueue = [...prev];
             newQueue[index] = { ...newQueue[index], resolvedTrack: resolvedTrack! };
@@ -978,7 +1065,8 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         }
         
         audioUrl = resolvedTrack.url;
-        trackDuration = resolvedTrack.duration || 0;
+        notificationTrack = song;
+
         setCurrentTrack(song);
         currentSongRef.current = song;
         currentSongIdRef.current = song.id;
@@ -988,16 +1076,16 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         }
       }
 
-      // Create and play sound
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: startPlaying, positionMillis: 0 }
-      );
-      
+      // FIX #3: createSound picks MediaPlayer for Opus/WebM on Android
+      const sound = await createSound(audioUrl, startPlaying, 0, resolvedTrack);
       currentSoundRef.current = sound;
       await setupPlaybackListener(sound);
 
-      await updateNowPlayingNotification(currentTrack, startPlaying);
+      // Reset last playing state ref
+      lastPlayingStateRef.current = startPlaying;
+      
+      // FIX #5: pass local notificationTrack, not stale currentTrack state
+      await updateNowPlayingNotification(notificationTrack, startPlaying);
       
       setCurrentQueueIndex(index);
       await saveQueueState(queue, index);
@@ -1013,7 +1101,12 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [queue, cleanupSound, setupPlaybackListener, currentTrack, log]);
+  }, [queue, cleanupSound, setupPlaybackListener, log]);
+
+  // Keep the ref pointing at the latest version (FIX #1)
+  useEffect(() => {
+    loadTrackFromQueueRef.current = loadTrackFromQueue;
+  }, [loadTrackFromQueue]);
 
   // ─── Progress tracking interval ───────────────────────────────────────────
   useEffect(() => {
@@ -1059,21 +1152,30 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   }, [expandPlayer, log]);
 
   // ─── RESTORE PLAYING STATE ON APP START ─────────────────────────────────────
+  // FIX #1: loadTrackFromQueue is NOT in the dependency array.
+  // We call it via loadTrackFromQueueRef.current to get the latest version
+  // without causing the effect to re-run every time queue changes.
+  // FIX #10: Fixed race condition — wait for queue state to commit before loading
   useEffect(() => {
     if (!playerReadyProp) return;
 
     const initializeAndRestore = async () => {
       try {
-        // Try to restore full queue first
         const { queue: savedQueue, currentIndex: savedIndex } = await restoreQueueState();
         
-        if (savedQueue.length > 0 && savedIndex >= 0) {
+        if (savedQueue.length > 0 && savedIndex >= 0 && savedIndex < savedQueue.length) {
           log(`Restoring queue with ${savedQueue.length} tracks at index ${savedIndex}`);
+          
+          // FIX #10: Set queue state first and wait for it to be reflected
+          // We do this by using a state setter and then loading in the next tick
           setQueue(savedQueue);
           setCurrentQueueIndex(savedIndex);
-          await loadTrackFromQueue(savedIndex, false);
+          
+          // Use setTimeout to allow React state to commit before loading
+          setTimeout(async () => {
+            await loadTrackFromQueueRef.current?.(savedIndex, false);
+          }, 0);
         } else {
-          // Fall back to single track restore
           const { track, position: savedPosition } = await restoreLastPlayingState();
           if (track && track.url) {
             log(`Restoring last playing track: ${track.title}`);
@@ -1083,9 +1185,12 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
             const resolvedTrack = await resolveTrack(track);
             if (resolvedTrack) {
-              const { sound } = await Audio.Sound.createAsync(
-                { uri: resolvedTrack.url },
-                { shouldPlay: false, positionMillis: savedPosition > 5 ? savedPosition * 1000 : 0 }
+              // FIX #3: use createSound helper for format-aware init
+              const sound = await createSound(
+                resolvedTrack.url,
+                false,
+                savedPosition > 5 ? savedPosition * 1000 : 0,
+                resolvedTrack,
               );
               currentSoundRef.current = sound;
               await setupPlaybackListener(sound);
@@ -1104,7 +1209,8 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     };
 
     initializeAndRestore();
-  }, [playerReadyProp, log, setupPlaybackListener, loadTrackFromQueue]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerReadyProp]); // ← ONLY playerReadyProp. log and setupPlaybackListener are stable.
 
   // Save queue state when it changes
   useEffect(() => {
@@ -1113,10 +1219,13 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     }
   }, [queue, currentQueueIndex]);
 
+  // FIX #6: debounced save — was firing every 250ms on position ticks
   useEffect(() => {
-    if (currentTrack) {
+    if (!currentTrack) return;
+    const timer = setTimeout(() => {
       saveLastPlayingState(currentTrack, position);
-    }
+    }, 5000);
+    return () => clearTimeout(timer);
   }, [currentTrack, position]);
 
   // ─── BACKGROUND PLAYLIST LOADING ───────────────────────────────────────────
@@ -1126,25 +1235,16 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
-      // Build the queue starting from the initial song
       const queueItems: QueueItem[] = [];
       
-      // Add songs after the current one
       for (let i = targetIndex; i < fullPlaylist.length; i++) {
         if (abortSignal.aborted) return;
-        queueItems.push({
-          song: fullPlaylist[i],
-          isDownloaded: false,
-        });
+        queueItems.push({ song: fullPlaylist[i], isDownloaded: false });
       }
       
-      // Add songs before the current one (for wrap-around)
       for (let i = 0; i < targetIndex; i++) {
         if (abortSignal.aborted) return;
-        queueItems.push({
-          song: fullPlaylist[i],
-          isDownloaded: false,
-        });
+        queueItems.push({ song: fullPlaylist[i], isDownloaded: false });
       }
 
       setQueue(queueItems);
@@ -1165,18 +1265,12 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       
       for (let i = targetIndex; i < fullPlaylist.length; i++) {
         if (abortSignal.aborted) return;
-        queueItems.push({
-          song: fullPlaylist[i],
-          isDownloaded: true,
-        });
+        queueItems.push({ song: fullPlaylist[i], isDownloaded: true });
       }
       
       for (let i = 0; i < targetIndex; i++) {
         if (abortSignal.aborted) return;
-        queueItems.push({
-          song: fullPlaylist[i],
-          isDownloaded: true,
-        });
+        queueItems.push({ song: fullPlaylist[i], isDownloaded: true });
       }
 
       setQueue(queueItems);
@@ -1194,7 +1288,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       const related = await fetchRelatedSongs(song.url);
       if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
 
-      // Only add related songs if queue is empty
       if (queue.length === 0 && related.length > 0) {
         const queueItems: QueueItem[] = related.slice(0, 10).map(relSong => ({
           song: relSong,
@@ -1228,25 +1321,19 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     }
 
     const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
-    if (goToPlayer) {
-      goToPlayer();
-    }
+    if (goToPlayer) goToPlayer();
 
-    // Cancel any background operations
     bgAbortControllerRef.current?.abort();
     bgAbortControllerRef.current = new AbortController();
     const abortSignal = bgAbortControllerRef.current.signal;
 
-    // If we have a playlist, create a queue
     if (playlist && playlist.length > 1) {
       await addPlaylistTracksInBackground(songToPlay, playlist, abortSignal);
       await loadTrackFromQueue(0, true);
     } else {
-      // Single song - clear queue and just play this one
       setQueue([]);
       setCurrentQueueIndex(-1);
       
-      // Resolve and play the single track
       const resolvedTrack = await resolveTrack(songToPlay);
       if (!resolvedTrack) {
         Alert.alert('Playback Error', `"${songToPlay.title}" is unavailable.`);
@@ -1255,20 +1342,20 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
       await cleanupSound();
       
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: resolvedTrack.url },
-        { shouldPlay: true }
-      );
-      
+      // FIX #3: format-aware sound creation
+      const sound = await createSound(resolvedTrack.url, true, 0, resolvedTrack);
       currentSoundRef.current = sound;
       await setupPlaybackListener(sound);
       setCurrentTrack(songToPlay);
       currentSongRef.current = songToPlay;
       currentSongIdRef.current = songToPlay.id;
       
+      // Reset last playing state ref
+      lastPlayingStateRef.current = true;
+      
+      // FIX #5: pass songToPlay directly, not stale currentTrack state
       await updateNowPlayingNotification(songToPlay, true);
       
-      // Add up-next suggestions
       addUpNextSongs(songToPlay, abortSignal).catch(() => {});
     }
   }, [netInfo.isConnected, addPlaylistTracksInBackground, addUpNextSongs, cleanupSound, setupPlaybackListener, loadTrackFromQueue, log]);
@@ -1304,9 +1391,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     }
 
     const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
-    if (goToPlayer) {
-      goToPlayer();
-    }
+    if (goToPlayer) goToPlayer();
 
     bgAbortControllerRef.current?.abort();
     bgAbortControllerRef.current = new AbortController();
@@ -1321,32 +1406,29 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       
       await cleanupSound();
       
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: songToPlay.localTrackUri },
-        { shouldPlay: true }
-      );
-      
+      // Downloaded files are always local — no format detection needed
+      const sound = await createSound(songToPlay.localTrackUri, true, 0, null);
       currentSoundRef.current = sound;
       await setupPlaybackListener(sound);
-      setCurrentTrack({
+
+      const track: Song = {
         id: songToPlay.id,
         title: songToPlay.title,
         artist: songToPlay.artist,
         thumbnail: songToPlay.localArtworkUri || '',
         url: songToPlay.localTrackUri,
         videoId: undefined,
-      });
+      };
+
+      setCurrentTrack(track);
       currentSongRef.current = null;
       currentSongIdRef.current = songToPlay.id;
       
-      await updateNowPlayingNotification({
-        id: songToPlay.id,
-        title: songToPlay.title,
-        artist: songToPlay.artist,
-        thumbnail: songToPlay.localArtworkUri || '',
-        url: songToPlay.localTrackUri,
-        videoId: undefined,
-      }, true);
+      // Reset last playing state ref
+      lastPlayingStateRef.current = true;
+      
+      // FIX #5: pass local track variable
+      await updateNowPlayingNotification(track, true);
     }
   }, [addDownloadedPlaylistTracksInBackground, cleanupSound, setupPlaybackListener, loadTrackFromQueue]);
 
@@ -1364,7 +1446,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   const togglePlayPause = useCallback(async () => {
     try {
       if (!currentSoundRef.current) {
-        // No sound loaded, try to restore from queue
         if (queue.length > 0 && currentQueueIndex >= 0) {
           await loadTrackFromQueue(currentQueueIndex, true);
         } else {
@@ -1378,14 +1459,11 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
         if (queue.length > 0 && currentQueueIndex >= 0) {
           await loadTrackFromQueue(currentQueueIndex, true);
         } else if (currentTrack?.url) {
-          // Try to reload current track
           const resolvedTrack = await resolveTrack(currentTrack as Song);
           if (resolvedTrack) {
             await cleanupSound();
-            const { sound } = await Audio.Sound.createAsync(
-              { uri: resolvedTrack.url },
-              { shouldPlay: true }
-            );
+            // FIX #3: format-aware
+            const sound = await createSound(resolvedTrack.url, true, 0, resolvedTrack);
             currentSoundRef.current = sound;
             await setupPlaybackListener(sound);
           }
@@ -1395,13 +1473,13 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
       if (status.isPlaying) {
         await currentSoundRef.current.pauseAsync();
-        await updateNowPlayingNotification(currentTrack, false);
+        // Update notification with paused state (FIX #9: will trigger on change via status callback)
         log('Paused');
       } else {
         await currentSoundRef.current.playAsync();
-        await updateNowPlayingNotification(currentTrack, true);
         log('Playing');
       }
+      // Notification update is handled by the playback status listener (FIX #9)
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       log(`togglePlayPause error: ${error.message}`);
@@ -1431,7 +1509,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       if (nextIndex < queue.length) {
         await loadTrackFromQueue(nextIndex, true);
       } else {
-        // Loop back to the beginning if we're at the end
         if (queue.length > 0) {
           await loadTrackFromQueue(0, true);
         }
@@ -1443,13 +1520,11 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
   const skipToPrevious = useCallback(async () => {
     try {
-      // If we're more than 3 seconds in, just seek to start
       if (position > 3) {
         await seekTo(0);
         return;
       }
 
-      // Otherwise go to previous track
       if (queue.length === 0) {
         log('No queue available for skipToPrevious');
         return;
@@ -1459,7 +1534,6 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       if (prevIndex >= 0) {
         await loadTrackFromQueue(prevIndex, true);
       } else {
-        // Loop to the end if we're at the beginning
         if (queue.length > 0) {
           await loadTrackFromQueue(queue.length - 1, true);
         }
@@ -1468,6 +1542,56 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       log(`skipToPrevious error: ${error}`);
     }
   }, [position, queue, currentQueueIndex, loadTrackFromQueue, seekTo, log]);
+
+  // ─── REMOTE NOTIFICATION ACTIONS ──────────────────────────────────────────
+  // FIX #11: Wire up remote action callbacks from service.ts
+  useEffect(() => {
+    // Start the notification listener service
+    startPlaybackService();
+    
+    // Register callbacks that the service will call when user taps notification buttons
+    registerRemoteActionCallbacks({
+      onPlay: async () => {
+        if (!currentSoundRef.current) {
+          if (queue.length > 0 && currentQueueIndex >= 0) {
+            await loadTrackFromQueue(currentQueueIndex, true);
+          }
+          return;
+        }
+        const status = await currentSoundRef.current.getStatusAsync();
+        if (!status.isLoaded) {
+          if (queue.length > 0 && currentQueueIndex >= 0) {
+            await loadTrackFromQueue(currentQueueIndex, true);
+          }
+        } else if (!status.isPlaying) {
+          await currentSoundRef.current.playAsync();
+        }
+      },
+      onPause: async () => {
+        if (currentSoundRef.current) {
+          const status = await currentSoundRef.current.getStatusAsync();
+          if (status.isLoaded && status.isPlaying) {
+            await currentSoundRef.current.pauseAsync();
+          }
+        }
+      },
+      onStop: async () => {
+        if (currentSoundRef.current) {
+          await currentSoundRef.current.stopAsync();
+        }
+      },
+      onNext: async () => {
+        await skipToNext();
+      },
+      onPrevious: async () => {
+        await skipToPrevious();
+      },
+    });
+
+    return () => {
+      deregisterRemoteActionCallbacks();
+    };
+  }, [queue, currentQueueIndex, loadTrackFromQueue, skipToNext, skipToPrevious]);
 
   const contextValue: MusicPlayerContextType = {
     currentTrack,

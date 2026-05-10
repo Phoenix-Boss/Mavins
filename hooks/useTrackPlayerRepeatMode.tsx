@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useMusicPlayer } from '@/components/MusicPlayerContext';
-import { useTrackPlayerEvents, Event } from './useTrackPlayerEvents';
+import { useTrackPlayerEvents, Event } from './useTrackPlayerEvent';
 
 // RNTP-compatible RepeatMode enum
 export enum RepeatMode {
