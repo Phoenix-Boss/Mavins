@@ -1,9 +1,13 @@
-// app/(library)/favorites.tsx
+// app/(library)/mostPlayed.tsx
 /**
- * FavoritesScreen - expo-av version
+ * MostPlayedScreen
  *
- * Displays songs the user has hearted/liked — both streamed and local.
- * Uses useActiveTrack and useLastActiveTrack from expo-av hooks.
+ * Displays songs ranked by play count — highest first.
+ * - Ranked list with play-count badge
+ * - Sort: Most Played · A–Z · Artist
+ * - Shuffle all + Play All FAB
+ * - Individual song options menu
+ * - Active playback indicator
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -11,9 +15,7 @@ import { Colors } from "@/constants/Colors";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
 import { useActiveTrack } from "@/hooks/useActiveTrack";
-import { useFavorites } from "@/store/library";
-import type { Song as LibrarySong } from "@/store/library";
-import type { Song } from "@/types/song";
+import { useMostPlayed } from "@/store/library";
 import { defaultStyles } from "@/styles";
 import { Image as ExpoImage } from "expo-image";
 import { Entypo, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -27,13 +29,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   ScaledSheet,
   moderateScale,
-  scale,
   verticalScale,
+  scale,
 } from "react-native-size-matters/extend";
+import type { Song as LibrarySong } from "@/store/library";
+import type { Song } from "@/types/song";
 
 // ─── Sort options ───────────────────────────────────────────────────────────
 
-const SORT_OPTIONS = ["Recent", "A–Z", "Artist"] as const;
+const SORT_OPTIONS = ["Most Played", "A–Z", "Artist"] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
 
 // ─── Typed FlashList wrapper ─────────────────────────────────────────────────
@@ -46,42 +50,47 @@ const TypedFlashList = FlashList as React.ComponentType<
 >;
 
 // ─── Normalise store Song → types/song.Song ──────────────────────────────────
-// library.Song:    url?: string, thumbnail?: string  (both optional)
-// types/song.Song: url:  string, thumbnail:  string  (both required)
+// store/library.Song:  thumbnail?: string  (optional)
+// types/song.Song:     thumbnail:  string  (required)
+// Coerce undefined → "" so playAudio / playPlaylist are satisfied.
 
 const toPlayerSong = (s: LibrarySong): Song => ({
   id:        s.id,
   title:     s.title,
   artist:    s.artist,
   thumbnail: s.thumbnail ?? "",
-  url:       s.url       ?? "",
+  url:       s.url,
   videoId:   undefined,
   videoUrl:  undefined,
   duration:  s.duration,
 });
 
-// ─── FavoritesScreen ────────────────────────────────────────────────────────
+// ─── MostPlayedScreen ────────────────────────────────────────────────────────
 
-const FavoritesScreen = () => {
+const MostPlayedScreen = () => {
   const [isScrolling, setIsScrolling] = useState<boolean>(false);
-  const [activeSort, setActiveSort] = useState<SortOption>("Recent");
+  const [activeSort, setActiveSort] = useState<SortOption>("Most Played");
+
   const { top, bottom } = useSafeAreaInsets();
   const { playAudio, playPlaylist } = useMusicPlayer();
   const lastActiveTrack = useLastActiveTrack();
   const activeTrack = useActiveTrack();
   const router = useRouter();
 
-  // useFavorites returns { favoriteTracks: LibrarySong[] }
-  const { favoriteTracks } = useFavorites();
+  // useMostPlayed returns LibrarySong[] directly — no destructuring
+  const mostPlayedTracks = useMostPlayed();
 
   const isFloatingPlayerNotVisible = !(activeTrack ?? lastActiveTrack);
 
+  // Sort tracks based on active sort option
   const sortedTracks = useMemo<LibrarySong[]>(() => {
-    const copy = [...favoriteTracks];
-    if (activeSort === "A–Z")    return copy.sort((a, b) => a.title.localeCompare(b.title));
-    if (activeSort === "Artist") return copy.sort((a, b) => a.artist.localeCompare(b.artist));
-    return copy; // "Recent" — keep insertion order
-  }, [favoriteTracks, activeSort]);
+    const copy = [...mostPlayedTracks];
+    if (activeSort === "A–Z")
+      return copy.sort((a, b) => a.title.localeCompare(b.title));
+    if (activeSort === "Artist")
+      return copy.sort((a, b) => a.artist.localeCompare(b.artist));
+    return copy.sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0));
+  }, [mostPlayedTracks, activeSort]);
 
   const handleSongSelect = useCallback(
     (song: LibrarySong) => {
@@ -134,18 +143,39 @@ const FavoritesScreen = () => {
         {SORT_OPTIONS.map((opt) => (
           <TouchableOpacity
             key={opt}
-            style={[styles.sortPill, activeSort === opt && styles.sortPillActive]}
-            onPress={() => { triggerHaptic(); setActiveSort(opt); }}
+            style={[
+              styles.sortPill,
+              activeSort === opt && styles.sortPillActive,
+            ]}
+            onPress={() => {
+              triggerHaptic();
+              setActiveSort(opt);
+            }}
             activeOpacity={0.7}
           >
-            <Text style={[styles.sortText, activeSort === opt && styles.sortTextActive]}>{opt}</Text>
+            <Text
+              style={[
+                styles.sortText,
+                activeSort === opt && styles.sortTextActive,
+              ]}
+            >
+              {opt}
+            </Text>
           </TouchableOpacity>
         ))}
 
         {/* Shuffle action */}
         {sortedTracks.length > 1 && (
-          <TouchableOpacity style={styles.sortPill} onPress={handleShuffleAll} activeOpacity={0.7}>
-            <MaterialCommunityIcons name="shuffle-variant" size={moderateScale(14)} color="#888" />
+          <TouchableOpacity
+            style={styles.sortPill}
+            onPress={handleShuffleAll}
+            activeOpacity={0.7}
+          >
+            <MaterialCommunityIcons
+              name="shuffle-variant"
+              size={moderateScale(14)}
+              color="#888"
+            />
           </TouchableOpacity>
         )}
       </View>
@@ -153,7 +183,8 @@ const FavoritesScreen = () => {
       {/* Track count */}
       {sortedTracks.length > 0 && (
         <Text style={styles.trackCount}>
-          {sortedTracks.length} {sortedTracks.length === 1 ? "Song" : "Songs"}
+          {sortedTracks.length}{" "}
+          {sortedTracks.length === 1 ? "Song" : "Songs"}
         </Text>
       )}
     </>
@@ -162,10 +193,39 @@ const FavoritesScreen = () => {
   // ─── Render item ──────────────────────────────────────────────────────────
 
   const renderItem = useCallback(
-    ({ item }: { item: LibrarySong }) => {
+    ({ item, index }: { item: LibrarySong; index: number }) => {
       const isPlaying = activeTrack?.id === item.id;
+      const rank = index + 1;
+      const showTopBadge = activeSort === "Most Played" && rank <= 3;
+
+      const badgeColors: Record<number, string> = {
+        1: "#D4AF37",
+        2: "#A8A9AD",
+        3: "#CD7F32",
+      };
+
       return (
         <View style={styles.songItem}>
+          {/* Rank badge */}
+          <View
+            style={[
+              styles.rankBadge,
+              showTopBadge && {
+                backgroundColor: badgeColors[rank] + "22",
+                borderColor: badgeColors[rank] + "55",
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.rankText,
+                showTopBadge && { color: badgeColors[rank] },
+              ]}
+            >
+              {rank}
+            </Text>
+          </View>
+
           <TouchableOpacity
             style={styles.songItemTouchableArea}
             onPress={() => handleSongSelect(item)}
@@ -185,7 +245,13 @@ const FavoritesScreen = () => {
               />
             )}
             <View style={styles.resultText}>
-              <Text style={[styles.resultTitle, isPlaying && styles.resultTitleActive]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.resultTitle,
+                  isPlaying && styles.resultTitleActive,
+                ]}
+                numberOfLines={1}
+              >
                 {item.title}
               </Text>
               <Text style={styles.resultArtist} numberOfLines={1}>
@@ -194,24 +260,40 @@ const FavoritesScreen = () => {
             </View>
           </TouchableOpacity>
 
+          {/* Play count pill */}
+          {item.playCount != null && item.playCount > 0 && (
+            <View style={styles.playCountPill}>
+              <MaterialCommunityIcons
+                name="play-circle-outline"
+                size={moderateScale(11)}
+                color="#666"
+              />
+              <Text style={styles.playCountText}>{item.playCount}</Text>
+            </View>
+          )}
+
           {/* Options menu button */}
           <TouchableOpacity
             onPress={() => handleOpenMenu(item)}
             hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+            style={{ marginLeft: 8 }}
           >
-            <Entypo name="dots-three-vertical" size={moderateScale(15)} color="white" />
+            <Entypo
+              name="dots-three-vertical"
+              size={moderateScale(15)}
+              color="white"
+            />
           </TouchableOpacity>
         </View>
       );
     },
-    [handleSongSelect, handleOpenMenu, activeTrack],
+    [handleSongSelect, handleOpenMenu, activeTrack, activeSort],
   );
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <View style={defaultStyles.container}>
-
       {/* Header */}
       <View style={[styles.header, { paddingTop: top }]}>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -219,29 +301,40 @@ const FavoritesScreen = () => {
             name="arrow-left"
             size={moderateScale(25)}
             color={Colors.text}
-            onPress={() => { triggerHaptic(); router.back(); }}
+            onPress={() => {
+              triggerHaptic();
+              router.back();
+            }}
             style={{ marginRight: 10 }}
           />
-          <Text style={styles.headerText}>Favourites</Text>
+          <Text style={styles.headerText}>Most Played</Text>
         </View>
 
-        {/* Play all button in header when there are tracks */}
         {sortedTracks.length > 0 && (
-          <TouchableOpacity style={styles.headerPlayBtn} onPress={handlePlayAll} activeOpacity={0.8}>
-            <MaterialCommunityIcons name="play" size={moderateScale(18)} color="#000" />
+          <TouchableOpacity
+            style={styles.headerPlayBtn}
+            onPress={handlePlayAll}
+            activeOpacity={0.8}
+          >
+            <MaterialCommunityIcons
+              name="play"
+              size={moderateScale(18)}
+              color="#000"
+            />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Divider on scroll */}
       {isScrolling && (
-        <Divider style={{ backgroundColor: "rgba(255,255,255,0.3)", height: 0.3 }} />
+        <Divider
+          style={{ backgroundColor: "rgba(255,255,255,0.3)", height: 0.3 }}
+        />
       )}
 
       <TypedFlashList
         data={sortedTracks}
         renderItem={renderItem}
-        extraData={activeTrack}
+        extraData={[activeTrack, activeSort]}
         keyExtractor={(item) => item.id}
         estimatedItemSize={75}
         contentContainerStyle={{
@@ -256,17 +349,22 @@ const FavoritesScreen = () => {
         ListHeaderComponent={ListHeader}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <MaterialCommunityIcons name="heart-outline" size={moderateScale(52)} color="rgba(212,175,55,0.35)" />
-            <Text style={styles.emptyTitle}>No favourites yet</Text>
+            <MaterialCommunityIcons
+              name="chart-bar"
+              size={moderateScale(52)}
+              color="rgba(212,175,55,0.35)"
+            />
+            <Text style={styles.emptyTitle}>Nothing played yet</Text>
             <Text style={styles.emptySub}>
-              Heart songs from the streaming feed or your local library to find them here.
+              Start listening and your most-played songs will appear here.
             </Text>
           </View>
         }
         ListFooterComponent={
           sortedTracks.length > 0 ? (
             <Text style={styles.footerText}>
-              {sortedTracks.length} {sortedTracks.length === 1 ? "Track" : "Tracks"}
+              {sortedTracks.length}{" "}
+              {sortedTracks.length === 1 ? "Track" : "Tracks"}
             </Text>
           ) : null
         }
@@ -279,7 +377,8 @@ const FavoritesScreen = () => {
             styles.fab,
             {
               marginBottom:
-                (isFloatingPlayerNotVisible ? 60 : moderateScale(138)) + bottom,
+                (isFloatingPlayerNotVisible ? 60 : moderateScale(138)) +
+                bottom,
             },
           ]}
           theme={{ roundness: 1 }}
@@ -295,7 +394,7 @@ const FavoritesScreen = () => {
   );
 };
 
-export default FavoritesScreen;
+export default MostPlayedScreen;
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
@@ -352,8 +451,24 @@ const styles = ScaledSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: "10@ms",
-    paddingLeft: 20,
-    paddingRight: 30,
+    paddingLeft: 15,
+    paddingRight: 20,
+  },
+  rankBadge: {
+    width: "28@ms",
+    height: "28@ms",
+    borderRadius: "8@ms",
+    backgroundColor: "transparent",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  rankText: {
+    fontSize: "12@ms",
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.25)",
   },
   songItemTouchableArea: {
     flexDirection: "row",
@@ -378,6 +493,23 @@ const styles = ScaledSheet.create({
   resultTitle: { color: Colors.text, fontSize: "16@ms" },
   resultTitleActive: { color: "#D4AF37" },
   resultArtist: { color: Colors.textMuted, fontSize: "14@ms" },
+  playCountPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "3@s",
+    paddingHorizontal: "7@s",
+    paddingVertical: "4@vs",
+    borderRadius: "10@ms",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.06)",
+    marginRight: 6,
+  },
+  playCountText: {
+    fontSize: "11@ms",
+    color: "#555",
+    fontWeight: "600",
+  },
   emptyContainer: {
     flex: 1,
     alignItems: "center",

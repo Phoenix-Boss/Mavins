@@ -1,16 +1,15 @@
 // components/player/PlayerControls.tsx
 /**
- * PlayerControls.tsx
+ * PlayerControls.tsx - expo-av version
  * 
  * Uses playerStore.setIsPlaying() for INSTANT UI feedback
- * 
- * CONVERTED: Now uses react-native-track-player strictly instead of mavin-eq
+ * All RNTP calls replaced with MusicPlayerContext methods
  */
 
 import { Colors } from "@/constants/Colors";
 import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
-import { useTrackPlayerRepeatMode } from "@/hooks/useTrackPlayerRepeatMode";
+import { useTrackPlayerRepeatMode, RepeatMode } from "@/hooks/useTrackPlayerRepeatMode";
 import { downloadAndSaveSong } from "@/services/download";
 import { useIsSongDownloaded, useIsSongDownloading } from "@/store/library";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -29,11 +28,6 @@ import {
 } from "react-native";
 import { moderateScale } from "react-native-size-matters/extend";
 
-// RNTP imports - replacing mavin-eq
-import TrackPlayer, {
-  RepeatMode,
-  useActiveTrack,
-} from "react-native-track-player";
 import { match } from "ts-pattern";
 
 export type PlayerControlsProps = {
@@ -83,7 +77,7 @@ export const PlayPauseButton = ({
   iconSize = moderateScale(65),
   isFloatingPlayer = false,
 }: PlayerButtonProps) => {
-  const { togglePlayPause, isPlaying: contextIsPlaying } = useMusicPlayer();
+  const { togglePlayPause, isPlaying: contextIsPlaying, isLoading, currentTrack } = useMusicPlayer();
   
   // ═══════════════════════════════════════════════════════════════════════════
   // INSTANT UI: Use playerStore for immediate state updates
@@ -115,6 +109,11 @@ export const PlayPauseButton = ({
   const handlePress = useCallback(() => {
     triggerHaptic();
     
+    // Don't allow play/pause if no track is loaded
+    if (!currentTrack && !storeIsPlaying) {
+      return;
+    }
+    
     // Enter dumb mode
     dumbModeRef.current = true;
     
@@ -137,7 +136,28 @@ export const PlayPauseButton = ({
       dumbModeRef.current = false;
       setStoreIsPlaying(contextIsPlaying);
     }, 300);
-  }, [storeIsPlaying, contextIsPlaying, togglePlayPause, setStoreIsPlaying]);
+  }, [storeIsPlaying, contextIsPlaying, togglePlayPause, setStoreIsPlaying, currentTrack]);
+
+  // Show loading indicator while track is loading
+  if (isLoading) {
+    return (
+      <View style={[
+        isFloatingPlayer
+          ? { height: iconSize }
+          : {
+              height: iconSize,
+              width: iconSize,
+              borderRadius: iconSize / 2,
+              backgroundColor: "#fff",
+              alignItems: "center",
+              justifyContent: "center",
+            },
+        style,
+      ]}>
+        <ActivityIndicator size="small" color="#000" />
+      </View>
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -172,22 +192,40 @@ export const SkipToNextButton = ({
   iconSize = moderateScale(40),
   isFloatingPlayer = false,
   onBeforeSkip,
-}: PlayerButtonProps) => (
-  <TouchableOpacity
-    onPress={() => {
-      triggerHaptic();
-      onBeforeSkip?.();
-      // RNTP API - direct TrackPlayer call
-      TrackPlayer.skipToNext();
-    }}
-  >
-    {isFloatingPlayer ? (
-      <MaterialIcons name="skip-next" size={iconSize} color="#fff" />
-    ) : (
-      <MaterialCommunityIcons name="skip-next-outline" size={iconSize} color="#fff" />
-    )}
-  </TouchableOpacity>
-);
+}: PlayerButtonProps) => {
+  const { skipToNext, queue, currentQueueIndex } = useMusicPlayer();
+  
+  const handlePress = useCallback(() => {
+    triggerHaptic();
+    onBeforeSkip?.();
+    skipToNext();
+  }, [skipToNext, onBeforeSkip]);
+  
+  // Check if there's a next track
+  const hasNextTrack = queue.length > 0 && currentQueueIndex < queue.length - 1;
+  
+  return (
+    <TouchableOpacity 
+      onPress={handlePress}
+      activeOpacity={hasNextTrack ? 0.7 : 1}
+      disabled={!hasNextTrack}
+    >
+      {isFloatingPlayer ? (
+        <MaterialIcons 
+          name="skip-next" 
+          size={iconSize} 
+          color={hasNextTrack ? "#fff" : "rgba(255,255,255,0.3)"} 
+        />
+      ) : (
+        <MaterialCommunityIcons 
+          name="skip-next-outline" 
+          size={iconSize} 
+          color={hasNextTrack ? "#fff" : "rgba(255,255,255,0.3)"} 
+        />
+      )}
+    </TouchableOpacity>
+  );
+};
 
 // ─── SkipToPreviousButton ────────────────────────────────────────────────────
 
@@ -195,50 +233,67 @@ export const SkipToPreviousButton = ({
   iconSize = moderateScale(40),
   isFloatingPlayer = false,
   onBeforeSkip,
-}: PlayerButtonProps) => (
-  <TouchableOpacity
-    onPress={() => {
-      triggerHaptic();
-      onBeforeSkip?.();
-      // RNTP API - direct TrackPlayer call
-      TrackPlayer.skipToPrevious();
-    }}
-  >
-    {isFloatingPlayer ? (
-      <MaterialIcons name="skip-previous" size={iconSize} color="#fff" />
-    ) : (
-      <MaterialCommunityIcons name="skip-previous-outline" size={iconSize} color="#fff" />
-    )}
-  </TouchableOpacity>
-);
+}: PlayerButtonProps) => {
+  const { skipToPrevious, position, queue, currentQueueIndex } = useMusicPlayer();
+  
+  const handlePress = useCallback(() => {
+    triggerHaptic();
+    onBeforeSkip?.();
+    skipToPrevious();
+  }, [skipToPrevious, onBeforeSkip]);
+  
+  // Check if there's a previous track (or we can seek to start)
+  const hasPreviousTrack = queue.length > 0 && (currentQueueIndex > 0 || position > 3);
+  
+  return (
+    <TouchableOpacity 
+      onPress={handlePress}
+      activeOpacity={hasPreviousTrack ? 0.7 : 1}
+      disabled={!hasPreviousTrack}
+    >
+      {isFloatingPlayer ? (
+        <MaterialIcons 
+          name="skip-previous" 
+          size={iconSize} 
+          color={hasPreviousTrack ? "#fff" : "rgba(255,255,255,0.3)"} 
+        />
+      ) : (
+        <MaterialCommunityIcons 
+          name="skip-previous-outline" 
+          size={iconSize} 
+          color={hasPreviousTrack ? "#fff" : "rgba(255,255,255,0.3)"} 
+        />
+      )}
+    </TouchableOpacity>
+  );
+};
 
 // ─── AddToPlaylistButton ─────────────────────────────────────────────────────
 
 export const AddToPlaylistButton = ({ iconSize = moderateScale(30) }) => {
   const router = useRouter();
-  // RNTP hook - replacing mavin-eq
-  const activeTrack = useActiveTrack();
+  const { currentTrack } = useMusicPlayer();
+
+  const handlePress = useCallback(async () => {
+    triggerHaptic();
+    await router.push({
+      pathname: "/(modals)/addToPlaylist",
+      params: currentTrack
+        ? {
+            track: JSON.stringify({
+              id: currentTrack.id,
+              title: currentTrack.title || "",
+              artist: currentTrack.artist || "",
+              thumbnail: currentTrack.artwork || unknownTrackImageUri,
+            }),
+          }
+        : undefined,
+    });
+  }, [router, currentTrack]);
 
   return (
     <View>
-      <TouchableOpacity
-        onPress={async () => {
-          triggerHaptic();
-          await router.push({
-            pathname: "/(modals)/addToPlaylist",
-            params: activeTrack
-              ? {
-                  track: JSON.stringify({
-                    id: activeTrack.id,
-                    title: activeTrack.title || "",
-                    artist: activeTrack.artist || "",
-                    thumbnail: activeTrack.artwork || unknownTrackImageUri,
-                  }),
-                }
-              : undefined,
-          });
-        }}
-      >
+      <TouchableOpacity onPress={handlePress}>
         <MaterialIcons name="playlist-add" size={iconSize} color={Colors.text} />
       </TouchableOpacity>
     </View>
@@ -251,27 +306,28 @@ export const DownloadSongButton = ({
   style,
   iconSize = moderateScale(25),
 }: PlayerButtonProps) => {
-  // RNTP hook - replacing mavin-eq
-  const activeTrack = useActiveTrack();
-  const downloaded = useIsSongDownloaded(activeTrack?.id || "");
-  const downloading = useIsSongDownloading(activeTrack?.id || "");
+  const { currentTrack } = useMusicPlayer();
+  const downloaded = useIsSongDownloaded(currentTrack?.id || "");
+  const downloading = useIsSongDownloading(currentTrack?.id || "");
 
   const handleDownload = useCallback(async () => {
-    if (!activeTrack || downloaded) return;
+    if (!currentTrack || downloaded) return;
     if (downloading) {
       ToastAndroid.show("Song is already downloading", ToastAndroid.SHORT);
       return;
     }
     triggerHaptic();
     await downloadAndSaveSong({
-      id: activeTrack.id,
-      title: activeTrack.title || "Unknown Title",
-      artist: activeTrack.artist || "Unknown Artist",
-      duration: activeTrack.duration,
-      url: activeTrack.url,
-      thumbnailUrl: activeTrack.artwork,
+      id: currentTrack.id,
+      title: currentTrack.title || "Unknown Title",
+      artist: currentTrack.artist || "Unknown Artist",
+      duration: currentTrack.duration,
+      url: currentTrack.url || "",
+      thumbnailUrl: currentTrack.artwork,
     });
-  }, [activeTrack, downloaded, downloading]);
+  }, [currentTrack, downloaded, downloading]);
+
+  if (!currentTrack) return null;
 
   return (
     <View style={style}>
@@ -298,15 +354,13 @@ type RepeatIconName = ComponentProps<typeof MaterialCommunityIcons>["name"];
 const repeatOrder = [RepeatMode.Off, RepeatMode.Track, RepeatMode.Queue] as const;
 
 export const RepeatToggle = ({ ...iconProps }: RepeatIconProps) => {
-  const { repeatMode, changeRepeatMode } = useTrackPlayerRepeatMode();
+  const { repeatMode, cycleRepeatMode, isLoading } = useTrackPlayerRepeatMode();
 
-  const toggleRepeatMode = () => {
+  const toggleRepeatMode = useCallback(() => {
     triggerHaptic();
     if (repeatMode == null) return;
-    const currentIndex = repeatOrder.indexOf(repeatMode);
-    const nextIndex = (currentIndex + 1) % repeatOrder.length;
-    changeRepeatMode(repeatOrder[nextIndex]);
-  };
+    cycleRepeatMode();
+  }, [repeatMode, cycleRepeatMode]);
 
   const icon = match(repeatMode)
     .returnType<RepeatIconName>()
@@ -314,6 +368,14 @@ export const RepeatToggle = ({ ...iconProps }: RepeatIconProps) => {
     .with(RepeatMode.Track, () => "repeat-once")
     .with(RepeatMode.Queue, () => "repeat")
     .otherwise(() => "repeat-off");
+
+  if (isLoading) {
+    return (
+      <View style={{ width: moderateScale(32), alignItems: "center" }}>
+        <ActivityIndicator size="small" color={Colors.textMuted} />
+      </View>
+    );
+  }
 
   return (
     <MaterialCommunityIcons

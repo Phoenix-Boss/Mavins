@@ -1,16 +1,11 @@
 // libs/playerSetup.ts
 //
-// Clean initialization for react-native-track-player 4.1.2 (New Architecture)
+// Clean initialization for expo-av
 //
-// API pattern confirmed from official RNTP 4.1.2 example:
-// - setupPlayer() only accepts: autoHandleInterruptions, alwaysPauseOnInterruption
-// - ALL capabilities/notification options go into updateOptions() only
-// - Hot reload detection via getActiveTrack() — getCurrentTrack() removed in 4.x
+// expo-av provides a simpler API without the complex setup requirements
+// of react-native-track-player
 
-import TrackPlayer, {
-  Capability,
-  AppKilledPlaybackBehavior,
-} from 'react-native-track-player';
+import { Audio } from 'expo-av';
 
 let isInitialized = false;
 let initPromise: Promise<boolean> | null = null;
@@ -30,65 +25,16 @@ export async function setupPlayerGlobal(): Promise<boolean> {
     try {
       console.log('[PlayerSetup] Starting...');
 
-      // Hot reload detection: getQueue() succeeds if player is already set up
-      // getActiveTrack/getCurrentTrack both removed in RNTP 4.x — use getQueue() instead
-      try {
-        const queue = await TrackPlayer.getQueue();
-        if (Array.isArray(queue)) {
-          console.log('[PlayerSetup] Already set up (hot reload detected via queue)');
-          isInitialized = true;
-          initPromise = null;
-          return true;
-        }
-      } catch {
-        // Expected on cold launch — player not initialized yet
-      }
-
-      // In RNTP 4.1.2, setupPlayer only accepts these two options
-      await TrackPlayer.setupPlayer({
-        autoHandleInterruptions: true,
-        alwaysPauseOnInterruption: false,
+      // Configure audio mode for playback
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        staysActiveInBackground: true,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
       });
 
-      console.log('[PlayerSetup] ✅ setupPlayer complete');
-
-      // All capabilities and notification config go into updateOptions.
-      // NOTE: Capability.Like / Dislike / Bookmark / SetRating were removed
-      // in react-native-track-player v5 alpha and cause a NullPointerException
-      // on Android if included. Only use capabilities confirmed in v5 alpha.
-      await TrackPlayer.updateOptions({
-        android: {
-          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
-        },
-        capabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.Stop,
-          Capability.SkipToNext,
-          Capability.SkipToPrevious,
-          Capability.SeekTo,
-          Capability.JumpForward,
-          Capability.JumpBackward,
-        ],
-        compactCapabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.SkipToNext,
-          Capability.SkipToPrevious,
-          Capability.Stop,
-        ],
-        notificationCapabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.Stop,
-          Capability.SkipToNext,
-          Capability.SkipToPrevious,
-          Capability.SeekTo,
-          Capability.JumpForward,
-          Capability.JumpBackward,
-        ],
-        progressUpdateEventInterval: 2,
-      });
+      console.log('[PlayerSetup] ✅ Audio mode configured');
 
       isInitialized = true;
       initPromise = null;
@@ -97,12 +43,10 @@ export async function setupPlayerGlobal(): Promise<boolean> {
 
     } catch (err: any) {
       const msg: string = err?.message ?? String(err);
-      const code: string = err?.code ?? '';
 
       // Concurrent call already succeeded — treat as success
       if (
         msg.includes('already') ||
-        code === 'player_already_initialized' ||
         msg.includes('already initialized')
       ) {
         console.log('[PlayerSetup] Already initialized by concurrent caller');
@@ -126,7 +70,8 @@ export function isPlayerReady(): boolean {
 
 export async function releasePlayerGlobal(): Promise<void> {
   try {
-    await TrackPlayer.reset();
+    // Unload all sounds and release resources
+    await Audio.setIsEnabledAsync(false);
   } catch (e) {
     console.log('[PlayerSetup] Release error (ignored):', e);
   }

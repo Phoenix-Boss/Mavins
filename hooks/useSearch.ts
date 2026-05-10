@@ -1,7 +1,11 @@
+// hooks/useSearch.ts
 /**
- * useSearch Hook - Searches music with filters
- * Matches: AsyncFunction("searchMusic") { query: String, filter: String?, promise: Promise -> }
+ * useSearch Hook - expo-av compatible (no changes needed)
+ * 
+ * Searches music with filters using MavinEngine.
+ * This hook doesn't depend on RNTP or expo-av.
  */
+
 import { useState, useCallback } from "react";
 import MavinEngine from "@/modules/mavin-engine";
 import { cache } from "@/libs/cache";
@@ -43,30 +47,21 @@ export const useSearch = () => {
 
         const cached = await cache.get(cacheKey);
         if (cached) {
-          console.log(
-            `📦 [useSearch] Using cached results for "${searchQuery}"`,
-          );
+          console.log(`📦 [useSearch] Using cached results for "${searchQuery}"`);
           setResults(cached);
           setLoading(false);
           return;
         }
 
-        console.log(
-          `🔍 [useSearch] Searching for "${searchQuery}" with filter ${filter || "all"}`,
-        );
+        console.log(`🔍 [useSearch] Searching for "${searchQuery}" with filter ${filter || "all"}`);
 
         // ✅ Matches: searchMusic(query, filter) with two parameters
-        const searchResults = await MavinEngine.searchMusic(
-          searchQuery,
-          filter,
-        );
+        const searchResults = await MavinEngine.searchMusic(searchQuery, filter);
 
         if (!searchResults) {
           setResults([]);
         } else {
-          console.log(
-            `✅ [useSearch] Received ${searchResults.length} results`,
-          );
+          console.log(`✅ [useSearch] Received ${searchResults.length} results`);
           setResults(searchResults);
           await cache.set(cacheKey, searchResults, 60 * 60 * 1000);
         }

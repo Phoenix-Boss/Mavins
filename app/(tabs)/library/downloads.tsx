@@ -1,13 +1,9 @@
+// app/(library)/downloads.tsx
 /**
- * DownloadsScreen
- *
+ * DownloadsScreen - expo-av version
+ * 
  * Displays songs downloaded to the device for offline playback.
- * - Active download progress cards
- * - Sort: Recent · A–Z · Duration
- * - Play individual song, play all, or shuffle all
- * - Song options menu via `/(modals)/menu`
- * - Active playback indicator
- * - Animated FAB that extends/collapses on scroll
+ * Uses useActiveTrack and useLastActiveTrack from expo-av hooks.
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -15,6 +11,7 @@ import { Colors } from "@/constants/Colors";
 import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
+import { useActiveTrack } from "@/hooks/useActiveTrack";
 import {
   DownloadedSongMetadata,
   useActiveDownloads,
@@ -27,7 +24,16 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useMemo, useState, useCallback } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
-import { FlashList } from "@shopify/flash-list";
+import { FlashList, FlashListProps } from "@shopify/flash-list";
+
+// ─── Typed FlashList wrapper ─────────────────────────────────────────────────
+
+type FlashListPropsWithEstimated<T> = FlashListProps<T> & {
+  estimatedItemSize?: number;
+};
+const TypedFlashList = FlashList as React.ComponentType<
+  FlashListPropsWithEstimated<DownloadedSongMetadata>
+>;
 import LoaderKit from "react-native-loader-kit";
 import { AnimatedFAB, Divider } from "react-native-paper";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -36,7 +42,6 @@ import {
   moderateScale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
 
 // ─── Sort options ───────────────────────────────────────────────────────────
 
@@ -80,7 +85,7 @@ const DownloadsScreen = () => {
     triggerHaptic();
     if (formattedTracks.length === 0) return;
     await playAllDownloadedSongs(formattedTracks);
-    await router.navigate("/player");
+    await router.navigate("/(player)");
   };
 
   const handleShuffleAll = async () => {
@@ -88,7 +93,7 @@ const DownloadsScreen = () => {
     if (formattedTracks.length === 0) return;
     const shuffled = [...formattedTracks].sort(() => Math.random() - 0.5);
     await playAllDownloadedSongs(shuffled);
-    await router.navigate("/player");
+    await router.navigate("/(player)");
   };
 
   const handleOpenMenu = useCallback(
@@ -104,7 +109,7 @@ const DownloadsScreen = () => {
             id: originalMetadata.id,
             title: originalMetadata.title,
             artist: originalMetadata.artist,
-            thumbnail: originalMetadata.localArtworkUri,
+            thumbnail: originalMetadata.localArtworkUri ?? "",
             url: originalMetadata.localTrackUri,
             duration: originalMetadata.duration,
           }),
@@ -178,15 +183,14 @@ const DownloadsScreen = () => {
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeDownloads, formattedTracks, activeSort],
+    [activeDownloads, formattedTracks, activeSort, handleShuffleAll],
   );
 
   // ─── Render item ──────────────────────────────────────────────────────────
 
   const renderItem = useCallback(
     ({ item }: { item: DownloadedSongMetadata }) => {
-      const isPlaying =
-        activeTrack?.id === item.id && activeTrack?.url === item.localTrackUri;
+      const isPlaying = activeTrack?.id === item.id && activeTrack?.url === item.localTrackUri;
       return (
         <View style={styles.songItem}>
           <TouchableOpacity
@@ -263,7 +267,7 @@ const DownloadsScreen = () => {
         <Divider style={{ backgroundColor: "rgba(255,255,255,0.3)", height: 0.3 }} />
       )}
 
-      <FlashList
+      <TypedFlashList
         data={formattedTracks}
         renderItem={renderItem}
         keyExtractor={(item) => item.id}

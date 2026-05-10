@@ -1,10 +1,9 @@
 // components/MusicPlayerContext.tsx
 //
-// CRITICAL FIX: All react-native-track-player imports are DEFERRED to runtime.
-// No RNTP code is imported at the top level to prevent CAPABILITY_PLAY null
-// errors during Metro static evaluation.
-//
-// FIXED: Proper typing for dynamic RNTP import using ReturnType
+// Converted from react-native-track-player to expo-av
+// All RNTP code removed, now using expo-av for audio playback
+// Uses expo-notifications for lock screen controls
+// Includes proper queue management for playlists
 
 import React, {
   createContext,
@@ -15,8 +14,10 @@ import React, {
   useEffect,
   useState,
 } from 'react';
-import { AppState, Alert } from 'react-native';
+import { AppState, Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
+import * as Notifications from 'expo-notifications';
 
 import MavinEngine, {
   StreamInfoItem,
@@ -29,149 +30,7 @@ import { DownloadedSongMetadata } from '@/store/library';
 import { supabase } from '@/libs/supabase';
 import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
-import type { StreamInsert } from '@/libs/supabase';
 import { useHomeStore } from '@/store/home';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LAZY RNTP MODULE TYPE
-// ─────────────────────────────────────────────────────────────────────────────
-
-type RNTPModule = {
-  Capability: any;
-  AppKilledPlaybackBehavior: any;
-  Event: any;
-  State: any;
-  TrackPlayer: {
-    setupPlayer: (options?: any) => Promise<void>;
-    getPlaybackState: () => Promise<{ state: any }>;
-    reset: () => Promise<void>;
-    add: (tracks: any | any[]) => Promise<void>;
-    load: (track: any) => Promise<void>;
-    play: () => Promise<void>;
-    pause: () => Promise<void>;
-    stop: () => Promise<void>;
-    skipToNext: () => Promise<void>;
-    skipToPrevious: () => Promise<void>;
-    seekTo: (position: number) => Promise<void>;
-    getPosition: () => Promise<number>;
-    getDuration: () => Promise<number>;
-    getQueue: () => Promise<any[]>;
-    addEventListener: (event: string, listener: (data: any) => void) => { remove: () => void };
-    updateOptions: (options: any) => Promise<void>;
-  };
-};
-
-let _rntpModule: RNTPModule | null = null;
-
-async function getRNTP(): Promise<RNTPModule | null> {
-  if (!_rntpModule) {
-    try {
-      const module = await import('react-native-track-player');
-      // The default export IS the TrackPlayer object in RNTP 4.x.
-      // module.TrackPlayer does not exist — use module.default instead.
-      const player = (module.default ?? module) as unknown as RNTPModule['TrackPlayer'];
-      _rntpModule = {
-        Capability: module.Capability,
-        AppKilledPlaybackBehavior: module.AppKilledPlaybackBehavior,
-        Event: module.Event,
-        State: module.State,
-        TrackPlayer: player,
-      };
-    } catch (e) {
-      console.error('[MusicPlayer] Failed to load RNTP:', e);
-      return null;
-    }
-  }
-  return _rntpModule;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Supabase Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TABLE_NOT_FOUND_MSG = 'track_stats';
-
-const safeGetTrackStats = async (videoId: string) => {
-  try {
-    return await supabaseCache.getTrackStats(videoId);
-  } catch (e: any) {
-    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG))
-      console.warn('[MusicPlayer] getTrackStats error:', e?.message);
-    return null;
-  }
-};
-
-const safeSaveTrackStats = async (
-  params: Parameters<typeof supabaseCache.saveTrackStats>[0],
-) => {
-  try {
-    await supabaseCache.saveTrackStats(params);
-  } catch (e: any) {
-    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG))
-      console.warn('[MusicPlayer] saveTrackStats error:', e?.message);
-  }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UUID Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-
-function uuidToBytes(uuid: string): number[] {
-  return uuid.replace(/-/g, '').match(/.{2}/g)!.map(h => parseInt(h, 16));
-}
-
-async function sha1(data: Uint8Array): Promise<Uint8Array> {
-  const H = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
-  const msg = Array.from(data);
-  const bitLen = msg.length * 8;
-  msg.push(0x80);
-  while (msg.length % 64 !== 56) msg.push(0);
-  for (let i = 7; i >= 0; i--) msg.push((bitLen / Math.pow(2, i * 8)) & 0xff);
-
-  for (let i = 0; i < msg.length; i += 64) {
-    const W: number[] = [];
-    for (let t = 0; t < 16; t++)
-      W[t] = (msg[i+t*4]<<24)|(msg[i+t*4+1]<<16)|(msg[i+t*4+2]<<8)|msg[i+t*4+3];
-    for (let t = 16; t < 80; t++) {
-      const v = W[t-3]^W[t-8]^W[t-14]^W[t-16];
-      W[t] = ((v<<1)|(v>>>31)) >>> 0;
-    }
-    let [a,b,c,d,e] = H;
-    for (let t = 0; t < 80; t++) {
-      const rot = (((a<<5)|(a>>>27))>>>0);
-      const f   = t<20 ? ((b&c)|((~b>>>0)&d)) : t<40 ? (b^c^d) : t<60 ? ((b&c)|(b&d)|(c&d)) : (b^c^d);
-      const k   = t<20 ? 0x5A827999 : t<40 ? 0x6ED9EBA1 : t<60 ? 0x8F1BBCDC : 0xCA62C1D6;
-      const tmp = (rot + f + e + k + W[t]) >>> 0;
-      e=d; d=c; c=((b<<30)|(b>>>2))>>>0; b=a; a=tmp;
-    }
-    H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0;
-    H[3]=(H[3]+d)>>>0; H[4]=(H[4]+e)>>>0;
-  }
-  const out = new Uint8Array(20);
-  H.forEach((v, i) => {
-    out[i*4]   = (v>>>24)&0xff; out[i*4+1] = (v>>>16)&0xff;
-    out[i*4+2] = (v>>>8) &0xff; out[i*4+3] =  v      &0xff;
-  });
-  return out;
-}
-
-const _uuidCache = new Map<string, string>();
-
-async function videoIdToUuid(videoId: string): Promise<string> {
-  if (_uuidCache.has(videoId)) return _uuidCache.get(videoId)!;
-  const nsBytes  = uuidToBytes(UUID_NAMESPACE);
-  const idBytes  = Array.from(new TextEncoder().encode(videoId));
-  const combined = new Uint8Array([...nsBytes, ...idBytes]);
-  const hash     = await sha1(combined);
-  hash[6] = (hash[6] & 0x0f) | 0x50;
-  hash[8] = (hash[8] & 0x3f) | 0x80;
-  const h    = Array.from(hash.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
-  const uuid = `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
-  _uuidCache.set(videoId, uuid);
-  return uuid;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -198,6 +57,13 @@ export interface ResolvedTrack {
   artwork?: string;
   duration?: number;
   [key: string]: any;
+}
+
+// Queue item for expo-av
+interface QueueItem {
+  song: Song | DownloadedSongMetadata;
+  resolvedTrack?: ResolvedTrack;
+  isDownloaded: boolean;
 }
 
 const MAX_EXTRAS_CACHE = 50;
@@ -227,6 +93,8 @@ export interface MusicPlayerContextType {
   isLoading: boolean;
   position: number;
   duration: number;
+  queue: QueueItem[];
+  currentQueueIndex: number;
 
   playAudio: (song: Song, playlist?: Song[], expandPlayerFn?: () => void) => Promise<void>;
   playPlaylist: (songs: Song[], expandPlayerFn?: () => void) => Promise<void>;
@@ -237,6 +105,8 @@ export interface MusicPlayerContextType {
   seekTo: (position: number) => Promise<void>;
   skipToNext: () => Promise<void>;
   skipToPrevious: () => Promise<void>;
+  setQueue: (queue: QueueItem[]) => void;
+  setCurrentQueueIndex: (index: number) => void;
 
   expandPlayer: () => void;
   collapsePlayer: () => void;
@@ -250,7 +120,6 @@ const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(und
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STREAM_TTL_MS = 6 * 60 * 60 * 1000;
-const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stream Selection Helpers
@@ -314,15 +183,6 @@ async function getCachedVideoStream(trackId: string): Promise<string | null> {
     if (error || !data) return null;
     return data.stream_url;
   } catch { return null; }
-}
-
-async function invalidateStreamCache(trackId: string): Promise<void> {
-  try {
-    const uuid = await videoIdToUuid(trackId);
-    await (supabase as any).from('streams').update({ is_active: false }).eq('track_id', uuid);
-  } catch (e) {
-    console.warn('[MusicPlayer] invalidateStreamCache error:', e);
-  }
 }
 
 async function cacheStreamsToSupabase(
@@ -605,6 +465,94 @@ const resolveTrack = async (song: Song): Promise<ResolvedTrack | null> => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Supabase Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TABLE_NOT_FOUND_MSG = 'track_stats';
+
+const safeGetTrackStats = async (videoId: string) => {
+  try {
+    return await supabaseCache.getTrackStats(videoId);
+  } catch (e: any) {
+    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG))
+      console.warn('[MusicPlayer] getTrackStats error:', e?.message);
+    return null;
+  }
+};
+
+const safeSaveTrackStats = async (
+  params: Parameters<typeof supabaseCache.saveTrackStats>[0],
+) => {
+  try {
+    await supabaseCache.saveTrackStats(params);
+  } catch (e: any) {
+    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG))
+      console.warn('[MusicPlayer] saveTrackStats error:', e?.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UUID Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+function uuidToBytes(uuid: string): number[] {
+  return uuid.replace(/-/g, '').match(/.{2}/g)!.map(h => parseInt(h, 16));
+}
+
+async function sha1(data: Uint8Array): Promise<Uint8Array> {
+  const H = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+  const msg = Array.from(data);
+  const bitLen = msg.length * 8;
+  msg.push(0x80);
+  while (msg.length % 64 !== 56) msg.push(0);
+  for (let i = 7; i >= 0; i--) msg.push((bitLen / Math.pow(2, i * 8)) & 0xff);
+
+  for (let i = 0; i < msg.length; i += 64) {
+    const W: number[] = [];
+    for (let t = 0; t < 16; t++)
+      W[t] = (msg[i+t*4]<<24)|(msg[i+t*4+1]<<16)|(msg[i+t*4+2]<<8)|msg[i+t*4+3];
+    for (let t = 16; t < 80; t++) {
+      const v = W[t-3]^W[t-8]^W[t-14]^W[t-16];
+      W[t] = ((v<<1)|(v>>>31)) >>> 0;
+    }
+    let [a,b,c,d,e] = H;
+    for (let t = 0; t < 80; t++) {
+      const rot = (((a<<5)|(a>>>27))>>>0);
+      const f   = t<20 ? ((b&c)|((~b>>>0)&d)) : t<40 ? (b^c^d) : t<60 ? ((b&c)|(b&d)|(c&d)) : (b^c^d);
+      const k   = t<20 ? 0x5A827999 : t<40 ? 0x6ED9EBA1 : t<60 ? 0x8F1BBCDC : 0xCA62C1D6;
+      const tmp = (rot + f + e + k + W[t]) >>> 0;
+      e=d; d=c; c=((b<<30)|(b>>>2))>>>0; b=a; a=tmp;
+    }
+    H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0;
+    H[3]=(H[3]+d)>>>0; H[4]=(H[4]+e)>>>0;
+  }
+  const out = new Uint8Array(20);
+  H.forEach((v, i) => {
+    out[i*4]   = (v>>>24)&0xff; out[i*4+1] = (v>>>16)&0xff;
+    out[i*4+2] = (v>>>8) &0xff; out[i*4+3] =  v      &0xff;
+  });
+  return out;
+}
+
+const _uuidCache = new Map<string, string>();
+
+async function videoIdToUuid(videoId: string): Promise<string> {
+  if (_uuidCache.has(videoId)) return _uuidCache.get(videoId)!;
+  const nsBytes  = uuidToBytes(UUID_NAMESPACE);
+  const idBytes  = Array.from(new TextEncoder().encode(videoId));
+  const combined = new Uint8Array([...nsBytes, ...idBytes]);
+  const hash     = await sha1(combined);
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const h    = Array.from(hash.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const uuid = `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+  _uuidCache.set(videoId, uuid);
+  return uuid;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Related Songs Helper
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -712,6 +660,8 @@ const saveQuickActions = async (songUrl: string, sourceSongId: string): Promise<
 const STORAGE_KEYS = {
   LAST_PLAYING_TRACK: 'last_playing_track',
   LAST_PLAYING_POSITION: 'last_playing_position',
+  PLAYER_QUEUE: 'player_queue',
+  CURRENT_QUEUE_INDEX: 'current_queue_index',
 };
 
 async function saveLastPlayingState(track: Song | null, position?: number): Promise<void> {
@@ -745,6 +695,101 @@ async function restoreLastPlayingState(): Promise<{ track: Song | null; position
   }
 }
 
+async function saveQueueState(queue: QueueItem[], currentIndex: number): Promise<void> {
+  try {
+    // Only save the essential info, not the resolved tracks
+    const queueToSave = queue.map(item => ({
+      song: item.song,
+      isDownloaded: item.isDownloaded,
+    }));
+    await AsyncStorage.setItem(STORAGE_KEYS.PLAYER_QUEUE, JSON.stringify(queueToSave));
+    await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_QUEUE_INDEX, String(currentIndex));
+  } catch (error) {
+    console.warn('[MusicPlayer] Failed to save queue state:', error);
+  }
+}
+
+async function restoreQueueState(): Promise<{ queue: QueueItem[]; currentIndex: number }> {
+  try {
+    const queueJson = await AsyncStorage.getItem(STORAGE_KEYS.PLAYER_QUEUE);
+    const indexStr = await AsyncStorage.getItem(STORAGE_KEYS.CURRENT_QUEUE_INDEX);
+    
+    const queue = queueJson ? JSON.parse(queueJson) : [];
+    const currentIndex = indexStr ? parseInt(indexStr, 10) : -1;
+    
+    return { queue, currentIndex };
+  } catch (error) {
+    console.warn('[MusicPlayer] Failed to restore queue state:', error);
+    return { queue: [], currentIndex: -1 };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Update Notification Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function updateNowPlayingNotification(track: Song | null, isPlaying: boolean = false) {
+  if (!track) {
+    await Notifications.dismissAllNotificationsAsync();
+    return;
+  }
+
+  await Notifications.setNotificationCategoryAsync('MEDIA_PLAYBACK', [
+    {
+      identifier: 'PREVIOUS',
+      buttonTitle: '⏮',
+      options: { isDestructive: false },
+    },
+    {
+      identifier: isPlaying ? 'PAUSE' : 'PLAY',
+      buttonTitle: isPlaying ? '⏸' : '▶',
+      options: { isDestructive: false },
+    },
+    {
+      identifier: 'NEXT',
+      buttonTitle: '⏭',
+      options: { isDestructive: false },
+    },
+    {
+      identifier: 'STOP',
+      buttonTitle: '⏹',
+      options: { isDestructive: true },
+    },
+  ]);
+
+  // Build notification content
+  const notificationContent: any = {
+    title: track.title,
+    body: track.artist || 'Unknown Artist',
+    data: { type: 'MEDIA_PLAYBACK', track },
+    categoryIdentifier: 'MEDIA_PLAYBACK',
+  };
+
+  // Android options
+  if (Platform.OS === 'android') {
+    notificationContent.android = {
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+    };
+    notificationContent.color = '#1DB954';
+  }
+
+  // iOS attachments
+  if (track.thumbnail && Platform.OS === 'ios') {
+    notificationContent.attachments = [
+      {
+        identifier: 'artwork',
+        type: 'image',
+        url: track.thumbnail,
+      },
+    ];
+  }
+
+  await Notifications.scheduleNotificationAsync({
+    content: notificationContent,
+    trigger: null,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────────────────────────────────────
@@ -768,20 +813,21 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   children, 
   playerReady: playerReadyProp = false 
 }) => {
-  const [nativePlaybackState, setNativePlaybackState] = useState<number | string>(0);
   const [currentTrack, setCurrentTrack] = useState<Song | null>(null);
-  const [optimisticPlaying, setOptimisticPlaying] = useState<boolean | null>(null);
-  const [progress, setProgress] = useState({ position: 0, duration: 0, buffered: 0 });
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [error, setError] = useState<Error | null>(null);
 
-  // Use both string and number state comparisons for New Architecture compatibility
-  // New Arch uses string states ('playing', 'buffering') while old used numbers (3, 6, 7, 8)
-  const nativeIsPlaying = nativePlaybackState === 'playing' || nativePlaybackState === 3;
-  const isPlaying = optimisticPlaying !== null ? optimisticPlaying : nativeIsPlaying;
-  const isBuffering = ['buffering', 'loading', 6, 8, 7].includes(nativePlaybackState as any);
+  // Queue management
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
 
-  const currentSongIdRef = useRef<string | null>(null);
+  const currentSoundRef = useRef<Audio.Sound | null>(null);
   const currentSongRef = useRef<Song | null>(null);
+  const currentSongIdRef = useRef<string | null>(null);
   const bgAbortControllerRef = useRef<AbortController | null>(null);
   const expandPlayerRef = useRef<(() => void) | null>(null);
   const collapsePlayerRef = useRef<(() => void) | null>(null);
@@ -789,156 +835,222 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   const isInitializedRef = useRef(false);
   const playerReadyRef = useRef(playerReadyProp);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const eventUnsubscribersRef = useRef<Array<() => void>>([]);
+  const playbackStatusSubscriptionRef = useRef<any>(null);
 
   const netInfo = useNetInfo();
   const log = useCallback((msg: string) => console.log(`[MusicPlayer] ${msg}`), []);
 
+  // Configure audio mode on mount
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      staysActiveInBackground: true,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    }).catch(console.warn);
+  }, []);
+
   useEffect(() => {
     playerReadyRef.current = playerReadyProp;
   }, [playerReadyProp]);
-
-  useEffect(() => {
-    if (optimisticPlaying === null) return;
-    if (optimisticPlaying === nativeIsPlaying) {
-      setOptimisticPlaying(null);
-    }
-  }, [nativeIsPlaying, optimisticPlaying]);
 
   const setPlayerOverlayRefs = useCallback((expand: () => void, collapse: () => void) => {
     expandPlayerRef.current = expand;
     collapsePlayerRef.current = collapse;
   }, []);
 
-  const expandPlayer = useCallback(() => expandPlayerRef.current?.(), []);
-  const collapsePlayer = useCallback(() => collapsePlayerRef.current?.(), []);
+  const expandPlayer = useCallback(() => {
+    if (expandPlayerRef.current) {
+      expandPlayerRef.current();
+    }
+  }, []);
 
-  // ─── DEFERRED RNTP INITIALIZATION ───────────────────────────────────────────
-  useEffect(() => {
-    if (!playerReadyProp) return;
+  const collapsePlayer = useCallback(() => {
+    if (collapsePlayerRef.current) {
+      collapsePlayerRef.current();
+    }
+  }, []);
 
-    let cancelled = false;
-
-    async function initRNTP() {
-      const rntp = await getRNTP();
-      if (!rntp || cancelled) return;
-
-      const { Event, State, TrackPlayer } = rntp;
-
-      eventUnsubscribersRef.current.forEach(unsub => unsub());
-      eventUnsubscribersRef.current = [];
-      
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
+  // Setup playback status listener
+  const setupPlaybackListener = useCallback(async (sound: Audio.Sound) => {
+    if (playbackStatusSubscriptionRef.current) {
+      playbackStatusSubscriptionRef.current.remove();
+    }
+    
+    playbackStatusSubscriptionRef.current = sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded) {
+        setIsPlaying(status.isPlaying);
+        setIsBuffering(status.isBuffering);
+        setPosition(status.positionMillis / 1000);
+        setDuration((status.durationMillis || 0) / 1000);
+        setError(null);
+        
+        // Update notification when play state changes
+        if (currentTrack) {
+          updateNowPlayingNotification(currentTrack, status.isPlaying).catch(console.warn);
+        }
+      } else if (status.error) {
+        log(`Playback error: ${status.error}`);
+        setIsBuffering(false);
+        setError(new Error(status.error));
       }
+    });
+  }, [currentTrack, log]);
 
-      progressIntervalRef.current = setInterval(async () => {
-        if (cancelled) return;
-        try {
-          const pos = await TrackPlayer.getPosition();
-          const dur = await TrackPlayer.getDuration();
-          setProgress({ position: pos, duration: dur, buffered: 0 });
-        } catch (e) {}
-      }, 250);
+  // Cleanup sound
+  const cleanupSound = useCallback(async () => {
+    if (playbackStatusSubscriptionRef.current) {
+      playbackStatusSubscriptionRef.current.remove();
+      playbackStatusSubscriptionRef.current = null;
+    }
+    if (currentSoundRef.current) {
+      await currentSoundRef.current.unloadAsync();
+      currentSoundRef.current = null;
+    }
+  }, []);
 
-      const stateSub = TrackPlayer.addEventListener(Event.PlaybackState, ({ state }: any) => {
-        if (!cancelled) setNativePlaybackState(state);
-      });
-      eventUnsubscribersRef.current.push(() => stateSub.remove());
-
-      const trackSub = TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, async ({ track }: any) => {
-        try {
-          if (track && !cancelled) {
-            const song: Song = {
-              id: track.id,
-              title: track.title || 'Unknown',
-              artist: track.artist || 'Unknown',
-              thumbnail: typeof track.artwork === 'string' ? track.artwork : '',
-              url: track.url || '',
-              duration: track.duration || 0,
-              videoId: (track as any).videoId,
-            };
-            setCurrentTrack(song);
-            currentSongRef.current = song;
-            currentSongIdRef.current = track.id;
-            saveLastPlayingState(song, progress.position);
-          } else if (!cancelled) {
-            setCurrentTrack(null);
-            currentSongRef.current = null;
-            currentSongIdRef.current = null;
-            saveLastPlayingState(null);
-          }
-        } catch (e) {
-          log(`ActiveTrackChanged error: ${e}`);
-        }
-      });
-      eventUnsubscribersRef.current.push(() => trackSub.remove());
-
-      const errorSub = TrackPlayer.addEventListener(Event.PlaybackError, async (event: any) => {
-        log(`Playback error: ${event.message || 'unknown'}`);
-        if (!cancelled) setNativePlaybackState('error');
-
-        const song = currentSongRef.current;
-        if (!song || isRecoveringRef.current) return;
-
-        isRecoveringRef.current = true;
-        try {
-          await invalidateStreamCache(song.id);
-          const track = await resolveTrack(song);
-          if (track) {
-            storeTrackExtras(track.id, {
-              videoUrl: track.videoUrl,
-              muxedVideoUrl: track.muxedVideoUrl,
-              videoId: track.videoId,
-              uploaderUrl: track.uploaderUrl,
-              likeCount: track.likeCount,
-              dislikeCount: track.dislikeCount,
-              viewCount: track.viewCount,
-              commentsCount: track.commentsCount,
-            });
-            await TrackPlayer.load(track);
-            await TrackPlayer.play();
-          }
-        } catch (e) {
-          log(`Recovery failed: ${e}`);
-        } finally {
-          isRecoveringRef.current = false;
-        }
-      });
-      eventUnsubscribersRef.current.push(() => errorSub.remove());
-
-      log('RNTP event listeners registered');
+  // Load a track from queue
+  const loadTrackFromQueue = useCallback(async (index: number, startPlaying: boolean = true) => {
+    if (index < 0 || index >= queue.length) {
+      log(`Invalid queue index: ${index}`);
+      return false;
     }
 
-    initRNTP();
+    const queueItem = queue[index];
+    if (!queueItem) return false;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await cleanupSound();
+
+      let resolvedTrack: ResolvedTrack | null;
+      let audioUrl: string;
+      let trackDuration: number;
+
+      if (queueItem.isDownloaded) {
+        const downloadedSong = queueItem.song as DownloadedSongMetadata;
+        audioUrl = downloadedSong.localTrackUri;
+        trackDuration = downloadedSong.duration || 0;
+        
+        setCurrentTrack({
+          id: downloadedSong.id,
+          title: downloadedSong.title,
+          artist: downloadedSong.artist,
+          thumbnail: downloadedSong.localArtworkUri || '',
+          url: downloadedSong.localTrackUri,
+          videoId: undefined,
+        });
+        currentSongRef.current = null;
+        currentSongIdRef.current = downloadedSong.id;
+      } else {
+        const song = queueItem.song as Song;
+        
+        if (queueItem.resolvedTrack) {
+          resolvedTrack = queueItem.resolvedTrack;
+        } else {
+          resolvedTrack = await resolveTrack(song);
+          if (!resolvedTrack) {
+            Alert.alert('Playback Error', `"${song.title}" is unavailable.`);
+            setIsLoading(false);
+            return false;
+          }
+          
+          // Update queue with resolved track
+          setQueue(prev => {
+            const newQueue = [...prev];
+            newQueue[index] = { ...newQueue[index], resolvedTrack: resolvedTrack! };
+            return newQueue;
+          });
+          
+          storeTrackExtras(resolvedTrack.id, {
+            videoUrl: resolvedTrack.videoUrl,
+            muxedVideoUrl: resolvedTrack.muxedVideoUrl,
+            videoId: resolvedTrack.videoId,
+            uploaderUrl: resolvedTrack.uploaderUrl,
+            likeCount: resolvedTrack.likeCount,
+            dislikeCount: resolvedTrack.dislikeCount,
+            viewCount: resolvedTrack.viewCount,
+            commentsCount: resolvedTrack.commentsCount,
+          });
+        }
+        
+        audioUrl = resolvedTrack.url;
+        trackDuration = resolvedTrack.duration || 0;
+        setCurrentTrack(song);
+        currentSongRef.current = song;
+        currentSongIdRef.current = song.id;
+        
+        if (resolvedTrack.url) {
+          saveQuickActions(resolvedTrack.url, resolvedTrack.id).catch(() => {});
+        }
+      }
+
+      // Create and play sound
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUrl },
+        { shouldPlay: startPlaying, positionMillis: 0 }
+      );
+      
+      currentSoundRef.current = sound;
+      await setupPlaybackListener(sound);
+
+      await updateNowPlayingNotification(currentTrack, startPlaying);
+      
+      setCurrentQueueIndex(index);
+      await saveQueueState(queue, index);
+      
+      log(`Loaded track ${index + 1}/${queue.length}: "${queueItem.song.title}"`);
+      return true;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      log(`loadTrackFromQueue error: ${error.message}`);
+      setError(error);
+      Alert.alert('Playback Error', `Failed to play "${queueItem.song.title}".`);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [queue, cleanupSound, setupPlaybackListener, currentTrack, log]);
+
+  // ─── Progress tracking interval ───────────────────────────────────────────
+  useEffect(() => {
+    if (isPlaying) {
+      progressIntervalRef.current = setInterval(() => {
+        if (currentSoundRef.current) {
+          currentSoundRef.current.getStatusAsync().then(status => {
+            if (status.isLoaded) {
+              setPosition(status.positionMillis / 1000);
+              setDuration((status.durationMillis || 0) / 1000);
+            }
+          }).catch(() => {});
+        }
+      }, 250);
+    } else if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
 
     return () => {
-      cancelled = true;
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);
         progressIntervalRef.current = null;
       }
-      eventUnsubscribersRef.current.forEach(unsub => unsub());
-      eventUnsubscribersRef.current = [];
     };
-  }, [playerReadyProp, log]);
+  }, [isPlaying]);
 
   // ─── AUTO-EXPAND ON APP RESUME ─────────────────────────────────────────────
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
       if (nextAppState === 'active' && isInitializedRef.current && playerReadyRef.current) {
-        try {
-          const rntp = await getRNTP();
-          if (!rntp) return;
-          const queue = await rntp.TrackPlayer.getQueue();
-          const { state: playbackState } = await rntp.TrackPlayer.getPlaybackState();
-          
-          if (queue?.length > 0 && (playbackState === 'playing' || playbackState === 3) && expandPlayerRef.current) {
+        if (currentSoundRef.current && expandPlayerRef.current) {
+          const status = await currentSoundRef.current.getStatusAsync();
+          if (status.isLoaded && status.isPlaying) {
             log('App resumed with active track - auto-expanding player');
             setTimeout(() => expandPlayer(), 100);
           }
-        } catch (e) {
-          log(`App resume check error: ${e}`);
         }
       }
     });
@@ -947,38 +1059,41 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
   }, [expandPlayer, log]);
 
   // ─── RESTORE PLAYING STATE ON APP START ─────────────────────────────────────
-  // playerReadyProp is set true by _layout.tsx after setupPlayerGlobal() resolves.
-  // No polling needed — react to the prop flipping, the layout owns readiness.
   useEffect(() => {
     if (!playerReadyProp) return;
 
     const initializeAndRestore = async () => {
       try {
-        const rntp = await getRNTP();
-        if (!rntp) return;
+        // Try to restore full queue first
+        const { queue: savedQueue, currentIndex: savedIndex } = await restoreQueueState();
+        
+        if (savedQueue.length > 0 && savedIndex >= 0) {
+          log(`Restoring queue with ${savedQueue.length} tracks at index ${savedIndex}`);
+          setQueue(savedQueue);
+          setCurrentQueueIndex(savedIndex);
+          await loadTrackFromQueue(savedIndex, false);
+        } else {
+          // Fall back to single track restore
+          const { track, position: savedPosition } = await restoreLastPlayingState();
+          if (track && track.url) {
+            log(`Restoring last playing track: ${track.title}`);
+            setCurrentTrack(track);
+            currentSongRef.current = track;
+            currentSongIdRef.current = track.id;
 
-        const queue = await rntp.TrackPlayer.getQueue();
-        if (queue?.length > 0) {
-          log('Active track already exists, skipping restore');
-          isInitializedRef.current = true;
-          return;
-        }
-
-        const { track, position } = await restoreLastPlayingState();
-
-        if (track) {
-          log(`Restoring last playing track: ${track.title}`);
-          setCurrentTrack(track);
-          currentSongRef.current = track;
-          currentSongIdRef.current = track.id;
-
-          const resolvedTrack = await resolveTrack(track);
-          if (resolvedTrack) {
-            await rntp.TrackPlayer.load(resolvedTrack);
-            if (position > 5) {
-              await rntp.TrackPlayer.seekTo(position);
+            const resolvedTrack = await resolveTrack(track);
+            if (resolvedTrack) {
+              const { sound } = await Audio.Sound.createAsync(
+                { uri: resolvedTrack.url },
+                { shouldPlay: false, positionMillis: savedPosition > 5 ? savedPosition * 1000 : 0 }
+              );
+              currentSoundRef.current = sound;
+              await setupPlaybackListener(sound);
+              
+              if (savedPosition > 5) {
+                setPosition(savedPosition);
+              }
             }
-            await rntp.TrackPlayer.pause();
           }
         }
 
@@ -989,13 +1104,20 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     };
 
     initializeAndRestore();
-  }, [playerReadyProp, log]);
+  }, [playerReadyProp, log, setupPlaybackListener, loadTrackFromQueue]);
+
+  // Save queue state when it changes
+  useEffect(() => {
+    if (queue.length > 0 && currentQueueIndex >= 0) {
+      saveQueueState(queue, currentQueueIndex);
+    }
+  }, [queue, currentQueueIndex]);
 
   useEffect(() => {
     if (currentTrack) {
-      saveLastPlayingState(currentTrack, progress.position);
+      saveLastPlayingState(currentTrack, position);
     }
-  }, [currentTrack, progress.position]);
+  }, [currentTrack, position]);
 
   // ─── BACKGROUND PLAYLIST LOADING ───────────────────────────────────────────
   const addPlaylistTracksInBackground = useCallback(
@@ -1004,38 +1126,31 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
-      const rntp = await getRNTP();
-      if (!rntp) return;
+      // Build the queue starting from the initial song
+      const queueItems: QueueItem[] = [];
+      
+      // Add songs after the current one
+      for (let i = targetIndex; i < fullPlaylist.length; i++) {
+        if (abortSignal.aborted) return;
+        queueItems.push({
+          song: fullPlaylist[i],
+          isDownloaded: false,
+        });
+      }
+      
+      // Add songs before the current one (for wrap-around)
+      for (let i = 0; i < targetIndex; i++) {
+        if (abortSignal.aborted) return;
+        queueItems.push({
+          song: fullPlaylist[i],
+          isDownloaded: false,
+        });
+      }
 
-      const addTrack = async (song: Song): Promise<boolean> => {
-        if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-        try {
-          const track = await resolveTrack(song);
-          if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-          if (!track) return true;
-          storeTrackExtras(track.id, {
-            videoUrl: track.videoUrl,
-            muxedVideoUrl: track.muxedVideoUrl,
-            videoId: track.videoId,
-            uploaderUrl: track.uploaderUrl,
-            likeCount: track.likeCount,
-            dislikeCount: track.dislikeCount,
-            viewCount: track.viewCount,
-            commentsCount: track.commentsCount,
-          });
-          await rntp.TrackPlayer.add(track);
-          log(`BG Queue: added "${track.title}"`);
-        } catch (e) {
-          log(`BG Queue error on "${song.title}": ${e}`);
-        }
-        return true;
-      };
-
-      const songsAfter = fullPlaylist.slice(targetIndex + 1);
-      const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
-
-      for (const s of songsAfter) { if (!(await addTrack(s))) return; await delay(150); }
-      for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
+      setQueue(queueItems);
+      setCurrentQueueIndex(0);
+      await saveQueueState(queueItems, 0);
+      log(`Created playlist queue with ${queueItems.length} tracks`);
     },
     [log],
   );
@@ -1046,31 +1161,28 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       const targetIndex = fullPlaylist.findIndex(s => s.id === initialId);
       if (targetIndex === -1) return;
 
-      const rntp = await getRNTP();
-      if (!rntp) return;
+      const queueItems: QueueItem[] = [];
+      
+      for (let i = targetIndex; i < fullPlaylist.length; i++) {
+        if (abortSignal.aborted) return;
+        queueItems.push({
+          song: fullPlaylist[i],
+          isDownloaded: true,
+        });
+      }
+      
+      for (let i = 0; i < targetIndex; i++) {
+        if (abortSignal.aborted) return;
+        queueItems.push({
+          song: fullPlaylist[i],
+          isDownloaded: true,
+        });
+      }
 
-      const addTrack = async (song: DownloadedSongMetadata): Promise<boolean> => {
-        if (abortSignal.aborted || currentSongIdRef.current !== initialId) return false;
-        try {
-          await rntp.TrackPlayer.add({
-            id: song.id,
-            url: song.localTrackUri,
-            title: song.title,
-            artist: song.artist,
-            artwork: song.localArtworkUri,
-            duration: song.duration,
-          });
-        } catch (e) {
-          log(`BG Downloaded Queue error on "${song.title}": ${e}`);
-        }
-        return true;
-      };
-
-      const songsAfter = fullPlaylist.slice(targetIndex + 1);
-      const songsBefore = fullPlaylist.slice(0, targetIndex).reverse();
-
-      for (const s of songsAfter) { if (!(await addTrack(s))) return; await delay(150); }
-      for (const s of songsBefore) { if (!(await addTrack(s))) return; await delay(150); }
+      setQueue(queueItems);
+      setCurrentQueueIndex(0);
+      await saveQueueState(queueItems, 0);
+      log(`Created downloaded playlist queue with ${queueItems.length} tracks`);
     },
     [log],
   );
@@ -1082,31 +1194,21 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       const related = await fetchRelatedSongs(song.url);
       if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
 
-      const rntp = await getRNTP();
-      if (!rntp) return;
-
-      for (const relSong of related.slice(0, 5)) {
-        if (abortSignal.aborted || currentSongIdRef.current !== songId) return;
-        const track = await resolveTrack(relSong);
-        if (!track) continue;
-        storeTrackExtras(track.id, {
-          videoUrl: track.videoUrl,
-          muxedVideoUrl: track.muxedVideoUrl,
-          videoId: track.videoId,
-          uploaderUrl: track.uploaderUrl,
-          likeCount: track.likeCount,
-          dislikeCount: track.dislikeCount,
-          viewCount: track.viewCount,
-          commentsCount: track.commentsCount,
-        });
-        await rntp.TrackPlayer.add(track);
-        await delay(200);
+      // Only add related songs if queue is empty
+      if (queue.length === 0 && related.length > 0) {
+        const queueItems: QueueItem[] = related.slice(0, 10).map(relSong => ({
+          song: relSong,
+          isDownloaded: false,
+        }));
+        setQueue(queueItems);
+        await saveQueueState(queueItems, -1);
+        log(`Added ${queueItems.length} up-next songs to queue`);
       }
     },
-    [log],
+    [queue.length, log],
   );
 
-  // ─── CORE PLAY FUNCTION ────────────────────────────────────────────────────
+  // ─── CORE PLAY FUNCTIONS ────────────────────────────────────────────────────
   const playAudio = useCallback(async (
     songToPlay: Song,
     playlist?: Song[],
@@ -1125,95 +1227,51 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       return;
     }
 
-    const rntp = await getRNTP();
-    if (!rntp) {
-      Alert.alert('Player Error', 'Audio engine failed to load.');
-      return;
-    }
-
     const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
     if (goToPlayer) {
       goToPlayer();
-    } else {
-      log('ERROR: expandPlayer not registered');
-      return;
     }
 
-    currentSongRef.current = songToPlay;
-    currentSongIdRef.current = songToPlay.id;
-    setCurrentTrack(songToPlay);
-
-    setIsLoading(true);
+    // Cancel any background operations
     bgAbortControllerRef.current?.abort();
     bgAbortControllerRef.current = new AbortController();
     const abortSignal = bgAbortControllerRef.current.signal;
-    isRecoveringRef.current = false;
 
-    try {
-      log(`Play: "${songToPlay.title}"`);
-
-      const cached = await getCachedAudioStream(songToPlay.id);
-
-      if (cached) {
-        const track = buildTrack(songToPlay, cached.url, null, null, cached.duration);
-        storeTrackExtras(track.id, {
-          videoUrl: track.videoUrl,
-          muxedVideoUrl: track.muxedVideoUrl,
-          videoId: track.videoId,
-          uploaderUrl: track.uploaderUrl,
-          likeCount: track.likeCount,
-          dislikeCount: track.dislikeCount,
-          viewCount: track.viewCount,
-          commentsCount: track.commentsCount,
-        });
-        await rntp.TrackPlayer.load(track);
-        await rntp.TrackPlayer.play();
-        log(`Now playing (cached): "${track.title}"`);
-        saveQuickActions(track.url, track.id).catch(() => {});
-      } else {
-        const track = await resolveTrack(songToPlay);
-        if (abortSignal.aborted) { setIsLoading(false); return; }
-
-        if (!track) {
-          Alert.alert('Playback Error', `"${songToPlay.title}" is unavailable.`);
-          setIsLoading(false);
-          return;
-        }
-
-        storeTrackExtras(track.id, {
-          videoUrl: track.videoUrl,
-          muxedVideoUrl: track.muxedVideoUrl,
-          videoId: track.videoId,
-          uploaderUrl: track.uploaderUrl,
-          likeCount: track.likeCount,
-          dislikeCount: track.dislikeCount,
-          viewCount: track.viewCount,
-          commentsCount: track.commentsCount,
-        });
-
-        currentSongIdRef.current = track.id;
-
-        await rntp.TrackPlayer.load(track);
-        await rntp.TrackPlayer.play();
-        log(`Now playing (resolved): "${track.title}"`);
-
-        if (track.url) {
-          saveQuickActions(track.url, track.id).catch(() => {});
-        }
+    // If we have a playlist, create a queue
+    if (playlist && playlist.length > 1) {
+      await addPlaylistTracksInBackground(songToPlay, playlist, abortSignal);
+      await loadTrackFromQueue(0, true);
+    } else {
+      // Single song - clear queue and just play this one
+      setQueue([]);
+      setCurrentQueueIndex(-1);
+      
+      // Resolve and play the single track
+      const resolvedTrack = await resolveTrack(songToPlay);
+      if (!resolvedTrack) {
+        Alert.alert('Playback Error', `"${songToPlay.title}" is unavailable.`);
+        return;
       }
 
-      if (playlist && playlist.length > 1) {
-        addPlaylistTracksInBackground(songToPlay, playlist, abortSignal).catch(() => {});
-      } else {
-        addUpNextSongs(songToPlay, abortSignal).catch(() => {});
-      }
-    } catch (error) {
-      log(`playAudio error: ${error}`);
-      Alert.alert('Playback Error', `Failed to play "${songToPlay.title}".`);
-    } finally {
-      setIsLoading(false);
+      await cleanupSound();
+      
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: resolvedTrack.url },
+        { shouldPlay: true }
+      );
+      
+      currentSoundRef.current = sound;
+      await setupPlaybackListener(sound);
+      setCurrentTrack(songToPlay);
+      currentSongRef.current = songToPlay;
+      currentSongIdRef.current = songToPlay.id;
+      
+      await updateNowPlayingNotification(songToPlay, true);
+      
+      // Add up-next suggestions
+      addUpNextSongs(songToPlay, abortSignal).catch(() => {});
     }
-  }, [netInfo.isConnected, addPlaylistTracksInBackground, addUpNextSongs, log]);
+  }, [netInfo.isConnected, addPlaylistTracksInBackground, addUpNextSongs, cleanupSound, setupPlaybackListener, loadTrackFromQueue, log]);
 
   const playPlaylist = useCallback(async (songs: Song[], expandPlayerFn?: () => void) => {
     if (!songs?.length) {
@@ -1225,30 +1283,15 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
   const playNext = useCallback(async (songsToAdd: Song[] | null) => {
     if (!songsToAdd?.length) return;
-    try {
-      const rntp = await getRNTP();
-      if (!rntp) return;
-
-      for (const song of songsToAdd) {
-        if (song.id === currentSongIdRef.current) continue;
-        const track = await resolveTrack(song);
-        if (!track) continue;
-        storeTrackExtras(track.id, {
-          videoUrl: track.videoUrl,
-          muxedVideoUrl: track.muxedVideoUrl,
-          videoId: track.videoId,
-          uploaderUrl: track.uploaderUrl,
-          likeCount: track.likeCount,
-          dislikeCount: track.dislikeCount,
-          viewCount: track.viewCount,
-          commentsCount: track.commentsCount,
-        });
-        await rntp.TrackPlayer.add(track);
-      }
-    } catch {
-      Alert.alert('Playback Error', 'Failed to queue next song(s).');
-    }
-  }, []);
+    
+    const newQueueItems: QueueItem[] = songsToAdd.map(song => ({
+      song,
+      isDownloaded: false,
+    }));
+    
+    setQueue(prev => [...newQueueItems, ...prev]);
+    log(`Added ${newQueueItems.length} songs to play next`);
+  }, [log]);
 
   const playDownloadedSong = useCallback(async (
     songToPlay: DownloadedSongMetadata,
@@ -1260,46 +1303,52 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
       return;
     }
 
-    const rntp = await getRNTP();
-    if (!rntp) {
-      Alert.alert('Player Error', 'Audio engine failed to load.');
-      return;
+    const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
+    if (goToPlayer) {
+      goToPlayer();
     }
 
-    const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
-    goToPlayer?.();
+    bgAbortControllerRef.current?.abort();
+    bgAbortControllerRef.current = new AbortController();
+    const abortSignal = bgAbortControllerRef.current.signal;
 
-    try {
-      setIsLoading(true);
-      bgAbortControllerRef.current?.abort();
-      bgAbortControllerRef.current = new AbortController();
-      const abortSignal = bgAbortControllerRef.current.signal;
-
-      currentSongRef.current = null;
-      currentSongIdRef.current = songToPlay.id;
-
-      await rntp.TrackPlayer.load({
+    if (playlist && playlist.length > 1) {
+      await addDownloadedPlaylistTracksInBackground(songToPlay, playlist, abortSignal);
+      await loadTrackFromQueue(0, true);
+    } else {
+      setQueue([]);
+      setCurrentQueueIndex(-1);
+      
+      await cleanupSound();
+      
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: songToPlay.localTrackUri },
+        { shouldPlay: true }
+      );
+      
+      currentSoundRef.current = sound;
+      await setupPlaybackListener(sound);
+      setCurrentTrack({
         id: songToPlay.id,
-        url: songToPlay.localTrackUri,
         title: songToPlay.title,
         artist: songToPlay.artist,
-        artwork: songToPlay.localArtworkUri,
-        duration: songToPlay.duration,
+        thumbnail: songToPlay.localArtworkUri || '',
+        url: songToPlay.localTrackUri,
+        videoId: undefined,
       });
-
-      if (abortSignal.aborted) { setIsLoading(false); return; }
-
-      await rntp.TrackPlayer.play();
-
-      if (playlist?.length) {
-        addDownloadedPlaylistTracksInBackground(songToPlay, playlist, abortSignal).catch(() => {});
-      }
-    } catch (error) {
-      Alert.alert('Playback Error', `Failed to play "${songToPlay.title}".`);
-    } finally {
-      setIsLoading(false);
+      currentSongRef.current = null;
+      currentSongIdRef.current = songToPlay.id;
+      
+      await updateNowPlayingNotification({
+        id: songToPlay.id,
+        title: songToPlay.title,
+        artist: songToPlay.artist,
+        thumbnail: songToPlay.localArtworkUri || '',
+        url: songToPlay.localTrackUri,
+        videoId: undefined,
+      }, true);
     }
-  }, [addDownloadedPlaylistTracksInBackground]);
+  }, [addDownloadedPlaylistTracksInBackground, cleanupSound, setupPlaybackListener, loadTrackFromQueue]);
 
   const playAllDownloadedSongs = useCallback(async (
     songs: DownloadedSongMetadata[],
@@ -1314,39 +1363,58 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
   const togglePlayPause = useCallback(async () => {
     try {
-      const rntp = await getRNTP();
-      if (!rntp) {
-        Alert.alert('Player Error', 'Audio engine not available.');
+      if (!currentSoundRef.current) {
+        // No sound loaded, try to restore from queue
+        if (queue.length > 0 && currentQueueIndex >= 0) {
+          await loadTrackFromQueue(currentQueueIndex, true);
+        } else {
+          Alert.alert('Nothing to Play', 'Please select a song first.');
+        }
         return;
       }
 
-      const queue = await rntp.TrackPlayer.getQueue();
-      if (!queue?.length) {
-        Alert.alert('Nothing to Play', 'Please select a song first.');
+      const status = await currentSoundRef.current.getStatusAsync();
+      if (!status.isLoaded) {
+        if (queue.length > 0 && currentQueueIndex >= 0) {
+          await loadTrackFromQueue(currentQueueIndex, true);
+        } else if (currentTrack?.url) {
+          // Try to reload current track
+          const resolvedTrack = await resolveTrack(currentTrack as Song);
+          if (resolvedTrack) {
+            await cleanupSound();
+            const { sound } = await Audio.Sound.createAsync(
+              { uri: resolvedTrack.url },
+              { shouldPlay: true }
+            );
+            currentSoundRef.current = sound;
+            await setupPlaybackListener(sound);
+          }
+        }
         return;
       }
 
-      const willBePlaying = !isPlaying;
-      setOptimisticPlaying(willBePlaying);
-
-      if (isPlaying) {
-        await rntp.TrackPlayer.pause();
+      if (status.isPlaying) {
+        await currentSoundRef.current.pauseAsync();
+        await updateNowPlayingNotification(currentTrack, false);
         log('Paused');
       } else {
-        await rntp.TrackPlayer.play();
+        await currentSoundRef.current.playAsync();
+        await updateNowPlayingNotification(currentTrack, true);
         log('Playing');
       }
-    } catch (error) {
-      setOptimisticPlaying(null);
-      log(`togglePlayPause error: ${error}`);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      log(`togglePlayPause error: ${error.message}`);
+      setError(error);
     }
-  }, [isPlaying, log]);
+  }, [currentTrack, queue, currentQueueIndex, loadTrackFromQueue, cleanupSound, setupPlaybackListener, log]);
 
-  const seekTo = useCallback(async (position: number) => {
+  const seekTo = useCallback(async (newPosition: number) => {
     try {
-      const rntp = await getRNTP();
-      if (!rntp) return;
-      await rntp.TrackPlayer.seekTo(position);
+      if (currentSoundRef.current) {
+        await currentSoundRef.current.setPositionAsync(newPosition * 1000);
+        setPosition(newPosition);
+      }
     } catch (error) {
       log(`seekTo error: ${error}`);
     }
@@ -1354,31 +1422,62 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
 
   const skipToNext = useCallback(async () => {
     try {
-      const rntp = await getRNTP();
-      if (!rntp) return;
-      await rntp.TrackPlayer.skipToNext();
+      if (queue.length === 0) {
+        log('No queue available for skipToNext');
+        return;
+      }
+
+      const nextIndex = currentQueueIndex + 1;
+      if (nextIndex < queue.length) {
+        await loadTrackFromQueue(nextIndex, true);
+      } else {
+        // Loop back to the beginning if we're at the end
+        if (queue.length > 0) {
+          await loadTrackFromQueue(0, true);
+        }
+      }
     } catch (error) {
       log(`skipToNext error: ${error}`);
     }
-  }, [log]);
+  }, [queue, currentQueueIndex, loadTrackFromQueue, log]);
 
   const skipToPrevious = useCallback(async () => {
     try {
-      const rntp = await getRNTP();
-      if (!rntp) return;
-      await rntp.TrackPlayer.skipToPrevious();
+      // If we're more than 3 seconds in, just seek to start
+      if (position > 3) {
+        await seekTo(0);
+        return;
+      }
+
+      // Otherwise go to previous track
+      if (queue.length === 0) {
+        log('No queue available for skipToPrevious');
+        return;
+      }
+
+      const prevIndex = currentQueueIndex - 1;
+      if (prevIndex >= 0) {
+        await loadTrackFromQueue(prevIndex, true);
+      } else {
+        // Loop to the end if we're at the beginning
+        if (queue.length > 0) {
+          await loadTrackFromQueue(queue.length - 1, true);
+        }
+      }
     } catch (error) {
       log(`skipToPrevious error: ${error}`);
     }
-  }, [log]);
+  }, [position, queue, currentQueueIndex, loadTrackFromQueue, seekTo, log]);
 
   const contextValue: MusicPlayerContextType = {
     currentTrack,
     isPlaying,
     isBuffering,
     isLoading,
-    position: progress.position,
-    duration: progress.duration,
+    position,
+    duration,
+    queue,
+    currentQueueIndex,
     playAudio,
     playPlaylist,
     playNext,
@@ -1388,6 +1487,8 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({
     seekTo,
     skipToNext,
     skipToPrevious,
+    setQueue,
+    setCurrentQueueIndex,
     expandPlayer,
     collapsePlayer,
     setPlayerOverlayRefs,

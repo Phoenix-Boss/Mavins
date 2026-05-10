@@ -1,7 +1,9 @@
+// components/QuickPicksSection.tsx
 /**
- * This file defines the `QuickPicksSection` component, which displays a horizontally
- * scrollable list of recommended songs, often referred to as "Quick Picks".
- * It shows song artwork, title, and artist, and indicates the currently playing track.
+ * QuickPicksSection - expo-av version
+ * 
+ * Displays a horizontally scrollable list of recommended songs.
+ * Uses useActiveTrack from expo-av hooks.
  */
 
 import React, { useMemo } from "react";
@@ -14,22 +16,14 @@ import { useRouter } from "expo-router";
 import { Text, TouchableOpacity, View } from "react-native";
 import LoaderKit from "react-native-loader-kit";
 import { ScaledSheet } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/hooks/useActiveTrack";
+import type { Song } from "@/types/song";
 
-/**
- * @interface QuickPicksSectionProps
- */
 export interface QuickPicksSectionProps {
-  results: Song[]; // An array of Song objects to display as quick picks.
-  onItemClick: (item: Song) => void; // Callback function when a quick pick item is clicked.
+  results: Song[];
+  onItemClick: (item: Song) => void;
 }
 
-/**
- * `QuickPicksSection` component.
- * Renders a section of quick pick songs in a two-row horizontal scroll view.
- * @param results - An array of Song objects to display as quick picks.
- * @param onItemClick - Callback function when a quick pick item is clicked.
- */
 export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
   results,
   onItemClick,
@@ -37,11 +31,6 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
   const router = useRouter();
   const activeTrack = useActiveTrack();
 
-  /**
-   * Renders an individual quick pick item (song).
-   * @param item The Song object to render.
-   * @returns A TouchableOpacity component representing the quick pick item.
-   */
   const renderItem = (item: Song) => (
     <TouchableOpacity
       key={item.id}
@@ -51,7 +40,6 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
         onItemClick(item);
       }}
       onLongPress={() => {
-        // Prepare song data for the menu modal.
         const songData = JSON.stringify({
           id: item.id,
           title: item.title,
@@ -59,10 +47,8 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
           thumbnail: item.thumbnail,
         });
 
-        // Trigger haptic feedback for long press.
         triggerHaptic(Haptics.AndroidHaptics.Long_Press);
 
-        // Navigate to the menu modal with song details.
         router.push({
           pathname: "/(modals)/menu",
           params: { songData: songData, type: "song" },
@@ -71,7 +57,6 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
     >
       <View style={styles.imageContainer}>
         <FastImage source={{ uri: item.thumbnail }} style={styles.thumbnail} />
-        {/* Display a playing indicator if this is the active track */}
         {activeTrack?.id === item.id && (
           <LoaderKit
             style={styles.trackPlayingIconIndicator}
@@ -97,7 +82,6 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
     }));
   }, [results]);
 
-  // If there are no results, return null to avoid rendering the section.
   if (results.length === 0) {
     return null;
   }
@@ -125,7 +109,6 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
   );
 };
 
-// Styles for the QuickPicksSection component.
 const styles = ScaledSheet.create({
   header: {
     color: "white",

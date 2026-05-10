@@ -1,5 +1,10 @@
 // contexts/GlobalUIStateContext.tsx
-// CLEAN RNTP IMPLEMENTATION - No redundant state
+/**
+ * GlobalUIStateContext - expo-av version
+ * 
+ * Manages global UI state including tab visibility and music playing status.
+ * Uses MusicPlayerContext instead of RNTP's usePlaybackState.
+ */
 
 import React, {
   createContext,
@@ -9,7 +14,7 @@ import React, {
   useEffect,
   useMemo,
 } from "react";
-import TrackPlayer, { usePlaybackState, State } from "react-native-track-player";
+import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { triggerHaptic } from "@/helpers/haptics";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,27 +49,28 @@ export const GlobalUIStateProvider: React.FC<{
   const [handleVisible, setHandleVisibleState] = useState(false);
   const [isMusicPlaying, setIsMusicPlayingState] = useState(false);
 
-  // 🔥 RNTP: usePlaybackState returns the current state directly
-  const playbackState = usePlaybackState();
+  // Get playback state from MusicPlayerContext (expo-av)
+  const { isPlaying, isLoading, position, duration } = useMusicPlayer();
   
   // Determine if music is playing (includes buffering as "active" state)
-  const isPlaying = useMemo(() => {
-    return playbackState === State.Playing || playbackState === State.Buffering;
-  }, [playbackState]);
+  // For expo-av, we consider isPlaying as the main state
+  const isPlayingValue = useMemo(() => {
+    return isPlaying;
+  }, [isPlaying]);
 
   // ── Sync tab/handle visibility with playback ──────────────────────────────
   useEffect(() => {
-    setIsMusicPlayingState(isPlaying);
-    setHandleVisibleState(isPlaying);
+    setIsMusicPlayingState(isPlayingValue);
+    setHandleVisibleState(isPlayingValue);
 
     if (!tabsLocked) {
-      setTabsVisibleState(!isPlaying);
+      setTabsVisibleState(!isPlayingValue);
     }
 
-    if (!isPlaying) {
+    if (!isPlayingValue) {
       setTabsLockedState(false);
     }
-  }, [isPlaying, tabsLocked]);
+  }, [isPlayingValue, tabsLocked]);
 
   // ── Setters ───────────────────────────────────────────────────────────────
 

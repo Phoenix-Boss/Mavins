@@ -1,5 +1,6 @@
+// app/(tabs)/search/playlist.tsx
 /**
- * PlaylistView
+ * PlaylistView - expo-av version
  *
  * Displays the contents of a remote playlist fetched via MavinEngine.
  * Shows artwork, title, and song list; supports per-song playback and
@@ -7,9 +8,9 @@
  *
  * Route params:
  *   id — full playlist URL (e.g. "https://music.youtube.com/playlist?list=…")
- * 
+ *
  * NOTE: This file keeps mavin-engine as requested. Only the active track
- * detection is updated to use RNTP's useActiveTrack instead of mavin-eq.
+ * detection is updated to use expo-av's useActiveTrack.
  */
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
@@ -18,12 +19,12 @@ import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-// mavin-engine kept as requested
+import { useActiveTrack } from "@/hooks/useActiveTrack";
 import MavinEngine, {
   PlaylistInfo,
   StreamInfoItem,
 } from "@/modules/mavin-engine";
-import { FlashList } from "@shopify/flash-list";
+import { FlashList, FlashListProps } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
 import color from "color";
@@ -40,27 +41,33 @@ import {
   verticalScale,
 } from "react-native-size-matters/extend";
 
-// RNTP import - replacing mavin-eq for active track detection only
-import { useActiveTrack } from "react-native-track-player";
+// ─── Typed FlashList wrapper ─────────────────────────────────────────────────
+
+type FlashListPropsWithEstimated<T> = FlashListProps<T> & {
+  estimatedItemSize?: number;
+};
+const TypedFlashList = FlashList as React.ComponentType<
+  FlashListPropsWithEstimated<Song>
+>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local types
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface Song {
-  id: string;
-  title: string;
-  artist: string;
+  id:        string;
+  title:     string;
+  artist:    string;
   thumbnail: string;
-  url: string;
+  url:       string;
 }
 
 interface PlaylistPageData {
-  title: string;
-  subtitle: string;
+  title:           string;
+  subtitle:        string;
   second_subtitle: string;
-  thumbnail: string;
-  songs: Song[];
+  thumbnail:       string;
+  songs:           Song[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,19 +83,16 @@ const playlistInfoToPageData = (info: PlaylistInfo): PlaylistPageData => {
   const songs: Song[] = info.items
     .filter((i): i is StreamInfoItem => i.type === "stream")
     .map((s) => ({
-      id: s.url.split("v=")[1]?.split("&")[0] ?? s.url,
-      title: s.name,
-      artist: s.uploaderName,
-      thumbnail:
-        s.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ??
-        s.thumbnails[0]?.url ??
-        thumbnail,
-      url: s.url,
+      id:        s.url.split("v=")[1]?.split("&")[0] ?? s.url,
+      title:     s.name,
+      artist:    s.uploaderName,
+      thumbnail: s.thumbnails.find((t) => t.resolutionLevel === "MEDIUM")?.url ?? s.thumbnails[0]?.url ?? thumbnail,
+      url:       s.url,
     }));
 
   return {
-    title: info.name,
-    subtitle: info.uploaderName,
+    title:           info.name,
+    subtitle:        info.uploaderName,
     second_subtitle: `${info.streamCount} songs`,
     thumbnail,
     songs,
@@ -100,37 +104,28 @@ const playlistInfoToPageData = (info: PlaylistInfo): PlaylistPageData => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PlaylistView = () => {
-  const [isScrolling, setIsScrolling] = useState<boolean>(false);
+  const [isScrolling, setIsScrolling]         = useState<boolean>(false);
   const [showHeaderTitle, setShowHeaderTitle] = useState<boolean>(false);
-  const [loading, setLoading] = useState(true);
-  const [titleLayout, setTitleLayout] = useState({ y: 0, height: 0 });
-  const [playlistData, setPlaylistData] = useState<PlaylistPageData | null>(null);
-  const { top, bottom } = useSafeAreaInsets();
-  const router = useRouter();
-  const lastActiveTrack = useLastActiveTrack();
-  
-  // RNTP hook - replacing mavin-eq
-  const activeTrack = useActiveTrack();
-  
-  const { playAudio, playPlaylist } = useMusicPlayer();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const [loading, setLoading]                 = useState(true);
+  const [titleLayout, setTitleLayout]         = useState({ y: 0, height: 0 });
+  const [playlistData, setPlaylistData]       = useState<PlaylistPageData | null>(null);
+  const { top, bottom }                       = useSafeAreaInsets();
+  const router                                = useRouter();
+  const lastActiveTrack                       = useLastActiveTrack();
+  const activeTrack                           = useActiveTrack();
+  const { playAudio, playPlaylist }           = useMusicPlayer();
+  const { id }                                = useLocalSearchParams<{ id: string }>();
 
-  const { imageColors } = useImageColors(
-    playlistData?.thumbnail ?? unknownTrackImageUri
-  );
+  const { imageColors } = useImageColors(playlistData?.thumbnail ?? unknownTrackImageUri);
 
   const isFloatingPlayerNotVisible = !(activeTrack ?? lastActiveTrack);
 
   useEffect(() => {
     const fetchPlaylistData = async () => {
-      if (!id) {
-        setLoading(false);
-        return;
-      }
+      if (!id) { setLoading(false); return; }
       setLoading(true);
       try {
         console.log(`[PlaylistView] fetching playlist: ${id}`);
-        // mavin-engine kept as requested
         const info: PlaylistInfo = await MavinEngine.getPlaylistInfo(id, 0);
         setPlaylistData(playlistInfoToPageData(info));
       } catch (error) {
@@ -176,81 +171,64 @@ const PlaylistView = () => {
         {playlistData?.title}
       </Text>
 
-      <Text
-        style={{
-          color: Colors.text,
-          textAlign: "center",
-          fontSize: moderateScale(15),
-          marginBottom: 5,
-        }}
-      >
-        {playlistData?.subtitle}
-      </Text>
-      <Text
-        style={{
-          color: Colors.text,
-          textAlign: "center",
-          fontSize: moderateScale(15),
-          marginBottom: 5,
-        }}
-      >
-        {playlistData?.second_subtitle}
-      </Text>
+      <Text style={styles.subtitleText}>{playlistData?.subtitle}</Text>
+      <Text style={styles.subtitleText}>{playlistData?.second_subtitle}</Text>
     </>
   );
 
-  const renderSongItem = ({ item }: { item: Song }) => (
-    <View style={styles.songItem}>
-      <TouchableOpacity
-        style={styles.songItemTouchableArea}
-        onPress={() => handleSongSelect(item)}
-      >
-        <Image
-          source={{ uri: item.thumbnail }}
-          style={styles.resultThumbnail}
-          contentFit="cover"
-        />
-        {activeTrack?.id === item.id && (
-          <LoaderKit
-            style={styles.trackPlayingIconIndicator}
-            name="LineScalePulseOutRapid"
-            color="white"
+  const renderSongItem = ({ item }: { item: Song }) => {
+    const isPlaying = activeTrack?.id === item.id;
+    return (
+      <View style={styles.songItem}>
+        <TouchableOpacity
+          style={styles.songItemTouchableArea}
+          onPress={() => handleSongSelect(item)}
+        >
+          <Image
+            source={{ uri: item.thumbnail }}
+            style={styles.resultThumbnail}
+            contentFit="cover"
           />
-        )}
-        <View style={styles.resultText}>
-          <Text style={styles.resultTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.resultArtist} numberOfLines={1}>
-            {item.artist}
-          </Text>
-        </View>
-      </TouchableOpacity>
+          {isPlaying && (
+            <LoaderKit
+              style={styles.trackPlayingIconIndicator}
+              name="LineScalePulseOutRapid"
+              color="white"
+            />
+          )}
+          <View style={styles.resultText}>
+            <Text style={[styles.resultTitle, isPlaying && { color: "#D4AF37" }]} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.resultArtist} numberOfLines={1}>
+              {item.artist}
+            </Text>
+          </View>
+        </TouchableOpacity>
 
-      <TouchableOpacity
-        onPress={() => {
-          triggerHaptic();
-          const songData = JSON.stringify({
-            id: item.id,
-            title: item.title,
-            artist: item.artist,
-            thumbnail: item.thumbnail,
-          });
-          router.push({
-            pathname: "/(modals)/menu",
-            params: { songData, type: "song" },
-          });
-        }}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Entypo
-          name="dots-three-vertical"
-          size={moderateScale(15)}
-          color="white"
-        />
-      </TouchableOpacity>
-    </View>
-  );
+        <TouchableOpacity
+          onPress={() => {
+            triggerHaptic();
+            router.push({
+              pathname: "/(modals)/menu",
+              params: {
+                songData: JSON.stringify({
+                  id:        item.id,
+                  title:     item.title,
+                  artist:    item.artist,
+                  thumbnail: item.thumbnail,
+                }),
+                type: "song",
+              },
+            });
+          }}
+          hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+        >
+          <Entypo name="dots-three-vertical" size={moderateScale(15)} color="white" />
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   return (
     <LinearGradient
@@ -274,10 +252,7 @@ const PlaylistView = () => {
             size={moderateScale(28)}
             color={Colors.text}
             style={{ paddingLeft: 15, paddingRight: 10, marginTop: 2 }}
-            onPress={() => {
-              triggerHaptic();
-              router.back();
-            }}
+            onPress={() => { triggerHaptic(); router.back(); }}
           />
           <Text
             numberOfLines={1}
@@ -297,7 +272,7 @@ const PlaylistView = () => {
           />
         )}
 
-        <FlashList
+        <TypedFlashList
           data={playlistData?.songs ?? []}
           renderItem={renderSongItem}
           keyExtractor={(item: Song) => item.id}
@@ -335,7 +310,7 @@ const PlaylistView = () => {
               triggerHaptic();
               if (!playlistData?.songs.length) return;
               await playPlaylist(playlistData.songs);
-              await router.navigate("/player");
+              await router.navigate("/(player)");
             }}
           />
         )}
@@ -351,88 +326,24 @@ export default PlaylistView;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const styles = ScaledSheet.create({
-  container: {
-    flex: 1,
-  },
-  centeredContainer: {
-    flex: 1,
-    backgroundColor: "#000",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "flex-start",
-    alignItems: "center",
-    paddingBottom: 10,
-  },
-  headerText: {
-    fontSize: "20@ms",
-    fontWeight: "bold",
-    color: Colors.text,
-    textAlign: "left",
-    width: "82%",
-  },
-  headerScrolled: {
-    backgroundColor: "rgba(0,0,0,0.3)",
-  },
+  container:        { flex: 1 },
+  centeredContainer:{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" },
+  header:           { flexDirection: "row", justifyContent: "flex-start", alignItems: "center", paddingBottom: 10 },
+  headerText:       { fontSize: "20@ms", fontWeight: "bold", color: Colors.text, textAlign: "left", width: "82%" },
+  headerScrolled:   { backgroundColor: "rgba(0,0,0,0.3)" },
   artworkImageContainer: {
-    elevation: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.8,
-    shadowRadius: 11,
-    borderRadius: 12,
-    alignSelf: "center",
-    height: "240@ms",
-    width: "240@ms",
-    marginBottom: 10,
+    elevation: 20, shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.8, shadowRadius: 11,
+    borderRadius: 12, alignSelf: "center", height: "240@ms", width: "240@ms", marginBottom: 10,
   },
-  artworkImage: {
-    width: "240@ms",
-    height: "240@ms",
-    borderRadius: 12,
-  },
-  titleText: {
-    fontSize: "24@ms",
-    fontWeight: "bold",
-    color: Colors.text,
-    marginHorizontal: 15,
-    textAlign: "center",
-    marginBottom: 5,
-  },
-  songItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 10,
-  },
-  songItemTouchableArea: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  resultThumbnail: {
-    width: "55@ms",
-    height: "55@ms",
-    marginRight: 10,
-    borderRadius: 8,
-  },
-  trackPlayingIconIndicator: {
-    position: "absolute",
-    top: "18@ms",
-    left: "19@ms",
-    width: "20@ms",
-    height: "20@ms",
-  },
-  resultText: {
-    flex: 1,
-  },
-  resultTitle: {
-    color: Colors.text,
-    fontSize: "16@ms",
-  },
-  resultArtist: {
-    color: Colors.textMuted,
-    fontSize: "14@ms",
-  },
+  artworkImage:   { width: "240@ms", height: "240@ms", borderRadius: 12 },
+  titleText:      { fontSize: "24@ms", fontWeight: "bold", color: Colors.text, marginHorizontal: 15, textAlign: "center", marginBottom: 5 },
+  subtitleText:   { color: Colors.text, textAlign: "center", fontSize: "15@ms", marginBottom: 5 },
+  songItem:       { flexDirection: "row", alignItems: "center", padding: 10 },
+  songItemTouchableArea: { flex: 1, flexDirection: "row", alignItems: "center" },
+  resultThumbnail:{ width: "55@ms", height: "55@ms", marginRight: 10, borderRadius: 8 },
+  trackPlayingIconIndicator: { position: "absolute", top: "18@ms", left: "19@ms", width: "20@ms", height: "20@ms" },
+  resultText:     { flex: 1 },
+  resultTitle:    { color: Colors.text, fontSize: "16@ms" },
+  resultArtist:   { color: Colors.textMuted, fontSize: "14@ms" },
 });

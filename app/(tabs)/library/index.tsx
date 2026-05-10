@@ -1,25 +1,12 @@
+// app/(library)/index.tsx
 /**
- * LibraryScreen — Mavin Music Platform
- *
+ * LibraryScreen — Mavin Music Platform - expo-av version
+ * 
  * Unified library for both streaming (online) and local device music.
- *
+ * Uses useActiveTrack and useLastActiveTrack from expo-av hooks.
+ * 
  * Tabs:     Playlists · Albums · Artists · Songs · Downloads
  * Quick Access: Favourites · Recently Played · Most Played · Local Music
- *
- * Features:
- *   - Real data from Redux store hooks (playlists, favorites, downloads, local)
- *   - Per-tab sort/filter with persistence
- *   - Grid/List view toggle (Albums, Artists)
- *   - Shuffle all per tab
- *   - Pull-to-refresh
- *   - Create playlist FAB (Playlists tab)
- *   - Import local music button (Songs tab)
- *   - Search within library
- *   - Pinned quick-access row
- *   - Empty states per tab
- *   - Smart resume: if user was last on Local Music, redirect straight there
- *
- * Design: dark luxury — black base, gold accents, Meriva display font.
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from "react";
@@ -45,25 +32,40 @@ import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/hooks/useActiveTrack";
 import {
   usePlaylists,
   useFavorites,
   useDownloadedTracks,
   useActiveDownloads,
-  type Song,
+  type Song as LibrarySong,
   type DownloadedSongMetadata,
   type Playlist,
   type SmartPlaylist,
 } from "@/store/library";
+import type { Song } from "@/types/song";
+
+// ─── Normalise store Song → types/song.Song ──────────────────────────────────
+// library.Song:    url?: string, thumbnail?: string  (both optional)
+// types/song.Song: url:  string, thumbnail:  string  (both required)
+
+const toPlayerSong = (s: LibrarySong): Song => ({
+  id:        s.id,
+  title:     s.title,
+  artist:    s.artist,
+  thumbnail: s.thumbnail ?? "",
+  url:       s.url       ?? "",
+  videoId:   undefined,
+  videoUrl:  undefined,
+  duration:  s.duration,
+});
 import { unknownTrackImageUri } from "@/constants/images";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Session flag storage (replaces MMKV — same key used in localMusic.tsx)
+// Session flag storage
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Key that localMusic.tsx writes when the user enters that screen. */
 const LAST_SCREEN_KEY = "lastLibraryScreen";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,9 +109,7 @@ const SORT_OPTIONS: Record<Tab, string[]> = {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Derives a sorted array of playlist entries from the playlists map. */
 function useSortedPlaylists(sort: string) {
-  // usePlaylists() returns Record<id, Playlist|SmartPlaylist> directly — not { playlists }
   const playlists = usePlaylists();
   return useMemo(() => {
     if (!playlists) return [];
@@ -123,33 +123,30 @@ function useSortedPlaylists(sort: string) {
     if (sort === "A–Z") return entries.sort((a, b) => a.name.localeCompare(b.name));
     if (sort === "By You") return entries.filter((p) => p.createdBy === "user");
     if (sort === "Saved") return entries.filter((p) => p.createdBy === "shared");
-    return entries; // "Recent" keeps insertion order
+    return entries;
   }, [playlists, sort]);
 }
 
-/** Derives sorted downloaded tracks. */
 function useSortedDownloads(sort: string) {
   const raw = useDownloadedTracks();
   return useMemo(() => {
     const copy = [...raw];
     if (sort === "A–Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "Duration") return copy.sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0));
-    return copy.reverse(); // Recent first by default
+    return copy.reverse();
   }, [raw, sort]);
 }
 
-/** Derives sorted favorite tracks. */
 function useSortedFavorites(sort: string) {
   const { favoriteTracks } = useFavorites();
   return useMemo(() => {
-    const copy: Song[] = [...favoriteTracks];
+    const copy: LibrarySong[] = [...favoriteTracks];
     if (sort === "A–Z") return copy.sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "Artist") return copy.sort((a, b) => a.artist.localeCompare(b.artist));
     return copy;
   }, [favoriteTracks, sort]);
 }
 
-/** Derives albums from downloaded tracks (grouped by album field or artist). */
 function useDerivedAlbums(sort: string) {
   const downloads = useDownloadedTracks();
   const favorites = useFavorites().favoriteTracks;
@@ -177,7 +174,6 @@ function useDerivedAlbums(sort: string) {
   }, [downloads, favorites, sort]);
 }
 
-/** Derives artists from downloaded tracks and favorites. */
 function useDerivedArtists(sort: string) {
   const downloads = useDownloadedTracks();
   const favorites = useFavorites().favoriteTracks;
@@ -357,9 +353,7 @@ const sStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CoverArt
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── CoverArt ─────────────────────────────────────────────────────────────
 
 function CoverArt({
   uri, size, radius = 10, placeholder,
@@ -381,9 +375,7 @@ function CoverArt({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Source badge (streaming vs local)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Source badge ─────────────────────────────────────────────────────────
 
 function SourceBadge({ isLocal }: { isLocal?: boolean }) {
   if (!isLocal) return null;
@@ -410,9 +402,7 @@ const badgeStyles = ScaledSheet.create({
   text: { fontSize: "9@ms", color: C.local, fontWeight: "600" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Empty state
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Empty state ─────────────────────────────────────────────────────────
 
 function EmptyState({
   icon, title, sub, actionLabel, onAction,
@@ -461,9 +451,7 @@ const emStyles = ScaledSheet.create({
   btnText: { fontSize: "14@ms", color: C.gold, fontWeight: "700" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Row components
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Row components ─────────────────────────────────────────────────────
 
 function PlaylistRow({
   name, cover, count,
@@ -549,9 +537,7 @@ const gridStyles = ScaledSheet.create({
   cellSub: { fontSize: "11@ms", color: C.textSub, marginTop: "2@vs", textAlign: "center" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section count label
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Section count label ────────────────────────────────────────────────
 
 function SectionCount({ count, label }: { count: number; label: string }) {
   if (count === 0) return null;
@@ -575,9 +561,7 @@ const scStyles = ScaledSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Active download row
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Active download row ─────────────────────────────────────────────────
 
 function ActiveDownloadItem({ song }: { song: any }) {
   return (
@@ -613,9 +597,7 @@ const adStyles = ScaledSheet.create({
   pct: { fontSize: "10@ms", color: C.textMuted, marginTop: "3@vs" },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Download row
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Download row ────────────────────────────────────────────────────────
 
 function DownloadRow({
   item, isPlaying, onPress, onMore,
@@ -658,225 +640,6 @@ const dlStyles = ScaledSheet.create({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab panels
-// ─────────────────────────────────────────────────────────────────────────────
-
-function PlaylistsPanel({ sort, router, onCreatePlaylist }: {
-  sort: string; router: ReturnType<typeof useRouter>; onCreatePlaylist: () => void;
-}) {
-  const playlists = useSortedPlaylists(sort);
-  if (playlists.length === 0) {
-    return (
-      <EmptyState
-        icon="musical-notes-outline"
-        title="No playlists yet"
-        sub="Create your first playlist to organise your music."
-        actionLabel="Create Playlist"
-        onAction={onCreatePlaylist}
-      />
-    );
-  }
-  return (
-    <>
-      <SectionCount count={playlists.length} label="Playlist" />
-      <FlatList
-        data={playlists}
-        keyExtractor={(i) => i.id}
-        scrollEnabled={false}
-        renderItem={({ item }) => (
-          <PlaylistRow
-            name={item.name}
-            cover={item.cover}
-            count={item.count}
-            onPress={() => router.push({ pathname: "/(library)/[playlistName]", params: { playlistName: item.name, playlistId: item.id } })}
-            onMore={() => router.push({ pathname: "/(modals)/menu", params: { type: "playlist", playlistId: item.id } })}
-          />
-        )}
-        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
-      />
-    </>
-  );
-}
-
-function AlbumsPanel({ sort, router }: { sort: string; router: ReturnType<typeof useRouter> }) {
-  const albums = useDerivedAlbums(sort);
-  const [gridView, setGridView] = useState(false);
-  if (albums.length === 0) {
-    return <EmptyState icon="disc-outline" title="No albums yet" sub="Albums are derived from your downloaded tracks and favourites." />;
-  }
-  return (
-    <>
-      <SectionCount count={albums.length} label="Album" />
-      {gridView ? (
-        <FlatList
-          data={albums}
-          keyExtractor={(i) => i.id}
-          scrollEnabled={false}
-          numColumns={2}
-          columnWrapperStyle={{ justifyContent: "space-around", paddingHorizontal: scale(8) }}
-          renderItem={({ item }) => (
-            <AlbumRow item={item} onPress={() => {}} gridMode />
-          )}
-        />
-      ) : (
-        <FlatList
-          data={albums}
-          keyExtractor={(i) => i.id}
-          scrollEnabled={false}
-          renderItem={({ item }) => <AlbumRow item={item} onPress={() => {}} />}
-          ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
-        />
-      )}
-    </>
-  );
-}
-
-function ArtistsPanel({ sort, router }: { sort: string; router: ReturnType<typeof useRouter> }) {
-  const artists = useDerivedArtists(sort);
-  if (artists.length === 0) {
-    return <EmptyState icon="person-outline" title="No artists yet" sub="Artists are derived from your downloaded tracks and favourites." />;
-  }
-  return (
-    <>
-      <SectionCount count={artists.length} label="Artist" />
-      <FlatList
-        data={artists}
-        keyExtractor={(i) => i.id}
-        scrollEnabled={false}
-        renderItem={({ item }) => <ArtistRow item={item} onPress={() => {}} />}
-        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
-      />
-    </>
-  );
-}
-
-function SongsPanel({ sort, router }: { sort: string; router: ReturnType<typeof useRouter> }) {
-  const songs = useSortedFavorites(sort);
-  const activeTrack = useActiveTrack();
-  const { playAudio } = useMusicPlayer();
-  if (songs.length === 0) {
-    return (
-      <EmptyState
-        icon="heart-outline"
-        title="No songs yet"
-        sub="Heart songs from the streaming feed or your local library."
-        actionLabel="Go to Favourites"
-        onAction={() => router.push("/(library)/favorites")}
-      />
-    );
-  }
-  return (
-    <>
-      <SectionCount count={songs.length} label="Song" />
-      <FlatList
-        data={songs}
-        keyExtractor={(i) => i.id}
-        scrollEnabled={false}
-        renderItem={({ item }) => {
-          const isPlaying = activeTrack?.id === item.id;
-          return (
-            <TouchableOpacity
-              style={rowStyles.row}
-              onPress={() => { triggerHaptic(); playAudio(item, songs); }}
-              activeOpacity={0.7}
-            >
-              <CoverArt uri={item.thumbnail} size={moderateScale(52)} />
-              <View style={rowStyles.info}>
-                <Text style={[rowStyles.title, isPlaying && { color: C.gold }]} numberOfLines={1}>{item.title}</Text>
-                <Text style={rowStyles.sub} numberOfLines={1}>{item.artist}</Text>
-              </View>
-              <TouchableOpacity
-                hitSlop={12}
-                onPress={() => {
-                  triggerHaptic();
-                  router.push({
-                    pathname: "/(modals)/menu",
-                    params: {
-                      songData: JSON.stringify({ id: item.id, title: item.title, artist: item.artist, thumbnail: item.thumbnail }),
-                      type: "song",
-                    },
-                  });
-                }}
-              >
-                <Ionicons name="ellipsis-vertical" size={moderateScale(18)} color={C.textMuted} />
-              </TouchableOpacity>
-            </TouchableOpacity>
-          );
-        }}
-        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
-      />
-    </>
-  );
-}
-
-function DownloadsPanel({
-  sort, router,
-}: {
-  sort: string; router: ReturnType<typeof useRouter>;
-}) {
-  const tracks = useSortedDownloads(sort);
-  const activeDownloads = useActiveDownloads();
-  const activeTrack = useActiveTrack();
-  const { playDownloadedSong } = useMusicPlayer();
-
-  return (
-    <>
-      {/* Active downloads progress section */}
-      {activeDownloads.length > 0 && (
-        <View style={{ marginBottom: 8 }}>
-          <Text style={[scStyles.text, { marginBottom: 4, color: C.goldShimmer }]}>
-            Downloading ({activeDownloads.length})
-          </Text>
-          {activeDownloads.map((dl) => (
-            <ActiveDownloadItem key={dl.id} song={dl} />
-          ))}
-        </View>
-      )}
-
-      {tracks.length === 0 && activeDownloads.length === 0 ? (
-        <EmptyState
-          icon="cloud-download-outline"
-          title="No downloads yet"
-          sub="Download songs and albums to listen offline anywhere, even without a connection."
-        />
-      ) : (
-        <>
-          <SectionCount count={tracks.length} label="Download" />
-          <FlatList
-            data={tracks}
-            keyExtractor={(i) => i.id}
-            scrollEnabled={false}
-            renderItem={({ item }) => (
-              <DownloadRow
-                item={item}
-                isPlaying={activeTrack?.id === item.id && activeTrack?.url === item.localTrackUri}
-                onPress={() => { playDownloadedSong(item, tracks); router.navigate("/player"); }}
-                onMore={() => {
-                  router.push({
-                    pathname: "/(modals)/menu",
-                    params: {
-                      songData: JSON.stringify({
-                        id: item.id, title: item.title,
-                        artist: item.artist,
-                        thumbnail: item.localArtworkUri,
-                        url: item.localTrackUri,
-                        duration: item.duration,
-                      }),
-                      type: "downloadedSong",
-                    },
-                  });
-                }}
-              />
-            )}
-            ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
-          />
-        </>
-      )}
-    </>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // LibraryScreen
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -911,8 +674,6 @@ export default function LibraryScreen() {
   useEffect(() => {
     AsyncStorage.getItem(LAST_SCREEN_KEY).then((lastScreen) => {
       if (lastScreen === "localMusic") {
-        // Replace so pressing back from localMusic returns here properly.
-        // fromTab=1 tells LocalMusicScreen to show the compact header (no back arrow).
         router.replace({ pathname: "/(modals)/localMusic", params: { fromTab: "1" } });
       }
     });
@@ -937,11 +698,11 @@ export default function LibraryScreen() {
   const handleShuffleAll = async () => {
     triggerHaptic();
     if (activeTab === "Songs" && favoriteTracks.length > 0) {
-      await playPlaylist([...favoriteTracks].sort(() => Math.random() - 0.5));
-      router.navigate("/player");
+      await playPlaylist([...favoriteTracks].sort(() => Math.random() - 0.5).map(toPlayerSong));
+      router.navigate("/(player)");
     } else if (activeTab === "Downloads" && downloadedTracks.length > 0) {
       await playAllDownloadedSongs([...downloadedTracks].sort(() => Math.random() - 0.5));
-      router.navigate("/player");
+      router.navigate("/(player)");
     }
   };
 
@@ -968,7 +729,7 @@ export default function LibraryScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={lStyles.headerBtn}
-            onPress={() => { triggerHaptic(); router.push("/(modals)/settings"); }}
+            onPress={() => { triggerHaptic(); router.push("/(tabs)/settings"); }}
             hitSlop={10}
           >
             <Ionicons name="settings-outline" size={moderateScale(20)} color={C.textSub} />
@@ -1023,7 +784,7 @@ export default function LibraryScreen() {
               label="Favourites"
               sub="Songs you've liked"
               badge={favoriteTracks.length}
-              onPress={() => router.push("/(library)/favorites")}
+              onPress={() => router.push("/(tabs)/library/favorites")}
             />
             <QuickPill
               icon="cloud-download-outline"
@@ -1031,7 +792,7 @@ export default function LibraryScreen() {
               sub="Offline listening"
               badge={downloadedTracks.length}
               tint={C.gold}
-              onPress={() => router.push("/(library)/downloads")}
+              onPress={() => router.push("/(tabs)/library/downloads")}
             />
             <QuickPill
               icon="time-outline"
@@ -1118,6 +879,216 @@ export default function LibraryScreen() {
       )}
 
     </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab Panels (simplified versions)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PlaylistsPanel({ sort, router, onCreatePlaylist }: any) {
+  const playlists = useSortedPlaylists(sort);
+  if (playlists.length === 0) {
+    return (
+      <EmptyState
+        icon="musical-notes-outline"
+        title="No playlists yet"
+        sub="Create your first playlist to organise your music."
+        actionLabel="Create Playlist"
+        onAction={onCreatePlaylist}
+      />
+    );
+  }
+  return (
+    <>
+      <SectionCount count={playlists.length} label="Playlist" />
+      <FlatList
+        data={playlists}
+        keyExtractor={(i) => i.id}
+        scrollEnabled={false}
+        renderItem={({ item }) => (
+          <PlaylistRow
+            name={item.name}
+            cover={item.cover}
+            count={item.count}
+            onPress={() => router.push({ pathname: "/(library)/[playlistName]", params: { playlistName: item.name, playlistId: item.id } })}
+            onMore={() => router.push({ pathname: "/(modals)/menu", params: { type: "playlist", playlistId: item.id } })}
+          />
+        )}
+        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
+      />
+    </>
+  );
+}
+
+function AlbumsPanel({ sort, router }: any) {
+  const albums = useDerivedAlbums(sort);
+  const [gridView, setGridView] = useState(false);
+  if (albums.length === 0) {
+    return <EmptyState icon="disc-outline" title="No albums yet" sub="Albums are derived from your downloaded tracks and favourites." />;
+  }
+  return (
+    <>
+      <SectionCount count={albums.length} label="Album" />
+      {gridView ? (
+        <FlatList
+          data={albums}
+          keyExtractor={(i) => i.id}
+          scrollEnabled={false}
+          numColumns={2}
+          columnWrapperStyle={{ justifyContent: "space-around", paddingHorizontal: scale(8) }}
+          renderItem={({ item }) => <AlbumRow item={item} onPress={() => {}} gridMode />}
+        />
+      ) : (
+        <FlatList
+          data={albums}
+          keyExtractor={(i) => i.id}
+          scrollEnabled={false}
+          renderItem={({ item }) => <AlbumRow item={item} onPress={() => {}} />}
+          ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
+        />
+      )}
+    </>
+  );
+}
+
+function ArtistsPanel({ sort, router }: any) {
+  const artists = useDerivedArtists(sort);
+  if (artists.length === 0) {
+    return <EmptyState icon="person-outline" title="No artists yet" sub="Artists are derived from your downloaded tracks and favourites." />;
+  }
+  return (
+    <>
+      <SectionCount count={artists.length} label="Artist" />
+      <FlatList
+        data={artists}
+        keyExtractor={(i) => i.id}
+        scrollEnabled={false}
+        renderItem={({ item }) => <ArtistRow item={item} onPress={() => {}} />}
+        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
+      />
+    </>
+  );
+}
+
+function SongsPanel({ sort, router }: any) {
+  const songs = useSortedFavorites(sort);
+  const activeTrack = useActiveTrack();
+  const { playAudio } = useMusicPlayer();
+  if (songs.length === 0) {
+    return (
+      <EmptyState
+        icon="heart-outline"
+        title="No songs yet"
+        sub="Heart songs from the streaming feed or your local library."
+        actionLabel="Go to Favourites"
+        onAction={() => router.push("/(library)/favorites")}
+      />
+    );
+  }
+  return (
+    <>
+      <SectionCount count={songs.length} label="Song" />
+      <FlatList
+        data={songs}
+        keyExtractor={(i) => i.id}
+        scrollEnabled={false}
+        renderItem={({ item }) => {
+          const isPlaying = activeTrack?.id === item.id;
+          return (
+            <TouchableOpacity
+              style={rowStyles.row}
+              onPress={() => { triggerHaptic(); playAudio(toPlayerSong(item), songs.map(toPlayerSong)); }}
+              activeOpacity={0.7}
+            >
+              <CoverArt uri={item.thumbnail} size={moderateScale(52)} />
+              <View style={rowStyles.info}>
+                <Text style={[rowStyles.title, isPlaying && { color: C.gold }]} numberOfLines={1}>{item.title}</Text>
+                <Text style={rowStyles.sub} numberOfLines={1}>{item.artist}</Text>
+              </View>
+              <TouchableOpacity
+                hitSlop={12}
+                onPress={() => {
+                  triggerHaptic();
+                  router.push({
+                    pathname: "/(modals)/menu",
+                    params: {
+                      songData: JSON.stringify({ id: item.id, title: item.title, artist: item.artist, thumbnail: item.thumbnail ?? "" }),
+                      type: "song",
+                    },
+                  });
+                }}
+              >
+                <Ionicons name="ellipsis-vertical" size={moderateScale(18)} color={C.textMuted} />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          );
+        }}
+        ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
+      />
+    </>
+  );
+}
+
+function DownloadsPanel({ sort, router }: any) {
+  const tracks = useSortedDownloads(sort);
+  const activeDownloads = useActiveDownloads();
+  const activeTrack = useActiveTrack();
+  const { playDownloadedSong } = useMusicPlayer();
+
+  return (
+    <>
+      {activeDownloads.length > 0 && (
+        <View style={{ marginBottom: 8 }}>
+          <Text style={[scStyles.text, { marginBottom: 4, color: C.goldShimmer }]}>
+            Downloading ({activeDownloads.length})
+          </Text>
+          {activeDownloads.map((dl) => (
+            <ActiveDownloadItem key={dl.id} song={dl} />
+          ))}
+        </View>
+      )}
+
+      {tracks.length === 0 && activeDownloads.length === 0 ? (
+        <EmptyState
+          icon="cloud-download-outline"
+          title="No downloads yet"
+          sub="Download songs and albums to listen offline anywhere, even without a connection."
+        />
+      ) : (
+        <>
+          <SectionCount count={tracks.length} label="Download" />
+          <FlatList
+            data={tracks}
+            keyExtractor={(i) => i.id}
+            scrollEnabled={false}
+            renderItem={({ item }) => (
+              <DownloadRow
+                item={item}
+                isPlaying={activeTrack?.id === item.id && activeTrack?.url === item.localTrackUri}
+                onPress={() => { playDownloadedSong(item, tracks); router.navigate("/(player)"); }}
+                onMore={() => {
+                  router.push({
+                    pathname: "/(modals)/menu",
+                    params: {
+                      songData: JSON.stringify({
+                        id: item.id, title: item.title,
+                        artist: item.artist,
+                        thumbnail: item.localArtworkUri,
+                        url: item.localTrackUri,
+                        duration: item.duration,
+                      }),
+                      type: "downloadedSong",
+                    },
+                  });
+                }}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: scale(80) }} />}
+          />
+        </>
+      )}
+    </>
   );
 }
 

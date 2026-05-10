@@ -26,6 +26,8 @@ export default function ModalsLayout() {
       <Stack.Screen name="addToPlaylist" />
       <Stack.Screen name="comments" />
       <Stack.Screen name="createPlaylist" />
+      <Stack.Screen name="recentlyPlayed" />
+      <Stack.Screen name="mostPlayed" />
       <Stack.Screen name="deletePlaylist" />
       {/* Equalizer removed — RNTP does not provide EQ/DSP functionality */}
       <Stack.Screen name="lyrics" />

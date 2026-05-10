@@ -1,12 +1,9 @@
+// components/player/PlayerProgressbar.tsx
 /**
- * PlayerProgressBar
- *
- * NOTE — unit contract:
- *   RNTP's useProgress() returns { position, duration, buffered } in SECONDS (not milliseconds).
- *   RNTP's seekTo(seconds) expects SECONDS.
- *   formatSecondsToMinutes() expects SECONDS.
- *
- *   RNTP v4+ returns values in seconds directly, so no conversion needed from ms.
+ * PlayerProgressBar - expo-av version
+ * 
+ * Uses MusicPlayerContext for position/duration instead of RNTP's useProgress.
+ * All times are in SECONDS.
  */
 
 import { fontSize } from "@/constants/tokens";
@@ -17,14 +14,13 @@ import { Text, View, ViewProps } from "react-native";
 import { Slider } from "react-native-awesome-slider";
 import { useSharedValue, runOnJS } from "react-native-reanimated";
 
-// RNTP imports - replacing mavin-eq
-import TrackPlayer, { useProgress } from "react-native-track-player";
+import { useMusicPlayer } from "@/components/MusicPlayerContext";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect } from "react";
 
 export const PlayerProgressBar = ({ style }: ViewProps) => {
-  // RNTP useProgress returns SECONDS directly in v4+ (not milliseconds)
-  const { duration: durationSec, position: positionSec } = useProgress(250);
+  // Get position and duration from MusicPlayerContext (in seconds)
+  const { position: positionSec, duration: durationSec, seekTo } = useMusicPlayer();
 
   // All shared values live on the UI thread — zero JS bridge for slider motion.
   const isSliding    = useSharedValue(false);
@@ -32,25 +28,44 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const slidingValue = useSharedValue(0);
   const min = useSharedValue(0);
   const max = useSharedValue(1);
+  
+  // Track if component is mounted for safe updates
+  const isMounted = useRef(true);
 
-  // 80ms debounce: rapid drags batch into one seek instead of hammering the player.
-  // seekTo() expects seconds.
+  // Update progress from context when not sliding
+  useEffect(() => {
+    if (!isSliding.value && durationSec > 0 && isMounted.current) {
+      progress.value = positionSec / durationSec;
+    }
+  }, [positionSec, durationSec, isSliding.value, progress]);
+
+  // Cleanup
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  // Debounced seek handler
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
   const commitSeek = useCallback((fraction: number) => {
     if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
     seekDebounceRef.current = setTimeout(() => {
-      TrackPlayer.seekTo(fraction * durationSec);
+      const newPosition = fraction * durationSec;
+      seekTo(newPosition);
     }, 80);
-  }, [durationSec]);
+  }, [durationSec, seekTo]);
 
   // Time labels — all in seconds.
   const trackElapsedTime   = formatSecondsToMinutes(positionSec);
-  const trackRemainingTime = formatSecondsToMinutes(durationSec - positionSec);
+  const trackRemainingTime = formatSecondsToMinutes(Math.max(0, durationSec - positionSec));
   const trackDuration      = formatSecondsToMinutes(durationSec);
 
-  // Slider ratio calculation - using seconds directly since RNTP returns seconds
-  if (!isSliding.value) {
-    progress.value = durationSec > 0 ? positionSec / durationSec : 0;
+  // Slider ratio calculation
+  if (!isSliding.value && durationSec > 0) {
+    progress.value = positionSec / durationSec;
   }
 
   return (
@@ -66,7 +81,6 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
         renderBubble={() => (
           <View style={styles.bubbleContainer}>
             <Text style={styles.bubbleText}>
-              {/* slidingValue is a 0-1 fraction; multiply by durationSec for seconds */}
               {formatSecondsToMinutes(slidingValue.value * durationSec)}
             </Text>
           </View>
@@ -94,8 +108,8 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           if (!isSliding.value) return;
           isSliding.value = false;
           if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
-          // seekTo expects seconds.
-          TrackPlayer.seekTo(value * durationSec);
+          // Seek expects seconds
+          seekTo(value * durationSec);
         }}
       />
 

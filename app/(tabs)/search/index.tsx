@@ -1,9 +1,10 @@
+// app/(tabs)/search/index.tsx
 /**
- * Search Screen — app/(tabs)/search/index.tsx  v13
- *
- * Changes from v12:
- *   [F] Fixed ReferenceError: Property 'setQuery' doesn't exist.
- *       GenreFolderGrid now receives setQuery and performSearch as props.
+ * Search Screen — expo-av version
+ * 
+ * Changes from RNTP version:
+ *   - Replaced useActiveTrack from react-native-track-player with expo-av version
+ *   - All other MavinEngine logic remains unchanged
  */
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
@@ -24,8 +25,10 @@ import { Ionicons, Entypo } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import LoaderKit from "react-native-loader-kit";
-import { useActiveTrack } from "react-native-track-player";
 import { moderateScale, verticalScale } from "react-native-size-matters/extend";
+
+// expo-av version of useActiveTrack
+import { useActiveTrack } from "@/hooks/useActiveTrack";
 
 import { setPendingTrack } from '@/helpers/pendingTrack';
 import MavinEngine, {
@@ -292,8 +295,8 @@ const fetchSongsFromHistory = async (): Promise<SongWithMetadata[]> => {
       if (cachedResults?.songs) {
         allSongs.push(...cachedResults.songs.map((song: SongResult) => ({
           ...song,
-          genre: [], // Will be populated by detectGenre
-          lastPlayed: new Date().toISOString(), // Replace with real lastPlayed from your DB
+          genre: [],
+          lastPlayed: new Date().toISOString(),
         })));
       }
     }
@@ -307,7 +310,6 @@ const fetchSongsFromHistory = async (): Promise<SongWithMetadata[]> => {
 
 // Assign a genre to a song based on real metadata or title/artist
 const detectGenre = (song: SongWithMetadata): string => {
-  // Use real genre metadata if available
   if (song.genre && song.genre.length > 0) {
     const matchedGenre = PREDEFINED_GENRES.find(g =>
       song.genre!.some(genre => genre.toLowerCase().includes(g.toLowerCase()))
@@ -315,7 +317,6 @@ const detectGenre = (song: SongWithMetadata): string => {
     if (matchedGenre) return matchedGenre;
   }
 
-  // Fallback to title/artist keyword matching
   const titleLower = song.title.toLowerCase();
   const artistLower = song.artist.toLowerCase();
 
@@ -330,7 +331,7 @@ const detectGenre = (song: SongWithMetadata): string => {
   if (titleLower.includes("electronic") || artistLower.includes("electronic")) return "Electronic";
   if (titleLower.includes("amapiano") || artistLower.includes("amapiano")) return "Amapiano";
 
-  return "Pop"; // Default genre
+  return "Pop";
 };
 
 // Group songs by genre and format into folders
@@ -338,24 +339,20 @@ const getGenreFolders = async (): Promise<DynamicFolder[]> => {
   const allSongs = await fetchSongsFromHistory();
   const genreMap: Record<string, SongWithMetadata[]> = {};
 
-  // Initialize genre map
   PREDEFINED_GENRES.forEach(genre => {
     genreMap[genre] = [];
   });
 
-  // Assign songs to genres
   allSongs.forEach(song => {
     const genre = detectGenre(song);
     genreMap[genre].push(song);
   });
 
-  // Filter out empty genres and format folders
   return PREDEFINED_GENRES
     .map(genre => {
       let genreSongs = genreMap[genre];
       if (genreSongs.length === 0) return null;
 
-      // Sort by lastPlayed (newest first)
       genreSongs = genreSongs.sort((a, b) =>
         new Date(b.lastPlayed!).getTime() - new Date(a.lastPlayed!).getTime()
       );
@@ -403,7 +400,6 @@ const folderStyles = StyleSheet.create({
 });
 
 // ─── Genre Folder Grid Component ───────────────────────────────────────────────
-// [F] Fixed: Added props interface to receive setQuery and performSearch
 
 interface GenreFolderGridProps {
   setQuery: (query: string) => void;
@@ -462,6 +458,7 @@ const GenreFolderGrid = ({ setQuery, performSearch }: GenreFolderGridProps) => {
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  // expo-av version of useActiveTrack
   const activeTrack = useActiveTrack();
   const { playAudio } = useMusicPlayer();
 
@@ -590,7 +587,7 @@ export default function SearchScreen() {
   const handleClearHistory = async () => { await clearAllHistory(); setHistory([]); };
   const handleRemoveHistory = async (q: string) => setHistory(await removeHistoryItem(q, history));
 
-  // ── [B] Song press — FloatingPlayer-first playback ───────────────────────────
+  // ── Song press — FloatingPlayer-first playback ──────────────────────────────
   const handleSongPress = useCallback(async (song: SongResult) => {
     triggerHaptic();
     setPendingTrack({ title: song.title, artist: song.artist, artwork: song.thumbnail });
@@ -766,7 +763,6 @@ export default function SearchScreen() {
       )}
 
       {/* ── Genre Folders ────────────────────────────────────────────────────── */}
-      {/* [F] Fixed: Pass setQuery and performSearch as props */}
       {showHistory && (
         <View style={styles.historySection}>
           <Text style={styles.sectionLabel}>Browse by Genre</Text>
@@ -782,7 +778,7 @@ export default function SearchScreen() {
         </View>
       )}
 
-      {/* ── [A] Skeleton loading ─────────────────────────────────────────────── */}
+      {/* ── Skeleton loading ─────────────────────────────────────────────── */}
       {loading && <SkeletonResultList />}
 
       {/* ── Error ───────────────────────────────────────────────────────────── */}
@@ -863,12 +859,13 @@ const styles = StyleSheet.create({
   suggestionRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.surfaceLight },
   suggestionText: { color: COLORS.text, fontSize: moderateScale(14) },
   historySection: { paddingHorizontal: 16, paddingTop: 8 },
-  historySectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   sectionLabel: { color: COLORS.text, fontSize: moderateScale(16), fontWeight: "600" },
-  clearText: { color: COLORS.goldShimmer, fontSize: moderateScale(13) },
-  historyRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.surfaceLight },
-  historyRowMain: { flex: 1, flexDirection: "row", alignItems: "center" },
-  historyText: { color: COLORS.textSecondary, fontSize: moderateScale(14) },
+  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: verticalScale(80), gap: 12 },
+  emptyStateText: { color: COLORS.textTertiary, fontSize: moderateScale(15), textAlign: "center" },
+  errorBox: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingHorizontal: 24 },
+  errorText: { color: COLORS.textSecondary, fontSize: moderateScale(14), textAlign: "center" },
+  retryBtn: { paddingHorizontal: 20, paddingVertical: 9, backgroundColor: COLORS.goldPrimary + "20", borderRadius: 20, borderWidth: 1, borderColor: COLORS.goldPrimary },
+  retryText: { color: COLORS.goldPrimary, fontSize: moderateScale(13), fontWeight: "600" },
   tabsScroll: { flexGrow: 0 },
   tabsRow: { paddingHorizontal: 16, gap: 8, paddingVertical: 8 },
   tab: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, backgroundColor: COLORS.surfaceLight },
@@ -886,10 +883,4 @@ const styles = StyleSheet.create({
   resultSub: { color: COLORS.textTertiary, fontSize: moderateScale(12) },
   typeBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, backgroundColor: COLORS.surfaceLight, marginRight: 4 },
   typeBadgeText: { color: COLORS.textTertiary, fontSize: moderateScale(9), fontWeight: "700", letterSpacing: 0.5 },
-  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: verticalScale(80), gap: 12 },
-  emptyStateText: { color: COLORS.textTertiary, fontSize: moderateScale(15), textAlign: "center" },
-  errorBox: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingHorizontal: 24 },
-  errorText: { color: COLORS.textSecondary, fontSize: moderateScale(14), textAlign: "center" },
-  retryBtn: { paddingHorizontal: 20, paddingVertical: 9, backgroundColor: COLORS.goldPrimary + "20", borderRadius: 20, borderWidth: 1, borderColor: COLORS.goldPrimary },
-  retryText: { color: COLORS.goldPrimary, fontSize: moderateScale(13), fontWeight: "600" },
 });

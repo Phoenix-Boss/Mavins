@@ -1,4 +1,6 @@
-// app/_layout.tsx
+// app/_layout.tsx - Complete expo-av version
+// 
+// Root layout with expo-av initialization instead of react-native-track-player
 
 import React, {
   createContext,
@@ -12,7 +14,6 @@ import {
   Animated,
   AppState,
   AppStateStatus,
-  AppRegistry,
   Linking,
   StatusBar,
   StyleSheet,
@@ -33,6 +34,8 @@ import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRootNavigationState, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Notifications from 'expo-notifications';
+import { Audio } from 'expo-av';
 
 import { initializeLibrary } from '@/store/library';
 import { PlayerProvider } from '@/components/player/playerProvider';
@@ -52,6 +55,20 @@ SplashScreen.preventAutoHideAsync();
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 
 const PREMIUM_BANNER_DELAY_MS = 2200;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Configure expo-notifications for lock screen controls
+// ─────────────────────────────────────────────────────────────────────────────
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert:  false,
+    shouldPlaySound:  false,
+    shouldSetBadge:   false,
+    shouldShowBanner: false, // required by NotificationBehavior in newer expo-notifications
+    shouldShowList:   false, // required by NotificationBehavior in newer expo-notifications
+  }),
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gesture Context
@@ -216,7 +233,7 @@ function AppShell({
 
       {showFloatingPlayer && (
         <View style={styles.floatingPlayerWrapper}>
-          <FloatingPlayer playerReady={playerReady} />
+          <FloatingPlayer />
         </View>
       )}
 
@@ -288,7 +305,7 @@ export default function RootLayout() {
     }
   }, [playerReady, navReady, appReady]);
 
-  // ── DEFERRED Player initialization ────────────────────────────────────────
+  // ── Player initialization with expo-av ────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
@@ -297,14 +314,24 @@ export default function RootLayout() {
       setupAttemptedRef.current = true;
 
       try {
-        const { setupPlayerGlobal } = await import('@/libs/playerSetup');
-        const ready = await setupPlayerGlobal();
-        if (!cancelled) setPlayerReady(ready);
+        // Configure audio mode for playback
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
 
+        console.log('[RootLayout] Audio mode configured');
+        
+        if (!cancelled) setPlayerReady(true);
+
+        // Initialize library and cache
         initializeLibrary().catch(e => console.warn('[Library]', e));
+
         try {
-          const cr = initCache({ startBackgroundJobs: true });
-          cr?.catch?.((e: any) => console.warn('[Cache]', e));
+          initCache({ startBackgroundJobs: true });
         } catch (e) {
           console.warn('[Cache]', e);
         }
@@ -319,12 +346,16 @@ export default function RootLayout() {
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       if (
         appStateRef.current.match(/inactive|background/) &&
-        next === 'active' &&
-        !playerReady
+        next === 'active'
       ) {
-        import('@/libs/playerSetup').then(({ isPlayerReady }) => {
-          if (isPlayerReady() && !playerReady) setPlayerReady(true);
-        });
+        // Re-check audio mode when app returns to foreground
+        Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        }).catch(console.warn);
       }
       appStateRef.current = next;
     });
@@ -333,30 +364,6 @@ export default function RootLayout() {
       cancelled = true;
       sub.remove();
     };
-  }, [playerReady]);
-
-  // ── DEFERRED PlaybackService registration ────────────────────────────────
-  useEffect(() => {
-    let registered = false;
-
-    async function registerService() {
-      if (registered) return;
-      registered = true;
-
-      const _g = global as any;
-      if (!_g.__rntp_service_registered) {
-        try {
-          const { PlaybackService } = await import('@/libs/service');
-          AppRegistry.registerHeadlessTask('TrackPlayer', () => PlaybackService);
-          _g.__rntp_service_registered = true;
-        } catch (e) {
-          console.error('[RootLayout] Service registration failed:', e);
-        }
-      }
-    }
-
-    const timer = setTimeout(registerService, 500);
-    return () => clearTimeout(timer);
   }, []);
 
   // ── Premium banner ────────────────────────────────────────────────────────
@@ -376,6 +383,55 @@ export default function RootLayout() {
     Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', ({ url }) => handle(url));
     return () => sub.remove();
+  }, []);
+
+  // ── Register for remote notifications (lock screen controls) ──────────────
+  useEffect(() => {
+    async function registerForNotifications() {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+      if (finalStatus !== 'granted') {
+        console.log('[RootLayout] Notification permissions not granted');
+        return;
+      }
+      
+      // Set up notification category for media controls
+      await Notifications.setNotificationCategoryAsync('MEDIA_PLAYBACK', [
+        {
+          identifier: 'PREVIOUS',
+          buttonTitle: '⏮',
+          options: { isDestructive: false },
+        },
+        {
+          identifier: 'PLAY',
+          buttonTitle: '▶',
+          options: { isDestructive: false },
+        },
+        {
+          identifier: 'PAUSE',
+          buttonTitle: '⏸',
+          options: { isDestructive: false },
+        },
+        {
+          identifier: 'NEXT',
+          buttonTitle: '⏭',
+          options: { isDestructive: false },
+        },
+        {
+          identifier: 'STOP',
+          buttonTitle: '⏹',
+          options: { isDestructive: true },
+        },
+      ]);
+      
+      console.log('[RootLayout] Notifications configured');
+    }
+    
+    registerForNotifications();
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
+// components/TrendingSection.tsx
 /**
- * This file defines the `TrendingSection` component, which displays a horizontally
- * scrollable grid of trending songs. Each song is presented with its rank, artwork, title, and artist,
- * and includes an option to open a menu for additional actions.
+ * TrendingSection - expo-av version
+ * 
+ * Displays a horizontally scrollable grid of trending songs.
+ * Uses useActiveTrack from expo-av hooks.
  */
 
 import { Colors } from "@/constants/Colors";
@@ -14,21 +16,14 @@ import React, { useMemo, useCallback } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
 import LoaderKit from "react-native-loader-kit";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
+import { useActiveTrack } from "@/hooks/useActiveTrack";
+import type { Song } from "@/types/song";
 
-/**
- * @interface TrendingSectionProps
- */
 export interface TrendingSectionProps {
-  results: Song[]; // An array of Song objects to display as trending items.
-  onItemClick: (item: Song) => void; // Callback function when a trending item is clicked.
+  results: Song[];
+  onItemClick: (item: Song) => void;
 }
 
-/**
- * `TrendingSection` component.
- * Renders a section of trending songs in a multi-row horizontal scroll view.
- * @param {TrendingSectionProps} { results, onItemClick } Props for the component.
- */
 export const TrendingSection: React.FC<TrendingSectionProps> = ({
   results,
   onItemClick,

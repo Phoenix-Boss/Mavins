@@ -15,7 +15,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { usePlaylists } from "@/store/library";
+import { usePlaylists, useLibraryStore } from "@/store/library";
 import { triggerHaptic } from "@/helpers/haptics";
 
 const C = {
@@ -41,13 +41,17 @@ export default function DeletePlaylistModal() {
   }>();
 
   const playlists = usePlaylists();
+  const deletePlaylist = useLibraryStore((s) => s.deletePlaylist);
+
   const playlist = playlists && playlistId ? playlists[playlistId] : null;
   const displayName = playlist?.name ?? playlistId ?? "this playlist";
   const trackCount = playlist?.trackCount ?? 0;
 
   const handleDelete = () => {
     triggerHaptic();
-    // TODO: dispatch deletePlaylist(playlistId)
+    if (playlistId) {
+      deletePlaylist(playlistId);
+    }
     router.back();
     router.back(); // also dismiss the library screen back to the playlists tab
   };
@@ -65,7 +69,7 @@ export default function DeletePlaylistModal() {
       {/* Text */}
       <Text style={styles.heading}>Delete Playlist?</Text>
       <Text style={styles.body}>
-        <Text style={styles.playlistName}>"{displayName}"</Text>
+        <Text style={styles.playlistName}>&ldquo;{displayName}&rdquo;</Text>
         {trackCount > 0
           ? ` (${trackCount} track${trackCount !== 1 ? "s" : ""}) will be permanently removed. This cannot be undone.`
           : " will be permanently removed. This cannot be undone."}

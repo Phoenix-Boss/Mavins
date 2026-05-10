@@ -1,3 +1,4 @@
+// app/(library)/[playlistName].tsx
 /**
  * PlaylistView
  *
@@ -16,8 +17,11 @@ import { unknownTrackImageUri } from "@/constants/images";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useImageColors } from "@/hooks/useImageColors";
 import { useLastActiveTrack } from "@/hooks/useLastActiveTrack";
-import { usePlaylists } from "@/store/library";
-import { FlashList } from "@shopify/flash-list";
+import { useActiveTrack } from "@/hooks/useActiveTrack";
+import { usePlaylists, usePlaylistTracks } from "@/store/library";
+import type { Song as LibrarySong } from "@/store/library";
+import type { Song } from "@/types/song";
+import { FlashList, FlashListProps } from "@shopify/flash-list";
 import { Image as ExpoImage } from "expo-image";
 import { Entypo, Ionicons } from "@expo/vector-icons";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -35,12 +39,35 @@ import {
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
-import { useActiveTrack } from "react-native-track-player";
 
 // ─── Sort options ───────────────────────────────────────────────────────────
 
 const SORT_OPTIONS = ["Default", "A–Z", "Artist"] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
+
+// ─── Typed FlashList wrapper ─────────────────────────────────────────────────
+
+type FlashListPropsWithEstimated<T> = FlashListProps<T> & {
+  estimatedItemSize?: number;
+};
+const TypedFlashList = FlashList as React.ComponentType<
+  FlashListPropsWithEstimated<LibrarySong>
+>;
+
+// ─── Normalise store Song → types/song.Song ──────────────────────────────────
+// library.Song:     url?: string, thumbnail?: string  (both optional)
+// types/song.Song:  url:  string, thumbnail:  string  (both required)
+
+const toPlayerSong = (s: LibrarySong): Song => ({
+  id:        s.id,
+  title:     s.title,
+  artist:    s.artist,
+  thumbnail: s.thumbnail ?? "",
+  url:       s.url       ?? "",
+  videoId:   undefined,
+  videoUrl:  undefined,
+  duration:  s.duration,
+});
 
 // ─── PlaylistView ────────────────────────────────────────────────────────────
 
@@ -56,19 +83,25 @@ const PlaylistView = () => {
   const activeTrack = useActiveTrack();
   const { playAudio, playPlaylist } = useMusicPlayer();
 
-  // Get the playlist name from navigation params
+  // Get the playlist name/id from navigation params
   const { playlistName } = useLocalSearchParams<{ playlistName: string }>();
 
-  // Fetch playlists from Redux store
-  const { playlists } = usePlaylists();
-  const rawPlaylist: Song[] = (playlists[playlistName] as Song[]) ?? [];
+  // usePlaylists returns Record<string, Playlist | SmartPlaylist> directly
+  const playlists = usePlaylists();
+  const playlistMeta = playlistName ? playlists[playlistName] : null;
+  const displayName = playlistMeta?.name ?? playlistName ?? "";
 
-  // Sort the playlist
-  const playlist = useMemo<Song[]>(() => {
-    if (activeSort === "A–Z") return [...rawPlaylist].sort((a, b) => a.title.localeCompare(b.title));
-    if (activeSort === "Artist") return [...rawPlaylist].sort((a, b) => a.artist.localeCompare(b.artist));
-    return rawPlaylist; // Default
-  }, [rawPlaylist, activeSort]);
+  // usePlaylistTracks resolves trackIds → LibrarySong[] via the store
+  const rawTracks = usePlaylistTracks(playlistName ?? "");
+
+  // Sort
+  const playlist = useMemo<LibrarySong[]>(() => {
+    if (activeSort === "A–Z")
+      return [...rawTracks].sort((a, b) => a.title.localeCompare(b.title));
+    if (activeSort === "Artist")
+      return [...rawTracks].sort((a, b) => a.artist.localeCompare(b.artist));
+    return rawTracks; // Default
+  }, [rawTracks, activeSort]);
 
   // Derive artwork colours from the first song's thumbnail
   const { imageColors } = useImageColors(
@@ -79,24 +112,24 @@ const PlaylistView = () => {
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
-  const handleSongSelect = (song: Song) => {
+  const handleSongSelect = (song: LibrarySong) => {
     triggerHaptic();
-    playAudio(song, playlist);
+    playAudio(toPlayerSong(song), playlist.map(toPlayerSong));
   };
 
   const handleShuffleAll = async () => {
     triggerHaptic();
     if (playlist.length === 0) return;
     const shuffled = [...playlist].sort(() => Math.random() - 0.5);
-    await playPlaylist(shuffled);
-    await router.navigate("/player");
+    await playPlaylist(shuffled.map(toPlayerSong));
+    await router.navigate("/(player)");
   };
 
   const handlePlayAll = async () => {
     triggerHaptic();
     if (playlist.length === 0) return;
-    await playPlaylist(playlist);
-    await router.navigate("/player");
+    await playPlaylist(playlist.map(toPlayerSong));
+    await router.navigate("/(player)");
   };
 
   // ─── Sub-components ───────────────────────────────────────────────────────
@@ -121,7 +154,7 @@ const PlaylistView = () => {
         }}
         style={styles.titleText}
       >
-        {playlistName}
+        {displayName}
       </Text>
 
       {/* Track count */}
@@ -132,23 +165,44 @@ const PlaylistView = () => {
       )}
 
       {/* Controls row: Sort pills + Shuffle */}
-      {rawPlaylist.length > 0 && (
+      {rawTracks.length > 0 && (
         <View style={styles.controlsRow}>
           <View style={styles.sortRow}>
             {SORT_OPTIONS.map((opt) => (
               <TouchableOpacity
                 key={opt}
-                style={[styles.sortPill, activeSort === opt && styles.sortPillActive]}
-                onPress={() => { triggerHaptic(); setActiveSort(opt); }}
+                style={[
+                  styles.sortPill,
+                  activeSort === opt && styles.sortPillActive,
+                ]}
+                onPress={() => {
+                  triggerHaptic();
+                  setActiveSort(opt);
+                }}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.sortText, activeSort === opt && styles.sortTextActive]}>{opt}</Text>
+                <Text
+                  style={[
+                    styles.sortText,
+                    activeSort === opt && styles.sortTextActive,
+                  ]}
+                >
+                  {opt}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
           {playlist.length > 1 && (
-            <TouchableOpacity style={styles.shuffleBtn} onPress={handleShuffleAll} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="shuffle-variant" size={moderateScale(18)} color="#D4AF37" />
+            <TouchableOpacity
+              style={styles.shuffleBtn}
+              onPress={handleShuffleAll}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="shuffle-variant"
+                size={moderateScale(18)}
+                color="#D4AF37"
+              />
             </TouchableOpacity>
           )}
         </View>
@@ -156,7 +210,13 @@ const PlaylistView = () => {
     </>
   );
 
-  const renderSongItem = ({ item, index }: { item: Song; index: number }) => {
+  const renderSongItem = ({
+    item,
+    index,
+  }: {
+    item: LibrarySong;
+    index: number;
+  }) => {
     const isPlaying = activeTrack?.id === item.id;
     return (
       <View style={styles.songItem}>
@@ -166,7 +226,7 @@ const PlaylistView = () => {
           activeOpacity={0.7}
         >
           <ExpoImage
-            source={{ uri: item.thumbnail }}
+            source={{ uri: item.thumbnail ?? "" }}
             style={styles.resultThumbnail}
             contentFit="cover"
             priority="normal"
@@ -179,7 +239,13 @@ const PlaylistView = () => {
             />
           )}
           <View style={styles.resultText}>
-            <Text style={[styles.resultTitle, isPlaying && styles.resultTitleActive]} numberOfLines={1}>
+            <Text
+              style={[
+                styles.resultTitle,
+                isPlaying && styles.resultTitleActive,
+              ]}
+              numberOfLines={1}
+            >
               {item.title}
             </Text>
             <Text style={styles.resultArtist} numberOfLines={1}>
@@ -196,10 +262,10 @@ const PlaylistView = () => {
               pathname: "/(modals)/menu",
               params: {
                 songData: JSON.stringify({
-                  id: item.id,
-                  title: item.title,
-                  artist: item.artist,
-                  thumbnail: item.thumbnail,
+                  id:        item.id,
+                  title:     item.title,
+                  artist:    item.artist,
+                  thumbnail: item.thumbnail ?? "",
                 }),
                 type: "playlistSong",
                 playlistName: playlistName,
@@ -208,7 +274,11 @@ const PlaylistView = () => {
           }}
           hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
         >
-          <Entypo name="dots-three-vertical" size={moderateScale(15)} color="white" />
+          <Entypo
+            name="dots-three-vertical"
+            size={moderateScale(15)}
+            color="white"
+          />
         </TouchableOpacity>
       </View>
     );
@@ -226,35 +296,63 @@ const PlaylistView = () => {
       }
     >
       <View style={styles.container}>
-
         {/* Header */}
-        <View style={[styles.header, isScrolling && styles.headerScrolled, { paddingTop: top }]}>
+        <View
+          style={[
+            styles.header,
+            isScrolling && styles.headerScrolled,
+            { paddingTop: top },
+          ]}
+        >
           <Ionicons
             name="arrow-back"
             size={moderateScale(28)}
             color={Colors.text}
             style={{ paddingLeft: 15, paddingRight: 10, marginTop: 2 }}
-            onPress={() => { triggerHaptic(); router.back(); }}
+            onPress={() => {
+              triggerHaptic();
+              router.back();
+            }}
           />
-          <Text numberOfLines={1} style={[styles.headerText, !showHeaderTitle && { opacity: 0 }]}>
-            {playlistName}
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.headerText,
+              !showHeaderTitle && { opacity: 0 },
+            ]}
+          >
+            {displayName}
           </Text>
           {/* Header play button — visible when title scrolled past */}
           {showHeaderTitle && playlist.length > 0 && (
-            <TouchableOpacity style={styles.headerPlayBtn} onPress={handlePlayAll} hitSlop={10}>
-              <MaterialCommunityIcons name="play" size={moderateScale(18)} color="#000" />
+            <TouchableOpacity
+              style={styles.headerPlayBtn}
+              onPress={handlePlayAll}
+              hitSlop={10}
+            >
+              <MaterialCommunityIcons
+                name="play"
+                size={moderateScale(18)}
+                color="#000"
+              />
             </TouchableOpacity>
           )}
         </View>
 
         {isScrolling && (
-          <Divider style={{ backgroundColor: "rgba(255,255,255,0.3)", height: 0.3, marginHorizontal: -15 }} />
+          <Divider
+            style={{
+              backgroundColor: "rgba(255,255,255,0.3)",
+              height: 0.3,
+              marginHorizontal: -15,
+            }}
+          />
         )}
 
-        <FlashList
+        <TypedFlashList
           data={playlist}
           renderItem={renderSongItem}
-          keyExtractor={(item: Song) => item.id}
+          keyExtractor={(item: LibrarySong) => item.id}
           estimatedItemSize={75}
           extraData={[activeTrack, activeSort]}
           ListHeaderComponent={ListHeader}
@@ -277,7 +375,9 @@ const PlaylistView = () => {
                 color="rgba(212,175,55,0.35)"
               />
               <Text style={styles.emptyTitle}>This playlist is empty</Text>
-              <Text style={styles.emptySub}>Add songs from the streaming feed or your local library.</Text>
+              <Text style={styles.emptySub}>
+                Add songs from the streaming feed or your local library.
+              </Text>
             </View>
           }
         />
@@ -289,7 +389,8 @@ const PlaylistView = () => {
               position: "absolute",
               marginRight: 16,
               marginBottom:
-                (isFloatingPlayerNotVisible ? 60 : moderateScale(138)) + bottom,
+                (isFloatingPlayerNotVisible ? 60 : moderateScale(138)) +
+                bottom,
               right: 0,
               bottom: 0,
               backgroundColor: "white",
@@ -389,7 +490,11 @@ const styles = ScaledSheet.create({
     backgroundColor: "rgba(212,175,55,0.15)",
     borderColor: "rgba(212,175,55,0.3)",
   },
-  sortText: { fontSize: "12@ms", color: "rgba(255,255,255,0.6)", fontWeight: "500" },
+  sortText: {
+    fontSize: "12@ms",
+    color: "rgba(255,255,255,0.6)",
+    fontWeight: "500",
+  },
   sortTextActive: { color: "#D4AF37" },
   shuffleBtn: {
     width: "36@ms",

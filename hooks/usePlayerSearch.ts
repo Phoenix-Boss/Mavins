@@ -1,10 +1,10 @@
-// src/hooks/usePlayerSearch.ts
+// hooks/usePlayerSearch.ts
 /**
- * usePlayerSearch Hook
- *
+ * usePlayerSearch Hook - expo-av compatible (no changes needed)
+ * 
  * Searches for a specific track by artist + title via MavinEngine.search().
- * Calls Kotlin: performSearch(query, "all", null, 0)
- *
+ * This hook doesn't depend on RNTP or expo-av - it only uses MavinEngine.
+ * 
  * ── Why filter="all" ────────────────────────────────────────────────────────
  * "songs" is a YouTube Music-specific content filter not registered
  * in the standard YouTube service (serviceId=0) searchQHFactory.
@@ -13,11 +13,15 @@
  */
 
 import { useState, useCallback } from 'react';
-import { search, StreamInfoItem, SearchPage, NativeImage } from '@/modules/mavin-engine';
+import MavinEngine, { 
+  StreamInfoItem, 
+  SearchPage, 
+  NativeImage 
+} from '@/modules/mavin-engine';
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Public shape
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface PlayerSearchResult {
   items: Array<{
@@ -45,9 +49,9 @@ interface UsePlayerSearchReturn {
   clearResults: () => void;
 }
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 function pickBestThumbnail(thumbnails: NativeImage[]): string {
   if (!thumbnails?.length) return '';
@@ -59,9 +63,9 @@ function pickBestThumbnail(thumbnails: NativeImage[]): string {
   return thumbnails[0]?.url ?? '';
 }
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Hook
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const usePlayerSearch = (): UsePlayerSearchReturn => {
   const [results, setResults] = useState<PlayerSearchResult | null>(null);
@@ -82,7 +86,7 @@ export const usePlayerSearch = (): UsePlayerSearchReturn => {
 
       // Calls Kotlin: performSearch(query, "all", null, 0)
       // "all" is the only valid filter for standard YouTube (serviceId=0)
-      const result = await search(
+      const result = await MavinEngine.search(
         query,
         'all',  // ← was 'songs', invalid on serviceId=0
         undefined,

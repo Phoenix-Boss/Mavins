@@ -1,29 +1,12 @@
 // components/FloatingPlayer.tsx
-//
-// INDUSTRY STANDARD FLOW — Spotify / Apple Music pattern:
-//
-//  1. Self-contained — pulls expandPlayer from PlayerOverlayContext (NOT MusicPlayerContext).
-//  2. Hidden on idle startup — returns null when there is no active/cached track.
-//  3. Hidden while full player is open — checks isPlayerVisible from
-//     PlayerOverlayContext so it NEVER flashes on top of the sliding-down
-//     player card during swipe-dismiss.
-//
-// Issue 3 Fix (P0-3): FloatingPlayer Reappear After Dismiss
-//   - Removed playerReady prop — reads from context instead
-//   - Uses expandPlayer from PlayerOverlayContext (not MusicPlayerContext)
-//   - Reads currentTrack from useActiveTrack() directly
-//   - Proper null check to prevent ghost player bar
-//   - Animation transition for smooth mount/unmount
-//
-//  The dismiss sequence:
-//    1. User swipes down on PlayerScreen
-//    2. PlayerScreen calls collapsePlayer() → isPlayerVisible = false (same frame)
-//    3. FloatingPlayer returns null immediately — invisible during the fling
-//    4. Spring animation completes → router.back() fires
-//    5. FloatingPlayer re-appears cleanly on the home screen
-//
-//  Without step 2-3, FloatingPlayer would flash on top of the player card
-//  while it was still animating off-screen.
+/**
+ * FloatingPlayer.tsx - expo-av version
+ * 
+ * INDUSTRY STANDARD FLOW — Spotify / Apple Music pattern:
+ *   1. Self-contained — pulls expandPlayer from PlayerOverlayContext
+ *   2. Hidden on idle startup — returns null when there is no active/cached track
+ *   3. Hidden while full player is open — checks isPlayerVisible from context
+ */
 
 import React, { useEffect, useRef } from 'react';
 import {
@@ -38,14 +21,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters/extend';
 
-import TrackPlayer, {
-  useActiveTrack,
-  usePlaybackState,
-  State,
-} from 'react-native-track-player';
 import { useMusicPlayer } from '@/components/MusicPlayerContext';
 import { usePlayerStore } from '@/store/player';
 import { usePlayerOverlay } from '@/components/player/playerProvider';
+import { useActiveTrack } from '@/hooks/useActiveTrack';
 
 const MINI_PLAYER_HEIGHT = verticalScale(64);
 const FADE_DURATION = 200;
@@ -76,27 +55,28 @@ function SkeletonPulse({
 
 // ─── FloatingPlayer ───────────────────────────────────────────────────────────
 
-// Issue 3 Fix: Removed playerReady prop — FloatingPlayer reads from context
 export default function FloatingPlayer() {
   const insets = useSafeAreaInsets();
 
-  // Issue 3 Fix: Use expandPlayer from PlayerOverlayContext (NOT MusicPlayerContext)
-  // This ensures the overlay expands, not a route Navigation
+  // Use expandPlayer from PlayerOverlayContext
   const { expandPlayer, isPlayerVisible, playerReady } = usePlayerOverlay();
 
-  // togglePlayPause still comes from MusicPlayerContext for playback control
-  const { togglePlayPause, currentTrack: musicPlayerTrack } = useMusicPlayer();
+  // Get playback state from MusicPlayerContext
+  const { 
+    togglePlayPause, 
+    isPlaying, 
+    isLoading,
+    currentTrack: musicPlayerTrack,
+    skipToNext 
+  } = useMusicPlayer();
 
-  // Issue 3 Fix: Read currentTrack from useActiveTrack() directly (RNTP source of truth)
+  // Read currentTrack from useActiveTrack (source of truth)
   const activeTrack = useActiveTrack();
-  const playbackState = usePlaybackState();
 
   // Fallback to store for cached track (persists last track across restarts)
-  type PS = ReturnType<typeof usePlayerStore.getState>;
-  const storeTrack = usePlayerStore((s: PS) => s.currentTrack);
+  const storeTrack = usePlayerStore((s: any) => s.currentTrack);
 
-  // Issue 3 Fix: Prioritize activeTrack (RNTP), then musicPlayerTrack, then storeTrack
-  // This ensures track data persists through dismiss and reappears correctly
+  // Prioritize activeTrack, then musicPlayerTrack, then storeTrack
   const track = activeTrack ?? musicPlayerTrack ?? (storeTrack
     ? {
         id: storeTrack.id,
@@ -109,17 +89,14 @@ export default function FloatingPlayer() {
       }
     : null);
 
-  // Issue 3 Fix: Hide when:
+  // Hide when:
   //   - Player not ready (engine not initialized)
   //   - No track available (idle state)
-  //   - Full player screen is open (to prevent flash during dismiss)
-  // Returns null silently (no error, no ghost bar)
+  //   - Full player screen is open
   if (!playerReady || !track || isPlayerVisible) return null;
 
-  // Determine playing state from RNTP
-  const isPlaying =
-    playbackState?.state === State.Playing ||
-    playbackState?.state === State.Buffering;
+  // Don't show while loading first track
+  if (isLoading && !isPlaying) return null;
 
   // Resolve artwork URI
   const artwork = (() => {
@@ -141,15 +118,13 @@ export default function FloatingPlayer() {
   const handleSkipNext = async (e: any) => {
     e?.stopPropagation?.();
     try {
-      await TrackPlayer.skipToNext();
+      await skipToNext();
     } catch (error) {
       console.warn('[FloatingPlayer] Skip next error:', error);
     }
   };
 
   const handleExpandPlayer = () => {
-    // Issue 3 Fix: Use expandPlayer from PlayerOverlayContext
-    // This opens the overlay, NOT a route navigation
     expandPlayer();
   };
 
