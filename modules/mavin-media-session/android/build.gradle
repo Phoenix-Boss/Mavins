@@ -29,9 +29,17 @@ dependencies {
   implementation project(':expo-modules-core')
 
   compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
-  implementation 'androidx.media3:media3-session:1.4.1'
-  implementation 'androidx.media3:media3-common:1.4.1'
+
+  // MediaSessionCompat / PlaybackStateCompat / MediaMetadataCompat
+  // (androidx.media — the support-library compat layer, NOT media3)
+  implementation 'androidx.media:media:1.7.0'
+
+  // NotificationCompat, ContextCompat
   implementation 'androidx.core:core-ktx:1.13.1'
+
+  // Async artwork loading
   implementation 'com.github.bumptech.glide:glide:4.16.0'
+
+  // Dynamic notification color from album art
   implementation 'androidx.palette:palette-ktx:1.0.0'
 }
