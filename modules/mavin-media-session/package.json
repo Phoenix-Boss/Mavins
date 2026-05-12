@@ -1,0 +1,15 @@
+{
+  "name": "mavin-media-session",
+  "version": "1.0.0",
+  "description": "Android MediaSession for lockscreen controls",
+  "main": "index.ts",
+  "keywords": ["expo", "react-native", "mediasession", "lockscreen"],
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*"
+  },
+  "platforms": ["android"],
+  "scripts": {
+    "android": "cd android && ./gradlew build"
+  }
+}

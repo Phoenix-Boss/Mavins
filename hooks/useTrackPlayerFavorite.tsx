@@ -1,13 +1,17 @@
 /**
  * useTrackPlayerFavorite.tsx
  * 
- * ADJUSTED for react-native-track-player
+ * FIXED: No longer uses react-native-track-player.
+ * Uses PlayerEngineContext to get current track and library store for favorites.
  */
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useActiveTrack } from "react-native-track-player";
+import { usePlayerEngine } from "@/libs/playerSetup";
 import { useLibraryStore, useIsSongFavorite } from "@/store/library";
-import { triggerHaptic, type HapticStrength } from "@/helpers/haptics";
+import { triggerHaptic } from "@/helpers/haptics";
+
+// Define HapticStrength locally since it's not exported from haptics
+type HapticStrength = "light" | "medium" | "heavy";
 
 interface UseTrackPlayerFavoriteResult {
   isFavorite: boolean;
@@ -18,11 +22,11 @@ interface UseTrackPlayerFavoriteResult {
 }
 
 export const useTrackPlayerFavorite = (): UseTrackPlayerFavoriteResult => {
-  // useActiveTrack from RNTP returns the track directly or null
-  const activeTrack = useActiveTrack();
-  const trackLoading = !activeTrack;
+  const engine = usePlayerEngine();
+  const currentTrack = engine.currentTrack;
+  const trackLoading = !currentTrack;
   
-  const currentTrackId = activeTrack?.id ?? null;
+  const currentTrackId = currentTrack?.id ?? null;
   
   const isFavoriteFromStore = useIsSongFavorite(currentTrackId ?? "");
   const [isFavorite, setIsFavorite] = useState(false);
@@ -40,7 +44,7 @@ export const useTrackPlayerFavorite = (): UseTrackPlayerFavoriteResult => {
       return;
     }
 
-    const trackId = activeTrack?.id;
+    const trackId = currentTrack?.id;
     
     if (trackId !== lastTrackIdRef.current) {
       lastTrackIdRef.current = trackId ?? null;
@@ -55,7 +59,7 @@ export const useTrackPlayerFavorite = (): UseTrackPlayerFavoriteResult => {
     
     setIsFavorite(isFavoriteFromStore);
     setIsLoading(false);
-  }, [activeTrack?.id, isFavoriteFromStore, trackLoading]);
+  }, [currentTrack?.id, isFavoriteFromStore, trackLoading, currentTrack]);
 
   const toggleFavorite = useCallback(async () => {
     const trackId = currentTrackId;

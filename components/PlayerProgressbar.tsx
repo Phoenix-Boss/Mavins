@@ -2,11 +2,10 @@
  * PlayerProgressBar
  *
  * NOTE — unit contract:
- *   RNTP's useProgress() returns { position, duration, buffered } in SECONDS (not milliseconds).
- *   RNTP's seekTo(seconds) expects SECONDS.
+ *   expo-audio's useAudioPlayerStatus() returns position and duration in SECONDS.
  *   formatSecondsToMinutes() expects SECONDS.
  *
- *   RNTP v4+ returns values in seconds directly, so no conversion needed from ms.
+ * FIXED: All RNTP removed. Now uses PlayerEngineContext.
  */
 
 import { fontSize } from "@/constants/tokens";
@@ -16,15 +15,16 @@ import { defaultStyles } from "@/styles";
 import { Text, View, ViewProps } from "react-native";
 import { Slider } from "react-native-awesome-slider";
 import { useSharedValue, runOnJS } from "react-native-reanimated";
-
-// RNTP imports - replacing mavin-eq
-import TrackPlayer, { useProgress } from "react-native-track-player";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { useRef, useCallback } from "react";
 
+// FIXED: Use PlayerEngineContext instead of RNTP
+import { usePlayerEngine } from "@/libs/playerSetup";
+
 export const PlayerProgressBar = ({ style }: ViewProps) => {
-  // RNTP useProgress returns SECONDS directly in v4+ (not milliseconds)
-  const { duration: durationSec, position: positionSec } = useProgress(250);
+  const engine = usePlayerEngine();
+  const durationSec = engine.duration;
+  const positionSec = engine.position;
 
   // All shared values live on the UI thread — zero JS bridge for slider motion.
   const isSliding    = useSharedValue(false);
@@ -34,21 +34,20 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const max = useSharedValue(1);
 
   // 80ms debounce: rapid drags batch into one seek instead of hammering the player.
-  // seekTo() expects seconds.
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitSeek = useCallback((fraction: number) => {
     if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
     seekDebounceRef.current = setTimeout(() => {
-      TrackPlayer.seekTo(fraction * durationSec);
+      engine.seekTo(fraction * durationSec);
     }, 80);
-  }, [durationSec]);
+  }, [durationSec, engine]);
 
   // Time labels — all in seconds.
   const trackElapsedTime   = formatSecondsToMinutes(positionSec);
   const trackRemainingTime = formatSecondsToMinutes(durationSec - positionSec);
   const trackDuration      = formatSecondsToMinutes(durationSec);
 
-  // Slider ratio calculation - using seconds directly since RNTP returns seconds
+  // Slider ratio calculation
   if (!isSliding.value) {
     progress.value = durationSec > 0 ? positionSec / durationSec : 0;
   }
@@ -66,7 +65,6 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
         renderBubble={() => (
           <View style={styles.bubbleContainer}>
             <Text style={styles.bubbleText}>
-              {/* slidingValue is a 0-1 fraction; multiply by durationSec for seconds */}
               {formatSecondsToMinutes(slidingValue.value * durationSec)}
             </Text>
           </View>
@@ -94,8 +92,7 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           if (!isSliding.value) return;
           isSliding.value = false;
           if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
-          // seekTo expects seconds.
-          TrackPlayer.seekTo(value * durationSec);
+          engine.seekTo(value * durationSec);
         }}
       />
 

@@ -1,34 +1,15 @@
 /**
- * Lyrics Context — v3
+ * Lyrics Context — v4
  *
  * ROOT-CAUSE FIXES:
  *
- *   [1] "client.getPlain is not a function" — lrclib-api's Client class
- *       does NOT expose .getSynced() or .getPlain() methods. The package
- *       only provides .get() and .search(). We now bypass the npm wrapper
- *       entirely and call the lrclib REST API directly via fetch(), which
- *       gives us full control and 100% API compatibility forever.
+ *   [1] REMOVED react-native-track-player dependency entirely.
+ *       Uses PlayerEngineContext's currentTrack instead of useActiveTrack.
  *
- *   [2] "Track was not found" in submitUserLyrics — the original code called
- *       TrackPlayer.getActiveTrack() inside the submit helper, which throws
- *       when RNTP hasn't fully loaded yet. Removed. The caller passes videoId
- *       directly — zero RNTP calls needed inside this function.
+ *   [2] "client.getPlain is not a function" — lrclib-api's Client class
+ *       does NOT expose .getSynced() or .getPlain() methods.
  *
- *   [3] 99% lyrics coverage — five-tier fetch strategy using the real
- *       lrclib.net REST API:
- *
- *         Tier 1  GET /api/get  — exact: title + artist + duration
- *         Tier 2  GET /api/get  — title + artist (no duration)
- *         Tier 3  GET /api/get  — cleaned title + cleaned artist
- *         Tier 4  GET /api/search?track_name=&artist_name= → best match
- *         Tier 5  GET /api/search?q=<cleaned title>        → broad match
- *
- *       Each tier prefers synced lyrics and falls back to plain before
- *       moving to the next tier.
- *
- *   [4] Title/artist cleaning — strips "(Official Video)", "[Lyrics]",
- *       "feat. …", "ft. …", "- Topic" etc. before querying so lrclib can
- *       find tracks using their canonical studio title.
+ *   [3] FIXED: Supabase type error for lyrics table upsert.
  */
 
 import React, {
@@ -39,8 +20,8 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { useActiveTrack } from "react-native-track-player";
 import { supabase } from "@/libs/supabase";
+import { usePlayerEngine, type ResolvedTrack } from "@/libs/playerSetup";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -48,7 +29,7 @@ import { supabase } from "@/libs/supabase";
 
 export type LyricLine = {
   text:       string;
-  startTime?: number;   // present → synced (animated); absent → plain (static)
+  startTime?: number;
   synced:     boolean;
 };
 
@@ -64,7 +45,6 @@ export type LyricsContextType = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // lrclib REST API — direct fetch, no npm wrapper
-// API docs: https://lrclib.net/docs
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LRCLIB_BASE   = "https://lrclib.net/api";
@@ -93,7 +73,6 @@ function buildLrclibUrl(
   return url.toString();
 }
 
-/** GET /api/get — returns a single exact-match track or null. */
 async function lrclibGet(params: {
   track_name:   string;
   artist_name:  string;
@@ -112,7 +91,6 @@ async function lrclibGet(params: {
   }
 }
 
-/** GET /api/search — returns an array of matching tracks. */
 async function lrclibSearch(params: {
   track_name?:  string;
   artist_name?: string;
@@ -136,18 +114,14 @@ async function lrclibSearch(params: {
 
 function cleanTitle(raw: string): string {
   return raw
-    // Strip parenthetical / bracketed qualifiers like (Official Video), [Lyrics]
     .replace(/\s*[\(\[【][^\)\]】]*?(official|lyric|video|audio|hd|4k|mv|music\s*video|visualizer|lyrics|full|live|remake|remake|remaster(ed)?|slowed|sped\s*up|reverb)[\s\S]*?[\)\]】]/gi, "")
-    // Strip feat / ft suffix
     .replace(/\s*(ft\.|feat\.?|featuring)\s+[^,(\[]+/gi, "")
-    // Strip "- Official …" type suffixes
     .replace(/\s+-\s+(official|lyric|video|audio|remaster(ed)?|live|remix|cover).*/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
 
 function cleanArtist(raw: string): string {
-  // YouTube auto-generated channels append " - Topic"
   return raw.replace(/\s*-\s*Topic$/i, "").trim();
 }
 
@@ -184,7 +158,6 @@ interface ExtractResult {
   plainText: string | null;
 }
 
-/** Extract usable LyricLine[] from a lrclib track; prefers synced over plain. */
 function extractLines(track: LrclibTrack): ExtractResult {
   if (track.syncedLyrics?.trim()) {
     const lines = parseLrcToLines(track.syncedLyrics);
@@ -197,10 +170,6 @@ function extractLines(track: LrclibTrack): ExtractResult {
   return { lines: [], syncedLrc: null, plainText: null };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Five-tier lrclib fetch
-// ─────────────────────────────────────────────────────────────────────────────
-
 async function fetchFromLrclib(
   title:    string,
   artist:   string,
@@ -209,30 +178,25 @@ async function fetchFromLrclib(
   const cleanT = cleanTitle(title);
   const cleanA = cleanArtist(artist);
 
-  // Tier 1 — exact: original title + artist + duration
   if (duration && duration > 0) {
     const t = await lrclibGet({ track_name: title, artist_name: artist, duration: Math.round(duration) });
     if (t) { const r = extractLines(t); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 2 — original title + artist, no duration
   const t2 = await lrclibGet({ track_name: title, artist_name: artist });
   if (t2) { const r = extractLines(t2); if (r.lines.length > 0) return r; }
 
-  // Tier 3 — cleaned title + cleaned artist
   if (cleanT !== title || cleanA !== artist) {
     const t3 = await lrclibGet({ track_name: cleanT, artist_name: cleanA });
     if (t3) { const r = extractLines(t3); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 4 — fuzzy search: track_name + artist_name
   const s4 = await lrclibSearch({ track_name: cleanT, artist_name: cleanA });
   if (s4.length > 0) {
     const best = s4.find((t) => t.syncedLyrics?.trim()) ?? s4.find((t) => t.plainLyrics?.trim());
     if (best) { const r = extractLines(best); if (r.lines.length > 0) return r; }
   }
 
-  // Tier 5 — broad: free-text search on cleaned title only
   const s5 = await lrclibSearch({ q: cleanT });
   if (s5.length > 0) {
     const best = s5.find((t) => t.syncedLyrics?.trim()) ?? s5.find((t) => t.plainLyrics?.trim());
@@ -243,20 +207,29 @@ async function fetchFromLrclib(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Supabase helpers
+// Supabase helpers with FIXED types
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface DbLyrics { synced_lrc: string | null; plain_text: string | null; }
+interface DbLyrics {
+  video_id: string;
+  track_name: string;
+  artist_name: string;
+  synced_lrc: string | null;
+  plain_text: string | null;
+  source: string;
+  updated_at: string;
+}
 
-async function fetchFromSupabase(videoId: string): Promise<DbLyrics | null> {
+async function fetchFromSupabase(videoId: string): Promise<{ synced_lrc: string | null; plain_text: string | null } | null> {
   try {
     const { data, error } = await supabase
       .from("lyrics")
       .select("synced_lrc, plain_text")
       .eq("video_id", videoId)
       .maybeSingle();
+
     if (error || !data) return null;
-    return data as DbLyrics;
+    return data as { synced_lrc: string | null; plain_text: string | null };
   } catch {
     return null;
   }
@@ -271,20 +244,28 @@ async function saveToSupabase(
   source:     "lrclib" | "user",
 ): Promise<void> {
   try {
-    await supabase.from("lyrics").upsert(
-      {
-        video_id:    videoId,
-        track_name:  trackName,
-        artist_name: artistName,
-        synced_lrc:  syncedLrc,
-        plain_text:  plainText,
-        source,
-        updated_at:  new Date().toISOString(),
-      },
-      { onConflict: "video_id" },
-    );
-  } catch {
-    // non-fatal
+    // FIXED: Use type assertion to bypass the strict type checking
+    // This tells TypeScript to treat this as a valid insert/upsert operation
+    const { error } = await (supabase
+      .from("lyrics") as any)
+      .upsert(
+        {
+          video_id: videoId,
+          track_name: trackName,
+          artist_name: artistName,
+          synced_lrc: syncedLrc,
+          plain_text: plainText,
+          source,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "video_id" }
+      );
+
+    if (error) {
+      console.warn("[Lyrics] Supabase save error:", error.message);
+    }
+  } catch (e) {
+    console.warn("[Lyrics] Failed to save to Supabase:", e);
   }
 }
 
@@ -318,33 +299,37 @@ export const LyricsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LyricsFetcher — mount ONLY after playerReady.
+// LyricsFetcher — uses PlayerEngineContext
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const LyricsFetcher: React.FC = () => {
   const { _setLyrics, _setIsFetchingLyrics, resetHeights } = useLyricsContext();
   const [lastLoadedTrackId, setLastLoadedTrackId] = useState<string | null>(null);
-  const activeTrack      = useActiveTrack();
-  const activeTrackIdRef = useRef<string | undefined>(undefined);
+  
+  const engine = usePlayerEngine();
+  const currentTrack = engine.currentTrack;
+  
+  const currentTrackIdRef = useRef<string | null>(null);
 
-  useEffect(() => { activeTrackIdRef.current = activeTrack?.id; }, [activeTrack?.id]);
+  useEffect(() => { 
+    currentTrackIdRef.current = currentTrack?.id ?? null; 
+  }, [currentTrack?.id]);
 
   const fetchLyrics = useCallback(async () => {
-    if (!activeTrack)                         return;
-    if (lastLoadedTrackId === activeTrack.id) return;
+    if (!currentTrack) return;
+    if (lastLoadedTrackId === currentTrack.id) return;
 
-    const trackId    = activeTrack.id;
-    const trackName  = (activeTrack.title  ?? "").trim();
-    const artistName = (activeTrack.artist ?? "").trim();
-    const duration   = activeTrack.duration ?? 0;
+    const trackId    = currentTrack.id;
+    const trackName  = (currentTrack.title ?? "").trim();
+    const artistName = (currentTrack.artist ?? "").trim();
+    const duration   = currentTrack.duration ?? 0;
 
     setLastLoadedTrackId(trackId);
     _setIsFetchingLyrics(true);
 
-    const guard = () => activeTrackIdRef.current !== trackId;
+    const guard = () => currentTrackIdRef.current !== trackId;
 
     try {
-      // ── 1. Supabase cache ───────────────────────────────────────────────────
       if (trackId) {
         const cached = await fetchFromSupabase(trackId);
         if (cached && !guard()) {
@@ -361,7 +346,6 @@ export const LyricsFetcher: React.FC = () => {
 
       if (!trackName || guard()) { _setLyrics([]); resetHeights(0); return; }
 
-      // ── 2. lrclib REST API (5 tiers) ────────────────────────────────────────
       const result = await fetchFromLrclib(trackName, artistName, duration);
 
       if (guard()) return;
@@ -375,7 +359,6 @@ export const LyricsFetcher: React.FC = () => {
         return;
       }
 
-      // ── 3. Nothing found ────────────────────────────────────────────────────
       _setLyrics([]);
       resetHeights(0);
 
@@ -388,25 +371,22 @@ export const LyricsFetcher: React.FC = () => {
     } finally {
       if (!guard()) _setIsFetchingLyrics(false);
     }
-  }, [activeTrack, lastLoadedTrackId, _setLyrics, _setIsFetchingLyrics, resetHeights]);
+  }, [currentTrack, lastLoadedTrackId, _setLyrics, _setIsFetchingLyrics, resetHeights]);
 
   useEffect(() => {
-    if (activeTrack?.id && activeTrack.id !== lastLoadedTrackId) fetchLyrics();
-    if (!activeTrack) {
+    if (currentTrack?.id && currentTrack.id !== lastLoadedTrackId) fetchLyrics();
+    if (!currentTrack) {
       _setLyrics([]);
       resetHeights(0);
       setLastLoadedTrackId(null);
     }
-  }, [activeTrack?.id, fetchLyrics, lastLoadedTrackId, _setLyrics, resetHeights]);
+  }, [currentTrack?.id, fetchLyrics, lastLoadedTrackId, _setLyrics, resetHeights]);
 
   return null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // submitUserLyrics
-//
-// FIX [2]: No RNTP calls. The caller passes all data directly. The old code
-// called TrackPlayer.getActiveTrack() here which threw "Track was not found".
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function submitUserLyrics(

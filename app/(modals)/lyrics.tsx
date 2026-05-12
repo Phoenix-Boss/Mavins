@@ -1,5 +1,8 @@
 /**
- * (modals)/lyrics.tsx  — v2
+ * (modals)/lyrics.tsx  — v3
+ *
+ * FIXED: Removed react-native-track-player dependency
+ * Uses PlayerEngineContext for playback position instead of RNTP useProgress
  *
  * Lyrics priority:
  *   1. Supabase cache (via LyricsFetcher context)   — fastest
@@ -11,9 +14,6 @@
  *   - User pastes plain text or LRC-formatted lyrics.
  *   - Saved to Supabase `lyrics` table via submitUserLyrics().
  *   - Instantly reflected in the UI without re-fetch.
- *
- * The NotFoundError from lrclib-api is now handled inside useLyricsContext.tsx
- * and never reaches this screen.
  *
  * Params from PlayerScreen.handleLyrics:
  *   title:    string
@@ -45,7 +45,6 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useProgress } from "react-native-track-player";
 import { useSharedValue } from "react-native-reanimated";
 import Animated, {
   useAnimatedStyle,
@@ -56,6 +55,7 @@ import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useLyricsContext, submitUserLyrics } from "@/hooks/useLyricsContext";
 import type { LyricLine } from "@/hooks/useLyricsContext";
+import { usePlayerEngine } from "@/libs/playerSetup";
 
 // ─── Colours ─────────────────────────────────────────────────────────────────
 
@@ -80,23 +80,30 @@ const C = {
 export default function LyricsModal() {
   const router          = useRouter();
   const { top, bottom } = useSafeAreaInsets();
+  
+  // FIXED: Use PlayerEngineContext instead of RNTP useProgress
+  const engine = usePlayerEngine();
+  const position = engine.position;
+  const duration = engine.duration;
 
-  const { title, artist, duration, videoId, leadIn } = useLocalSearchParams<{
+  const { title, artist, duration: durationParam, videoId, leadIn } = useLocalSearchParams<{
     title:    string;
     artist:   string;
     duration: string;
     videoId:  string;
-    leadIn?:  string;   // seconds to add ahead of position for early highlight
+    leadIn?:  string;
   }>();
 
-  // [7] Parse lead-in — PlayerScreen passes LYRICS_LEAD_IN_S (default 0.25 s)
+  // Parse lead-in — PlayerScreen passes LYRICS_LEAD_IN_S (default 0.25 s)
   const LEAD_IN = leadIn ? parseFloat(leadIn) : 0.25;
 
-  // Poll RNTP every 100 ms
-  const { position } = useProgress(100);
-  const seekTime     = useSharedValue(0);
-  // [7] Add lead-in offset so the highlight lands before the syllable starts
-  useEffect(() => { seekTime.value = position + LEAD_IN; }, [position, LEAD_IN]);
+  // FIXED: Use local position state that updates from engine
+  const seekTime = useSharedValue(0);
+  
+  // Add lead-in offset so the highlight lands before the syllable starts
+  useEffect(() => { 
+    seekTime.value = position + LEAD_IN; 
+  }, [position, LEAD_IN]);
 
   // Pull lyrics from context (LyricsFetcher drives the fetch)
   const { lyrics, isFetchingLyrics } = useLyricsContext();
@@ -113,9 +120,6 @@ export default function LyricsModal() {
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleLyricsSubmitted = useCallback((newLines: LyricLine[]) => {
-    // The context will be updated automatically on next track change;
-    // for instant feedback we just close the modal — the user will see
-    // the new lyrics next time they open this screen.
     setAddModalVisible(false);
     Alert.alert("Thanks!", "Your lyrics have been saved and will appear for future listeners.");
   }, []);
@@ -269,6 +273,19 @@ function SyncedView({ lines, seekTime, position, bottom, leadIn }: SyncedViewPro
     scrollRef.current?.scrollTo({ y: offset, animated: true });
   }, [activeIndex, userScrolling]);
 
+  // Calculate endTime for a line based on next line's startTime
+  const getLineEndTime = useCallback((index: number, currentStartTime: number): number => {
+    // Look for the next non-empty line with a startTime
+    for (let i = index + 1; i < lines.length; i++) {
+      const nextLine = lines[i];
+      if (nextLine.text !== "" && nextLine.startTime !== undefined) {
+        return nextLine.startTime;
+      }
+    }
+    // If no next line, assume 5 seconds duration
+    return currentStartTime + 5;
+  }, [lines]);
+
   return (
     <ScrollView
       ref={scrollRef}
@@ -281,10 +298,8 @@ function SyncedView({ lines, seekTime, position, bottom, leadIn }: SyncedViewPro
       {lines.map((line, i) => {
         if (line.text === "") return <View key={i} style={styles.spacer} />;
 
-        const nextNonEmpty = lines.slice(i + 1).find((l) => l.text !== "");
-        const nextStart    = nextNonEmpty?.startTime;
-        const startTime    = line.startTime ?? 0;
-        const endTime      = line.endTime ?? nextStart ?? startTime + 5;
+        const startTime = line.startTime ?? 0;
+        const endTime = getLineEndTime(i, startTime);
 
         return (
           <View
@@ -482,7 +497,7 @@ function AddLyricsModal({
             style={addStyles.input}
             value={text}
             onChangeText={(t) => { setText(t); setError(null); }}
-            placeholder={"[00:12.00] First line of the song\n[00:15.50] Second line...\n\nOr paste plain text without timestamps"}
+            placeholder="[00:12.00] First line of the song\n[00:15.50] Second line...\n\nOr paste plain text without timestamps"
             placeholderTextColor={C.textMuted}
             multiline
             autoCorrect={false}

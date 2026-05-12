@@ -1,40 +1,91 @@
 // app/(player)/_layout.tsx
 //
-// SPOTIFY-STYLE TRANSPARENT OVERLAY — compositor chain:
+// PLAYER ROUTE GROUP LAYOUT
 //
-//  app/_layout.tsx → Stack.Screen name="(player)"
-//    presentation:  'transparentModal'  ← keeps (tabs) rendered & visible behind
-//    animation:     'none'              ← no React Navigation compositor involvement
-//    contentStyle:  { backgroundColor: 'transparent' }
+// This layout wraps ALL screens within the (player) route group.
+// This is effectively the main app layout for authenticated/player-enabled screens.
 //
-//  This inner NativeStack must ALSO be fully transparent — any backgroundColor
-//  here adds an opaque compositor layer visible during swipe-down.
+// Screens in this group:
+//   - index.tsx (Home screen with integrated player overlay)
+//   - library/ (User's music library - has its own nested layout)
+//   - search/ (Search and discovery - has its own nested layout)
+//   - settings.tsx (App settings and preferences)
 //
-//  IMPORTANT: `cardStyle` does NOT exist on NativeStackNavigationOptions.
-//  Expo Router uses NativeStack by default. Only `contentStyle` is valid.
-//  The ONLY visual fill is PlayerContent's LinearGradient.
+// ARCHITECTURE NOTE:
+//   The global player overlay (mini/expanded) is provided by PlayerOverlayProvider
+//   in the root _layout.tsx. This layout does NOT create its own player components.
+//   Instead, it provides a container for screen content while the global overlay
+//   handles all player UI rendering.
+//
+//   This separation ensures the player overlay persists across ALL screens in this group:
+//   home, library, search, and settings - maintaining playback continuity everywhere.
+//
+//   Library and search have their own nested layouts for internal navigation.
+//   Settings is a single screen with no nested navigation.
 
 import { Stack } from 'expo-router';
+import { View, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 
 export default function PlayerLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        animation: 'none',
-        gestureEnabled: false,
-        contentStyle: { backgroundColor: 'transparent' },
-      }}
-    >
-      <Stack.Screen
-        name="index"
-        options={{
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar style="light" />
+      
+      <Stack
+        screenOptions={{
           headerShown: false,
-          animation: 'none',
-          gestureEnabled: false,
-          contentStyle: { backgroundColor: 'transparent' },
+          animation: 'slide_from_right',
+          contentStyle: { backgroundColor: '#000000' },
+          navigationBarColor: '#000000',
+          statusBarStyle: 'light',
+          statusBarTranslucent: true,
+          statusBarBackgroundColor: 'transparent',
         }}
-      />
-    </Stack>
+      >
+        {/* Home screen - main view with integrated player overlay */}
+        <Stack.Screen 
+          name="index" 
+          options={{
+            title: 'Home',
+          }}
+        />
+        
+        {/* Library folder - contains its own nested Stack navigator */}
+        <Stack.Screen 
+          name="library" 
+          options={{
+            title: 'Library',
+          }}
+        />
+        
+        {/* Search folder - contains its own nested Stack navigator */}
+        <Stack.Screen 
+          name="search" 
+          options={{
+            title: 'Search',
+          }}
+        />
+        
+        {/* Settings screen - single screen, no nested navigation */}
+        <Stack.Screen 
+          name="settings" 
+          options={{
+            title: 'Settings',
+            animation: 'slide_from_right',
+          }}
+        />
+      </Stack>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+});

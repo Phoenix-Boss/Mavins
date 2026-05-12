@@ -6,12 +6,12 @@ const withIconXml = require("./plugins/withIconXml");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "wocof2",
-  slug: "wocof2",
+  owner: "xacibi6468-1",
+  slug: "xacibi6468",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "8968f586-c2de-4f2b-91ac-a08008acd380",
+      projectId: "01b4b11c-49dd-4680-9889-3b6c9ff3b792",
     },
   },
   platforms: ["android"],
@@ -21,11 +21,8 @@ module.exports = {
   userInterfaceStyle: "automatic",
 
   // ── Architecture ───────────────────────────────────────────────────────────
-  // react-native-track-player 4.1.2 (stable) crashes on New Architecture due
-  // to a null eventType NPE in MusicModule.addListener. The 5.x alpha that
-  // claims New Arch support is itself broken (iOS can't play tracks at all).
-  // Disable New Arch here until RNTP ships a stable 5.x release, then re-enable.
-  // SDK 54 is the last Expo version where this opt-out is supported.
+  // New Architecture is now enabled because react-native-track-player has been
+  // fully replaced with expo-audio + expo-video, which are New Arch compatible.
   newArchEnabled: true,
 
   android: {
@@ -44,7 +41,7 @@ module.exports = {
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.RECEIVE_BOOT_COMPLETED",
       // Required by DynamicsProcessing (mavin-eq) to attach to the
-      // TrackPlayer audio session. Without this the EQ silently does nothing.
+      // audio session. Without this the EQ silently does nothing.
       "android.permission.MODIFY_AUDIO_SETTINGS",
     ],
     usesCleartextTraffic: true,
@@ -68,7 +65,8 @@ module.exports = {
         autoVerify: true,
         data: [
           {
-            scheme: "mavins-player",
+            // FIXED: Use dynamic scheme matching the build variant
+            scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
             host: "player",
             pathPrefix: "/open",
           },
@@ -90,7 +88,11 @@ module.exports = {
       "expo-notifications",
       {
         icon: "./assets/images/notification-icon.png",
-        color: "#000",
+        // FIXED: Changed from "#000" to "#D4AF37" (gold) for visibility
+        // on dark notification backgrounds. Native Palette extraction
+        // (in MediaSessionManager.kt) will override this dynamically
+        // per-track for Android 8+ devices.
+        color: "#D4AF37",
       },
     ],
     "react-native-edge-to-edge",
