@@ -1,5 +1,14 @@
 // contexts/GlobalUIStateContext.tsx
-// CLEAN RNTP IMPLEMENTATION - No redundant state
+//
+// Migrated from react-native-track-player → expo-audio engine (usePlayerEngine).
+//
+// ARCHITECTURE:
+//   isPlaying is now derived from engine.isPlaying (set by MusicPlayerContext)
+//   rather than RNTP's usePlaybackState hook.
+//
+//   PlayerOverlayProvider (in _layout.tsx) already watches engine.currentTrack
+//   to show/hide the mini player — this context handles the tab bar and handle
+//   visibility that responds to the same playback lifecycle.
 
 import React, {
   createContext,
@@ -7,66 +16,68 @@ import React, {
   useState,
   useCallback,
   useEffect,
-  useMemo,
-} from "react";
-import TrackPlayer, { usePlaybackState, State } from "react-native-track-player";
-import { triggerHaptic } from "@/helpers/haptics";
+} from 'react';
+import { usePlayerEngine } from '@/libs/playerSetup';
+import { triggerHaptic } from '@/helpers/haptics';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface GlobalUIStateContextType {
-  tabsVisible: boolean;
-  tabsLocked: boolean;
-  handleVisible: boolean;
-  isMusicPlaying: boolean;
-  setTabsVisible: (visible: boolean, isUserAction?: boolean) => void;
+  tabsVisible:          boolean;
+  tabsLocked:           boolean;
+  handleVisible:        boolean;
+  isMusicPlaying:       boolean;
+  setTabsVisible:       (visible: boolean, isUserAction?: boolean) => void;
   resetNavigationState: () => void;
-  setIsMusicPlaying: (playing: boolean) => void;
-  setHandleVisible: (visible: boolean) => void;
-  setTabsLocked: (locked: boolean) => void;
+  setIsMusicPlaying:    (playing: boolean) => void;
+  setHandleVisible:     (visible: boolean) => void;
+  setTabsLocked:        (locked: boolean) => void;
   handleUserTappedHandle: () => void;
 }
 
-const GlobalUIStateContext =
-  createContext<GlobalUIStateContextType | undefined>(undefined);
+const GlobalUIStateContext = createContext<GlobalUIStateContextType | undefined>(undefined);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const GlobalUIStateProvider: React.FC<{
-  children: React.ReactNode;
-}> = ({ children }) => {
-  const [tabsVisible, setTabsVisibleState] = useState(true);
-  const [tabsLocked, setTabsLockedState] = useState(false);
-  const [handleVisible, setHandleVisibleState] = useState(false);
+export const GlobalUIStateProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const engine = usePlayerEngine();
+
+  const [tabsVisible,    setTabsVisibleState]    = useState(true);
+  const [tabsLocked,     setTabsLockedState]     = useState(false);
+  const [handleVisible,  setHandleVisibleState]  = useState(false);
+  // Mirrors engine.isPlaying — kept in state so consumers can subscribe via
+  // context without reaching into the engine directly.
   const [isMusicPlaying, setIsMusicPlayingState] = useState(false);
 
-  // 🔥 RNTP: usePlaybackState returns the current state directly
-  const playbackState = usePlaybackState();
-  
-  // Determine if music is playing (includes buffering as "active" state)
-  const isPlaying = useMemo(() => {
-    return playbackState === State.Playing || playbackState === State.Buffering;
-  }, [playbackState]);
+  // ── Sync with engine playback state ────────────────────────────────────────
+  //
+  // engine.isPlaying is true while audio is actively playing (expo-audio),
+  // and engine.isBuffering covers the loading state that RNTP's State.Buffering
+  // previously handled.  We treat either as "active" for UI purposes.
 
-  // ── Sync tab/handle visibility with playback ──────────────────────────────
+  const isActive = engine.isPlaying || engine.isBuffering;
+
   useEffect(() => {
-    setIsMusicPlayingState(isPlaying);
-    setHandleVisibleState(isPlaying);
+    setIsMusicPlayingState(isActive);
+    setHandleVisibleState(isActive);
 
     if (!tabsLocked) {
-      setTabsVisibleState(!isPlaying);
+      setTabsVisibleState(!isActive);
     }
 
-    if (!isPlaying) {
+    // When playback stops, always clear the lock so the next play auto-hides tabs.
+    if (!isActive) {
       setTabsLockedState(false);
     }
-  }, [isPlaying, tabsLocked]);
+  }, [isActive, tabsLocked]);
 
-  // ── Setters ───────────────────────────────────────────────────────────────
+  // ── Setters ─────────────────────────────────────────────────────────────────
 
   /**
    * Set tab visibility. Pass `isUserAction=true` to lock the state so the
@@ -77,23 +88,24 @@ export const GlobalUIStateProvider: React.FC<{
       setTabsVisibleState(visible);
       if (isUserAction) setTabsLockedState(visible);
     },
-    []
+    [],
   );
 
   const setTabsLocked = useCallback(
     (locked: boolean) => setTabsLockedState(locked),
-    []
+    [],
   );
 
   /**
    * Called when the user taps the drag handle on the FloatingPlayer.
-   * Toggles tab bar visibility and locks it to prevent auto-override.
+   * Toggles tab bar visibility and locks it to prevent the auto-sync from
+   * immediately overriding the user's choice.
    */
   const handleUserTappedHandle = useCallback(() => {
     if (!isMusicPlaying) return;
 
     const newVisibility = !tabsVisible;
-    setTabsLockedState(newVisibility); // lock when showing, unlock when hiding
+    setTabsLockedState(newVisibility);  // lock when showing, release when hiding
     setTabsVisibleState(newVisibility);
     triggerHaptic();
   }, [isMusicPlaying, tabsVisible]);
@@ -103,14 +115,16 @@ export const GlobalUIStateProvider: React.FC<{
     setTabsLockedState(false);
   }, []);
 
+  // Escape hatch: allow external callers to force-set the playing flag
+  // (e.g. optimistic UI before the engine state propagates).
   const setIsMusicPlaying = useCallback(
     (playing: boolean) => setIsMusicPlayingState(playing),
-    []
+    [],
   );
 
   const setHandleVisible = useCallback(
     (visible: boolean) => setHandleVisibleState(visible),
-    []
+    [],
   );
 
   return (
@@ -140,9 +154,7 @@ export const GlobalUIStateProvider: React.FC<{
 export const useGlobalUIState = (): GlobalUIStateContextType => {
   const context = useContext(GlobalUIStateContext);
   if (!context) {
-    throw new Error(
-      "useGlobalUIState must be used within a GlobalUIStateProvider"
-    );
+    throw new Error('useGlobalUIState must be used within a GlobalUIStateProvider');
   }
   return context;
 };

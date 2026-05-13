@@ -1,156 +1,218 @@
 // hooks/useSystemMediaControls.ts
 //
-// Bridges expo-audio (via usePlayerEngine) → mavin-media-session native module.
+// Bridges the player engine → expo-media-control for lock screen controls (Android only).
 //
-// Now imports from @/libs/playerSetup for consistency with the bridge pattern.
+// CORRECT API (expo-media-control):
+//   • enableMediaControls()   - init with capability list
+//   • updateMetadata()        - track title, artist, artwork { uri }, duration, elapsedTime
+//   • updatePlaybackState()   - (state, position?, rate?) — native side animates progress
+//   • addListener()           - single unified callback for ALL lock screen button events
+//   • disableMediaControls()  - cleanup on unmount
 //
-// FIXES vs original:
-//  • engine.playerReady removed — not part of PlayerEngineState; readiness is
-//    inferred from engine.currentTrack being non-null instead.
-//  • mediaSession.setMetadata() is now async (AsyncFunction on native) — awaited.
-//  • Media button handlers use an engineRef so they never capture a stale closure.
-//  • Position sync interval is created once (on mount) and reads live values
-//    from engineRef — no re-creation on every render.
-//  • AppState background handler uses engineRef for the same reason.
-//  • seekTo data.position guard changed: `!data?.position` is falsy when
-//    position is 0 (valid seek target) — changed to `data?.position == null`.
-//  • artworkUrl: track.videoId is already the bare video ID — no need to call
-//    extractVideoId on it again.
+// NOTE: There is NO setNowPlaying(), NO updatePlaybackPosition(), NO MediaControl.on().
+//       The native platform animates scrubber progress automatically from position + rate,
+//       so a periodic JS position-push interval is unnecessary and actually harmful
+//       (it interrupts the native animation on Android).
 
 import { useEffect, useRef } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, Platform } from 'react-native';
+import {
+  MediaControl,
+  PlaybackState,
+  Command,
+  type MediaControlEvent,
+} from 'expo-media-control';
 import { usePlayerEngine, PlayerEngineState } from '@/libs/playerSetup';
-import mediaSession from '@/modules/mavin-media-session';
 
-const POSITION_SYNC_MS = 2000;
+// Only run on Android
+const isAndroid = Platform.OS === 'android';
 
-export function useSystemMediaControls() {
-  const engine    = usePlayerEngine();
-  // Stable ref so interval / AppState / event callbacks always see current values
-  // without being listed as deps (which would cause teardown/re-subscribe churn).
+export function useSystemMediaControls(): void {
+  const engine = usePlayerEngine();
+
+  // Stable ref — lets AppState / event callbacks read the latest engine state
+  // without being listed as deps (avoids teardown/re-subscribe churn).
   const engineRef = useRef<PlayerEngineState>(engine);
-
   useEffect(() => {
     engineRef.current = engine;
   });
 
-  // ── 1. Metadata — fires when track changes ──────────────────────────────────
+  // ── 0. Initialize media controls (runs once on mount, Android only) ─────────
   useEffect(() => {
+    if (!isAndroid) return;
+
+    const initControls = async () => {
+      try {
+        await MediaControl.enableMediaControls({
+          capabilities: [
+            Command.PLAY,
+            Command.PAUSE,
+            Command.NEXT_TRACK,
+            Command.PREVIOUS_TRACK,
+            Command.SEEK,
+            Command.STOP,
+          ],
+          compactCapabilities: [
+            Command.PREVIOUS_TRACK,
+            Command.PLAY,
+            Command.NEXT_TRACK,
+          ],
+          notification: {
+            color: '#D4AF37', // Mavin gold
+          },
+        });
+        console.log('[MediaControls] Initialized successfully (Android)');
+      } catch (error) {
+        console.warn('[MediaControls] Init error on Android:', error);
+      }
+    };
+
+    initControls();
+  }, []);
+
+  // ── 1. Metadata — re-runs only when the track identity changes ──────────────
+  useEffect(() => {
+    if (!isAndroid) return;
+
     const track = engine.currentTrack;
     if (!track) return;
 
-    const artworkUrl =
+    // Build artwork URL from the bare videoId if no explicit thumbnail is set.
+    const artworkUri =
       track.thumbnail ||
       (track.videoId
         ? `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`
         : undefined);
 
-    // setMetadata is async (Glide runs on background thread)
-    mediaSession
-      .setMetadata({
-        title:      track.title,
-        artist:     track.artist ?? 'Unknown Artist',
-        artworkUrl,
-        // expo-audio gives duration in seconds; MediaSessionCompat wants ms
-        duration:   Math.round((track.duration ?? 0) * 1000),
-        trackId:    track.id,
-      })
-      .catch(e => console.warn('[MediaControls] setMetadata error:', e));
+    // updateMetadata() — artwork must be { uri: string }, not a bare string.
+    MediaControl.updateMetadata({
+      title: track.title,
+      artist: track.artist ?? 'Unknown Artist',
+      duration: track.duration ?? 0,
+      elapsedTime: engine.position,
+      ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
+    }).catch(e => console.warn('[MediaControls] updateMetadata error:', e));
 
-    // Push initial playback state alongside metadata
-    mediaSession.setPlaybackState(
-      engine.isPlaying ? 'playing' : 'paused',
-      Math.round(engine.position * 1000),
-      1,
-    );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine.currentTrack?.id]);   // only re-run when the track itself changes
+    // Push the initial playback state alongside the new metadata.
+    const initialState = engine.isPlaying ? PlaybackState.PLAYING : PlaybackState.PAUSED;
+    MediaControl.updatePlaybackState(
+      initialState,
+      engine.position,
+      engine.isPlaying ? 1.0 : 0.0,
+    ).catch(e => console.warn('[MediaControls] updatePlaybackState error:', e));
 
-  // ── 2. Playback state — fires when play/pause/buffer changes ───────────────
+    // Only re-run when the track itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.currentTrack?.id]);
+
+  // ── 2. Playback state — re-runs when play/pause/buffer state changes ────────
+  // Passing position + rate lets the native side animate the scrubber on its own,
+  // so we do NOT need a periodic JS interval for position updates.
   useEffect(() => {
+    if (!isAndroid) return;
+
     if (!engine.currentTrack) return;
 
-    const state = engine.isPlaying
-      ? 'playing'
-      : engine.isBuffering
-      ? 'buffering'
-      : 'paused';
+    let state: PlaybackState;
+    if (engine.isPlaying) {
+      state = PlaybackState.PLAYING;
+    } else if (engine.isBuffering) {
+      state = PlaybackState.BUFFERING;
+    } else {
+      state = PlaybackState.PAUSED;
+    }
 
-    mediaSession.setPlaybackState(
+    MediaControl.updatePlaybackState(
       state,
-      Math.round(engine.position * 1000),
-      1,
-    );
+      engine.position,
+      engine.isPlaying ? 1.0 : 0.0,
+    ).catch(e => console.warn('[MediaControls] updatePlaybackState error:', e));
   }, [engine.isPlaying, engine.isBuffering, engine.currentTrack?.id]);
 
-  // ── 3. Position sync — single interval, reads live ref ────────────────────
+  // ── 3. Media button events — single unified addListener() ──────────────────
+  // expo-media-control uses ONE addListener call that receives all commands
+  // via event.command (a Command enum value). Returns a plain remove function.
   useEffect(() => {
-    const id = setInterval(() => {
+    if (!isAndroid) return;
+
+    const removeListener = MediaControl.addListener((event: MediaControlEvent) => {
       const e = engineRef.current;
-      if (!e.currentTrack) return;
-      mediaSession.updatePosition(
-        Math.round(e.position * 1000),
-        Math.round(e.duration * 1000),
-      );
-    }, POSITION_SYNC_MS);
 
-    return () => clearInterval(id);
-  }, []); // mount/unmount only
+      switch (event.command) {
+        case Command.PLAY:
+          console.log('[MediaControls] PLAY received');
+          e.play();
+          break;
 
-  // ── 4. Media button events — subscribe once, read engine via ref ───────────
-  useEffect(() => {
-    const unsubs = [
-      mediaSession.addEventListener('onPlay', () => {
-        engineRef.current.play();
-      }),
+        case Command.PAUSE:
+          console.log('[MediaControls] PAUSE received');
+          e.pause();
+          break;
 
-      mediaSession.addEventListener('onPause', () => {
-        engineRef.current.pause();
-      }),
+        case Command.NEXT_TRACK:
+          console.log('[MediaControls] NEXT_TRACK received');
+          e.skipToNext();
+          break;
 
-      mediaSession.addEventListener('onSkipToNext', () => {
-        engineRef.current.skipToNext();
-      }),
+        case Command.PREVIOUS_TRACK:
+          console.log('[MediaControls] PREVIOUS_TRACK received');
+          e.skipToPrevious();
+          break;
 
-      mediaSession.addEventListener('onSkipToPrevious', () => {
-        engineRef.current.skipToPrevious();
-      }),
+        case Command.SEEK: {
+          const position = event.data?.position;
+          if (position !== undefined && position !== null) {
+            console.log('[MediaControls] SEEK received:', position);
+            e.seekTo(position);
+          }
+          break;
+        }
 
-      mediaSession.addEventListener('onSeekTo', (data?: { position?: number }) => {
-        // data.position arrives in milliseconds from the native side
-        if (data?.position == null) return;
-        engineRef.current.seekTo(data.position / 1000);
-      }),
+        case Command.STOP:
+          console.log('[MediaControls] STOP received');
+          e.pause();
+          break;
 
-      mediaSession.addEventListener('onStop', () => {
-        engineRef.current.pause();
-      }),
-    ];
+        default:
+          break;
+      }
+    });
 
     return () => {
-      unsubs.forEach(u => u());
+      removeListener();
     };
-  }, []); // mount/unmount only — engine read via ref
+  }, []);
 
-  // ── 5. App background — update state via ref ──────────────────────────────
+  // ── 4. App backgrounded — push final state via ref ─────────────────────────
+  // Ensures the lock screen reflects correct state when app goes to background.
   useEffect(() => {
+    if (!isAndroid) return;
+
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'background') return;
+
       const e = engineRef.current;
       if (!e.currentTrack) return;
-      mediaSession.setPlaybackState(
-        'paused',
-        Math.round(e.position * 1000),
-        1,
-      );
-    });
-    return () => sub.remove();
-  }, []); // mount/unmount only
 
-  // ── 6. Final cleanup ───────────────────────────────────────────────────────
+      const state = e.isPlaying ? PlaybackState.PLAYING : PlaybackState.PAUSED;
+      MediaControl.updatePlaybackState(
+        state,
+        e.position,
+        e.isPlaying ? 1.0 : 0.0,
+      ).catch(err => console.warn('[MediaControls] background state update error:', err));
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  // ── 5. Cleanup on unmount ──────────────────────────────────────────────────
   useEffect(() => {
+    if (!isAndroid) return;
+
     return () => {
-      mediaSession.removeAllListeners();
+      MediaControl.disableMediaControls().catch(e =>
+        console.warn('[MediaControls] disable error:', e),
+      );
     };
   }, []);
 }

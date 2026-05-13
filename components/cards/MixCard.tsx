@@ -11,7 +11,7 @@
  *   channel  → /channel/[id]
  *
  * The `queue` prop is the full list of songs from the current section so
- * RNTP gets a proper queue with skip forward/back context.
+ * the engine gets a proper queue with skip forward/back context.
  *
  * The `songUrl` prop is the full YouTube watch URL required by MavinEngine
  * e.g. "https://www.youtube.com/watch?v=JGwWNGJdvx8"
@@ -29,20 +29,22 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
-import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { useActiveTrack } from "react-native-track-player";
+
+// Import from the canonical bridge — never directly from MusicPlayerContext.
+import { useMusicPlayer, usePlayerEngine } from "@/libs/playerSetup";
+import { usePlayerOverlay } from "@/app/_layout";
 
 // ─── Colors ───────────────────────────────────────────────────────────────────
 
 const COLORS = {
-  background:   "#000000",
-  surfaceLight: "#1F1F1F",
-  goldPrimary:  "#D4AF37",
-  goldShiny:    "#FFD700",
-  goldShimmer:  "#E6C16A",
-  text:         "#FFFFFF",
-  textSecondary:"#B3B3B3",
-  textMuted:    "#808080",
+  background:    "#000000",
+  surfaceLight:  "#1F1F1F",
+  goldPrimary:   "#D4AF37",
+  goldShiny:     "#FFD700",
+  goldShimmer:   "#E6C16A",
+  text:          "#FFFFFF",
+  textSecondary: "#B3B3B3",
+  textMuted:     "#808080",
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -51,25 +53,29 @@ export type MixCardItemType = "song" | "artist" | "playlist" | "album" | "channe
 
 /**
  * Song shape expected by MusicPlayerContext.playAudio().
- * url must be the full YouTube watch URL.
+ * Must match the shape used in HomeScreen.
  */
 export interface MixCardSong {
-  id: string;
-  title: string;
-  artist: string;
+  id:        string;
+  title:     string;
+  artist:    string;
   thumbnail: string;
-  url: string;
+  url:       string;
+  duration?: number;  // Optional for backward compatibility
+  videoId?:  string;  // Optional for backward compatibility
 }
 
 export interface MixCardProps {
   item?: {
-    id?: string;
-    title?: string;
-    artist?: string;
+    id?:        string;
+    title?:     string;
+    artist?:    string;
     thumbnail?: string;
-    reason?: string;
+    reason?:    string;
     /** Full YouTube watch URL — required when itemType === "song" */
-    url?: string;
+    url?:       string;
+    duration?:  number;
+    videoId?:   string;
   };
   /**
    * Determines routing behaviour on press.
@@ -78,16 +84,33 @@ export interface MixCardProps {
   itemType?: MixCardItemType;
   /**
    * Full list of songs in the current section — passed as the queue to
-   * MusicPlayerContext.playAudio() so skip forward/back works correctly.
+   * playAudio() so skip forward/back works correctly.
    * Only used when itemType === "song".
    */
   queue?: MixCardSong[];
   isCurrentTrack?: boolean;
-  isPlaying?: boolean;
+  isPlaying?:      boolean;
   /** Override the default press behaviour entirely. */
   onPress?: () => void;
   fallbackTitle?: string;
+  /** Optional callback when playback starts (e.g., to expand player) */
+  onPlaybackStart?: () => void;
 }
+
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/**
+ * Safely navigates to a route with encoded parameters
+ */
+const navigateToRoute = (router: any, basePath: string, id: string) => {
+  if (!id) return;
+  
+  // Properly encode the ID for URL safety
+  const encodedId = encodeURIComponent(id);
+  const route = `${basePath}/${encodedId}` as const;
+  
+  router.push(route);
+};
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -99,10 +122,13 @@ export const MixCard = ({
   isPlaying = false,
   onPress,
   fallbackTitle = "Unknown",
+  onPlaybackStart,
 }: MixCardProps) => {
-  const router      = useRouter();
-  const { playAudio } = useMusicPlayer();
-  const activeTrack = useActiveTrack();
+  const router         = useRouter();
+  const { playAudio }  = useMusicPlayer();
+  const { expandPlayer } = usePlayerOverlay(); // Get expandPlayer from layout
+  // usePlayerEngine gives us currentTrack + isPlaying from the expo-audio engine
+  const engine         = usePlayerEngine();
 
   // ── Safe defaults ──────────────────────────────────────────────────────────
   const safeItem = {
@@ -112,19 +138,23 @@ export const MixCard = ({
     thumbnail: item?.thumbnail || null,
     reason:    item?.reason,
     url:       item?.url       || "",
+    duration:  item?.duration,
+    videoId:   item?.videoId,
   };
 
   const hasValidImage =
     !!safeItem.thumbnail && safeItem.thumbnail.startsWith("http");
 
-  // Whether this card is the track currently loaded in RNTP
-  const isActive = activeTrack?.id === safeItem.id;
+  // Whether this card's track is the one currently loaded in the engine
+  const isActive = engine.currentTrack?.id === safeItem.id;
+
+  // Live playing state — engine.isPlaying is the source of truth
+  const isActivePlaying = isActive && engine.isPlaying;
 
   // ── Press handler ──────────────────────────────────────────────────────────
   const handlePress = async () => {
     triggerHaptic();
 
-    // Always honour an explicit override
     if (onPress) {
       onPress();
       return;
@@ -134,29 +164,33 @@ export const MixCard = ({
 
     switch (itemType) {
       case "song": {
-        // Build a Song object matching MusicPlayerContext's expected shape
         const song: MixCardSong = {
           id:        safeItem.id,
           title:     safeItem.title,
           artist:    safeItem.artist,
           thumbnail: safeItem.thumbnail ?? "",
           url:       safeItem.url,
+          duration:  safeItem.duration,
+          videoId:   safeItem.videoId,
         };
-        // Pass the full section queue so RNTP can skip forward/back
-        await playAudio(song, queue ?? [song]);
+        
+        // Match HomeScreen's playAudio call signature
+        // Third parameter: callback to expand player when playback starts
+        const onStart = onPlaybackStart || expandPlayer;
+        await playAudio(song, queue ?? [song], onStart);
         break;
       }
       case "artist":
-        router.push(`/artist/${encodeURIComponent(safeItem.id)}`);
+        navigateToRoute(router, "/artist", safeItem.id);
         break;
       case "playlist":
-        router.push(`/playlist/${encodeURIComponent(safeItem.id)}`);
+        navigateToRoute(router, "/playlist", safeItem.id);
         break;
       case "album":
-        router.push(`/album/${encodeURIComponent(safeItem.id)}`);
+        navigateToRoute(router, "/album", safeItem.id);
         break;
       case "channel":
-        router.push(`/channel/${encodeURIComponent(safeItem.id)}`);
+        navigateToRoute(router, "/channel", safeItem.id);
         break;
     }
   };
@@ -172,8 +206,13 @@ export const MixCard = ({
         artist:    safeItem.artist,
         thumbnail: safeItem.thumbnail ?? "",
         url:       safeItem.url,
+        duration:  safeItem.duration,
+        videoId:   safeItem.videoId,
       };
-      await playAudio(song, queue ?? [song]);
+      
+      // Match HomeScreen's playAudio call signature
+      const onStart = onPlaybackStart || expandPlayer;
+      await playAudio(song, queue ?? [song], onStart);
     } else {
       handlePress();
     }
@@ -200,11 +239,13 @@ export const MixCard = ({
       ) : (
         <View style={[styles.mixCardImage, styles.fallbackImage]}>
           <Ionicons
-            name={itemType === "artist"  ? "person"          :
-                  itemType === "channel" ? "tv"               :
-                  itemType === "album"   ? "disc"             :
-                  itemType === "playlist"? "list-circle"      :
-                                          "musical-notes"}
+            name={
+              itemType === "artist"   ? "person"       :
+              itemType === "channel"  ? "tv"            :
+              itemType === "album"    ? "disc"          :
+              itemType === "playlist" ? "list-circle"   :
+                                       "musical-notes"
+            }
             size={40}
             color={COLORS.goldShimmer}
           />
@@ -225,7 +266,7 @@ export const MixCard = ({
               name={
                 itemType !== "song"
                   ? "arrow-forward"
-                  : isActive && isPlaying
+                  : isActivePlaying
                   ? "pause"
                   : "play"
               }
@@ -258,11 +299,11 @@ export const MixCard = ({
 
 const styles = StyleSheet.create({
   mixCard: {
-    width: 150,
-    height: 150,
-    borderRadius: 10,
-    overflow: "hidden",
-    position: "relative",
+    width:           150,
+    height:          150,
+    borderRadius:    10,
+    overflow:        "hidden",
+    position:        "relative",
     backgroundColor: COLORS.surfaceLight,
   },
   noImageCard: {
@@ -270,66 +311,66 @@ const styles = StyleSheet.create({
     borderColor: COLORS.goldPrimary + "30",
   },
   mixCardImage: {
-    width: "100%",
-    height: "100%",
+    width:           "100%",
+    height:          "100%",
     backgroundColor: COLORS.surfaceLight,
   },
   fallbackImage: {
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent:  "center",
+    alignItems:      "center",
     backgroundColor: COLORS.surfaceLight,
   },
   mixCardPlayButtonContainer: {
     position: "absolute",
-    top: 8,
-    right: 8,
-    zIndex: 2,
+    top:      8,
+    right:    8,
+    zIndex:   2,
   },
   metallicPlayButtonOutline: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width:           28,
+    height:          28,
+    borderRadius:    14,
     backgroundColor: "transparent",
-    borderWidth: 1.5,
-    borderColor: COLORS.goldShiny,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.6,
-    shadowRadius: 3,
-    elevation: 3,
+    borderWidth:     1.5,
+    borderColor:     COLORS.goldShiny,
+    justifyContent:  "center",
+    alignItems:      "center",
+    shadowColor:     COLORS.goldShiny,
+    shadowOffset:    { width: 0, height: 1 },
+    shadowOpacity:   0.6,
+    shadowRadius:    3,
+    elevation:       3,
   },
   activePlayButton: {
     backgroundColor: COLORS.goldPrimary + "30",
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowColor:     COLORS.goldShiny,
+    shadowOffset:    { width: 0, height: 0 },
+    shadowOpacity:   0.9,
+    shadowRadius:    6,
+    elevation:       6,
   },
   mixCardOverlay: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 10,
+    position:        "absolute",
+    bottom:          0,
+    left:            0,
+    right:           0,
+    padding:         10,
     backgroundColor: "rgba(0,0,0,0.8)",
   },
   mixCardTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.text,
-    marginBottom: 2,
+    fontSize:      14,
+    fontWeight:    "600",
+    color:         COLORS.text,
+    marginBottom:  2,
   },
   mixCardArtist: {
-    fontSize: 12,
-    color: COLORS.goldShimmer,
+    fontSize:     12,
+    color:        COLORS.goldShimmer,
     marginBottom: 2,
   },
   mixCardReason: {
     fontSize: 10,
-    color: COLORS.textSecondary,
+    color:    COLORS.textSecondary,
   },
   currentPlayingTrack: {
     borderWidth: 2,

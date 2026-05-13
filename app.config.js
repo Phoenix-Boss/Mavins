@@ -14,15 +14,12 @@ module.exports = {
       projectId: "01b4b11c-49dd-4680-9889-3b6c9ff3b792",
     },
   },
-  platforms: ["android"],
+  platforms: ["android"], // Only Android
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
   userInterfaceStyle: "automatic",
 
-  // ── Architecture ───────────────────────────────────────────────────────────
-  // New Architecture is now enabled because react-native-track-player has been
-  // fully replaced with expo-audio + expo-video, which are New Arch compatible.
   newArchEnabled: true,
 
   android: {
@@ -40,8 +37,6 @@ module.exports = {
       "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.RECEIVE_BOOT_COMPLETED",
-      // Required by DynamicsProcessing (mavin-eq) to attach to the
-      // audio session. Without this the EQ silently does nothing.
       "android.permission.MODIFY_AUDIO_SETTINGS",
     ],
     usesCleartextTraffic: true,
@@ -65,7 +60,6 @@ module.exports = {
         autoVerify: true,
         data: [
           {
-            // FIXED: Use dynamic scheme matching the build variant
             scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
             host: "player",
             pathPrefix: "/open",
@@ -78,6 +72,7 @@ module.exports = {
       },
     ],
   },
+
   plugins: [
     withAbiSplit,
     withIconXml,
@@ -88,14 +83,26 @@ module.exports = {
       "expo-notifications",
       {
         icon: "./assets/images/notification-icon.png",
-        // FIXED: Changed from "#000" to "#D4AF37" (gold) for visibility
-        // on dark notification backgrounds. Native Palette extraction
-        // (in MediaSessionManager.kt) will override this dynamically
-        // per-track for Android 8+ devices.
         color: "#D4AF37",
       },
     ],
+    
+    // ── expo-media-control for lock screen controls (Android only) ────────────
+    [
+      "expo-media-control",
+      {
+        enableBackgroundAudio: true,
+        audioSessionCategory: "playback",
+        android: {
+          notificationChannelName: "Mavins Player Playback",
+          notificationChannelDescription: "Shows current track and playback controls",
+          notificationColor: "#D4AF37",
+        },
+      },
+    ],
+    
     "react-native-edge-to-edge",
+    
     [
       "expo-splash-screen",
       {
@@ -105,6 +112,7 @@ module.exports = {
         backgroundColor: "#000",
       },
     ],
+    
     [
       "expo-build-properties",
       {
@@ -121,13 +129,11 @@ module.exports = {
       },
     ],
   ],
+  
   experiments: {
     typedRoutes: true,
   },
-  // ── Local native modules ───────────────────────────────────────────────────
-  // expo-modules-autolinking v3.x uses "modulesPaths" (array), not
-  // "nativeModulesDir". Scans ./modules/ directly so mavin-engine, mavin-eq,
-  // and honeygain are all discovered without node_modules symlinks.
+  
   autolinking: {
     modulesPaths: ["./modules"],
   },
