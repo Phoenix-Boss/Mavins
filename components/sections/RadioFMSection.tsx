@@ -1,36 +1,31 @@
-// Updated: components/sections/RadioFMSection.tsx
+// components/sections/RadioFMSection.tsx
 /**
- * RadioFMSection — Store-First Version
+ * RadioFMSection — Theme-Aware Version
  */
 
 import React from "react";
 import {
   View,
-  Text,
   ScrollView,
   StyleSheet,
 } from "react-native";
 import { RadioFMCard } from "../cards/RadioFMCard";
 import { SectionHeader } from "../common/SectionHeader";
 import type { RadioStation } from "@/store/home";
-
-const COLORS = {
-  surface:       "#121212",
-  goldPrimary:   "#D4AF37",
-  textSecondary: "#B3B3B3",
-};
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface RadioFMSectionProps {
   data: RadioStation[];
 }
 
 export const RadioFMSection = ({ data }: RadioFMSectionProps) => {
-  // Empty state
+  const { colors } = useTheme();
+
   if (!data?.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Radio FM" showPlayAll={false} />
-        <View style={styles.emptyContainer} />
+        <View style={[styles.emptyContainer, { backgroundColor: colors.surface }]} />
       </View>
     );
   }
@@ -59,15 +54,7 @@ export const RadioFMSection = ({ data }: RadioFMSectionProps) => {
 };
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: 20,
-  },
-  horizontalScroll: {
-    paddingHorizontal: 16,
-    gap: 16,
-    alignItems: "flex-start",
-  },
-  emptyContainer: {
-    height: 100,
-  },
+  section: { marginBottom: 20 },
+  horizontalScroll: { paddingHorizontal: 16, gap: 16, alignItems: "flex-start" },
+  emptyContainer: { height: 100, borderRadius: 12 },
 });

@@ -1,25 +1,12 @@
 /**
- * ArtistPageScreen — v7  (YouTube-style channel page)
- *
- * Layout mirrors YouTube Music / YouTube channel pages:
- *
- *   ┌─────────────────────────────────────┐
- *   │  BANNER (full-width, 180px tall)    │
- *   │  ┌───────┐  Name  ✓ verified        │
- *   │  │ Avatar│  12.4M subscribers       │
- *   │  └───────┘                          │
- *   └─────────────────────────────────────┘
- *   [ Songs ] [ Albums ] [ Singles ] [ Videos ] [ Playlists ]
- *   ─────────────────────────────────────────────────────────
- *   <content for active tab>
- *
- * Data source: MavinEngine.getChannelInfo() + getChannelTabItems()
+ * ArtistPageScreen — Fixed for Overlay Mode
  *
  * FIXES:
- *   - Removed react-native-track-player (useActiveTrack)
- *   - Uses PlayerEngineContext for active track detection
- *   - All hooks called unconditionally
- *   - Removed unsupported estimatedItemSize prop from FlashList
+ *   - Added useTheme for full light/dark mode support
+ *   - Fixed handleAlbumPress route: was "/(tabs)/search/album" → "/(player)/search/album"
+ *   - Background color from theme, text colors from theme throughout
+ *   - All hooks unconditional
+ *   - Works as overlay (no route change, just modal presentation)
  */
 
 import React, {
@@ -27,7 +14,6 @@ import React, {
   useEffect,
   useRef,
   useState,
-  useMemo,
 } from "react";
 import {
   Animated as RNAnimated,
@@ -52,7 +38,6 @@ import {
 } from "react-native-size-matters/extend";
 
 import { useMusicPlayer } from "@/components/MusicPlayerContext";
-import { Colors } from "@/constants/Colors";
 import { triggerHaptic } from "@/helpers/haptics";
 import MavinEngine, {
   ChannelInfo,
@@ -62,16 +47,11 @@ import MavinEngine, {
   PlaylistInfoItem,
   NativeImage,
 } from "@/modules/mavin-engine";
-
-// Use PlayerEngineContext instead of RNTP
 import { usePlayerEngine } from "@/libs/playerSetup";
-import { extractVideoId, toWatchUrl } from "@/helpers/youtube";
+import { extractVideoId } from "@/helpers/youtube";
+import { useTheme } from "@/contexts/ThemeContext";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const GOLD_PRIMARY = "#D4AF37";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -177,6 +157,8 @@ const bestImage = (images: NativeImage[], level: NativeImage["resolutionLevel"] 
 const channelUrlFromId = (id: string): string =>
   id.startsWith("UC")
     ? `https://www.youtube.com/channel/${id}`
+    : id.startsWith("http")
+    ? id
     : `https://music.youtube.com/channel/${id}`;
 
 const streamItemToSong = (item: StreamInfoItem, fallbackArtist: string): Song => {
@@ -197,23 +179,11 @@ const infoItemToAlbum = (item: InfoItem, fallbackArtist: string): AlbumItem | nu
   if (item.type === "stream") {
     const s = item as StreamInfoItem;
     const videoId = extractVideoId(s.url);
-    return {
-      id: videoId ?? s.url,
-      title: s.name,
-      subtitle: cleanName(s.uploaderName || fallbackArtist),
-      thumbnail: bestImage(s.thumbnails, "MEDIUM"),
-      url: s.url,
-    };
+    return { id: videoId ?? s.url, title: s.name, subtitle: cleanName(s.uploaderName || fallbackArtist), thumbnail: bestImage(s.thumbnails, "MEDIUM"), url: s.url };
   }
   if (item.type === "playlist") {
     const p = item as PlaylistInfoItem;
-    return {
-      id: p.url,
-      title: p.name,
-      subtitle: cleanName(p.uploaderName || fallbackArtist),
-      thumbnail: p.thumbnails[0]?.url ?? "",
-      url: p.url,
-    };
+    return { id: p.url, title: p.name, subtitle: cleanName(p.uploaderName || fallbackArtist), thumbnail: p.thumbnails[0]?.url ?? "", url: p.url };
   }
   return null;
 };
@@ -222,23 +192,11 @@ const infoItemToVideo = (item: InfoItem): VideoItem | null => {
   if (item.type !== "stream") return null;
   const s = item as StreamInfoItem;
   const videoId = extractVideoId(s.url);
-  return {
-    id: videoId ?? s.url,
-    title: s.name,
-    thumbnail: bestImage(s.thumbnails, "MEDIUM"),
-    url: s.url,
-    viewCount: s.viewCount,
-    duration: s.duration,
-    textualUploadDate: s.textualUploadDate,
-  };
+  return { id: videoId ?? s.url, title: s.name, thumbnail: bestImage(s.thumbnails, "MEDIUM"), url: s.url, viewCount: s.viewCount, duration: s.duration, textualUploadDate: s.textualUploadDate };
 };
 
 const findTab = (tabs: ChannelTab[], ...keywords: string[]): ChannelTab | undefined =>
-  tabs.find((tab) =>
-    keywords.some((kw) =>
-      tab.contentFilters.some((f) => f.toLowerCase().includes(kw.toLowerCase()))
-    )
-  );
+  tabs.find((tab) => keywords.some((kw) => tab.contentFilters.some((f) => f.toLowerCase().includes(kw.toLowerCase()))));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Skeleton
@@ -246,10 +204,9 @@ const findTab = (tabs: ChannelTab[], ...keywords: string[]): ChannelTab | undefi
 
 const SK = { base: "#1A1A1A", highlight: "#2A2A2A" };
 
-function ArtistPageSkeleton() {
+function ArtistPageSkeleton({ colors }: { colors: any }) {
   const { top } = useSafeAreaInsets();
   const anim = useRef(new RNAnimated.Value(0)).current;
-
   useEffect(() => {
     RNAnimated.loop(
       RNAnimated.sequence([
@@ -258,14 +215,12 @@ function ArtistPageSkeleton() {
       ])
     ).start();
   }, []);
-
   const bg = anim.interpolate({ inputRange: [0, 1], outputRange: [SK.base, SK.highlight] });
-  const Bone = ({ w, h, r = 6, style }: { w: number | string; h: number; r?: number; style?: object }) => (
-    <RNAnimated.View style={[{ width: w, height: h, borderRadius: r, backgroundColor: bg }, style]} />
+  const Bone = ({ w, h, r = 6 }: { w: number | string; h: number; r?: number }) => (
+    <RNAnimated.View style={{ width: w as any, height: h, borderRadius: r, backgroundColor: bg }} />
   );
-
   return (
-    <View style={{ flex: 1, backgroundColor: "#000" }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Bone w="100%" h={moderateScale(180)} r={0} />
       <View style={{ flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 16, marginTop: -30, gap: 12 }}>
         <Bone w={moderateScale(72)} h={moderateScale(72)} r={36} />
@@ -296,21 +251,21 @@ function ArtistPageSkeleton() {
 // SongRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SongRow({ item, onPlay, onMenu }: { item: Song; onPlay: () => void; onMenu: () => void }) {
+function SongRow({ item, onPlay, onMenu, colors }: { item: Song; onPlay: () => void; onMenu: () => void; colors: any }) {
   return (
     <View style={rowStyles.row}>
       <TouchableOpacity style={rowStyles.touchable} onPress={onPlay} activeOpacity={0.7}>
         <Image source={{ uri: item.thumbnail }} style={rowStyles.thumb} contentFit="cover" />
         <View style={rowStyles.textBlock}>
-          <Text style={rowStyles.title} numberOfLines={1}>{item.title}</Text>
-          <Text style={rowStyles.sub} numberOfLines={1}>
+          <Text style={[rowStyles.title, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
+          <Text style={[rowStyles.sub, { color: colors.textSub }]} numberOfLines={1}>
             {[formatCount(item.viewCount ?? 0) && `${formatCount(item.viewCount ?? 0)} views`, formatDuration(item.duration ?? 0)]
               .filter(Boolean).join(" • ")}
           </Text>
         </View>
       </TouchableOpacity>
       <TouchableOpacity onPress={onMenu} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
-        <Entypo name="dots-three-vertical" size={moderateScale(15)} color="rgba(255,255,255,0.6)" />
+        <Entypo name="dots-three-vertical" size={moderateScale(15)} color={colors.textMuted} />
       </TouchableOpacity>
     </View>
   );
@@ -320,12 +275,12 @@ function SongRow({ item, onPlay, onMenu }: { item: Song; onPlay: () => void; onM
 // AlbumCard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AlbumCard({ item, onPress }: { item: AlbumItem; onPress: () => void }) {
+function AlbumCard({ item, onPress, colors }: { item: AlbumItem; onPress: () => void; colors: any }) {
   return (
-    <TouchableOpacity style={cardStyles.card} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity style={[cardStyles.card, { backgroundColor: colors.surface }]} onPress={onPress} activeOpacity={0.75}>
       <Image source={{ uri: item.thumbnail }} style={cardStyles.image} contentFit="cover" />
-      <Text style={cardStyles.title} numberOfLines={2}>{item.title}</Text>
-      <Text style={cardStyles.sub} numberOfLines={1}>{item.subtitle}</Text>
+      <Text style={[cardStyles.title, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+      <Text style={[cardStyles.sub, { color: colors.textSub }]} numberOfLines={1}>{item.subtitle}</Text>
     </TouchableOpacity>
   );
 }
@@ -334,7 +289,7 @@ function AlbumCard({ item, onPress }: { item: AlbumItem; onPress: () => void }) 
 // VideoRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function VideoRow({ item, onPlay, onMenu }: { item: VideoItem; onPlay: () => void; onMenu: () => void }) {
+function VideoRow({ item, onPlay, onMenu, colors }: { item: VideoItem; onPlay: () => void; onMenu: () => void; colors: any }) {
   return (
     <View style={rowStyles.row}>
       <TouchableOpacity style={rowStyles.touchable} onPress={onPlay} activeOpacity={0.7}>
@@ -347,15 +302,15 @@ function VideoRow({ item, onPlay, onMenu }: { item: VideoItem; onPlay: () => voi
           )}
         </View>
         <View style={rowStyles.textBlock}>
-          <Text style={rowStyles.title} numberOfLines={2}>{item.title}</Text>
-          <Text style={rowStyles.sub} numberOfLines={1}>
+          <Text style={[rowStyles.title, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+          <Text style={[rowStyles.sub, { color: colors.textSub }]} numberOfLines={1}>
             {[formatCount(item.viewCount ?? 0) && `${formatCount(item.viewCount ?? 0)} views`, item.textualUploadDate]
               .filter(Boolean).join(" • ")}
           </Text>
         </View>
       </TouchableOpacity>
       <TouchableOpacity onPress={onMenu} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
-        <Entypo name="dots-three-vertical" size={moderateScale(15)} color="rgba(255,255,255,0.6)" />
+        <Entypo name="dots-three-vertical" size={moderateScale(15)} color={colors.textMuted} />
       </TouchableOpacity>
     </View>
   );
@@ -365,30 +320,17 @@ function VideoRow({ item, onPlay, onMenu }: { item: VideoItem; onPlay: () => voi
 // TabBar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TabBar({
-  tabs,
-  activeKey,
-  onSelect,
-}: {
-  tabs: TabDef[];
-  activeKey: TabKey;
-  onSelect: (key: TabKey) => void;
-}) {
+function TabBar({ tabs, activeKey, onSelect, colors }: { tabs: TabDef[]; activeKey: TabKey; onSelect: (key: TabKey) => void; colors: any }) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={tabBarStyles.container}
-      style={tabBarStyles.scroll}
-    >
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={tabBarStyles.container} style={tabBarStyles.scroll}>
       {tabs.map((t) => (
         <TouchableOpacity
           key={t.key}
-          style={[tabBarStyles.pill, activeKey === t.key && tabBarStyles.pillActive]}
+          style={[tabBarStyles.pill, { backgroundColor: colors.surfaceRaised }, activeKey === t.key && { backgroundColor: colors.gold }]}
           onPress={() => { triggerHaptic(); onSelect(t.key); }}
           activeOpacity={0.7}
         >
-          <Text style={[tabBarStyles.label, activeKey === t.key && tabBarStyles.labelActive]}>
+          <Text style={[tabBarStyles.label, { color: colors.textSub }, activeKey === t.key && { color: colors.textInverse, fontWeight: "700" }]}>
             {t.label}
           </Text>
         </TouchableOpacity>
@@ -398,28 +340,68 @@ function TabBar({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TabSkeleton / EmptyTab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function TabSkeleton({ colors }: { colors: any }) {
+  const anim = useRef(new RNAnimated.Value(0)).current;
+  useEffect(() => {
+    RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(anim, { toValue: 1, duration: 900, useNativeDriver: false }),
+        RNAnimated.timing(anim, { toValue: 0, duration: 900, useNativeDriver: false }),
+      ])
+    ).start();
+  }, []);
+  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: [colors.surfaceLight, colors.surfaceHigh] });
+  const Bone = ({ w, h, r = 4 }: { w: number | string; h: number; r?: number }) => (
+    <RNAnimated.View style={{ width: w as any, height: h, borderRadius: r, backgroundColor: bg }} />
+  );
+  return (
+    <View style={{ paddingTop: 8 }}>
+      {[1, 2, 3, 4].map((i) => (
+        <View key={i} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 12 }}>
+          <Bone w={52} h={52} r={4} />
+          <View style={{ flex: 1, gap: 8 }}>
+            <Bone w="60%" h={13} />
+            <Bone w="40%" h={11} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function EmptyTab({ label, colors }: { label: string; colors: any }) {
+  return (
+    <View style={{ alignItems: "center", paddingTop: verticalScale(40) }}>
+      <Text style={{ color: colors.textMuted, fontSize: moderateScale(14) }}>{label}</Text>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ArtistPageScreen() {
   const { top, bottom } = useSafeAreaInsets();
-  const router           = useRouter();
-  const params           = useLocalSearchParams<{ id: string; subtitle?: string }>();
-  const artistId         = decodeURIComponent(params.id ?? "");
+  const router = useRouter();
+  const params = useLocalSearchParams<{ id: string; subtitle?: string }>();
+  const artistId = decodeURIComponent(params.id ?? "");
 
-  // ALL HOOKS CALLED UNCONDITIONALLY
+  // ALL HOOKS UNCONDITIONAL
+  const { colors } = useTheme();
   const engine = usePlayerEngine();
   const { playAudio } = useMusicPlayer();
   const currentTrackId = engine.currentTrack?.id;
 
-  // ── Meta state ─────────────────────────────────────────────────────────────
   const [meta, setMeta]       = useState<ChannelMeta | null>(null);
   const [tabs, setTabs]       = useState<TabDef[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("songs");
   const [metaLoading, setMetaLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  // ── Per-tab lazy-loaded data ────────────────────────────────────────────────
   const [songsData,     setSongsData]     = useState<Song[]>([]);
   const [albumsData,    setAlbumsData]    = useState<AlbumItem[]>([]);
   const [singlesData,   setSinglesData]   = useState<AlbumItem[]>([]);
@@ -433,7 +415,7 @@ export default function ArtistPageScreen() {
   const channelUrlRef = useRef("");
   const metaRef = useRef<ChannelMeta | null>(null);
 
-  // ── Step 1: load channel metadata ─────────────────────────────────────────
+  // ── Load channel metadata ──────────────────────────────────────────────────
 
   useEffect(() => {
     if (!artistId) { setError("No artist ID provided."); setMetaLoading(false); return; }
@@ -446,15 +428,12 @@ export default function ArtistPageScreen() {
       setError(null);
       try {
         const info: ChannelInfo = await MavinEngine.getChannelInfo(url, 0);
-
         const m: ChannelMeta = {
-          name:            info.name,
-          description:     info.description,
-          avatarUrl:       bestImage(info.avatars, "HIGH"),
-          bannerUrl:       bestImage(info.banners, "HIGH"),
+          name: info.name, description: info.description,
+          avatarUrl: bestImage(info.avatars, "HIGH"),
+          bannerUrl: bestImage(info.banners, "HIGH"),
           subscriberCount: info.subscriberCount,
-          isVerified:      info.isVerified,
-          tags:            info.tags,
+          isVerified: info.isVerified, tags: info.tags,
         };
         metaRef.current = m;
         setMeta(m);
@@ -466,11 +445,11 @@ export default function ArtistPageScreen() {
         const playlistTab = findTab(info.tabs, "playlists");
         const videosTab   = findTab(info.tabs, "shorts", "live", "streams");
 
-        if (songsTab)    built.push({ key: "songs",     label: "Songs",       channelTab: songsTab    });
-        if (albumsTab)   built.push({ key: "albums",    label: "Albums",      channelTab: albumsTab   });
+        if (songsTab)    built.push({ key: "songs",     label: "Songs",         channelTab: songsTab    });
+        if (albumsTab)   built.push({ key: "albums",    label: "Albums",        channelTab: albumsTab   });
         if (singlesTab)  built.push({ key: "singles",   label: "Singles & EPs", channelTab: singlesTab  });
-        if (playlistTab) built.push({ key: "playlists", label: "Playlists",   channelTab: playlistTab });
-        if (videosTab)   built.push({ key: "videos",    label: "Videos",      channelTab: videosTab   });
+        if (playlistTab) built.push({ key: "playlists", label: "Playlists",     channelTab: playlistTab });
+        if (videosTab)   built.push({ key: "videos",    label: "Videos",        channelTab: videosTab   });
 
         setTabs(built);
         if (built.length > 0) setActiveTab(built[0].key);
@@ -483,7 +462,7 @@ export default function ArtistPageScreen() {
     })();
   }, [artistId]);
 
-  // ── Step 2: lazy-load tab content on first activation ─────────────────────
+  // ── Lazy-load tab data ─────────────────────────────────────────────────────
 
   const loadTab = useCallback(async (key: TabKey) => {
     if (loadedTabs.current.has(key)) return;
@@ -495,46 +474,31 @@ export default function ArtistPageScreen() {
 
     setTabLoading((p) => ({ ...p, [key]: true }));
     try {
-      const page = await MavinEngine.getChannelTabItems(
-        url,
-        tabDef.channelTab.contentFilters[0],
-        undefined,
-        0
-      );
+      const page = await MavinEngine.getChannelTabItems(url, tabDef.channelTab.contentFilters[0], undefined, 0);
       loadedTabs.current.add(key);
 
       switch (key) {
         case "songs":
           setSongsData(
-            page.items
-              .filter((i): i is StreamInfoItem => i.type === "stream")
-              .slice(0, 20)
-              .map((i) => streamItemToSong(i, artistName))
+            page.items.filter((i): i is StreamInfoItem => i.type === "stream")
+              .slice(0, 20).map((i) => streamItemToSong(i, artistName))
           );
           break;
         case "albums":
-        case "singles":
-          const albums = page.items
-            .map((i) => infoItemToAlbum(i, artistName))
-            .filter((i): i is AlbumItem => i !== null)
-            .slice(0, 20);
+        case "singles": {
+          const albums = page.items.map((i) => infoItemToAlbum(i, artistName)).filter((i): i is AlbumItem => i !== null).slice(0, 20);
           if (key === "albums") setAlbumsData(albums);
           else setSinglesData(albums);
           break;
+        }
         case "playlists":
           setPlaylistsData(
-            page.items
-              .map((i) => infoItemToAlbum(i, artistName))
-              .filter((i): i is AlbumItem => i !== null)
-              .slice(0, 20)
+            page.items.map((i) => infoItemToAlbum(i, artistName)).filter((i): i is AlbumItem => i !== null).slice(0, 20)
           );
           break;
         case "videos":
           setVideosData(
-            page.items
-              .map(infoItemToVideo)
-              .filter((i): i is VideoItem => i !== null)
-              .slice(0, 20)
+            page.items.map(infoItemToVideo).filter((i): i is VideoItem => i !== null).slice(0, 20)
           );
           break;
       }
@@ -560,122 +524,101 @@ export default function ArtistPageScreen() {
     triggerHaptic();
     router.push({
       pathname: "/(modals)/menu",
-      params: {
-        songData: JSON.stringify({ id: song.id, title: song.title, artist: song.artist, thumbnail: song.thumbnail }),
-        type: "song",
-      },
+      params: { songData: JSON.stringify({ id: song.id, title: song.title, artist: song.artist, thumbnail: song.thumbnail }), type: "song" },
     });
   }, [router]);
 
   const handleAlbumPress = useCallback((album: AlbumItem) => {
     triggerHaptic();
     router.push({
-      pathname: "/(tabs)/search/album",
-      params: {
-        id:        album.id,
-        title:     album.title,
-        thumbnail: album.thumbnail,
-        artist:    album.subtitle || metaRef.current?.name || "",
-      },
+      pathname: "/(player)/search/album",
+      params: { id: encodeURIComponent(album.url || album.id), artist: album.subtitle || metaRef.current?.name || "" },
+    });
+  }, [router]);
+
+  const handlePlaylistPress = useCallback((playlist: AlbumItem) => {
+    triggerHaptic();
+    router.push({
+      pathname: "/(player)/search/playlist",
+      params: { id: encodeURIComponent(playlist.url || playlist.id) },
     });
   }, [router]);
 
   const handleVideoPlay = useCallback((video: VideoItem) => {
     triggerHaptic();
-    playAudio({
-      id:        video.id,
-      title:     video.title,
-      artist:    metaRef.current?.name ?? "",
-      thumbnail: video.thumbnail,
-      url:       video.url,
-      videoId:   video.id,
-    });
+    playAudio({ id: video.id, title: video.title, artist: metaRef.current?.name ?? "", thumbnail: video.thumbnail, url: video.url, videoId: video.id });
   }, [playAudio]);
 
   const handleVideoMenu = useCallback((video: VideoItem) => {
     triggerHaptic();
     router.push({
       pathname: "/(modals)/menu",
-      params: {
-        songData: JSON.stringify({ id: video.id, title: video.title, artist: metaRef.current?.name ?? "", thumbnail: video.thumbnail }),
-        type: "song",
-      },
+      params: { songData: JSON.stringify({ id: video.id, title: video.title, artist: metaRef.current?.name ?? "", thumbnail: video.thumbnail }), type: "song" },
     });
   }, [router]);
 
-  // ── Tab content renderer ───────────────────────────────────────────────────
+  // ── Tab content ────────────────────────────────────────────────────────────
 
   const renderTabContent = () => {
-    if (tabLoading[activeTab]) {
-      return <TabSkeleton />;
-    }
+    if (tabLoading[activeTab]) return <TabSkeleton colors={colors} />;
 
     switch (activeTab) {
       case "songs":
-        if (!songsData.length) return <EmptyTab label="No songs found" />;
+        if (!songsData.length) return <EmptyTab label="No songs found" colors={colors} />;
         return (
           <FlashList
             data={songsData}
-            renderItem={({ item }) => (
-              <SongRow
-                item={item}
-                onPlay={() => handleSongPlay(item)}
-                onMenu={() => handleSongMenu(item)}
-              />
-            )}
+            renderItem={({ item }) => <SongRow item={item} onPlay={() => handleSongPlay(item)} onMenu={() => handleSongMenu(item)} colors={colors} />}
             keyExtractor={(item) => item.id}
             scrollEnabled={false}
+            estimatedItemSize={70}
           />
         );
 
       case "albums":
       case "singles": {
         const data = activeTab === "albums" ? albumsData : singlesData;
-        if (!data.length) return <EmptyTab label={`No ${activeTab} found`} />;
+        if (!data.length) return <EmptyTab label={`No ${activeTab} found`} colors={colors} />;
         return (
           <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 12, gap: 12 }}>
             {data.map((item) => (
-              <AlbumCard key={item.id} item={item} onPress={() => handleAlbumPress(item)} />
+              <AlbumCard key={item.id} item={item} onPress={() => handleAlbumPress(item)} colors={colors} />
             ))}
           </View>
         );
       }
 
       case "playlists":
-        if (!playlistsData.length) return <EmptyTab label="No playlists found" />;
+        if (!playlistsData.length) return <EmptyTab label="No playlists found" colors={colors} />;
         return (
           <FlashList
             data={playlistsData}
             renderItem={({ item }) => (
               <View style={rowStyles.row}>
-                <TouchableOpacity style={rowStyles.touchable} onPress={() => handleAlbumPress(item)} activeOpacity={0.7}>
+                <TouchableOpacity style={rowStyles.touchable} onPress={() => handlePlaylistPress(item)} activeOpacity={0.7}>
                   <Image source={{ uri: item.thumbnail }} style={rowStyles.thumb} contentFit="cover" />
                   <View style={rowStyles.textBlock}>
-                    <Text style={rowStyles.title} numberOfLines={1}>{item.title}</Text>
-                    <Text style={rowStyles.sub} numberOfLines={1}>{item.subtitle}</Text>
+                    <Text style={[rowStyles.title, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
+                    <Text style={[rowStyles.sub, { color: colors.textSub }]} numberOfLines={1}>{item.subtitle}</Text>
                   </View>
                 </TouchableOpacity>
               </View>
             )}
             keyExtractor={(item) => item.id}
             scrollEnabled={false}
+            estimatedItemSize={70}
           />
         );
 
       case "videos":
-        if (!videosData.length) return <EmptyTab label="No videos found" />;
+        if (!videosData.length) return <EmptyTab label="No videos found" colors={colors} />;
         return (
           <FlashList
             data={videosData}
-            renderItem={({ item }) => (
-              <VideoRow
-                item={item}
-                onPlay={() => handleVideoPlay(item)}
-                onMenu={() => handleVideoMenu(item)}
-              />
-            )}
+            renderItem={({ item }) => <VideoRow item={item} onPlay={() => handleVideoPlay(item)} onMenu={() => handleVideoMenu(item)} colors={colors} />}
             keyExtractor={(item) => item.id}
             scrollEnabled={false}
+            estimatedItemSize={90}
           />
         );
 
@@ -686,15 +629,15 @@ export default function ArtistPageScreen() {
 
   // ── Loading / error ────────────────────────────────────────────────────────
 
-  if (metaLoading) return <ArtistPageSkeleton />;
+  if (metaLoading) return <ArtistPageSkeleton colors={colors} />;
 
   if (error || !meta) {
     return (
-      <View style={localStyles.centered}>
-        <Ionicons name="alert-circle-outline" size={moderateScale(40)} color="#888" />
-        <Text style={localStyles.errorText}>{error ?? "Artist not found."}</Text>
-        <TouchableOpacity style={localStyles.backBtn} onPress={() => router.back()}>
-          <Text style={localStyles.backBtnText}>Go Back</Text>
+      <View style={[localStyles.centered, { backgroundColor: colors.background }]}>
+        <Ionicons name="alert-circle-outline" size={moderateScale(40)} color={colors.textSub} />
+        <Text style={[localStyles.errorText, { color: colors.textSub }]}>{error ?? "Artist not found."}</Text>
+        <TouchableOpacity style={[localStyles.backBtn, { borderColor: colors.gold }]} onPress={() => router.back()}>
+          <Text style={[localStyles.backBtnText, { color: colors.gold }]}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -704,21 +647,18 @@ export default function ArtistPageScreen() {
 
   return (
     <ScrollView
-      style={localStyles.container}
+      style={[localStyles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={{ paddingBottom: verticalScale(138) + bottom }}
       showsVerticalScrollIndicator={false}
     >
-      {/* ── BANNER ─────────────────────────────────────────────────────────── */}
+      {/* Banner */}
       <View style={localStyles.bannerContainer}>
         {meta.bannerUrl ? (
           <Image source={{ uri: meta.bannerUrl }} style={localStyles.banner} contentFit="cover" />
         ) : (
-          <View style={[localStyles.banner, { backgroundColor: "#1a1a1a" }]} />
+          <View style={[localStyles.banner, { backgroundColor: colors.surface }]} />
         )}
-        <LinearGradient
-          colors={["transparent", "rgba(0,0,0,0.85)"]}
-          style={StyleSheet.absoluteFill}
-        />
+        <LinearGradient colors={["transparent", "rgba(0,0,0,0.85)"]} style={StyleSheet.absoluteFill} />
         <TouchableOpacity
           style={[localStyles.backIcon, { top: top + 8 }]}
           onPress={() => { triggerHaptic(); router.back(); }}
@@ -728,35 +668,32 @@ export default function ArtistPageScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── AVATAR + NAME ROW ──────────────────────────────────────────────── */}
+      {/* Avatar + Name */}
       <View style={localStyles.headerRow}>
         <View style={localStyles.avatarWrapper}>
           {meta.avatarUrl ? (
             <Image source={{ uri: meta.avatarUrl }} style={localStyles.avatar} contentFit="cover" />
           ) : (
-            <View style={[localStyles.avatar, { backgroundColor: "#333" }]} />
+            <View style={[localStyles.avatar, { backgroundColor: colors.surface }]} />
           )}
         </View>
-
         <View style={localStyles.nameBlock}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Text style={localStyles.artistName} numberOfLines={1}>{meta.name}</Text>
-            {meta.isVerified && (
-              <MaterialIcons name="verified" size={moderateScale(18)} color="#3ea6ff" />
-            )}
+            <Text style={[localStyles.artistName, { color: colors.text }]} numberOfLines={1}>{meta.name}</Text>
+            {meta.isVerified && <MaterialIcons name="verified" size={moderateScale(18)} color="#3ea6ff" />}
           </View>
           {!!meta.subscriberCount && (
-            <Text style={localStyles.subscriberText}>{formatSubscribers(meta.subscriberCount)}</Text>
+            <Text style={[localStyles.subscriberText, { color: colors.textSub }]}>
+              {formatSubscribers(meta.subscriberCount)}
+            </Text>
           )}
         </View>
       </View>
 
-      {/* ── TAB BAR ───────────────────────────────────────────────────────── */}
-      {tabs.length > 0 && (
-        <TabBar tabs={tabs} activeKey={activeTab} onSelect={setActiveTab} />
-      )}
+      {/* Tab bar */}
+      {tabs.length > 0 && <TabBar tabs={tabs} activeKey={activeTab} onSelect={setActiveTab} colors={colors} />}
 
-      <View style={localStyles.divider} />
+      <View style={[localStyles.divider, { backgroundColor: colors.border }]} />
 
       <View style={{ minHeight: 300 }}>
         {renderTabContent()}
@@ -766,115 +703,49 @@ export default function ArtistPageScreen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TabSkeleton / EmptyTab
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TabSkeleton() {
-  const anim = useRef(new RNAnimated.Value(0)).current;
-  useEffect(() => {
-    RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(anim, { toValue: 1, duration: 900, useNativeDriver: false }),
-        RNAnimated.timing(anim, { toValue: 0, duration: 900, useNativeDriver: false }),
-      ])
-    ).start();
-  }, []);
-  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: [SK.base, SK.highlight] });
-  const Bone = ({ w, h, r = 4 }: { w: number | string; h: number; r?: number }) => (
-    <RNAnimated.View style={{ width: w, height: h, borderRadius: r, backgroundColor: bg }} />
-  );
-  return (
-    <View style={{ paddingTop: 8 }}>
-      {[1, 2, 3, 4].map((i) => (
-        <View key={i} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 12 }}>
-          <Bone w={52} h={52} r={4} />
-          <View style={{ flex: 1, gap: 8 }}>
-            <Bone w="60%" h={13} />
-            <Bone w="40%" h={11} />
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function EmptyTab({ label }: { label: string }) {
-  return (
-    <View style={{ alignItems: "center", paddingTop: verticalScale(40) }}>
-      <Text style={{ color: "rgba(255,255,255,0.4)", fontSize: moderateScale(14) }}>{label}</Text>
-    </View>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
 
 const localStyles = ScaledSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
-  centered:  { flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center", gap: 12 },
-  errorText: { color: "#888", fontSize: "14@ms", textAlign: "center", paddingHorizontal: 20 },
-  backBtn:   { borderColor: "#949392", borderWidth: 1, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 32 },
-  backBtnText: { color: "white", fontSize: "12@ms", fontWeight: "bold" },
-
+  container: { flex: 1 },
+  centered:  { flex: 1, justifyContent: "center", alignItems: "center", gap: 12 },
+  errorText: { fontSize: "14@ms", textAlign: "center", paddingHorizontal: 20 },
+  backBtn:   { borderWidth: 1, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 32 },
+  backBtnText: { fontSize: "12@ms", fontWeight: "bold" },
   bannerContainer: { width: "100%", height: "180@ms", position: "relative" },
   banner:          { width: "100%", height: "180@ms" },
   backIcon:        { position: "absolute", left: 14, zIndex: 10, padding: 6, backgroundColor: "rgba(0,0,0,0.4)", borderRadius: 20 },
-
   headerRow:     { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 16, marginTop: -28, gap: 12 },
-  avatarWrapper: {
-    width: "72@ms",
-    height: "72@ms",
-    borderRadius: "36@ms",
-    borderWidth: 3,
-    borderColor: "#000",
-    overflow: "hidden",
-  },
-  avatar:   { width: "72@ms", height: "72@ms" },
-  nameBlock:{ flex: 1, paddingBottom: 4, gap: 2 },
-  artistName:     { color: "#fff", fontSize: "22@ms", fontWeight: "700" },
-  subscriberText: { color: "rgba(255,255,255,0.6)", fontSize: "13@ms" },
-
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: "rgba(255,255,255,0.1)", marginTop: 4 },
+  avatarWrapper: { width: "72@ms", height: "72@ms", borderRadius: "36@ms", borderWidth: 3, borderColor: "#000", overflow: "hidden" },
+  avatar:        { width: "72@ms", height: "72@ms" },
+  nameBlock:     { flex: 1, paddingBottom: 4, gap: 2 },
+  artistName:    { fontSize: "22@ms", fontWeight: "700" },
+  subscriberText:{ fontSize: "13@ms" },
+  divider:       { height: StyleSheet.hairlineWidth, marginTop: 4 },
 });
 
 const tabBarStyles = StyleSheet.create({
   scroll:    { flexGrow: 0, marginTop: 14 },
   container: { paddingHorizontal: 14, gap: 8, paddingVertical: 4 },
-  pill:      {
-    paddingHorizontal: scale(14),
-    paddingVertical:   verticalScale(7),
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.1)",
-  },
-  pillActive:  { backgroundColor: GOLD_PRIMARY },
-  label:       { color: "rgba(255,255,255,0.7)", fontSize: moderateScale(13), fontWeight: "500" },
-  labelActive: { color: "#000", fontWeight: "700" },
+  pill:      { paddingHorizontal: scale(14), paddingVertical: verticalScale(7), borderRadius: 20 },
+  label:     { fontSize: moderateScale(13), fontWeight: "500" },
 });
 
 const rowStyles = StyleSheet.create({
-  row:      { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 },
-  touchable:{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
-  thumb:    { width: moderateScale(52), height: moderateScale(52), borderRadius: 4 },
+  row:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 },
+  touchable:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
+  thumb:      { width: moderateScale(52), height: moderateScale(52), borderRadius: 4 },
   videoThumb: { width: moderateScale(120), height: moderateScale(68), borderRadius: 4 },
-  textBlock:{ flex: 1 },
-  title:    { color: "#fff", fontSize: moderateScale(14), fontWeight: "500", marginBottom: 3 },
-  sub:      { color: "rgba(255,255,255,0.5)", fontSize: moderateScale(12) },
-  durationBadge: {
-    position: "absolute",
-    bottom: 4,
-    right: 4,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    borderRadius: 3,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  durationText: { color: "#fff", fontSize: moderateScale(10), fontWeight: "600" },
+  textBlock:  { flex: 1 },
+  title:      { fontSize: moderateScale(14), fontWeight: "500", marginBottom: 3 },
+  sub:        { fontSize: moderateScale(12) },
+  durationBadge: { position: "absolute", bottom: 4, right: 4, backgroundColor: "rgba(0,0,0,0.8)", borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  durationText:  { color: "#fff", fontSize: moderateScale(10), fontWeight: "600" },
 });
 
 const cardStyles = StyleSheet.create({
-  card:  { width: (SCREEN_WIDTH - 48) / 2, marginBottom: 4 },
+  card:  { width: (SCREEN_WIDTH - 48) / 2, marginBottom: 4, borderRadius: 10, overflow: "hidden" },
   image: { width: "100%", aspectRatio: 1, borderRadius: 8, marginBottom: 6 },
-  title: { color: "#fff", fontSize: moderateScale(13), fontWeight: "600", marginBottom: 2 },
-  sub:   { color: "rgba(255,255,255,0.5)", fontSize: moderateScale(11) },
+  title: { fontSize: moderateScale(13), fontWeight: "600", marginBottom: 2 },
+  sub:   { fontSize: moderateScale(11) },
 });

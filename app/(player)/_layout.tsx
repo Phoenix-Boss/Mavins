@@ -1,84 +1,104 @@
 // app/(player)/_layout.tsx
-//
-// PLAYER ROUTE GROUP LAYOUT
-//
-// This layout wraps ALL screens within the (player) route group.
-// This is effectively the main app layout for authenticated/player-enabled screens.
-//
-// Screens in this group:
-//   - index.tsx (Home screen with integrated player overlay)
-//   - library/ (User's music library - has its own nested layout)
-//   - search/ (Search and discovery - has its own nested layout)
-//   - settings.tsx (App settings and preferences)
-//
-// ARCHITECTURE NOTE:
-//   The global player overlay (mini/expanded) is provided by PlayerOverlayProvider
-//   in the root _layout.tsx. This layout does NOT create its own player components.
-//   Instead, it provides a container for screen content while the global overlay
-//   handles all player UI rendering.
-//
-//   This separation ensures the player overlay persists across ALL screens in this group:
-//   home, library, search, and settings - maintaining playback continuity everywhere.
-//
-//   Library and search have their own nested layouts for internal navigation.
-//   Settings is a single screen with no nested navigation.
-
-import { Stack } from 'expo-router';
-import { View, StyleSheet } from 'react-native';
+import { Tabs } from 'expo-router';
+import { View, StyleSheet, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
+import { useTheme } from '@/contexts/ThemeContext';
+import { usePlayerOverlay } from '@/libs/playerOverlay';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function PlayerLayout() {
+  const { colors } = useTheme();
+  const { playerMode } = usePlayerOverlay();
   const insets = useSafeAreaInsets();
+  
+  const isExpandedPlayerVisible = playerMode === 'expanded';
+  const shouldShowTabBar = !isExpandedPlayerVisible;
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <StatusBar style="light" />
-      
-      <Stack
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <Tabs
         screenOptions={{
           headerShown: false,
-          animation: 'slide_from_right',
-          contentStyle: { backgroundColor: '#000000' },
-          navigationBarColor: '#000000',
-          statusBarStyle: 'light',
-          statusBarTranslucent: true,
-          statusBarBackgroundColor: 'transparent',
+          tabBarStyle: {
+            position: 'absolute',
+            bottom: Platform.OS === 'ios' ? 20 : 16,
+            left: 16,
+            right: 16,
+            backgroundColor: colors.tabBarBackground,
+            borderRadius: 28,
+            height: Platform.OS === 'ios' ? 70 : 60,
+            paddingBottom: Platform.OS === 'ios' ? 10 : 8,
+            paddingTop: 8,
+            paddingHorizontal: 12,
+            borderTopWidth: 0,
+            shadowColor: colors.isDark ? '#000' : '#888',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: colors.isDark ? 0.3 : 0.15,
+            shadowRadius: 12,
+            elevation: 10,
+            borderWidth: colors.isDark ? 0 : 0.5,
+            borderColor: colors.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+            display: shouldShowTabBar ? 'flex' : 'none',
+          },
+          tabBarActiveTintColor: colors.gold,
+          tabBarInactiveTintColor: colors.textMuted,
+          tabBarLabelStyle: {
+            fontSize: 11,
+            fontWeight: '500',
+            marginTop: 4,
+          },
+          tabBarItemStyle: {
+            borderRadius: 20,
+            marginHorizontal: 4,
+          },
         }}
       >
-        {/* Home screen - main view with integrated player overlay */}
-        <Stack.Screen 
-          name="index" 
+        <Tabs.Screen
+          name="index"
           options={{
             title: 'Home',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons 
+                name={focused ? 'home' : 'home-outline'} 
+                size={size} 
+                color={color} 
+              />
+            ),
           }}
         />
-        
-        {/* Library folder - contains its own nested Stack navigator */}
-        <Stack.Screen 
-          name="library" 
+        <Tabs.Screen
+          name="library"
           options={{
             title: 'Library',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons 
+                name={focused ? 'library' : 'library-outline'} 
+                size={size} 
+                color={color} 
+              />
+            ),
           }}
         />
-        
-        {/* Search folder - contains its own nested Stack navigator */}
-        <Stack.Screen 
-          name="search" 
-          options={{
-            title: 'Search',
-          }}
-        />
-        
-        {/* Settings screen - single screen, no nested navigation */}
-        <Stack.Screen 
-          name="settings" 
+        <Tabs.Screen
+          name="settings"
           options={{
             title: 'Settings',
-            animation: 'slide_from_right',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons 
+                name={focused ? 'settings' : 'settings-outline'} 
+                size={size} 
+                color={color} 
+              />
+            ),
           }}
         />
-      </Stack>
+        {/* Remove these - they don't have corresponding files
+        <Tabs.Screen name="search" options={{ href: null }} />
+        <Tabs.Screen name="artist" options={{ href: null }} />
+        <Tabs.Screen name="album" options={{ href: null }} />
+        <Tabs.Screen name="playlist" options={{ href: null }} />
+        */}
+      </Tabs>
     </View>
   );
 }
@@ -86,6 +106,5 @@ export default function PlayerLayout() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
   },
 });

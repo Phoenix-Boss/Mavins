@@ -1,22 +1,9 @@
-/**
- * Section Header Component - Reusable header for all sections
- */
+// components/common/SectionHeader.tsx
 import React from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-} from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-
-// Metallic Gold Color Palette
-const COLORS = {
-  background: '#000000',
-  surface: '#121212',
-  goldPrimary: '#D4AF37',
-  text: '#FFFFFF',
-};
+import { triggerHaptic } from "@/helpers/haptics";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface SectionHeaderProps {
   title: string;
@@ -24,22 +11,18 @@ interface SectionHeaderProps {
   onPlayAllPress?: () => void;
 }
 
-export const SectionHeader = ({ 
-  title, 
-  showPlayAll = false,
-  onPlayAllPress 
-}: SectionHeaderProps) => {
+export const SectionHeader = ({ title, showPlayAll = false, onPlayAllPress }: SectionHeaderProps) => {
+  const { colors } = useTheme();
+
   return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+    <View style={styles.container}>
+      <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
       {showPlayAll && (
         <TouchableOpacity 
-          style={styles.playAllButton} 
-          onPress={onPlayAllPress}
+          onPress={() => { triggerHaptic(); onPlayAllPress?.(); }} 
           activeOpacity={0.7}
         >
-          <Text style={styles.playAllText}>Play all</Text>
-          <Ionicons name="play" size={14} color={COLORS.goldPrimary} />
+          <Text style={[styles.playAllText, { color: colors.gold }]}>Play All</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -47,31 +30,19 @@ export const SectionHeader = ({
 };
 
 const styles = StyleSheet.create({
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  container: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
     marginBottom: 12,
   },
-  sectionTitle: {
+  title: {
     fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  playAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary,
+    fontWeight: "700",
   },
   playAllText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: COLORS.goldPrimary,
-    marginRight: 4,
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

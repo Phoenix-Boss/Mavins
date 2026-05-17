@@ -1,29 +1,22 @@
-// Updated: components/sections/PeoplesChoiceSection.tsx
+// components/sections/PeoplesChoiceSection.tsx
 /**
- * PeoplesChoiceSection — Store-First Version
+ * PeoplesChoiceSection — Theme-Aware Version
  */
 
 import React, { useMemo } from "react";
 import {
   View,
-  Text,
   ScrollView,
   StyleSheet,
 } from "react-native";
 import { AlbumCard } from "../cards/AlbumCard";
 import { SectionHeader } from "../common/SectionHeader";
 import type { Song } from "@/store/home";
-
-const COLORS = {
-  surface: "#121212",
-  goldPrimary: "#D4AF37",
-  textSecondary: "#B3B3B3",
-};
+import { useTheme } from "@/contexts/ThemeContext";
 
 const formatViews = (viewCount: number): string => {
   if (!viewCount) return "0";
-  if (viewCount >= 1_000_000_000)
-    return `${(viewCount / 1_000_000_000).toFixed(1)}B`;
+  if (viewCount >= 1_000_000_000) return `${(viewCount / 1_000_000_000).toFixed(1)}B`;
   if (viewCount >= 1_000_000) return `${(viewCount / 1_000_000).toFixed(1)}M`;
   if (viewCount >= 1_000) return `${(viewCount / 1_000).toFixed(1)}K`;
   return String(viewCount);
@@ -34,18 +27,18 @@ interface PeoplesChoiceSectionProps {
 }
 
 export const PeoplesChoiceSection = ({ data }: PeoplesChoiceSectionProps) => {
-  // Shuffle the data
+  const { colors } = useTheme();
+
   const shuffledData = useMemo(() => {
     if (!data?.length) return [];
     return [...data].sort(() => Math.random() - 0.5);
   }, [data]);
 
-  // Empty state
   if (!shuffledData.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="People's Choice" showPlayAll />
-        <View style={styles.emptyContainer} />
+        <View style={[styles.emptyContainer, { backgroundColor: colors.surface }]} />
       </View>
     );
   }
@@ -77,14 +70,7 @@ export const PeoplesChoiceSection = ({ data }: PeoplesChoiceSectionProps) => {
 };
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: 20,
-  },
-  horizontalScroll: {
-    paddingHorizontal: 16,
-    gap: 14,
-  },
-  emptyContainer: {
-    height: 120,
-  },
+  section: { marginBottom: 20 },
+  horizontalScroll: { paddingHorizontal: 16, gap: 14 },
+  emptyContainer: { height: 120, borderRadius: 12 },
 });

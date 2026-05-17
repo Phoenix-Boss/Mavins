@@ -14,10 +14,7 @@ export default function ModalsLayout() {
   return (
     <Stack
       screenOptions={{
-        // ── No native header on any modal ──────────────────────────────────
         headerShown: false,
-
-        // ── Present as a bottom sheet over the current screen ──────────────
         presentation: "transparentModal",
         animation: "slide_from_bottom",
         contentStyle: { backgroundColor: "transparent" },
@@ -27,7 +24,7 @@ export default function ModalsLayout() {
       <Stack.Screen name="comments" />
       <Stack.Screen name="createPlaylist" />
       <Stack.Screen name="deletePlaylist" />
-      {/* Equalizer removed — RNTP does not provide EQ/DSP functionality */}
+      <Stack.Screen name="notifications" />
       <Stack.Screen name="lyrics" />
       <Stack.Screen name="menu" />
       <Stack.Screen name="premium" />

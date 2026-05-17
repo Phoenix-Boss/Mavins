@@ -14,6 +14,7 @@ export function HomePreloader() {
   const setRecentSongs = useHomeStore((s) => s.setRecentSongs);
   const setLoading = useHomeStore((s) => s.setLoading);
   const hasAnyData = useHomeStore((s) => s.hasAnyData());
+  const isDataFresh = useHomeStore((s) => s.isDataFresh());
 
   const shuffleArray = <T,>(array: T[]): T[] => {
     const shuffled = [...array];
@@ -25,8 +26,16 @@ export function HomePreloader() {
   };
 
   useEffect(() => {
-    if (hasAnyData || hasAttemptedFetch) {
-      console.log('📦 [HomePreloader] Skipping - hasData:', hasAnyData, 'attempted:', hasAttemptedFetch);
+    // Skip if we already tried this session, or if persisted data is recent enough.
+    // hasAnyData alone is NOT sufficient — it returns true from persisted data even
+    // when lastFetchedAt is null (e.g. first launch after a store version bump).
+    // isDataFresh() requires lastFetchedAt to be set AND within 30 minutes.
+    if (hasAttemptedFetch) {
+      console.log('📦 [HomePreloader] Skipping - already attempted this session');
+      return;
+    }
+    if (hasAnyData && isDataFresh) {
+      console.log('📦 [HomePreloader] Skipping - persisted data is fresh');
       return;
     }
 
@@ -127,7 +136,7 @@ export function HomePreloader() {
 
         let top10Songs: any[] = [];
         if (rankingsData && rankingsData.length > 0) {
-          const songIds = rankingsData.map(r => r.song_id);
+          const songIds = (rankingsData as any[]).map((r: any) => r.song_id);
           const { data: songsData } = await supabase
             .from('songs')
             .select('id, title, artist, video_id, artwork_thumbnail, artwork_url, play_count, duration')
@@ -313,7 +322,7 @@ export function HomePreloader() {
     };
 
     fetchAllData();
-  }, [hasAnyData, hasAttemptedFetch, setAllData, setRecentSongs, setLoading]);
+  }, [hasAnyData, isDataFresh, hasAttemptedFetch, setAllData, setRecentSongs, setLoading]);
 
   return null;
 }

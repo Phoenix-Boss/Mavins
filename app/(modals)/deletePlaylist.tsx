@@ -17,28 +17,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { usePlaylists } from "@/store/library";
 import { triggerHaptic } from "@/helpers/haptics";
-
-const C = {
-  bg: "#0D0D0D",
-  surface: "#161616",
-  border: "rgba(255,255,255,0.07)",
-  borderGold: "rgba(212,175,55,0.22)",
-  gold: "#D4AF37",
-  goldFill: "rgba(212,175,55,0.1)",
-  text: "#FFFFFF",
-  textSub: "#888888",
-  textMuted: "#4A4A4A",
-  danger: "#E05C5C",
-  dangerFill: "rgba(224,92,92,0.1)",
-  dangerBorder: "rgba(224,92,92,0.25)",
-};
+import { useTheme } from "@/contexts/ThemeContext";
 
 export default function DeletePlaylistModal() {
   const router = useRouter();
   const { bottom } = useSafeAreaInsets();
-  const { playlistName: playlistId } = useLocalSearchParams<{
-    playlistName: string;
-  }>();
+  const { playlistName: playlistId } = useLocalSearchParams<{ playlistName: string }>();
+  const { colors } = useTheme();
 
   const playlists = usePlaylists();
   const playlist = playlists && playlistId ? playlists[playlistId] : null;
@@ -47,33 +32,28 @@ export default function DeletePlaylistModal() {
 
   const handleDelete = () => {
     triggerHaptic();
-    // TODO: dispatch deletePlaylist(playlistId)
     router.back();
-    router.back(); // also dismiss the library screen back to the playlists tab
+    router.back();
   };
 
   return (
-    <View style={[styles.container, { paddingBottom: bottom + 24 }]}>
-      {/* Handle */}
-      <View style={styles.handle} />
+    <View style={[styles.container, { backgroundColor: colors.background, paddingBottom: bottom + 24 }]}>
+      <View style={[styles.handle, { backgroundColor: colors.textMuted }]} />
 
-      {/* Icon */}
-      <View style={styles.iconWrap}>
-        <Ionicons name="trash-outline" size={32} color={C.danger} />
+      <View style={[styles.iconWrap, { backgroundColor: `${colors.error}15`, borderColor: `${colors.error}40` }]}>
+        <Ionicons name="trash-outline" size={32} color={colors.error} />
       </View>
 
-      {/* Text */}
-      <Text style={styles.heading}>Delete Playlist?</Text>
-      <Text style={styles.body}>
-        <Text style={styles.playlistName}>"{displayName}"</Text>
+      <Text style={[styles.heading, { color: colors.text }]}>Delete Playlist?</Text>
+      <Text style={[styles.body, { color: colors.textSub }]}>
+        <Text style={[styles.playlistName, { color: colors.text }]}>"{displayName}"</Text>
         {trackCount > 0
           ? ` (${trackCount} track${trackCount !== 1 ? "s" : ""}) will be permanently removed. This cannot be undone.`
           : " will be permanently removed. This cannot be undone."}
       </Text>
 
-      {/* Buttons */}
       <TouchableOpacity
-        style={styles.deleteBtn}
+        style={[styles.deleteBtn, { backgroundColor: colors.error }]}
         onPress={handleDelete}
         activeOpacity={0.85}
       >
@@ -82,46 +62,25 @@ export default function DeletePlaylistModal() {
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={styles.cancelBtn}
+        style={[styles.cancelBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
         onPress={() => router.back()}
         activeOpacity={0.7}
       >
-        <Text style={styles.cancelBtnText}>Cancel</Text>
+        <Text style={[styles.cancelBtnText, { color: colors.textSub }]}>Cancel</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1, backgroundColor: C.bg,
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingHorizontal: 24, alignItems: "center",
-  },
-  handle: {
-    alignSelf: "center", width: 36, height: 4, borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)", marginTop: 10, marginBottom: 32,
-  },
-  iconWrap: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: C.dangerFill, borderWidth: 1, borderColor: C.dangerBorder,
-    alignItems: "center", justifyContent: "center", marginBottom: 20,
-  },
-  heading: { fontSize: 20, fontWeight: "700", color: C.text, marginBottom: 10, textAlign: "center" },
-  body: { fontSize: 14, color: C.textSub, textAlign: "center", lineHeight: 21, marginBottom: 32 },
-  playlistName: { color: C.text, fontWeight: "600" },
-  deleteBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center",
-    backgroundColor: C.danger, borderRadius: 28,
-    paddingVertical: 15, width: "100%", marginBottom: 12,
-    shadowColor: C.danger, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4, shadowRadius: 10, elevation: 6,
-  },
+  container: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, alignItems: "center" },
+  handle: { alignSelf: "center", width: 36, height: 4, borderRadius: 2, marginTop: 10, marginBottom: 32 },
+  iconWrap: { width: 72, height: 72, borderRadius: 36, borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: 20 },
+  heading: { fontSize: 20, fontWeight: "700", marginBottom: 10, textAlign: "center" },
+  body: { fontSize: 14, textAlign: "center", lineHeight: 21, marginBottom: 32 },
+  playlistName: { fontWeight: "600" },
+  deleteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", borderRadius: 28, paddingVertical: 15, width: "100%", marginBottom: 12, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 6 },
   deleteBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
-  cancelBtn: {
-    width: "100%", paddingVertical: 15, borderRadius: 28,
-    backgroundColor: C.surface, borderWidth: 0.5, borderColor: C.border,
-    alignItems: "center",
-  },
-  cancelBtnText: { fontSize: 15, fontWeight: "600", color: C.textSub },
+  cancelBtn: { width: "100%", paddingVertical: 15, borderRadius: 28, borderWidth: 0.5, alignItems: "center" },
+  cancelBtnText: { fontSize: 15, fontWeight: "600" },
 });

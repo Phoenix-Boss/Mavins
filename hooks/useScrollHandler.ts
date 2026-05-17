@@ -7,19 +7,27 @@ import {
 
 interface ScrollHandlerConfig {
   headerHeight: number;
+  hideThreshold?: number; // Minimum scroll distance before hiding
+  showThreshold?: number; // Minimum scroll distance before showing
+  onScrollDirectionChange?: (direction: 'up' | 'down', isScrolling: boolean) => void;
 }
 
 export const useScrollHandler = (config: ScrollHandlerConfig) => {
-  const { headerHeight } = config;
+  const { 
+    headerHeight, 
+    hideThreshold = 50,
+    showThreshold = 10,
+    onScrollDirectionChange 
+  } = config;
 
-  // Get animations — removed useScrollLogic entirely.
-  // useScrollLogic was causing a silent Reanimated worklet crash because
-  // it (or its dependencies) were not available / throwing on init.
-  const animations = useScrollAnimations();
+  // Get animations for header
+  const animations = useScrollAnimations({ useSpring: true });
 
   // ==================== SCROLL TRACKING ====================
   const lastScrollY = useSharedValue(0);
   const lastDirection = useSharedValue<'up' | 'down' | null>(null);
+  const isScrolling = useSharedValue(false);
+  const scrollStartY = useSharedValue(0);
 
   // ==================== SCROLL HANDLER WORKLET ====================
   const scrollHandler = useAnimatedScrollHandler({
@@ -29,51 +37,115 @@ export const useScrollHandler = (config: ScrollHandlerConfig) => {
       // ============ EXTRACT VALUES ============
       const currentY = event.contentOffset.y;
       const diff = currentY - lastScrollY.value;
-      lastScrollY.value = currentY;
-
+      const absDiff = Math.abs(diff);
+      
+      // ============ TRACK SCROLL START ============
+      if (!isScrolling.value && absDiff > 2) {
+        isScrolling.value = true;
+        scrollStartY.value = lastScrollY.value;
+      }
+      
       // ============ MIN SCROLL THRESHOLD ============
-      const MIN_SCROLL = 10;
-      if (Math.abs(diff) < MIN_SCROLL) return;
+      const MIN_SCROLL = 5;
+      if (absDiff < MIN_SCROLL) {
+        lastScrollY.value = currentY;
+        return;
+      }
 
       // ============ DIRECTION ============
       const direction = diff > 0 ? 'down' : 'up';
-      if (lastDirection.value === direction) return;
-      lastDirection.value = direction;
+      
+      // Only trigger on direction change
+      const directionChanged = lastDirection.value !== direction;
+      
+      if (directionChanged) {
+        lastDirection.value = direction;
 
-      // ============ HEADER LOGIC ============
-      // Hide header on scroll down, show on scroll up.
-      // Tabs are fixed — only the header animates.
-      const isHidden = animations.isHeaderHidden.value;
+        // ============ HEADER LOGIC ============
+        // Hide header on scroll down, show on scroll up
+        const isHeaderHidden = animations.isHeaderHidden.value;
+        const shouldHide = direction === 'down' && !isHeaderHidden && currentY > hideThreshold;
+        const shouldShow = direction === 'up' && isHeaderHidden && currentY > showThreshold;
 
-      if (direction === 'down' && !isHidden) {
-        animations.slideHeader(true, headerHeight);
-      } else if (direction === 'up' && isHidden) {
-        animations.slideHeader(false, headerHeight);
+        if (shouldHide) {
+          animations.slideHeader(true, headerHeight);
+        } else if (shouldShow) {
+          animations.slideHeader(false, headerHeight);
+        }
+
+        // ============ CALLBACK FOR TAB BAR ============
+        if (onScrollDirectionChange) {
+          // Run on JS thread for external callbacks
+          const { runOnJS } = require('react-native-reanimated');
+          runOnJS(onScrollDirectionChange)(direction, true);
+        }
       }
+      
+      lastScrollY.value = currentY;
     },
 
     onBeginDrag: () => {
       'worklet';
-      // Reset direction tracking on each new gesture so the first
-      // movement of a new drag always triggers the header logic.
+      // Reset direction tracking on each new gesture
       lastDirection.value = null;
+      isScrolling.value = true;
+      scrollStartY.value = lastScrollY.value;
+    },
+
+    onEndDrag: () => {
+      'worklet';
+      // Don't immediately set scrolling to false, wait for momentum
+    },
+
+    onMomentumEnd: () => {
+      'worklet';
+      isScrolling.value = false;
+      
+      // Notify that scrolling has stopped
+      if (onScrollDirectionChange) {
+        const { runOnJS } = require('react-native-reanimated');
+        runOnJS(onScrollDirectionChange)(lastDirection.value === 'up' ? 'up' : 'down', false);
+      }
     },
   });
+
+  // ==================== MANUAL CONTROL FUNCTIONS ====================
+  
+  const showHeader = (animated: boolean = true) => {
+    'worklet';
+    animations.slideHeader(false, headerHeight, animated);
+  };
+
+  const hideHeader = (animated: boolean = true) => {
+    'worklet';
+    animations.slideHeader(true, headerHeight, animated);
+  };
+
+  const toggleHeader = (animated: boolean = true) => {
+    'worklet';
+    animations.toggleHeader(headerHeight, animated);
+  };
+
+  const resetHeader = (animated: boolean = true) => {
+    'worklet';
+    animations.resetHeader(animated);
+  };
 
   // ==================== RETURN VALUES ====================
   return {
     scrollHandler,
     headerTranslateY: animations.headerTranslateY,
     isHeaderHidden: animations.isHeaderHidden,
-
-    // Manual controls — plain functions so they work as worklets
-    showHeader: () => {
-      'worklet';
-      animations.slideHeader(false, headerHeight);
-    },
-    hideHeader: () => {
-      'worklet';
-      animations.slideHeader(true, headerHeight);
-    },
+    isScrolling: animations.isScrolling,
+    isAnimating: animations.isAnimating,
+    
+    // Manual controls
+    showHeader,
+    hideHeader,
+    toggleHeader,
+    resetHeader,
+    
+    // Direct animation access (for advanced use)
+    animations,
   };
 };

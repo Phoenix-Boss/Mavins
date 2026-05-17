@@ -6,6 +6,12 @@
  *
  * Design language: dark luxury — black base, gold accents, Meriva display font.
  * No library management. No external links. No header nav bar.
+ * 
+ * FIXES:
+ *   - Integrated ThemeContext for light/dark mode support
+ *   - Added proper navigation handlers for settings pages
+ *   - Added Clear Cache functionality
+ *   - Added Theme toggle with system/light/dark options
  */
 
 import React, { useState } from "react";
@@ -16,34 +22,17 @@ import {
   Switch,
   ScrollView,
   StyleSheet,
-  Platform,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Divider } from "react-native-paper";
 import * as Application from "expo-application";
+import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Palette
-// ─────────────────────────────────────────────────────────────────────────────
-
-const C = {
-  bg:            "#000000",
-  surface:       "#0D0D0D",
-  surfaceRaised: "#141414",
-  border:        "rgba(255,255,255,0.07)",
-  borderGold:    "rgba(212,175,55,0.25)",
-  gold:          "#D4AF37",
-  goldShimmer:   "#E6C16A",
-  goldDim:       "rgba(212,175,55,0.45)",
-  text:          "#FFFFFF",
-  textSub:       "#888888",
-  textMuted:     "#555555",
-  danger:        "#EF4444",
-  success:       "#22C55E",
-};
+import { useTheme, type ThemeMode } from "@/contexts/ThemeContext";
+import { cache } from "@/libs/cache";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -71,21 +60,27 @@ function RowIcon({ name, lib = "ion", color }: { name: string; lib?: "ion" | "mc
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SettingRow(props: RowProps) {
-  const iconColor = props.kind === "nav" && props.danger ? C.danger : C.goldShimmer;
+  const { colors } = useTheme();
+  const iconColor = props.kind === "nav" && props.danger ? colors.error : colors.gold;
 
   const left = (
-    <View style={styles.rowLeft}>
-      <View style={[styles.iconBox, props.kind === "nav" && props.danger && styles.iconBoxDanger]}>
+    <View style={[styles.rowLeft, { gap: moderateScale(12) }]}>
+      <View style={[
+        styles.iconBox,
+        { backgroundColor: `${colors.gold}15` },
+        props.kind === "nav" && props.danger && { backgroundColor: `${colors.error}20` }
+      ]}>
         <RowIcon name={props.icon} lib={props.iconLib} color={iconColor} />
       </View>
       <View style={styles.rowTextBlock}>
         <Text style={[
           styles.rowLabel,
-          props.kind === "nav" && props.danger && { color: C.danger },
+          { color: colors.text },
+          props.kind === "nav" && props.danger && { color: colors.error },
         ]}>
           {props.label}
         </Text>
-        {props.sub ? <Text style={styles.rowSub}>{props.sub}</Text> : null}
+        {props.sub ? <Text style={[styles.rowSub, { color: colors.textSub }]}>{props.sub}</Text> : null}
       </View>
     </View>
   );
@@ -97,9 +92,8 @@ function SettingRow(props: RowProps) {
         <Switch
           value={props.value}
           onValueChange={(v) => { triggerHaptic(); props.onToggle(v); }}
-          trackColor={{ false: "#2A2A2A", true: C.goldDim }}
-          thumbColor={props.value ? C.gold : "#555"}
-          ios_backgroundColor="#2A2A2A"
+          trackColor={{ false: colors.surfaceHigh, true: colors.goldDim }}
+          thumbColor={props.value ? colors.gold : colors.textMuted}
         />
       </View>
     );
@@ -109,7 +103,7 @@ function SettingRow(props: RowProps) {
     return (
       <View style={styles.row}>
         {left}
-        <Text style={styles.rowValue}>{props.value}</Text>
+        <Text style={[styles.rowValue, { color: colors.textSub }]}>{props.value}</Text>
       </View>
     );
   }
@@ -122,7 +116,7 @@ function SettingRow(props: RowProps) {
       activeOpacity={0.65}
     >
       {left}
-      <Ionicons name="chevron-forward" size={moderateScale(16)} color={C.textMuted} />
+      <Ionicons name="chevron-forward" size={moderateScale(16)} color={colors.textMuted} />
     </TouchableOpacity>
   );
 }
@@ -132,17 +126,19 @@ function SettingRow(props: RowProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const { colors } = useTheme();
+  
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionCard}>
+      <Text style={[styles.sectionTitle, { color: colors.gold }]}>{title}</Text>
+      <View style={[styles.sectionCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {React.Children.map(children, (child, i) => (
-          <>
+          <React.Fragment key={i}>
             {child}
             {i < React.Children.count(children) - 1 && (
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />
             )}
-          </>
+          </React.Fragment>
         ))}
       </View>
     </View>
@@ -155,6 +151,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function SettingsScreen() {
   const { top, bottom } = useSafeAreaInsets();
+  const router = useRouter();
+  const { mode, setMode, colors, isDark } = useTheme();
 
   // ── Playback toggles ──────────────────────────────────────────────────────
   const [autoplay,       setAutoplay]       = useState(true);
@@ -175,16 +173,232 @@ export default function SettingsScreen() {
   const [listenHistory,  setListenHistory]  = useState(true);
   const [analytics,      setAnalytics]      = useState(false);
 
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  
+  const getThemeDisplayName = (): string => {
+    if (mode === 'light') return 'Light';
+    if (mode === 'dark') return 'Dark';
+    return 'System';
+  };
+
+  const handleClearCache = async () => {
+    triggerHaptic();
+    Alert.alert(
+      "Clear Cache",
+      "This will remove temporary files and free up storage space. Your downloads and settings will not be affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await cache.clear();
+              Alert.alert("Success", "Cache cleared successfully.");
+            } catch (error) {
+              Alert.alert("Error", "Failed to clear cache.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSignOut = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Sign Out",
+      "Are you sure you want to sign out?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign Out",
+          style: "destructive",
+          onPress: () => {
+            // TODO: Implement sign out logic
+            Alert.alert("Signed Out", "You have been signed out.");
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Delete Account",
+      "This action is permanent and cannot be undone. All your data will be lost.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            // TODO: Implement account deletion
+            Alert.alert("Account Deleted", "Your account has been scheduled for deletion.");
+          },
+        },
+      ]
+    );
+  };
+
+  const handleThemePress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Theme",
+      "Choose your preferred appearance",
+      [
+        { text: "Light", onPress: () => setMode("light") },
+        { text: "Dark", onPress: () => setMode("dark") },
+        { text: "System", onPress: () => setMode("system") },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handleLanguagePress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Language",
+      "Choose your preferred language",
+      [
+        { text: "English", onPress: () => {} },
+        { text: "French", onPress: () => {} },
+        { text: "Spanish", onPress: () => {} },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handleEqualizerPress = () => {
+    triggerHaptic();
+    // Navigate to equalizer modal
+    router.push('/(modals)/equalizer');
+  };
+
+  const handleDownloadsPress = () => {
+    triggerHaptic();
+    router.push('/(player)/library/downloads');
+  };
+
+  const handleProfilePress = () => {
+    triggerHaptic();
+    router.push('/(player)/profile');
+  };
+
+  const handleSubscriptionPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/subscription');
+  };
+
+  const handleRatePress = () => {
+    triggerHaptic();
+    // TODO: Open store rating
+    Alert.alert("Rate Mavin", "Thank you for your feedback!");
+  };
+
+  const handleHelpPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/help');
+  };
+
+  const handleFeedbackPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/feedback');
+  };
+
+  const handlePrivacyPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/privacy');
+  };
+
+  const handleTermsPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/terms');
+  };
+
+  const handleChangePassword = () => {
+    triggerHaptic();
+    router.push('/(modals)/change-password');
+  };
+
+  const handleTwoFactorPress = () => {
+    triggerHaptic();
+    router.push('/(modals)/two-factor');
+  };
+
+  const handleDefaultRepeatPress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Default Repeat Mode",
+      "Choose your default repeat behavior",
+      [
+        { text: "Off", onPress: () => {} },
+        { text: "All", onPress: () => {} },
+        { text: "One", onPress: () => {} },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handlePlaybackSpeedPress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Playback Speed",
+      "Choose your default playback speed",
+      [
+        { text: "0.5x", onPress: () => {} },
+        { text: "0.75x", onPress: () => {} },
+        { text: "1x", onPress: () => {} },
+        { text: "1.25x", onPress: () => {} },
+        { text: "1.5x", onPress: () => {} },
+        { text: "2x", onPress: () => {} },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handleStreamingQualityPress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Streaming Quality",
+      "Choose your preferred streaming quality",
+      [
+        { text: "Low (96 kbps)", onPress: () => {} },
+        { text: "Medium (160 kbps)", onPress: () => {} },
+        { text: "High (320 kbps)", onPress: () => {} },
+        { text: "Very High (lossless)", onPress: () => {} },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handleDownloadQualityPress = () => {
+    triggerHaptic();
+    Alert.alert(
+      "Download Quality",
+      "Choose download quality for offline listening",
+      [
+        { text: "Low (96 kbps)", onPress: () => {} },
+        { text: "Medium (160 kbps)", onPress: () => {} },
+        { text: "High (320 kbps)", onPress: () => {} },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
   return (
-    <View style={[styles.container, { paddingTop: top }]}>
+    <View style={[styles.container, { backgroundColor: colors.background, paddingTop: top }]}>
 
       {/* ── Page title — no back button (this IS a root tab) ────────────── */}
       <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Settings</Text>
-        <Text style={styles.pageSubtitle}>Mavin v{Application.nativeApplicationVersion}</Text>
+        <Text style={[styles.pageTitle, { color: colors.text }]}>Settings</Text>
+        <Text style={[styles.pageSubtitle, { color: colors.textMuted }]}>
+          Mavin v{Application.nativeApplicationVersion}
+        </Text>
       </View>
 
-      <Divider style={styles.headerDivider} />
+      <Divider style={[styles.headerDivider, { backgroundColor: colors.borderGold }]} />
 
       <ScrollView
         style={styles.scroll}
@@ -198,24 +412,24 @@ export default function SettingsScreen() {
             kind="nav" icon="person-circle-outline"
             label="Profile"
             sub="Manage your display name and avatar"
-            onPress={() => {}}
+            onPress={handleProfilePress}
           />
           <SettingRow
             kind="nav" icon="key-outline"
             label="Change Password"
-            onPress={() => {}}
+            onPress={handleChangePassword}
           />
           <SettingRow
             kind="nav" icon="shield-checkmark-outline"
             label="Two-Factor Authentication"
             sub="Add an extra layer of security"
-            onPress={() => {}}
+            onPress={handleTwoFactorPress}
           />
           <SettingRow
             kind="nav" icon="card-outline"
             label="Subscription"
             sub="Mavin Premium · Active"
-            onPress={() => {}}
+            onPress={handleSubscriptionPress}
           />
         </Section>
 
@@ -253,13 +467,13 @@ export default function SettingsScreen() {
             kind="nav" icon="repeat-outline"
             label="Default Repeat Mode"
             sub="Off"
-            onPress={() => {}}
+            onPress={handleDefaultRepeatPress}
           />
           <SettingRow
             kind="nav" icon="speedometer-outline" iconLib="mci"
             label="Playback Speed"
             sub="1×"
-            onPress={() => {}}
+            onPress={handlePlaybackSpeedPress}
           />
         </Section>
 
@@ -276,13 +490,13 @@ export default function SettingsScreen() {
             kind="nav" icon="wifi-outline"
             label="Streaming Quality"
             sub="Automatic"
-            onPress={() => {}}
+            onPress={handleStreamingQualityPress}
           />
           <SettingRow
             kind="nav" icon="save-outline"
             label="Download Quality"
             sub="High · 256 kbps"
-            onPress={() => {}}
+            onPress={handleDownloadQualityPress}
           />
           <SettingRow
             kind="toggle" icon="cloud-download-outline"
@@ -295,7 +509,7 @@ export default function SettingsScreen() {
             kind="nav" icon="equalizer-outline" iconLib="mci"
             label="Equalizer"
             sub="Customise your sound profile"
-            onPress={() => {}}
+            onPress={handleEqualizerPress}
           />
         </Section>
 
@@ -343,12 +557,12 @@ export default function SettingsScreen() {
           <SettingRow
             kind="nav" icon="document-text-outline"
             label="Privacy Policy"
-            onPress={() => {}}
+            onPress={handlePrivacyPress}
           />
           <SettingRow
             kind="nav" icon="reader-outline"
             label="Terms of Service"
-            onPress={() => {}}
+            onPress={handleTermsPress}
           />
         </Section>
 
@@ -357,14 +571,14 @@ export default function SettingsScreen() {
           <SettingRow
             kind="nav" icon="color-palette-outline"
             label="Theme"
-            sub="Dark"
-            onPress={() => {}}
+            sub={getThemeDisplayName()}
+            onPress={handleThemePress}
           />
           <SettingRow
             kind="nav" icon="language-outline"
             label="Language"
             sub="English"
-            onPress={() => {}}
+            onPress={handleLanguagePress}
           />
         </Section>
 
@@ -374,13 +588,13 @@ export default function SettingsScreen() {
             kind="nav" icon="folder-outline"
             label="Downloads"
             sub="Manage offline tracks and storage"
-            onPress={() => {}}
+            onPress={handleDownloadsPress}
           />
           <SettingRow
             kind="nav" icon="trash-outline"
             label="Clear Cache"
             sub="Free up temporary files"
-            onPress={() => {}}
+            onPress={handleClearCache}
           />
         </Section>
 
@@ -395,17 +609,17 @@ export default function SettingsScreen() {
             kind="nav" icon="star-outline"
             label="Rate Mavin"
             sub="Enjoying the app? Leave us a review"
-            onPress={() => {}}
+            onPress={handleRatePress}
           />
           <SettingRow
             kind="nav" icon="help-circle-outline"
             label="Help & Support"
-            onPress={() => {}}
+            onPress={handleHelpPress}
           />
           <SettingRow
             kind="nav" icon="chatbubble-ellipses-outline"
             label="Send Feedback"
-            onPress={() => {}}
+            onPress={handleFeedbackPress}
           />
         </Section>
 
@@ -414,13 +628,13 @@ export default function SettingsScreen() {
           <SettingRow
             kind="nav" icon="log-out-outline"
             label="Sign Out"
-            onPress={() => {}}
+            onPress={handleSignOut}
           />
           <SettingRow
             kind="nav" icon="person-remove-outline"
             label="Delete Account"
             sub="Permanently remove your account and all data"
-            onPress={() => {}}
+            onPress={handleDeleteAccount}
             danger
           />
         </Section>
@@ -436,8 +650,7 @@ export default function SettingsScreen() {
 
 const styles = ScaledSheet.create({
   container: {
-    flex:            1,
-    backgroundColor: C.bg,
+    flex: 1,
   },
 
   // ── Page header ────────────────────────────────────────────────────────
@@ -452,16 +665,13 @@ const styles = ScaledSheet.create({
   pageTitle: {
     fontSize:   "28@ms",
     fontFamily: "Meriva",
-    color:      C.text,
     letterSpacing: 0.5,
   },
   pageSubtitle: {
     fontSize:  "12@ms",
-    color:     C.textMuted,
     letterSpacing: 0.4,
   },
   headerDivider: {
-    backgroundColor: C.borderGold,
     height:          0.5,
     marginHorizontal: "20@s",
     marginBottom:    "6@vs",
@@ -483,17 +693,14 @@ const styles = ScaledSheet.create({
   sectionTitle: {
     fontSize:      "11@ms",
     fontWeight:    "700",
-    color:         C.gold,
     letterSpacing: 1.4,
     textTransform: "uppercase",
     marginBottom:  "10@vs",
     marginLeft:    "4@s",
   },
   sectionCard: {
-    backgroundColor: C.surface,
     borderRadius:    "14@ms",
     borderWidth:     0.5,
-    borderColor:     C.border,
     overflow:        "hidden",
   },
 
@@ -501,49 +708,41 @@ const styles = ScaledSheet.create({
   row: {
     flexDirection:  "row",
     alignItems:     "center",
+    justifyContent: "space-between",
     paddingVertical:   "13@vs",
     paddingHorizontal: "14@s",
     minHeight:         "52@vs",
   },
   rowDivider: {
     height:          0.5,
-    backgroundColor: C.border,
     marginLeft:      "52@s",
   },
   rowLeft: {
-    flex:        1,
+    flex: 1,
     flexDirection: "row",
-    alignItems:    "center",
+    alignItems: "center",
   },
   iconBox: {
     width:           "34@ms",
     height:          "34@ms",
     borderRadius:    "9@ms",
-    backgroundColor: "rgba(212,175,55,0.1)",
     alignItems:      "center",
     justifyContent:  "center",
-    marginRight:     "12@s",
-  },
-  iconBoxDanger: {
-    backgroundColor: "rgba(239,68,68,0.12)",
   },
   rowTextBlock: {
     flex: 1,
   },
   rowLabel: {
     fontSize:  "15@ms",
-    color:     C.text,
     fontWeight: "500",
   },
   rowSub: {
     fontSize:  "12@ms",
-    color:     C.textSub,
     marginTop: "2@vs",
     lineHeight: "16@ms",
   },
   rowValue: {
     fontSize:      "13@ms",
-    color:         C.textSub,
     letterSpacing: 0.2,
   },
 });

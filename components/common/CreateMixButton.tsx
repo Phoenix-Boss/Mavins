@@ -1,64 +1,48 @@
-/**
- * Create Mix Button Component - Circular + button for mix creation
- */
+// components/common/CreateMixButton.tsx
 import React from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-} from "react-native";
+import { TouchableOpacity, StyleSheet, View, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { triggerHaptic } from "@/helpers/haptics";
+import { useTheme } from "@/contexts/ThemeContext";
 
-// Metallic Gold Color Palette
-const COLORS = {
-  goldShiny: '#FFD700',
-  textTertiary: '#808080',
-};
+export const CreateMixButton = () => {
+  const router = useRouter();
+  const { colors, isDark } = useTheme();
 
-interface CreateMixButtonProps {
-  onPress?: () => void;
-}
+  const handlePress = () => {
+    triggerHaptic();
+    router.push("/(player)/create-mix");
+  };
 
-export const CreateMixButton = ({ onPress }: CreateMixButtonProps) => {
+  // Light mode: darker gold/brown for better contrast
+  // Dark mode: bright gold for visibility
+  const buttonColor = isDark ? colors.gold : "#B8860B";
+  const iconColor = isDark ? "#000" : "#FFF";
+
   return (
-    <View style={styles.createMixContainer}>
-      <TouchableOpacity 
-        style={styles.createMixCircleButton} 
-        onPress={onPress}
-        activeOpacity={0.7}
-      >
-        <Ionicons name="add" size={28} color={COLORS.goldShiny} />
-      </TouchableOpacity>
-      <Text style={styles.createMixLabel}>Create Mix</Text>
-    </View>
+    <TouchableOpacity
+      style={[styles.container, { backgroundColor: buttonColor }]}
+      onPress={handlePress}
+      activeOpacity={0.8}
+    >
+      <Ionicons name="add" size={24} color={iconColor} />
+    </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  createMixContainer: {
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  createMixCircleButton: {
+  container: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: COLORS.goldShiny,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: COLORS.goldShiny,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.8,
+    shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 4,
-  },
-  createMixLabel: {
-    fontSize: 11,
-    color: COLORS.textTertiary,
-    marginTop: 6,
-    textAlign: 'center',
   },
 });

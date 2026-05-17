@@ -1,12 +1,12 @@
 /**
  * TabBarIcon — Futuristic custom SVG icons for the 3-tab navigation.
  *
- * Design language: dark luxury futurism.
+ * Design language: dark luxury futurism — adapts to system theme.
  *   Active state   → gold filled glyph + soft gold radial glow ring
- *   Inactive state → hairline stroke glyph, muted silver, no glow
+ *   Inactive state → hairline stroke glyph, muted colour, no glow
  *
- * Each icon is a hand-crafted SVG path that evokes the tab's purpose
- * without defaulting to generic Ionicons shapes.
+ * DARK  → classic gold (#D4AF37) glyphs on black
+ * LIGHT → dark goldenrod (#B8860B) glyphs on sky blue
  *
  *   home     → stylised house with angled roof ridge + centre dot
  *   library  → three stacked horizontal bars with a vinyl disc inset
@@ -15,21 +15,29 @@
 
 import React, { useEffect, useRef } from "react";
 import { Animated } from "react-native";
-import Svg, { Path, Circle, Rect, Ellipse, G, Defs, RadialGradient, Stop } from "react-native-svg";
+import Svg, {
+  Path,
+  Circle,
+  Rect,
+  G,
+  Defs,
+  RadialGradient,
+  Stop,
+} from "react-native-svg";
+import { useTheme } from "@/contexts/ThemeContext";
 
-// ── Palette ───────────────────────────────────────────────────────────────────
+// ── Shared props ──────────────────────────────────────────────────────────────
 
-const GOLD        = "#D4AF37";
-const GOLD_GLOW   = "#FFD700";
-const GOLD_DIM    = "#8C6F0E";
-const INACTIVE    = "#4A4A4A";
-const GLOW_FILL   = "rgba(212,175,55,0.18)";
+export interface TabIconProps {
+  focused: boolean;
+  size?: number;
+}
 
 // ── Animation wrapper ─────────────────────────────────────────────────────────
 
 interface AnimatedIconProps {
   focused: boolean;
-  children: (scale: Animated.Value, opacity: Animated.Value) => React.ReactNode;
+  children: () => React.ReactNode;
 }
 
 function AnimatedIcon({ focused, children }: AnimatedIconProps) {
@@ -54,27 +62,26 @@ function AnimatedIcon({ focused, children }: AnimatedIconProps) {
 
   return (
     <Animated.View style={{ transform: [{ scale }], opacity }}>
-      {children(scale, opacity)}
+      {children()}
     </Animated.View>
   );
 }
 
-// ── Shared props ──────────────────────────────────────────────────────────────
-
-export interface TabIconProps {
-  focused: boolean;
-  size?: number;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // HomeIcon
-// Minimal angular house: flat top ridge, two walls, floor line, centre diamond
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function HomeIcon({ focused, size = 26 }: TabIconProps) {
-  const color      = focused ? GOLD       : INACTIVE;
-  const strokeW    = focused ? 1.6        : 1.4;
-  const glowId     = "homeGlow";
+  const { colors, isDark } = useTheme();
+
+  const gold      = colors.gold;
+  const goldGlow  = isDark ? "#FFD700" : "#D4A017";
+  const inactive  = colors.tabBarInactive;
+  const color     = focused ? gold    : inactive;
+  const strokeW   = focused ? 1.6     : 1.4;
+  const fillAlpha = isDark ? "22"     : "18";
+  const doorAlpha = isDark ? "33"     : "28";
+  const glowId    = "homeGlow";
 
   return (
     <AnimatedIcon focused={focused}>
@@ -83,21 +90,20 @@ export function HomeIcon({ focused, size = 26 }: TabIconProps) {
           {focused && (
             <Defs>
               <RadialGradient id={glowId} cx="50%" cy="50%" r="50%">
-                <Stop offset="0%"   stopColor={GOLD_GLOW} stopOpacity="0.28" />
-                <Stop offset="100%" stopColor={GOLD_GLOW} stopOpacity="0"    />
+                <Stop offset="0%"   stopColor={goldGlow} stopOpacity="0.28" />
+                <Stop offset="100%" stopColor={goldGlow} stopOpacity="0"    />
               </RadialGradient>
             </Defs>
           )}
 
-          {/* Glow disc */}
           {focused && (
             <Circle cx="13" cy="13" r="12" fill={`url(#${glowId})`} />
           )}
 
-          {/* Roof — angular ridge */}
+          {/* Roof */}
           <Path
             d="M13 4 L22 12 L20 12 L20 21 L6 21 L6 12 L4 12 Z"
-            fill={focused ? GOLD + "22" : "none"}
+            fill={focused ? gold + fillAlpha : "none"}
             stroke={color}
             strokeWidth={strokeW}
             strokeLinejoin="round"
@@ -107,19 +113,14 @@ export function HomeIcon({ focused, size = 26 }: TabIconProps) {
           {/* Door arch */}
           <Path
             d="M10 21 L10 16 Q10 14 13 14 Q16 14 16 16 L16 21"
-            fill={focused ? GOLD + "33" : "none"}
+            fill={focused ? gold + doorAlpha : "none"}
             stroke={color}
             strokeWidth={strokeW - 0.2}
             strokeLinecap="round"
           />
 
           {/* Centre apex dot */}
-          <Circle
-            cx="13"
-            cy="12.5"
-            r={focused ? 1.4 : 1.1}
-            fill={color}
-          />
+          <Circle cx="13" cy="12.5" r={focused ? 1.4 : 1.1} fill={color} />
         </Svg>
       )}
     </AnimatedIcon>
@@ -128,13 +129,18 @@ export function HomeIcon({ focused, size = 26 }: TabIconProps) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LibraryIcon
-// Stacked shelves with a vinyl disc on the right
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function LibraryIcon({ focused, size = 26 }: TabIconProps) {
-  const color   = focused ? GOLD    : INACTIVE;
-  const strokeW = focused ? 1.6     : 1.4;
-  const glowId  = "libGlow";
+  const { colors, isDark } = useTheme();
+
+  const gold      = colors.gold;
+  const goldGlow  = isDark ? "#FFD700" : "#D4A017";
+  const inactive  = colors.tabBarInactive;
+  const color     = focused ? gold    : inactive;
+  const strokeW   = focused ? 1.6     : 1.4;
+  const discAlpha = isDark ? "18"     : "14";
+  const glowId    = "libGlow";
 
   return (
     <AnimatedIcon focused={focused}>
@@ -143,8 +149,8 @@ export function LibraryIcon({ focused, size = 26 }: TabIconProps) {
           {focused && (
             <Defs>
               <RadialGradient id={glowId} cx="50%" cy="50%" r="50%">
-                <Stop offset="0%"   stopColor={GOLD_GLOW} stopOpacity="0.28" />
-                <Stop offset="100%" stopColor={GOLD_GLOW} stopOpacity="0"    />
+                <Stop offset="0%"   stopColor={goldGlow} stopOpacity="0.28" />
+                <Stop offset="100%" stopColor={goldGlow} stopOpacity="0"    />
               </RadialGradient>
             </Defs>
           )}
@@ -160,30 +166,21 @@ export function LibraryIcon({ focused, size = 26 }: TabIconProps) {
 
           {/* Vinyl disc */}
           <Circle
-            cx="20"
-            cy="13"
-            r="4.5"
-            fill={focused ? GOLD + "18" : "none"}
+            cx="20" cy="13" r="4.5"
+            fill={focused ? gold + discAlpha : "none"}
             stroke={color}
             strokeWidth={strokeW - 0.2}
           />
-          {/* Disc grooves */}
+          {/* Groove ring */}
           <Circle
-            cx="20"
-            cy="13"
-            r="2.4"
+            cx="20" cy="13" r="2.4"
             fill="none"
             stroke={color}
             strokeWidth={strokeW - 0.6}
             strokeOpacity="0.5"
           />
           {/* Centre spindle */}
-          <Circle
-            cx="20"
-            cy="13"
-            r={focused ? 1.2 : 0.9}
-            fill={color}
-          />
+          <Circle cx="20" cy="13" r={focused ? 1.2 : 0.9} fill={color} />
         </Svg>
       )}
     </AnimatedIcon>
@@ -192,15 +189,21 @@ export function LibraryIcon({ focused, size = 26 }: TabIconProps) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SettingsIcon
-// Hexagonal gear — 6 teeth, hollow centre
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
-  const color   = focused ? GOLD    : INACTIVE;
-  const strokeW = focused ? 1.6     : 1.4;
-  const glowId  = "setGlow";
+  const { colors, isDark } = useTheme();
 
-  // Build a 6-tooth gear path around centre (13,13) radius 8, tooth depth 2.2
+  const gold      = colors.gold;
+  const goldGlow  = isDark ? "#FFD700" : "#D4A017";
+  const inactive  = colors.tabBarInactive;
+  const color     = focused ? gold    : inactive;
+  const strokeW   = focused ? 1.6     : 1.4;
+  const bodyAlpha = isDark ? "22"     : "18";
+  const ringAlpha = isDark ? "44"     : "38";
+  const glowId    = "setGlow";
+
+  // 6-tooth gear path around (13,13)
   const gearPath = (() => {
     const cx = 13, cy = 13, r = 7.2, toothH = 2, toothW = 0.9;
     const teeth = 6;
@@ -210,14 +213,12 @@ export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
       const a1 = a0 + (Math.PI / teeth) * 0.55;
       const a2 = a0 + (Math.PI / teeth) * 0.75;
       const a3 = a0 + (Math.PI / teeth);
-      // inner point
-      const ix0 = cx + r * Math.cos(a0),       iy0 = cy + r * Math.sin(a0);
-      // tooth rise
+      const ix0 = cx + r * Math.cos(a0),             iy0 = cy + r * Math.sin(a0);
       const tx1 = cx + (r + toothH) * Math.cos(a1 - toothW * 0.15),
             ty1 = cy + (r + toothH) * Math.sin(a1 - toothW * 0.15);
       const tx2 = cx + (r + toothH) * Math.cos(a2 + toothW * 0.15),
             ty2 = cy + (r + toothH) * Math.sin(a2 + toothW * 0.15);
-      const ix3 = cx + r * Math.cos(a3),       iy3 = cy + r * Math.sin(a3);
+      const ix3 = cx + r * Math.cos(a3),             iy3 = cy + r * Math.sin(a3);
       if (i === 0) pts.push(`M${ix0.toFixed(2)} ${iy0.toFixed(2)}`);
       else         pts.push(`L${ix0.toFixed(2)} ${iy0.toFixed(2)}`);
       pts.push(`L${tx1.toFixed(2)} ${ty1.toFixed(2)}`);
@@ -235,8 +236,8 @@ export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
           {focused && (
             <Defs>
               <RadialGradient id={glowId} cx="50%" cy="50%" r="50%">
-                <Stop offset="0%"   stopColor={GOLD_GLOW} stopOpacity="0.28" />
-                <Stop offset="100%" stopColor={GOLD_GLOW} stopOpacity="0"    />
+                <Stop offset="0%"   stopColor={goldGlow} stopOpacity="0.28" />
+                <Stop offset="100%" stopColor={goldGlow} stopOpacity="0"    />
               </RadialGradient>
             </Defs>
           )}
@@ -248,7 +249,7 @@ export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
           {/* Gear body */}
           <Path
             d={gearPath}
-            fill={focused ? GOLD + "22" : "none"}
+            fill={focused ? gold + bodyAlpha : "none"}
             stroke={color}
             strokeWidth={strokeW}
             strokeLinejoin="round"
@@ -256,21 +257,14 @@ export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
 
           {/* Centre ring */}
           <Circle
-            cx="13"
-            cy="13"
-            r="2.8"
-            fill={focused ? GOLD + "44" : "none"}
+            cx="13" cy="13" r="2.8"
+            fill={focused ? gold + ringAlpha : "none"}
             stroke={color}
             strokeWidth={strokeW - 0.2}
           />
 
           {/* Centre dot */}
-          <Circle
-            cx="13"
-            cy="13"
-            r={focused ? 1.1 : 0.8}
-            fill={color}
-          />
+          <Circle cx="13" cy="13" r={focused ? 1.1 : 0.8} fill={color} />
         </Svg>
       )}
     </AnimatedIcon>
@@ -278,7 +272,7 @@ export function SettingsIcon({ focused, size = 26 }: TabIconProps) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Legacy TabBarIcon — kept for backward compat if anything still imports it
+// Legacy TabBarIcon — kept for backward compat
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Ionicons from "@expo/vector-icons/Ionicons";

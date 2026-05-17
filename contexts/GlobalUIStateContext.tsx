@@ -1,14 +1,13 @@
 // contexts/GlobalUIStateContext.tsx
 //
-// Migrated from react-native-track-player → expo-audio engine (usePlayerEngine).
+// IMPORTANT: This context NO LONGER controls tab bar visibility.
+// Tab bar visibility is now managed solely by (player)/_layout.tsx
+// based on playerMode === 'expanded'.
 //
-// ARCHITECTURE:
-//   isPlaying is now derived from engine.isPlaying (set by MusicPlayerContext)
-//   rather than RNTP's usePlaybackState hook.
-//
-//   PlayerOverlayProvider (in _layout.tsx) already watches engine.currentTrack
-//   to show/hide the mini player — this context handles the tab bar and handle
-//   visibility that responds to the same playback lifecycle.
+// This context now ONLY manages:
+//   - Drag handle visibility for the mini player
+//   - Music playing state (for other UI components)
+//   - Tab lock state (deprecated - kept for compatibility)
 
 import React, {
   createContext,
@@ -25,6 +24,7 @@ import { triggerHaptic } from '@/helpers/haptics';
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface GlobalUIStateContextType {
+  // Deprecated - tabs are now controlled by (player)/_layout.tsx
   tabsVisible:          boolean;
   tabsLocked:           boolean;
   handleVisible:        boolean;
@@ -46,45 +46,73 @@ const GlobalUIStateContext = createContext<GlobalUIStateContextType | undefined>
 export const GlobalUIStateProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const engine = usePlayerEngine();
+  // Safely try to get player engine - if not ready yet, use default values
+  let engine;
+  try {
+    engine = usePlayerEngine();
+  } catch (error) {
+    // Player engine not ready yet - use safe default values
+    engine = {
+      isPlaying: false,
+      isBuffering: false,
+      currentTrack: null,
+      position: 0,
+      duration: 0,
+      queue: [],
+      queueIndex: -1,
+      repeatMode: 'off' as const,
+      shuffleMode: 'off' as const,
+      play: () => {},
+      pause: () => {},
+      seekTo: () => {},
+      skipToNext: async () => {},
+      skipToPrevious: async () => {},
+      skipToIndex: async () => {},
+      togglePlayPause: () => {},
+      setRepeatMode: () => {},
+      setShuffleMode: () => {},
+      addToQueue: () => {},
+      removeFromQueue: () => {},
+      moveQueueItem: () => {},
+      clearQueue: () => {},
+      setPlayerOverlayRefs: () => {},
+      expandPlayer: () => {},
+      collapsePlayer: () => {},
+    };
+  }
 
+  // Tab bar state is now IGNORED - kept only for compatibility
+  // Actual tab bar visibility is controlled by playerMode in (player)/_layout.tsx
   const [tabsVisible,    setTabsVisibleState]    = useState(true);
   const [tabsLocked,     setTabsLockedState]     = useState(false);
   const [handleVisible,  setHandleVisibleState]  = useState(false);
-  // Mirrors engine.isPlaying — kept in state so consumers can subscribe via
-  // context without reaching into the engine directly.
   const [isMusicPlaying, setIsMusicPlayingState] = useState(false);
 
-  // ── Sync with engine playback state ────────────────────────────────────────
-  //
-  // engine.isPlaying is true while audio is actively playing (expo-audio),
-  // and engine.isBuffering covers the loading state that RNTP's State.Buffering
-  // previously handled.  We treat either as "active" for UI purposes.
-
+  // Sync with engine playback state
   const isActive = engine.isPlaying || engine.isBuffering;
 
   useEffect(() => {
     setIsMusicPlayingState(isActive);
     setHandleVisibleState(isActive);
+    
+    // CRITICAL FIX: REMOVED auto-hide logic for tabs
+    // Tabs should NEVER auto-hide due to music playback
+    // They are ONLY controlled by expanded player state in the layout
+    // The tabsVisible state is now purely for compatibility and not used
+    // for actual tab bar visibility
 
-    if (!tabsLocked) {
-      setTabsVisibleState(!isActive);
-    }
-
-    // When playback stops, always clear the lock so the next play auto-hides tabs.
+    // When playback stops, clear the lock
     if (!isActive) {
       setTabsLockedState(false);
     }
-  }, [isActive, tabsLocked]);
+  }, [isActive]);
 
-  // ── Setters ─────────────────────────────────────────────────────────────────
+  // ── Setters (kept for compatibility but tab bar no longer uses them) ─────────
 
-  /**
-   * Set tab visibility. Pass `isUserAction=true` to lock the state so the
-   * playback-driven auto-sync won't override a deliberate user choice.
-   */
   const setTabsVisible = useCallback(
     (visible: boolean, isUserAction = false) => {
+      // This no longer affects actual tab bar visibility
+      // Tab bar visibility is now controlled by playerMode in (player)/_layout.tsx
       setTabsVisibleState(visible);
       if (isUserAction) setTabsLockedState(visible);
     },
@@ -96,27 +124,20 @@ export const GlobalUIStateProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  /**
-   * Called when the user taps the drag handle on the FloatingPlayer.
-   * Toggles tab bar visibility and locks it to prevent the auto-sync from
-   * immediately overriding the user's choice.
-   */
   const handleUserTappedHandle = useCallback(() => {
     if (!isMusicPlaying) return;
-
-    const newVisibility = !tabsVisible;
-    setTabsLockedState(newVisibility);  // lock when showing, release when hiding
-    setTabsVisibleState(newVisibility);
+    
+    // Toggle handle visibility only - no tab bar control
+    const newVisibility = !handleVisible;
+    setHandleVisibleState(newVisibility);
     triggerHaptic();
-  }, [isMusicPlaying, tabsVisible]);
+  }, [isMusicPlaying, handleVisible]);
 
   const resetNavigationState = useCallback(() => {
-    setTabsVisibleState(false);
+    // Only reset internal states, don't affect tab bar
     setTabsLockedState(false);
   }, []);
 
-  // Escape hatch: allow external callers to force-set the playing flag
-  // (e.g. optimistic UI before the engine state propagates).
   const setIsMusicPlaying = useCallback(
     (playing: boolean) => setIsMusicPlayingState(playing),
     [],
@@ -130,7 +151,7 @@ export const GlobalUIStateProvider: React.FC<{ children: React.ReactNode }> = ({
   return (
     <GlobalUIStateContext.Provider
       value={{
-        tabsVisible,
+        tabsVisible,      // Kept for compatibility, not used for actual tab bar
         tabsLocked,
         handleVisible,
         isMusicPlaying,

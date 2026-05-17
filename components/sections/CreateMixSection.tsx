@@ -1,8 +1,6 @@
-// Updated: components/sections/CreateMixSection.tsx
+// components/sections/CreateMixSection.tsx
 /**
- * CreateMixSection — Store-First Version
- * 
- * Receives data from parent (HomeStore via index.tsx).
+ * CreateMixSection — Theme-Aware Version
  */
 
 import React from "react";
@@ -15,8 +13,8 @@ import { MixCard } from "../cards/MixCard";
 import { SectionHeader } from "../common/SectionHeader";
 import { CreateMixButton } from "../common/CreateMixButton";
 import type { Mix } from "@/store/home";
+import { useTheme } from "@/contexts/ThemeContext";
 
-// Default fallback image
 const DEFAULT_COVER_ART = "https://via.placeholder.com/300x300/1F1F1F/D4AF37?text=Mix";
 
 interface CreateMixSectionProps {
@@ -24,7 +22,8 @@ interface CreateMixSectionProps {
 }
 
 export const CreateMixSection = ({ data }: CreateMixSectionProps) => {
-  // Helper to validate thumbnail
+  const { colors } = useTheme();
+
   const getValidThumbnail = (thumbnail: string | undefined): string => {
     if (!thumbnail || thumbnail.trim() === "") return DEFAULT_COVER_ART;
     if (!thumbnail.startsWith("http")) return DEFAULT_COVER_ART;
@@ -43,7 +42,6 @@ export const CreateMixSection = ({ data }: CreateMixSectionProps) => {
         >
           {data?.map((item, index) => {
             const validThumbnail = getValidThumbnail(item.thumbnail);
-            
             return (
               <View key={`create-mix-${item.id}-${index}`} style={styles.cardWrapper}>
                 <MixCard
@@ -65,18 +63,8 @@ export const CreateMixSection = ({ data }: CreateMixSectionProps) => {
 };
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: 20,
-  },
-  createRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-  horizontalScroll: {
-    paddingRight: 16,
-    gap: 14,
-  },
-  cardWrapper: {
-    // Ensure consistent sizing
-  },
+  section: { marginBottom: 20 },
+  createRow: { flexDirection: "row", alignItems: "flex-start" },
+  horizontalScroll: { paddingRight: 16, gap: 14 },
+  cardWrapper: {},
 });

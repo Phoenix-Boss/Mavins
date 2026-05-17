@@ -2,217 +2,448 @@
 //
 // Bridges the player engine → expo-media-control for lock screen controls (Android only).
 //
-// CORRECT API (expo-media-control):
-//   • enableMediaControls()   - init with capability list
-//   • updateMetadata()        - track title, artist, artwork { uri }, duration, elapsedTime
-//   • updatePlaybackState()   - (state, position?, rate?) — native side animates progress
-//   • addListener()           - single unified callback for ALL lock screen button events
-//   • disableMediaControls()  - cleanup on unmount
+// Intended behavior:
+// - Continuous lock-screen progress updates
+// - Proper duration sync with fallback to track.duration
+// - Seek support from lock screen
+// - Repeat mode sync and control
+// - Notification tap expands player instead of routing
+// - Swipe-down returns to home screen naturally
+// - Defensive capability validation
+// - Robust error handling
+// - No circular dependency: all data is passed in via props
 //
-// NOTE: There is NO setNowPlaying(), NO updatePlaybackPosition(), NO MediaControl.on().
-//       The native platform animates scrubber progress automatically from position + rate,
-//       so a periodic JS position-push interval is unnecessary and actually harmful
-//       (it interrupts the native animation on Android).
+// Android-only. No iOS references.
 
-import { useEffect, useRef } from 'react';
-import { AppState, AppStateStatus, Platform } from 'react-native';
+import { useCallback, useEffect, useRef } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import {
+  Command,
   MediaControl,
   PlaybackState,
-  Command,
   type MediaControlEvent,
 } from 'expo-media-control';
-import { usePlayerEngine, PlayerEngineState } from '@/libs/playerSetup';
 
-// Only run on Android
-const isAndroid = Platform.OS === 'android';
+import type { RepeatMode } from '@/libs/playerSetup';
 
-export function useSystemMediaControls(): void {
-  const engine = usePlayerEngine();
+export interface SystemMediaControlsTrack {
+  title: string;
+  artist: string;
+  artwork?: string;
+  videoId?: string;
+  duration?: number;
+}
 
-  // Stable ref — lets AppState / event callbacks read the latest engine state
-  // without being listed as deps (avoids teardown/re-subscribe churn).
-  const engineRef = useRef<PlayerEngineState>(engine);
-  useEffect(() => {
-    engineRef.current = engine;
-  });
+export interface SystemMediaControlsProps {
+  track?: SystemMediaControlsTrack;
 
-  // ── 0. Initialize media controls (runs once on mount, Android only) ─────────
-  useEffect(() => {
-    if (!isAndroid) return;
+  isPlaying: boolean;
+  isBuffering: boolean;
+  position: number;
+  duration: number;
+  repeatMode: RepeatMode;
 
-    const initControls = async () => {
-      try {
-        await MediaControl.enableMediaControls({
-          capabilities: [
-            Command.PLAY,
-            Command.PAUSE,
-            Command.NEXT_TRACK,
-            Command.PREVIOUS_TRACK,
-            Command.SEEK,
-            Command.STOP,
-          ],
-          compactCapabilities: [
-            Command.PREVIOUS_TRACK,
-            Command.PLAY,
-            Command.NEXT_TRACK,
-          ],
-          notification: {
-            color: '#D4AF37', // Mavin gold
-          },
-        });
-        console.log('[MediaControls] Initialized successfully (Android)');
-      } catch (error) {
-        console.warn('[MediaControls] Init error on Android:', error);
-      }
-    };
+  onPlay: () => void;
+  onPause: () => void;
+  onSkipNext: () => Promise<void>;
+  onSkipPrevious: () => Promise<void>;
+  onSeek: (positionSec: number) => void;
+  onSetRepeatMode: (mode: RepeatMode) => void;
+  onExpandPlayer: () => void;
+}
 
-    initControls();
-  }, []);
+const LOCK_SCREEN_UPDATE_INTERVAL_MS = 250;
 
-  // ── 1. Metadata — re-runs only when the track identity changes ──────────────
-  useEffect(() => {
-    if (!isAndroid) return;
+const MEDIA_CAPABILITY_KEYS = [
+  'PLAY',
+  'PAUSE',
+  'NEXT_TRACK',
+  'PREVIOUS_TRACK',
+  'STOP',
+  'SEEK',
+  'REPEAT',
+] as const;
 
-    const track = engine.currentTrack;
-    if (!track) return;
+const COMPACT_CAPABILITY_KEYS = ['PREVIOUS_TRACK', 'PLAY', 'NEXT_TRACK'] as const;
 
-    // Build artwork URL from the bare videoId if no explicit thumbnail is set.
-    const artworkUri =
-      track.thumbnail ||
-      (track.videoId
-        ? `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`
-        : undefined);
+function isMediaControlAvailable(): boolean {
+  return !!MediaControl && typeof MediaControl.enableMediaControls === 'function';
+}
 
-    // updateMetadata() — artwork must be { uri: string }, not a bare string.
-    MediaControl.updateMetadata({
-      title: track.title,
-      artist: track.artist ?? 'Unknown Artist',
-      duration: track.duration ?? 0,
-      elapsedTime: engine.position,
-      ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
-    }).catch(e => console.warn('[MediaControls] updateMetadata error:', e));
+function safeDuration(duration: number, trackDuration?: number): number {
+  if (Number.isFinite(duration) && duration > 0) return duration;
+  if (Number.isFinite(trackDuration ?? NaN) && (trackDuration ?? 0) > 0) return trackDuration ?? 0;
+  return 0;
+}
 
-    // Push the initial playback state alongside the new metadata.
-    const initialState = engine.isPlaying ? PlaybackState.PLAYING : PlaybackState.PAUSED;
-    MediaControl.updatePlaybackState(
-      initialState,
-      engine.position,
-      engine.isPlaying ? 1.0 : 0.0,
-    ).catch(e => console.warn('[MediaControls] updatePlaybackState error:', e));
+function safePosition(position: number): number {
+  if (!Number.isFinite(position)) return 0;
+  return Math.max(0, position);
+}
 
-    // Only re-run when the track itself changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine.currentTrack?.id]);
+function repeatModeToNative(mode: RepeatMode): number {
+  switch (mode) {
+    case 'one':
+      return 1;
+    case 'all':
+      return 2;
+    default:
+      return 0;
+  }
+}
 
-  // ── 2. Playback state — re-runs when play/pause/buffer state changes ────────
-  // Passing position + rate lets the native side animate the scrubber on its own,
-  // so we do NOT need a periodic JS interval for position updates.
-  useEffect(() => {
-    if (!isAndroid) return;
+function playbackStateFor(isPlaying: boolean): PlaybackState {
+  return isPlaying ? PlaybackState.PLAYING : PlaybackState.PAUSED;
+}
 
-    if (!engine.currentTrack) return;
-
-    let state: PlaybackState;
-    if (engine.isPlaying) {
-      state = PlaybackState.PLAYING;
-    } else if (engine.isBuffering) {
-      state = PlaybackState.BUFFERING;
-    } else {
-      state = PlaybackState.PAUSED;
+async function safeMediaCall<T>(action: () => Promise<T>, fallback?: T): Promise<T | undefined> {
+  try {
+    return await action();
+  } catch (error: any) {
+    const message = String(error?.message ?? error ?? '');
+    if (
+      !message.includes('already') &&
+      !message.includes('initialized') &&
+      !message.includes('enabled')
+    ) {
+      console.warn('[MediaControls]', message);
     }
+    return fallback;
+  }
+}
 
-    MediaControl.updatePlaybackState(
-      state,
-      engine.position,
-      engine.isPlaying ? 1.0 : 0.0,
-    ).catch(e => console.warn('[MediaControls] updatePlaybackState error:', e));
-  }, [engine.isPlaying, engine.isBuffering, engine.currentTrack?.id]);
+function buildArtworkUri(track?: SystemMediaControlsTrack): string | undefined {
+  if (!track) return undefined;
+  if (track.artwork) return track.artwork;
+  if (track.videoId) return `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+  return undefined;
+}
 
-  // ── 3. Media button events — single unified addListener() ──────────────────
-  // expo-media-control uses ONE addListener call that receives all commands
-  // via event.command (a Command enum value). Returns a plain remove function.
+function getNativeCapabilities(): {
+  capabilities: Command[];
+  compactCapabilities: Command[];
+} {
+  const capabilities = MEDIA_CAPABILITY_KEYS
+    .map((key) => (Command as any)[key])
+    .filter((value): value is Command => value !== undefined);
+
+  const compactCapabilities = COMPACT_CAPABILITY_KEYS
+    .map((key) => (Command as any)[key])
+    .filter((value): value is Command => value !== undefined);
+
+  return { capabilities, compactCapabilities };
+}
+
+export function useSystemMediaControls(props: SystemMediaControlsProps): void {
+  const {
+    track,
+    isPlaying,
+    isBuffering,
+    position,
+    duration,
+    repeatMode,
+    onPlay,
+    onPause,
+    onSkipNext,
+    onSkipPrevious,
+    onSeek,
+    onSetRepeatMode,
+    onExpandPlayer,
+  } = props;
+
+  const initializedRef = useRef(false);
+  const pendingPropsRef = useRef<SystemMediaControlsProps | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const propsRef = useRef<SystemMediaControlsProps>(props);
+
   useEffect(() => {
-    if (!isAndroid) return;
+    propsRef.current = props;
+  }, [props]);
 
-    const removeListener = MediaControl.addListener((event: MediaControlEvent) => {
-      const e = engineRef.current;
+  const pushMetadataAndState = useCallback(async (nextProps: SystemMediaControlsProps) => {
+    if (!isMediaControlAvailable() || !initializedRef.current) return;
+    if (!nextProps.track) return;
 
-      switch (event.command) {
-        case Command.PLAY:
-          console.log('[MediaControls] PLAY received');
-          e.play();
-          break;
+    const elapsedTime = safePosition(nextProps.position);
+    const durationValue = safeDuration(nextProps.duration, nextProps.track.duration);
+    const artworkUri = buildArtworkUri(nextProps.track);
 
-        case Command.PAUSE:
-          console.log('[MediaControls] PAUSE received');
-          e.pause();
-          break;
-
-        case Command.NEXT_TRACK:
-          console.log('[MediaControls] NEXT_TRACK received');
-          e.skipToNext();
-          break;
-
-        case Command.PREVIOUS_TRACK:
-          console.log('[MediaControls] PREVIOUS_TRACK received');
-          e.skipToPrevious();
-          break;
-
-        case Command.SEEK: {
-          const position = event.data?.position;
-          if (position !== undefined && position !== null) {
-            console.log('[MediaControls] SEEK received:', position);
-            e.seekTo(position);
-          }
-          break;
-        }
-
-        case Command.STOP:
-          console.log('[MediaControls] STOP received');
-          e.pause();
-          break;
-
-        default:
-          break;
-      }
+    await safeMediaCall(async () => {
+      await MediaControl.updateMetadata({
+        title: nextProps.track?.title || 'Unknown Title',
+        artist: nextProps.track?.artist || 'Unknown Artist',
+        duration: durationValue,
+        elapsedTime,
+        repeatMode: repeatModeToNative(nextProps.repeatMode),
+        ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
+      });
     });
 
+    await safeMediaCall(async () => {
+      await MediaControl.updatePlaybackState(
+        playbackStateFor(nextProps.isPlaying),
+        elapsedTime,
+        nextProps.isPlaying ? 1.0 : 0.0,
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isMediaControlAvailable()) {
+      console.log('[MediaControls] MediaControl not available on this device');
+      return;
+    }
+
+    if (initializedRef.current) return;
+
+    let cancelled = false;
+
+    const init = async () => {
+      const { capabilities, compactCapabilities } = getNativeCapabilities();
+
+      try {
+        await MediaControl.enableMediaControls({
+          capabilities,
+          compactCapabilities,
+          notification: {
+            color: '#D4AF37',
+          },
+        });
+
+        if (cancelled) return;
+
+        initializedRef.current = true;
+        console.log('[MediaControls] Initialized successfully (Android)');
+
+        if (pendingPropsRef.current) {
+          await pushMetadataAndState(pendingPropsRef.current);
+          pendingPropsRef.current = null;
+        }
+      } catch (error: any) {
+        const message = String(error?.message ?? error ?? '');
+        if (!message.includes('already') && !message.includes('enabled')) {
+          console.warn('[MediaControls] Init error:', message);
+        }
+        initializedRef.current = true;
+      }
+    };
+
+    void init();
+
     return () => {
-      removeListener();
+      cancelled = true;
+    };
+  }, [pushMetadataAndState]);
+
+  useEffect(() => {
+    if (!isMediaControlAvailable() || !initializedRef.current) return;
+    if (!track) return;
+
+    const durationValue = safeDuration(duration, track.duration);
+    if (durationValue <= 0) return;
+
+    void safeMediaCall(async () => {
+      await MediaControl.updateMetadata({ duration: durationValue });
+    });
+  }, [duration, track?.duration, track?.title, track?.artist, track?.videoId, track?.artwork]);
+
+  useEffect(() => {
+    if (!track || !isMediaControlAvailable()) return;
+
+    if (!initializedRef.current) {
+      pendingPropsRef.current = propsRef.current;
+      return;
+    }
+
+    void pushMetadataAndState(propsRef.current);
+  }, [
+    track?.title,
+    track?.artist,
+    track?.artwork,
+    track?.videoId,
+    track?.duration,
+    duration,
+    position,
+    isPlaying,
+    repeatMode,
+    pushMetadataAndState,
+  ]);
+
+  useEffect(() => {
+    if (!isMediaControlAvailable() || !initializedRef.current) return;
+
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    intervalRef.current = setInterval(() => {
+      const current = propsRef.current;
+      if (!current.track) return;
+      if (!initializedRef.current) return;
+
+      const elapsedTime = safePosition(current.position);
+      const state = playbackStateFor(current.isPlaying);
+
+      void safeMediaCall(async () => {
+        await MediaControl.updatePlaybackState(
+          state,
+          elapsedTime,
+          current.isPlaying ? 1.0 : 0.0,
+        );
+      });
+    }, LOCK_SCREEN_UPDATE_INTERVAL_MS);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
   }, []);
 
-  // ── 4. App backgrounded — push final state via ref ─────────────────────────
-  // Ensures the lock screen reflects correct state when app goes to background.
   useEffect(() => {
-    if (!isAndroid) return;
+    if (!isMediaControlAvailable() || typeof MediaControl.addListener !== 'function') return;
 
+    let removeListener: (() => void) | null = null;
+
+    try {
+      removeListener = MediaControl.addListener((event: MediaControlEvent) => {
+        const current = propsRef.current;
+
+        switch (event.command) {
+          case Command.PLAY:
+            current.onPlay();
+            break;
+
+          case Command.PAUSE:
+            current.onPause();
+            break;
+
+          case Command.NEXT_TRACK:
+            void current.onSkipNext();
+            break;
+
+          case Command.PREVIOUS_TRACK:
+            void current.onSkipPrevious();
+            break;
+
+          case Command.SEEK: {
+            const nextPosition = event.data?.position;
+            if (typeof nextPosition === 'number' && Number.isFinite(nextPosition) && nextPosition >= 0) {
+              const maxDuration = safeDuration(current.duration, current.track?.duration);
+              const clamped = maxDuration > 0 ? Math.min(nextPosition, maxDuration) : nextPosition;
+              current.onSeek(clamped);
+
+              void safeMediaCall(async () => {
+                await MediaControl.updatePlaybackState(
+                  playbackStateFor(current.isPlaying),
+                  clamped,
+                  current.isPlaying ? 1.0 : 0.0,
+                );
+              });
+            }
+            break;
+          }
+
+          case Command.STOP:
+            current.onPause();
+            break;
+
+          case Command.REPEAT: {
+            if (current.repeatMode === 'off') current.onSetRepeatMode('all');
+            else if (current.repeatMode === 'all') current.onSetRepeatMode('one');
+            else current.onSetRepeatMode('off');
+            break;
+          }
+
+          default:
+            break;
+        }
+      });
+    } catch (error: any) {
+      console.warn('[MediaControls] Failed to add listener:', String(error?.message ?? error ?? ''));
+    }
+
+    return () => {
+      if (removeListener) {
+        try {
+          removeListener();
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'background') return;
+      if (!isMediaControlAvailable() || !initializedRef.current) return;
 
-      const e = engineRef.current;
-      if (!e.currentTrack) return;
+      const current = propsRef.current;
+      if (!current.track) return;
 
-      const state = e.isPlaying ? PlaybackState.PLAYING : PlaybackState.PAUSED;
-      MediaControl.updatePlaybackState(
-        state,
-        e.position,
-        e.isPlaying ? 1.0 : 0.0,
-      ).catch(err => console.warn('[MediaControls] background state update error:', err));
+      const elapsedTime = safePosition(current.position);
+      const durationValue = safeDuration(current.duration, current.track.duration);
+
+      void safeMediaCall(async () => {
+        await MediaControl.updatePlaybackState(
+          playbackStateFor(current.isPlaying),
+          elapsedTime,
+          current.isPlaying ? 1.0 : 0.0,
+        );
+      });
+
+      void safeMediaCall(async () => {
+        await MediaControl.updateMetadata({
+          duration: durationValue,
+          elapsedTime,
+          repeatMode: repeatModeToNative(current.repeatMode),
+          title: current.track?.title || 'Unknown Title',
+          artist: current.track?.artist || 'Unknown Artist',
+          ...(buildArtworkUri(current.track) ? { artwork: { uri: buildArtworkUri(current.track)! } } : {}),
+        });
+      });
     });
 
     return () => sub.remove();
   }, []);
 
-  // ── 5. Cleanup on unmount ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!isAndroid) return;
+    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (nextState !== 'active') return;
 
+      const current = propsRef.current;
+      if (!current.track || !initializedRef.current) return;
+
+      setTimeout(() => {
+        try {
+          current.onExpandPlayer();
+        } catch {
+          // intentionally silent
+        }
+      }, 150);
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     return () => {
-      MediaControl.disableMediaControls().catch(e =>
-        console.warn('[MediaControls] disable error:', e),
-      );
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+
+      if (isMediaControlAvailable() && initializedRef.current) {
+        void safeMediaCall(async () => {
+          await MediaControl.disableMediaControls();
+        });
+      }
+
+      initializedRef.current = false;
+      pendingPropsRef.current = null;
     };
   }, []);
 }

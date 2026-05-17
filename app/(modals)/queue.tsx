@@ -1,13 +1,10 @@
-/**
- * (modals)/queue.tsx
- *
- * EXPORT-QUEUE MODAL — Uses PlayerEngineContext (expo-video)
- * 
- * This modal displays the current playback queue from the engine.
- * All operations use the engine's queue state — no RNTP.
- */
+// app/(modals)/queue.tsx
+//
+// QUEUE MODAL - Displays and manages playback queue
+// ANDROID-ONLY: No iOS references
+// Accepts onClose prop for overlay dismissal
 
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useCallback, useState } from "react";
 import {
   View,
   Text,
@@ -17,12 +14,15 @@ import {
   Alert,
   Modal,
 } from "react-native";
-import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { triggerHaptic } from "@/helpers/haptics";
-import { usePlayerEngine, type ResolvedTrack } from "@/libs/playerSetup";
+import { usePlayerEngine, type Song } from "@/libs/playerSetup";
+
+interface QueueModalProps {
+  onClose: () => void;
+}
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -44,13 +44,121 @@ const C = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ClearQueueConfirmModal — confirmation dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ClearQueueConfirmModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  itemCount: number;
+}
+
+function ClearQueueConfirmModal({ visible, onClose, onConfirm, itemCount }: ClearQueueConfirmModalProps) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={clearStyles.overlay}>
+        <View style={clearStyles.dialog}>
+          <View style={clearStyles.iconWrap}>
+            <Ionicons name="trash-outline" size={28} color={C.danger} />
+          </View>
+          <Text style={clearStyles.title}>Clear Queue?</Text>
+          <Text style={clearStyles.message}>
+            Remove all {itemCount} track{itemCount !== 1 ? "s" : ""} from your queue?
+          </Text>
+          <View style={clearStyles.buttonRow}>
+            <TouchableOpacity style={clearStyles.cancelBtn} onPress={onClose}>
+              <Text style={clearStyles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={clearStyles.clearBtn} onPress={onConfirm}>
+              <Text style={clearStyles.clearText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const clearStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.75)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dialog: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: "80%",
+    alignItems: "center",
+    borderWidth: 0.5,
+    borderColor: C.borderGold,
+  },
+  iconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: C.dangerFill,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: C.text,
+    marginBottom: 8,
+  },
+  message: {
+    fontSize: 14,
+    color: C.textSub,
+    textAlign: "center",
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  buttonRow: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: C.surfaceRaised,
+    borderWidth: 0.5,
+    borderColor: C.border,
+    alignItems: "center",
+  },
+  cancelText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: C.textSub,
+  },
+  clearBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: C.danger,
+    alignItems: "center",
+  },
+  clearText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // QueueReorderModal — bottom sheet for reordering queue items
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface QueueReorderModalProps {
   visible: boolean;
   onClose: () => void;
-  queue: ResolvedTrack[];
+  queue: Song[];
   currentIndex: number;
   onMoveItem: (fromIndex: number, toIndex: number) => void;
 }
@@ -84,7 +192,7 @@ function QueueReorderModal({
     }
   };
 
-  const renderReorderItem = ({ item, index }: { item: ResolvedTrack; index: number }) => {
+  const renderReorderItem = ({ item, index }: { item: Song; index: number }) => {
     const isDragging = draggedIndex === index;
     const isDragOver = dragOverIndex === index && draggedIndex !== index;
     const isCurrent = index === currentIndex;
@@ -106,8 +214,8 @@ function QueueReorderModal({
           <Ionicons name="menu" size={18} color={C.textMuted} />
         </View>
 
-        {item.artwork ? (
-          <Image source={{ uri: item.artwork }} style={reorderStyles.artwork} contentFit="cover" />
+        {item.thumbnail ? (
+          <Image source={{ uri: item.thumbnail }} style={reorderStyles.artwork} contentFit="cover" />
         ) : (
           <View style={[reorderStyles.artwork, reorderStyles.artworkPlaceholder]}>
             <Ionicons name="musical-notes" size={16} color={C.textMuted} />
@@ -305,211 +413,54 @@ const reorderStyles = StyleSheet.create({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ClearQueueConfirmModal — confirmation dialog
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface ClearQueueConfirmModalProps {
-  visible: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  itemCount: number;
-}
-
-function ClearQueueConfirmModal({ visible, onClose, onConfirm, itemCount }: ClearQueueConfirmModalProps) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={clearStyles.overlay}>
-        <View style={clearStyles.dialog}>
-          <View style={clearStyles.iconWrap}>
-            <Ionicons name="trash-outline" size={28} color={C.danger} />
-          </View>
-          <Text style={clearStyles.title}>Clear Queue?</Text>
-          <Text style={clearStyles.message}>
-            Remove all {itemCount} track{itemCount !== 1 ? "s" : ""} from your queue?
-          </Text>
-          <View style={clearStyles.buttonRow}>
-            <TouchableOpacity style={clearStyles.cancelBtn} onPress={onClose}>
-              <Text style={clearStyles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={clearStyles.clearBtn} onPress={onConfirm}>
-              <Text style={clearStyles.clearText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-const clearStyles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.75)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  dialog: {
-    backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 24,
-    width: "80%",
-    alignItems: "center",
-    borderWidth: 0.5,
-    borderColor: C.borderGold,
-  },
-  iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: C.dangerFill,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: C.text,
-    marginBottom: 8,
-  },
-  message: {
-    fontSize: 14,
-    color: C.textSub,
-    textAlign: "center",
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 12,
-    width: "100%",
-  },
-  cancelBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 24,
-    backgroundColor: C.surfaceRaised,
-    borderWidth: 0.5,
-    borderColor: C.border,
-    alignItems: "center",
-  },
-  cancelText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: C.textSub,
-  },
-  clearBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 24,
-    backgroundColor: C.danger,
-    alignItems: "center",
-  },
-  clearText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#fff",
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Main QueueModal Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function QueueModal() {
-  const router = useRouter();
+export default function QueueModal({ onClose }: QueueModalProps) {
   const { bottom } = useSafeAreaInsets();
   const engine = usePlayerEngine();
 
   const [showReorder, setShowReorder] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [localQueue, setLocalQueue] = useState<ResolvedTrack[]>([]);
 
-  // Sync local queue with engine queue
-  useEffect(() => {
-    setLocalQueue([...engine.queue]);
-  }, [engine.queue]);
+  const queue = engine.queue;
+  const currentTrack = engine.currentTrack;
+  const currentIndex = queue.findIndex(t => t.id === currentTrack?.id);
 
   const handlePlayTrack = useCallback(
     async (index: number) => {
       triggerHaptic();
-      await engine.skipToIndex(index);
-      router.back();
+      await engine.skipToIndex?.(index);
+      onClose();
     },
-    [engine, router]
+    [engine, onClose]
   );
 
   const handleRemoveTrack = useCallback(
     (index: number) => {
       triggerHaptic();
-      const newQueue = [...localQueue];
-      newQueue.splice(index, 1);
-      
-      // Update engine queue by rebuilding
-      if (newQueue.length === 0) {
-        // If queue becomes empty, stop playback
-        engine.pause();
-        // Force engine queue update via a small hack — reload empty array
-        // Since engine doesn't have a direct remove method, we rebuild
-        engine.skipToIndex(-1); // Invalidate current
-      } else {
-        // Rebuild queue by loading the first track and enqueuing the rest
-        const currentTrackId = engine.currentTrack?.id;
-        const wasPlaying = engine.isPlaying;
-        
-        // Find if current track still exists
-        const newIndex = newQueue.findIndex(t => t.id === currentTrackId);
-        
-        if (newIndex !== -1) {
-          // Current track still in queue — load at that position
-          engine.loadQueue(newQueue, newIndex).then(() => {
-            if (wasPlaying) engine.play();
-          });
-        } else if (newIndex === -1 && newQueue.length > 0) {
-          // Current track was removed — load first track
-          engine.loadQueue(newQueue, 0).then(() => {
-            engine.play();
-          });
-        }
-      }
-      
-      setLocalQueue(newQueue);
+      engine.removeFromQueue(index);
     },
-    [localQueue, engine]
+    [engine]
   );
 
   const handleMoveItem = useCallback(
     (fromIndex: number, toIndex: number) => {
       triggerHaptic();
-      const newQueue = [...localQueue];
-      const [movedItem] = newQueue.splice(fromIndex, 1);
-      newQueue.splice(toIndex, 0, movedItem);
-      
-      // Rebuild engine queue
-      const currentTrackId = engine.currentTrack?.id;
-      const newCurrentIndex = newQueue.findIndex(t => t.id === currentTrackId);
-      const wasPlaying = engine.isPlaying;
-      
-      engine.loadQueue(newQueue, newCurrentIndex !== -1 ? newCurrentIndex : 0).then(() => {
-        if (wasPlaying) engine.play();
-      });
-      
-      setLocalQueue(newQueue);
+      engine.moveQueueItem(fromIndex, toIndex);
     },
-    [localQueue, engine]
+    [engine]
   );
 
   const handleClearQueue = useCallback(() => {
     triggerHaptic();
-    engine.pause();
-    engine.loadQueue([], -1);
-    setLocalQueue([]);
+    engine.clearQueue();
     setShowClearConfirm(false);
-    router.back();
-  }, [engine, router]);
+    onClose();
+  }, [engine, onClose]);
 
-  const renderItem = ({ item, index }: { item: ResolvedTrack; index: number }) => {
-    const isActive = engine.currentTrack?.id === item.id;
+  const renderItem = ({ item, index }: { item: Song; index: number }) => {
+    const isActive = currentTrack?.id === item.id;
     const isFirst = index === 0;
 
     return (
@@ -519,9 +470,9 @@ export default function QueueModal() {
         activeOpacity={0.7}
       >
         {/* Artwork */}
-        {item.artwork ? (
+        {item.thumbnail ? (
           <Image
-            source={{ uri: item.artwork }}
+            source={{ uri: item.thumbnail }}
             style={styles.artwork}
             contentFit="cover"
             transition={200}
@@ -587,14 +538,14 @@ export default function QueueModal() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Up Next</Text>
-          {localQueue.length > 0 && (
+          {queue.length > 0 && (
             <Text style={styles.subtitle}>
-              {localQueue.length} track{localQueue.length !== 1 ? "s" : ""}
+              {queue.length} track{queue.length !== 1 ? "s" : ""}
             </Text>
           )}
         </View>
         <View style={styles.headerActions}>
-          {localQueue.length > 1 && (
+          {queue.length > 1 && (
             <TouchableOpacity
               onPress={() => setShowReorder(true)}
               hitSlop={10}
@@ -603,7 +554,7 @@ export default function QueueModal() {
               <MaterialIcons name="reorder" size={20} color={C.textSub} />
             </TouchableOpacity>
           )}
-          {localQueue.length > 0 && (
+          {queue.length > 0 && (
             <TouchableOpacity
               onPress={() => setShowClearConfirm(true)}
               hitSlop={10}
@@ -615,7 +566,7 @@ export default function QueueModal() {
           <TouchableOpacity
             onPress={() => {
               triggerHaptic();
-              router.back();
+              onClose();
             }}
             hitSlop={10}
             style={styles.closeBtn}
@@ -630,12 +581,12 @@ export default function QueueModal() {
 
       {/* Queue list */}
       <FlatList
-        data={localQueue}
+        data={queue}
         keyExtractor={(item, index) => `${item.id}-${index}`}
         renderItem={renderItem}
         contentContainerStyle={[
           styles.listContent,
-          localQueue.length === 0 && styles.listContentEmpty,
+          queue.length === 0 && styles.listContentEmpty,
         ]}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => (
@@ -654,8 +605,8 @@ export default function QueueModal() {
       <QueueReorderModal
         visible={showReorder}
         onClose={() => setShowReorder(false)}
-        queue={localQueue}
-        currentIndex={localQueue.findIndex(t => t.id === engine.currentTrack?.id)}
+        queue={queue}
+        currentIndex={currentIndex}
         onMoveItem={handleMoveItem}
       />
 
@@ -664,7 +615,7 @@ export default function QueueModal() {
         visible={showClearConfirm}
         onClose={() => setShowClearConfirm(false)}
         onConfirm={handleClearQueue}
-        itemCount={localQueue.length}
+        itemCount={queue.length}
       />
     </View>
   );

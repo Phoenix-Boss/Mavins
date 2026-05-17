@@ -6,7 +6,7 @@
  *
  * FIXES:
  *   - Removed react-native-track-player (useActiveTrack)
- *   - Removed router.navigate("/player") — player is overlay, not a route
+ *   - Player is overlay, not a route
  *   - Uses PlayerEngineContext for active track detection
  *   - All hooks called unconditionally
  */
@@ -30,12 +30,36 @@ import {
   verticalScale,
 } from "react-native-size-matters/extend";
 
-// Use PlayerEngineContext instead of RNTP
 import { usePlayerEngine } from "@/libs/playerSetup";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const GOLD_PRIMARY = "#D4AF37";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Song {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  url: string;
+  duration?: number;
+  videoId?: string;
+}
+
+interface Album {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  year?: string;
+}
+
+interface Artist {
+  id: string;
+  name: string;
+  subtitle: string;
+  thumbnail: string;
+}
 
 /**
  * `ItemList` component.
@@ -44,7 +68,7 @@ const GOLD_PRIMARY = "#D4AF37";
 const ItemList = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isScrolling, setIsScrolling] = useState<boolean>(false);
-  const [formattedTracks, setFormattedTracks] = useState<Song[] | Video[]>([]);
+  const [formattedTracks, setFormattedTracks] = useState<Song[]>([]);
   const [formattedTracksAlbums, setFormattedTracksAlbums] = useState<Album[]>([]);
   const [formattedTracksArtists, setFormattedTracksArtists] = useState<Artist[]>([]);
   const { top, bottom } = useSafeAreaInsets();
@@ -65,7 +89,16 @@ const ItemList = () => {
    */
   const handleSongSelect = useCallback((song: Song) => {
     triggerHaptic();
-    playAudio(song, formattedTracks);
+    const songForPlayback = {
+      id: song.id,
+      title: song.title,
+      artist: song.artist,
+      thumbnail: song.thumbnail,
+      url: song.url,
+      duration: song.duration || 0,
+      videoId: song.videoId,
+    };
+    playAudio(songForPlayback, formattedTracks);
   }, [formattedTracks, playAudio]);
 
   /**
@@ -200,7 +233,7 @@ const ItemList = () => {
         onPress={() => {
           triggerHaptic();
           router.push({
-            pathname: "/(tabs)/search/album",
+            pathname: "/(player)/search/album",
             params: {
               id: item.id,
               title: item.title,
@@ -264,7 +297,7 @@ const ItemList = () => {
         onPress={() => {
           triggerHaptic();
           router.push({
-            pathname: "/(tabs)/search/artist",
+            pathname: "/(player)/search/artist",
             params: { id: item.id, subtitle: item.subtitle },
           });
         }}

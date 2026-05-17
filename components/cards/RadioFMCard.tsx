@@ -1,10 +1,5 @@
 /**
- * Radio FM Card Component - Circular station card
- * - Circular shape
- * - Cover art if available, initials fallback
- * - Clean readable name (no Radio/FM/AM/special chars)
- * - LIVE badge + play button
- * - No view count
+ * Radio FM Card Component - Theme-aware
  */
 import React from "react";
 import {
@@ -16,33 +11,10 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
+import { useTheme } from "@/contexts/ThemeContext";
 
-const COLORS = {
-  background:   "#000000",
-  surfaceLight: "#1F1F1F",
-  goldPrimary:  "#D4AF37",
-  goldShiny:    "#FFD700",
-  goldShimmer:  "#E6C16A",
-  text:         "#FFFFFF",
-  textSecondary:"#B3B3B3",
-  liveTag:      "#3B82F6",
-};
+const CARD_SIZE = 80;
 
-const CARD_SIZE = 80; // diameter of the circle
-
-interface RadioFMCardProps {
-  item: {
-    id: string;
-    title: string;
-    artist?: string;
-    thumbnail?: string;
-  };
-  isCurrentTrack?: boolean;
-  isPlaying?: boolean;
-  onPress?: () => void;
-}
-
-// Strip noise words and special characters, return readable station name
 function cleanStationName(name: string): string {
   if (!name) return "Station";
   return name
@@ -60,29 +32,30 @@ function getInitials(name: string): string {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
-function getColorFromName(name: string): string {
-  const colors = ["#D4AF37", "#FFD700", "#E6C16A", "#C9A227", "#B8941F"];
+function getColorFromName(name: string, colors: any): string {
+  const colorList = [colors.gold, colors.gold, "#E6C16A", "#C9A227", "#B8941F"];
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
   }
-  return colors[Math.abs(hash) % colors.length];
+  return colorList[Math.abs(hash) % colorList.length];
 }
 
-export const RadioFMCard = ({
-  item,
-  isCurrentTrack = false,
-  onPress,
-}: RadioFMCardProps) => {
-  const router = useRouter();
+interface RadioFMCardProps {
+  item: { id: string; title: string; artist?: string; thumbnail?: string };
+  isCurrentTrack?: boolean;
+  isPlaying?: boolean;
+  onPress?: () => void;
+}
 
-  const cleanedName   = cleanStationName(item.title);
-  const initials      = getInitials(item.title);
-  const bgColor       = getColorFromName(item.title);
-  const hasValidImage =
-    !!item.thumbnail &&
-    item.thumbnail.startsWith("http") &&
-    !item.thumbnail.includes("placeholder");
+export const RadioFMCard = ({ item, isCurrentTrack = false, onPress }: RadioFMCardProps) => {
+  const router = useRouter();
+  const { colors } = useTheme();
+
+  const cleanedName = cleanStationName(item.title);
+  const initials = getInitials(item.title);
+  const bgColor = getColorFromName(item.title, colors);
+  const hasValidImage = !!item.thumbnail && item.thumbnail.startsWith("http") && !item.thumbnail.includes("placeholder");
 
   const handlePress = () => {
     triggerHaptic();
@@ -91,109 +64,40 @@ export const RadioFMCard = ({
   };
 
   return (
-    <TouchableOpacity
-      style={styles.wrapper}
-      onPress={handlePress}
-      activeOpacity={0.85}
-    >
-      {/* Circle + LIVE badge in a relative container so badge sits in front */}
+    <TouchableOpacity style={styles.wrapper} onPress={handlePress} activeOpacity={0.85}>
       <View style={styles.circleWrapper}>
-        <View style={[styles.circle, isCurrentTrack && styles.circleActive]}>
+        <View style={[
+          styles.circle,
+          { backgroundColor: colors.surfaceLight, borderColor: `${colors.gold}20` },
+          isCurrentTrack && { borderColor: colors.gold, borderWidth: 2, shadowColor: colors.gold, shadowOpacity: 0.7, elevation: 6 }
+        ]}>
           {hasValidImage ? (
             <Image source={{ uri: item.thumbnail }} style={styles.image} />
           ) : (
-            <View style={[styles.fallback, { backgroundColor: bgColor + "28" }]}>
+            <View style={[styles.fallback, { backgroundColor: `${bgColor}28` }]}>
               <Text style={[styles.initials, { color: bgColor }]}>{initials}</Text>
             </View>
           )}
         </View>
-
-        {/* LIVE badge — absolutely positioned in front of circle, bottom center */}
-        <View style={styles.liveBadge}>
+        <View style={[styles.liveBadge, { backgroundColor: "#3B82F6" }]}>
           <View style={styles.liveDot} />
           <Text style={styles.liveText}>LIVE</Text>
         </View>
       </View>
-
-      {/* Station name */}
-      <Text style={styles.name} numberOfLines={2}>{cleanedName}</Text>
+      <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>{cleanedName}</Text>
     </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  wrapper: {
-    alignItems: "center",
-    width: CARD_SIZE + 8,
-  },
-  circleWrapper: {
-    width: CARD_SIZE,
-    height: CARD_SIZE,
-    position: "relative",
-  },
-  circle: {
-    width: CARD_SIZE,
-    height: CARD_SIZE,
-    borderRadius: CARD_SIZE / 2,
-    overflow: "hidden",
-    backgroundColor: COLORS.surfaceLight,
-    borderWidth: 1.5,
-    borderColor: "rgba(212,175,55,0.2)",
-  },
-  circleActive: {
-    borderColor: COLORS.goldPrimary,
-    borderWidth: 2,
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-  },
-  fallback: {
-    width: "100%",
-    height: "100%",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  initials: {
-    fontSize: 22,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  liveBadge: {
-    position: "absolute",
-    top: 10,
-    left: 0,
-    backgroundColor: COLORS.liveTag,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 8,
-    gap: 2,
-    zIndex: 10,
-  },
-  liveDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#fff",
-  },
-  liveText: {
-    fontSize: 7,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  name: {
-    marginTop: 6,
-    fontSize: 10,
-    fontWeight: "600",
-    color: COLORS.text,
-    textAlign: "center",
-    lineHeight: 13,
-  },
+  wrapper: { alignItems: "center", width: CARD_SIZE + 8 },
+  circleWrapper: { width: CARD_SIZE, height: CARD_SIZE, position: "relative" },
+  circle: { width: CARD_SIZE, height: CARD_SIZE, borderRadius: CARD_SIZE / 2, overflow: "hidden", borderWidth: 1.5 },
+  image: { width: "100%", height: "100%" },
+  fallback: { width: "100%", height: "100%", justifyContent: "center", alignItems: "center" },
+  initials: { fontSize: 22, fontWeight: "700", letterSpacing: 1 },
+  liveBadge: { position: "absolute", top: 10, left: 0, flexDirection: "row", alignItems: "center", paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, gap: 2, zIndex: 10 },
+  liveDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: "#fff" },
+  liveText: { fontSize: 7, fontWeight: "700", color: "#fff" },
+  name: { marginTop: 6, fontSize: 10, fontWeight: "600", textAlign: "center", lineHeight: 13 },
 });

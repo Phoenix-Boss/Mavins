@@ -5,7 +5,7 @@
  * Tap the banner → routes to /(modals)/premium.
  * Tap "Maybe Later" or outside → dismisses.
  *
- * Design language: black obsidian + gold dust — matches Mavin's dark luxury palette.
+ * Design language: adapts to light/dark mode with gold accents.
  */
 
 import React, { useEffect, useRef } from "react";
@@ -29,30 +29,14 @@ import Animated, {
   withSequence,
   withRepeat,
   Easing,
-  interpolate,
-  runOnJS,
 } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { triggerHaptic } from "@/helpers/haptics";
+import { useTheme } from "@/contexts/ThemeContext";
 
 const { width: W, height: H } = Dimensions.get("window");
-
-// ─── Palette ────────────────────────────────────────────────────────────────
-
-const C = {
-  bg: "#000000",
-  gold: "#D4AF37",
-  goldShimmer: "#F0D060",
-  goldDeep: "#A07820",
-  goldFill: "rgba(212,175,55,0.12)",
-  goldBorder: "rgba(212,175,55,0.35)",
-  goldGlow: "rgba(212,175,55,0.08)",
-  text: "#FFFFFF",
-  textSub: "#AAAAAA",
-  textMuted: "#555555",
-};
 
 // ─── Feature rows ────────────────────────────────────────────────────────────
 
@@ -66,7 +50,7 @@ const FEATURES = [
 
 // ─── Animated orb ────────────────────────────────────────────────────────────
 
-function GoldOrb({ delay = 0, size = 120, style }: { delay?: number; size?: number; style?: any }) {
+function GoldOrb({ delay = 0, size = 120, style, goldColor }: { delay?: number; size?: number; style?: any; goldColor: string }) {
   const opacity = useSharedValue(0);
   const scale = useSharedValue(0.8);
 
@@ -102,9 +86,8 @@ function GoldOrb({ delay = 0, size = 120, style }: { delay?: number; size?: numb
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: C.gold,
-          // Blur effect via box shadow approximation
-          shadowColor: C.gold,
+          backgroundColor: goldColor,
+          shadowColor: goldColor,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 1,
           shadowRadius: size * 0.5,
@@ -118,7 +101,7 @@ function GoldOrb({ delay = 0, size = 120, style }: { delay?: number; size?: numb
 
 // ─── Shimmer line ─────────────────────────────────────────────────────────────
 
-function ShimmerLine({ delay = 0 }: { delay?: number }) {
+function ShimmerLine({ delay = 0, goldColor }: { delay?: number; goldColor: string }) {
   const x = useSharedValue(-W);
 
   useEffect(() => {
@@ -141,9 +124,10 @@ function ShimmerLine({ delay = 0 }: { delay?: number }) {
       style={[
         {
           position: "absolute",
-          top: 0, bottom: 0,
+          top: 0,
+          bottom: 0,
           width: 60,
-          backgroundColor: "rgba(255,255,255,0.04)",
+          backgroundColor: `rgba(212,175,55,0.08)`,
           transform: [{ skewX: "-20deg" }],
         },
         animStyle,
@@ -152,18 +136,24 @@ function ShimmerLine({ delay = 0 }: { delay?: number }) {
   );
 }
 
-// ─── Feature row (needs its own component so hooks are valid) ────────────────
+// ─── Feature row component ────────────────────────────────────────────────────
 
 function FeatureRow({
   icon,
   label,
   opacity,
   translateY,
+  goldColor,
+  textColor,
+  isDark,
 }: {
   icon: string;
   label: string;
   opacity: any;
   translateY: any;
+  goldColor: string;
+  textColor: string;
+  isDark: boolean;
 }) {
   const animStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
@@ -171,12 +161,20 @@ function FeatureRow({
   }));
 
   return (
-    <Animated.View style={[styles.featureRow, animStyle]}>
-      <View style={styles.featureIconWrap}>
-        <Ionicons name={icon as any} size={14} color={C.gold} />
+    <Animated.View 
+      style={[
+        styles.featureRow, 
+        animStyle, 
+        { 
+          backgroundColor: isDark ? `${goldColor}08` : `${goldColor}10`,
+        }
+      ]}
+    >
+      <View style={[styles.featureIconWrap, { borderColor: `${goldColor}40`, backgroundColor: `${goldColor}10` }]}>
+        <Ionicons name={icon as any} size={14} color={goldColor} />
       </View>
-      <Text style={styles.featureLabel}>{label}</Text>
-      <Ionicons name="checkmark-circle" size={14} color={C.gold} style={{ opacity: 0.7 }} />
+      <Text style={[styles.featureLabel, { color: textColor }]}>{label}</Text>
+      <Ionicons name="checkmark-circle" size={14} color={goldColor} style={{ opacity: 0.7 }} />
     </Animated.View>
   );
 }
@@ -190,6 +188,18 @@ interface PremiumBannerProps {
 
 export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps) {
   const router = useRouter();
+  const { colors, isDark } = useTheme();
+
+  // Theme-aware colors
+  const gold = colors.gold;
+  const goldShimmer = isDark ? "#F0D060" : "#E8B830";
+  const goldDeep = isDark ? "#A07820" : "#B8860B";
+  const bgCard = isDark ? "#0A0A0A" : "#FFFFFF";
+  const textColor = colors.text;
+  const textSubColor = colors.textSub;
+  const textMuted = colors.textMuted;
+  const iconColor = isDark ? "#000000" : "#FFFFFF";
+  const backdropColor = isDark ? "rgba(0,0,0,0.72)" : "rgba(0,0,0,0.5)";
 
   // Entrance animations
   const backdropOpacity = useSharedValue(0);
@@ -198,26 +208,25 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
   const crownScale = useSharedValue(0.4);
   const crownRotate = useSharedValue(-15);
 
-  // Feature stagger — must be declared individually (no hooks inside .map())
+  // Feature stagger animations
   const fo0 = useSharedValue(0); const ft0 = useSharedValue(12);
   const fo1 = useSharedValue(0); const ft1 = useSharedValue(12);
   const fo2 = useSharedValue(0); const ft2 = useSharedValue(12);
   const fo3 = useSharedValue(0); const ft3 = useSharedValue(12);
   const fo4 = useSharedValue(0); const ft4 = useSharedValue(12);
-  const featureOpacities  = [fo0, fo1, fo2, fo3, fo4];
+  const featureOpacities = [fo0, fo1, fo2, fo3, fo4];
   const featureTranslates = [ft0, ft1, ft2, ft3, ft4];
 
   useEffect(() => {
     if (visible) {
-      // Backdrop
+      // Animate in
       backdropOpacity.value = withTiming(1, { duration: 350 });
-      // Card
       cardTranslateY.value = withDelay(100, withSpring(0, { damping: 18, stiffness: 200 }));
       cardOpacity.value = withDelay(100, withTiming(1, { duration: 300 }));
-      // Crown pop
       crownScale.value = withDelay(350, withSpring(1, { damping: 10, stiffness: 260 }));
       crownRotate.value = withDelay(350, withSpring(0, { damping: 12, stiffness: 200 }));
-      // Feature rows stagger
+      
+      // Stagger feature animations
       FEATURES.forEach((_, i) => {
         featureOpacities[i].value = withDelay(500 + i * 80, withTiming(1, { duration: 280 }));
         featureTranslates[i].value = withDelay(500 + i * 80, withSpring(0, { damping: 16, stiffness: 200 }));
@@ -276,66 +285,81 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
         <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss}>
           <BlurView
             intensity={Platform.OS === "ios" ? 30 : 20}
-            tint="dark"
+            tint={isDark ? "dark" : "light"}
             style={StyleSheet.absoluteFill}
           />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.72)" }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: backdropColor }]} />
         </Pressable>
       </Animated.View>
 
       {/* Card container */}
       <View style={styles.centeredContainer} pointerEvents="box-none">
-        <Animated.View style={[styles.card, cardStyle]}>
-
-          {/* Background orbs (decorative glow) */}
-          <GoldOrb size={180} delay={0}  style={{ top: -60,  left: -40,  opacity: 0.18 }} />
-          <GoldOrb size={120} delay={700} style={{ bottom: 20, right: -30, opacity: 0.12 }} />
+        <Animated.View 
+          style={[
+            styles.card, 
+            cardStyle, 
+            { 
+              backgroundColor: bgCard, 
+              borderColor: `${gold}40`,
+              shadowColor: gold,
+            }
+          ]}
+        >
+          {/* Background orbs */}
+          <GoldOrb size={180} delay={0} style={{ top: -60, left: -40, opacity: 0.18 }} goldColor={gold} />
+          <GoldOrb size={120} delay={700} style={{ bottom: 20, right: -30, opacity: 0.12 }} goldColor={gold} />
 
           {/* Shimmer sweep */}
           <View style={[StyleSheet.absoluteFill, { overflow: "hidden" }]} pointerEvents="none">
-            <ShimmerLine delay={800} />
-            <ShimmerLine delay={1600} />
+            <ShimmerLine delay={800} goldColor={gold} />
+            <ShimmerLine delay={1600} goldColor={gold} />
           </View>
 
           {/* Top gold hairline */}
           <LinearGradient
-            colors={["transparent", C.gold, C.goldShimmer, C.gold, "transparent"]}
+            colors={["transparent", gold, goldShimmer, gold, "transparent"]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.topLine}
           />
 
           {/* Close button */}
-          <TouchableOpacity style={styles.closeBtn} onPress={handleDismiss} hitSlop={12}>
-            <Ionicons name="close" size={16} color={C.textMuted} />
+          <TouchableOpacity 
+            style={[
+              styles.closeBtn, 
+              { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)" }
+            ]} 
+            onPress={handleDismiss} 
+            hitSlop={12}
+          >
+            <Ionicons name="close" size={16} color={textMuted} />
           </TouchableOpacity>
 
           {/* Crown icon */}
           <Animated.View style={[styles.crownWrap, crownStyle]}>
             <LinearGradient
-              colors={[C.goldShimmer, C.gold, C.goldDeep]}
+              colors={[goldShimmer, gold, goldDeep]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.crownGradient}
             >
-              <Ionicons name="diamond" size={28} color="#000" />
+              <Ionicons name="diamond" size={28} color={iconColor} />
             </LinearGradient>
-            {/* Outer glow ring */}
-            <View style={styles.crownRing1} />
-            <View style={styles.crownRing2} />
+            <View style={[styles.crownRing1, { borderColor: `${gold}40` }]} />
+            <View style={[styles.crownRing2, { borderColor: `${gold}20` }]} />
           </Animated.View>
 
           {/* Headline */}
-          <Text style={styles.headline}>Mavin{" "}
-            <Text style={styles.headlineGold}>Premium</Text>
+          <Text style={[styles.headline, { color: textColor }]}>
+            Mavin <Text style={[styles.headlineGold, { color: gold }]}>Premium</Text>
           </Text>
-          <Text style={styles.tagline}>
-            Your music. No limits. No ads.{"\n"}Everywhere you go.
+          <Text style={[styles.tagline, { color: textSubColor }]}>
+            Your music. No limits. No ads.{'\n'}Everywhere you go.
           </Text>
 
           {/* Divider */}
           <LinearGradient
-            colors={["transparent", "rgba(212,175,55,0.3)", "transparent"]}
+            colors={["transparent", `${gold}50`, "transparent"]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.divider}
@@ -350,48 +374,52 @@ export default function PremiumBanner({ visible, onDismiss }: PremiumBannerProps
                 label={f.label}
                 opacity={featureOpacities[i]}
                 translateY={featureTranslates[i]}
+                goldColor={gold}
+                textColor={textColor}
+                isDark={isDark}
               />
             ))}
           </View>
 
           {/* Price badge */}
-          <View style={styles.priceBadge}>
-            <Text style={styles.priceLabel}>From</Text>
-            <Text style={styles.price}>₦1,500</Text>
-            <Text style={styles.pricePeriod}>/month</Text>
+          <View style={[styles.priceBadge, { backgroundColor: `${gold}08`, borderColor: `${gold}30` }]}>
+            <Text style={[styles.priceLabel, { color: textSubColor }]}>From</Text>
+            <Text style={[styles.price, { color: gold }]}>₦1,500</Text>
+            <Text style={[styles.pricePeriod, { color: textSubColor }]}>/month</Text>
           </View>
 
           {/* CTA button */}
           <TouchableOpacity
-            style={styles.ctaBtn}
+            style={[styles.ctaBtn, { shadowColor: gold }]}
             onPress={handleUpgrade}
             activeOpacity={0.88}
           >
             <LinearGradient
-              colors={[C.goldShimmer, C.gold, C.goldDeep]}
+              colors={[goldShimmer, gold, goldDeep]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.ctaGradient}
             >
-              <Ionicons name="diamond-outline" size={16} color="#000" style={{ marginRight: 8 }} />
-              <Text style={styles.ctaText}>Unlock Premium</Text>
-              <Ionicons name="arrow-forward" size={14} color="#000" style={{ marginLeft: 6 }} />
+              <Ionicons name="diamond-outline" size={16} color={iconColor} style={{ marginRight: 8 }} />
+              <Text style={[styles.ctaText, { color: iconColor }]}>Unlock Premium</Text>
+              <Ionicons name="arrow-forward" size={14} color={iconColor} style={{ marginLeft: 6 }} />
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Dismiss */}
+          {/* Dismiss button */}
           <TouchableOpacity onPress={handleDismiss} hitSlop={10} style={{ marginTop: 14 }}>
-            <Text style={styles.laterText}>Maybe Later</Text>
+            <Text style={[styles.laterText, { color: textMuted, textDecorationColor: textMuted }]}>
+              Maybe Later
+            </Text>
           </TouchableOpacity>
 
           {/* Bottom gold hairline */}
           <LinearGradient
-            colors={["transparent", C.gold, "transparent"]}
+            colors={["transparent", gold, "transparent"]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.bottomLine}
           />
-
         </Animated.View>
       </View>
     </Modal>
@@ -410,17 +438,13 @@ const styles = StyleSheet.create({
   card: {
     width: "100%",
     maxWidth: 380,
-    backgroundColor: "#0A0A0A",
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.25)",
     overflow: "hidden",
     paddingHorizontal: 24,
     paddingTop: 10,
     paddingBottom: 28,
     alignItems: "center",
-    // Elevation
-    shadowColor: C.gold,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.25,
     shadowRadius: 32,
@@ -439,7 +463,6 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -462,7 +485,6 @@ const styles = StyleSheet.create({
     height: 84,
     borderRadius: 42,
     borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.25)",
   },
   crownRing2: {
     position: "absolute",
@@ -470,22 +492,17 @@ const styles = StyleSheet.create({
     height: 102,
     borderRadius: 51,
     borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.1)",
   },
   headline: {
     fontSize: 26,
     fontFamily: "Meriva",
-    color: C.text,
     letterSpacing: 0.5,
     marginBottom: 8,
     textAlign: "center",
   },
-  headlineGold: {
-    color: C.gold,
-  },
+  headlineGold: {},
   tagline: {
     fontSize: 13,
-    color: C.textSub,
     textAlign: "center",
     lineHeight: 20,
     marginBottom: 20,
@@ -506,16 +523,13 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: "rgba(212,175,55,0.04)",
     marginBottom: 4,
   },
   featureIconWrap: {
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: "rgba(212,175,55,0.1)",
     borderWidth: 0.5,
-    borderColor: "rgba(212,175,55,0.25)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -523,7 +537,6 @@ const styles = StyleSheet.create({
   featureLabel: {
     flex: 1,
     fontSize: 13,
-    color: C.text,
     fontWeight: "500",
   },
   priceBadge: {
@@ -534,29 +547,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: "rgba(212,175,55,0.08)",
     borderWidth: 0.5,
-    borderColor: "rgba(212,175,55,0.2)",
   },
   priceLabel: {
     fontSize: 12,
-    color: C.textSub,
   },
   price: {
     fontSize: 22,
     fontWeight: "700",
-    color: C.gold,
     letterSpacing: -0.5,
   },
   pricePeriod: {
     fontSize: 12,
-    color: C.textSub,
   },
   ctaBtn: {
     width: "100%",
     borderRadius: 28,
     overflow: "hidden",
-    shadowColor: C.gold,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.45,
     shadowRadius: 14,
@@ -572,14 +579,11 @@ const styles = StyleSheet.create({
   ctaText: {
     fontSize: 15,
     fontWeight: "800",
-    color: "#000",
     letterSpacing: 0.3,
   },
   laterText: {
     fontSize: 13,
-    color: C.textMuted,
     textDecorationLine: "underline",
-    textDecorationColor: C.textMuted,
   },
   bottomLine: {
     height: 1,

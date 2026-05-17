@@ -1,6 +1,6 @@
 /**
  * Album Card Component - Displays an album/playlist in a square card format
- * v1.3 - Compact size (110x140) for grid layouts
+ * v1.5 - Theme-aware with proper overlay colors for light/dark mode
  */
 import React from "react";
 import {
@@ -13,18 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
-
-// Metallic Gold Color Palette
-const COLORS = {
-  background: '#000000',
-  surfaceLight: '#1F1F1F',
-  goldPrimary: '#D4AF37',
-  goldShiny: '#FFD700',
-  goldShimmer: '#E6C16A',
-  text: '#FFFFFF',
-  textSecondary: '#B3B3B3',
-  textMuted: '#808080',
-};
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface AlbumCardProps {
   item?: {
@@ -51,8 +40,8 @@ export const AlbumCard = ({
   fallbackTitle = "Unknown Album"
 }: AlbumCardProps) => {
   const router = useRouter();
+  const { colors, isDark } = useTheme();
 
-  // ✅ DEFENSIVE: Handle missing or invalid item
   const safeItem = {
     id: item?.id || `fallback_${Math.random()}`,
     title: item?.title || fallbackTitle,
@@ -76,20 +65,23 @@ export const AlbumCard = ({
   const handlePlayPress = (e: any) => {
     e.stopPropagation();
     triggerHaptic();
-    router.navigate('/player');
+    router.navigate('/(player)');
   };
+
+  // Theme-aware overlay background
+  const overlayBackground = isDark ? 'rgba(0, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.9)';
 
   return (
     <TouchableOpacity
       style={[
         styles.albumCard,
-        isCurrentTrack && styles.currentPlayingTrack,
-        !hasValidImage && styles.noImageCard
+        { backgroundColor: colors.surface },
+        isCurrentTrack && { borderColor: colors.gold, borderWidth: 2 },
+        !hasValidImage && { borderColor: `${colors.gold}30`, borderWidth: 1 }
       ]}
       onPress={handlePress}
       activeOpacity={0.9}
     >
-      {/* Image with fallback */}
       {hasValidImage ? (
         <Image
           source={{ uri: safeItem.thumbnail }}
@@ -97,49 +89,46 @@ export const AlbumCard = ({
           resizeMode="cover"
         />
       ) : (
-        <View style={[styles.albumImage, styles.fallbackImage]}>
-          <Ionicons name="musical-note" size={32} color={COLORS.goldShimmer} />
+        <View style={[styles.albumImage, styles.fallbackImage, { backgroundColor: colors.surfaceLight }]}>
+          <Ionicons name="musical-note" size={32} color={colors.gold} />
         </View>
       )}
       
-      {/* Text overlay */}
-      <View style={styles.albumTextOverlay}>
+      <View style={[styles.albumTextOverlay, { backgroundColor: overlayBackground }]}>
         <View style={styles.albumTextContainer}>
-          {/* Position badge if available */}
           {safeItem.position && safeItem.position > 0 && (
-            <View style={styles.positionBadge}>
-              <Text style={styles.positionText}>#{safeItem.position}</Text>
+            <View style={[styles.positionBadge, { backgroundColor: colors.gold }]}>
+              <Text style={[styles.positionText, { color: colors.textInverse }]}>#{safeItem.position}</Text>
             </View>
           )}
           
-          <Text style={styles.albumTitle} numberOfLines={1}>
+          <Text style={[styles.albumTitle, { color: isDark ? colors.text : colors.text }]} numberOfLines={1}>
             {safeItem.title}
           </Text>
-          <Text style={styles.albumArtist} numberOfLines={1}>
+          <Text style={[styles.albumArtist, { color: colors.gold }]} numberOfLines={1}>
             {safeItem.artist}
           </Text>
           
-          {/* Plays count if available */}
           {safeItem.plays && (
-            <Text style={styles.playsText}>{safeItem.plays} plays</Text>
+            <Text style={[styles.playsText, { color: colors.textSub }]}>{safeItem.plays} plays</Text>
           )}
         </View>
       </View>
       
-      {/* Play Button */}
       {showPlayButton && hasValidImage && (
         <View style={styles.albumPlayButtonContainerTopRight}>
           <TouchableOpacity 
             style={[
               styles.metallicPlayButtonOutline,
-              isCurrentTrack && styles.activePlayButton
+              { borderColor: colors.gold, shadowColor: colors.gold },
+              isCurrentTrack && { backgroundColor: `${colors.gold}30`, shadowOpacity: 0.9 }
             ]}
             onPress={handlePlayPress}
           >
             <Ionicons 
               name={isCurrentTrack && isPlaying ? "pause" : "play"} 
               size={12} 
-              color={COLORS.goldShiny} 
+              color={colors.gold} 
             />
           </TouchableOpacity>
         </View>
@@ -150,97 +139,70 @@ export const AlbumCard = ({
 
 const styles = StyleSheet.create({
   albumCard: {
-    width: 110,           // Reduced from 130
-    height: 140,          // Reduced from 170
-    borderRadius: 8,      // Slightly smaller radius
+    width: 110,
+    height: 140,
+    borderRadius: 8,
     overflow: 'hidden',
     position: 'relative',
-    backgroundColor: COLORS.surfaceLight,
-  },
-  noImageCard: {
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary + '30',
   },
   albumImage: {
     width: '100%',
     height: '100%',
-    backgroundColor: COLORS.surfaceLight,
   },
   fallbackImage: {
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: COLORS.surfaceLight,
   },
   albumTextOverlay: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    padding: 8,           // Reduced from 10
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    padding: 8,
   },
   albumTextContainer: {
     maxWidth: '100%',
   },
   positionBadge: {
     position: 'absolute',
-    top: -20,             // Adjusted for smaller padding
+    top: -20,
     left: 0,
-    backgroundColor: COLORS.goldPrimary,
-    borderRadius: 3,      // Smaller radius
-    paddingHorizontal: 5, // Reduced from 6
-    paddingVertical: 1,   // Reduced from 2
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
   },
   positionText: {
-    color: '#000',
-    fontSize: 9,          // Reduced from 10
+    fontSize: 9,
     fontWeight: 'bold',
   },
   albumTitle: {
-    fontSize: 12,         // Reduced from 14
+    fontSize: 12,
     fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: 1,      // Reduced from 2
+    marginBottom: 1,
   },
   albumArtist: {
-    fontSize: 10,         // Reduced from 12
-    color: COLORS.goldShimmer,
-    marginBottom: 1,      // Reduced from 2
+    fontSize: 10,
+    marginBottom: 1,
   },
   playsText: {
-    fontSize: 9,          // Reduced from 10
-    color: COLORS.textMuted,
+    fontSize: 9,
   },
   albumPlayButtonContainerTopRight: {
     position: 'absolute',
-    top: 6,               // Reduced from 8
-    right: 6,             // Reduced from 8
+    top: 6,
+    right: 6,
   },
   metallicPlayButtonOutline: {
-    width: 24,            // Reduced from 28
-    height: 24,           // Reduced from 28
-    borderRadius: 12,     // Reduced from 14
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: 'transparent',
-    borderWidth: 1.2,     // Slightly thinner
-    borderColor: COLORS.goldShiny,
+    borderWidth: 1.2,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: COLORS.goldShiny,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.6,
-    shadowRadius: 2,      // Reduced from 3
-    elevation: 2,         // Reduced from 3
-  },
-  activePlayButton: {
-    backgroundColor: COLORS.goldPrimary + '30',
-    shadowColor: COLORS.goldShiny,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 4,      // Reduced from 6
-    elevation: 4,         // Reduced from 6
-  },
-  currentPlayingTrack: {
-    borderWidth: 2,
-    borderColor: COLORS.goldPrimary,
+    shadowRadius: 2,
+    elevation: 2,
   },
 });

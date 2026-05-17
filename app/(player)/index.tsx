@@ -1,14 +1,4 @@
-// app/(player)/index.tsx - Home Screen
-//
-// ARCHITECTURE:
-//   All player logic (engine, overlay, mini-player, full-player) lives in _layout.tsx.
-//   This file is ONLY the home content. It calls usePlayerEngine() to trigger playback
-//   and usePlayerOverlay() to expand the player — that's it.
-//
-//   No MiniPlayer, no FullPlayerOverlay, no RNTP hooks here.
-//
-// FIX: Changed import from @/components/MusicPlayerContext to @/libs/playerSetup
-
+// app/(player)/index.tsx - Home Screen (NO FALLBACKS, NO TRY-CATCH)
 import React, { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import {
   View,
@@ -19,7 +9,7 @@ import {
   StyleSheet,
   FlatList,
   Dimensions,
-  Platform,
+  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,7 +20,8 @@ import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
 import { useHomeStore, Song } from "@/store/home";
 import { useMusicPlayer } from "@/libs/playerSetup";
-import { usePlayerOverlay } from "@/app/_layout";
+import { usePlayerOverlay } from "@/libs/playerOverlay";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // Section components
 import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
@@ -44,20 +35,10 @@ import { PodcastSection } from "@/components/sections/PodcastSection";
 import { RadioFMSection } from "@/components/sections/RadioFMSection";
 import { ThrowbacksSection } from "@/components/sections/ThrowbacksSection";
 import { NewReleasesSection } from "@/components/sections/NewReleasesSection";
+import { QuickPicksSection } from "@/components/sections/QuickPicksSection";
 
 const { width } = Dimensions.get("window");
 const GRID_SIZE = (width - 48) / 3;
-
-const COLORS = {
-  background: "#000000",
-  surface: "#121212",
-  goldPrimary: "#D4AF37",
-  goldShimmer: "#E6C16A",
-  text: "#FFFFFF",
-  textSecondary: "#B3B3B3",
-  searchBackground: "#1A1A1A",
-  searchPlaceholder: "#666666",
-};
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +72,7 @@ interface QuickActionsGridProps {
 
 function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
   const router = useRouter();
+  const { colors } = useTheme();
   const [currentPage, setCurrentPage] = useState(0);
   const flatListRef = useRef<FlatList>(null);
 
@@ -138,12 +120,16 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
     >
       <Image
         source={{ uri: item.thumbnail }}
-        style={styles.gridImage}
+        style={[styles.gridImage, { backgroundColor: colors.surface }]}
         contentFit="cover"
         transition={150}
       />
-      <Text style={styles.gridTitle} numberOfLines={1}>{item.title}</Text>
-      <Text style={styles.gridArtist} numberOfLines={1}>{item.artist}</Text>
+      <Text style={[styles.gridTitle, { color: colors.text }]} numberOfLines={1}>
+        {item.title}
+      </Text>
+      <Text style={[styles.gridArtist, { color: colors.textSub }]} numberOfLines={1}>
+        {item.artist}
+      </Text>
     </TouchableOpacity>
   );
 
@@ -170,15 +156,15 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
     <View style={styles.quickActionsContainer}>
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleContainer}>
-          <Ionicons name="time-outline" size={20} color={COLORS.goldPrimary} />
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <Ionicons name="time-outline" size={20} color={colors.gold} />
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
         </View>
         <View style={styles.sectionActions}>
           <TouchableOpacity onPress={handleClearAll} style={styles.headerButton}>
-            <Text style={styles.headerButtonText}>Clear</Text>
+            <Text style={[styles.headerButtonText, { color: colors.textSub }]}>Clear</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={handleSeeAll}>
-            <Text style={styles.seeAllText}>See All</Text>
+            <Text style={[styles.seeAllText, { color: colors.gold }]}>See All</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -204,7 +190,8 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
               key={`indicator-${index}`}
               style={[
                 styles.pageIndicator,
-                currentPage === index && styles.pageIndicatorActive,
+                { backgroundColor: colors.textMuted },
+                currentPage === index && { width: 20, backgroundColor: colors.gold },
               ]}
             />
           ))}
@@ -275,19 +262,34 @@ function NewReleasesWrapper({ data }: { data: Song[] }) {
   return <NewReleasesSection data={data} />;
 }
 
+function QuickPicksWrapper({ data, onSongPress }: { data: Song[]; onSongPress: (song: Song) => void }) {
+  if (!data.length) return null;
+  return <QuickPicksSection results={data} onItemClick={onSongPress} />;
+}
+
 // ─── HOME SCREEN ──────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
+  const [isThemeReady, setIsThemeReady] = useState(false);
   const { top } = useSafeAreaInsets();
   const router = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
 
-  // Player control — layout owns the overlay; we just trigger expand
+  // Direct hook usage - NO TRY-CATCH, NO FALLBACKS
+  // These hooks will only work because MusicPlayerProvider is properly mounted
   const { expandPlayer } = usePlayerOverlay();
   const { playAudio } = useMusicPlayer();
+  const { colors, isDark } = useTheme();
 
-  // Store data
+  // Wait for theme to be ready
+  useEffect(() => {
+    if (colors && colors.background) {
+      setIsThemeReady(true);
+    }
+  }, [colors]);
+
+  // Store selectors
   const trending            = useHomeStore((s) => s.trending);
   const biggestHits         = useHomeStore((s) => s.biggestHits);
   const peoplesChoice       = useHomeStore((s) => s.peoplesChoice);
@@ -303,7 +305,6 @@ export default function HomeScreen() {
   const getExcludedIdsForTop10 = useHomeStore((s) => s.getExcludedIdsForTop10);
   const top10ExcludedIds    = getExcludedIdsForTop10();
 
-  // Watermark pulse
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
@@ -315,29 +316,26 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    try {
-      useHomeStore.getState().markStale();
-    } catch (e) {
-      console.warn("[HomeScreen] refresh error:", e);
-    } finally {
-      setRefreshing(false);
-    }
+    try { useHomeStore.getState().markStale(); }
+    catch (e) { console.warn("[HomeScreen] refresh error:", e); }
+    finally { setRefreshing(false); }
   }, []);
 
-  // Tap song → play + expand the layout-level full player
   const handleSongPress = useCallback(
     (song: Song) => {
       triggerHaptic();
       useHomeStore.getState().addRecentSong(song);
+      
+      // Direct play - no checks needed because player is guaranteed to be ready
       playAudio(
-        {
-          id: song.id,
-          title: song.title,
+        { 
+          id: song.id, 
+          title: song.title, 
           artist: song.artist,
-          thumbnail: song.thumbnail,
+          thumbnail: song.thumbnail, 
           url: song.url || "",
-          duration: song.duration,
-          videoId: song.videoId,
+          duration: song.duration, 
+          videoId: song.videoId 
         },
         undefined,
         expandPlayer,
@@ -346,82 +344,100 @@ export default function HomeScreen() {
     [playAudio, expandPlayer],
   );
 
-  const handleSearchPress = useCallback(() => {
-    triggerHaptic();
-    router.push("/(player)/search");
+  const handleSearchPress = useCallback(() => { 
+    triggerHaptic(); 
+    router.push("/search"); 
+  }, [router]);
+  
+  const handleNotificationsPress = useCallback(() => { 
+    triggerHaptic(); 
+    router.push("/(modals)/notifications"); 
   }, [router]);
 
-  const handleNotificationsPress = useCallback(() => {
-    triggerHaptic();
-    router.push("/(modals)/notifications");
-  }, [router]);
-
-  const CombinedHeader = useCallback(
+  // Memoized header component with theme colors
+  const CombinedHeader = useMemo(
     () => (
-      <View style={{ backgroundColor: COLORS.background }}>
-        <View style={[styles.header, { paddingTop: top + 10 }]}>
-          <TouchableOpacity
-            style={styles.searchContainer}
-            onPress={handleSearchPress}
+      <View style={{ backgroundColor: colors.background }}>
+        <View style={[styles.header, { paddingTop: top + 10, backgroundColor: colors.background }]}>
+          <TouchableOpacity 
+            style={[
+              styles.searchContainer, 
+              { 
+                backgroundColor: colors.surfaceRaised, 
+                borderColor: `${colors.gold}40`,
+                borderWidth: 1,
+              }
+            ]} 
+            onPress={handleSearchPress} 
             activeOpacity={0.7}
           >
-            <Ionicons
-              name="search"
-              size={20}
-              color={COLORS.goldShimmer}
-              style={styles.searchIcon}
-            />
-            <Text style={styles.searchPlaceholderText}>
+            <Ionicons name="search" size={20} color={colors.gold} style={styles.searchIcon} />
+            <Text style={[styles.searchPlaceholderText, { color: colors.textMuted }]}>
               Search music, artists, albums...
             </Text>
           </TouchableOpacity>
           <View style={styles.headerRight}>
-            <TouchableOpacity
-              onPress={handleNotificationsPress}
+            <TouchableOpacity 
+              onPress={handleNotificationsPress} 
               style={styles.iconButton}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons
-                name="notifications-outline"
-                size={24}
-                color={COLORS.goldShimmer}
-              />
+              <Ionicons name="notifications-outline" size={24} color={colors.gold} />
             </TouchableOpacity>
           </View>
         </View>
       </View>
     ),
-    [top, handleSearchPress, handleNotificationsPress],
+    [colors, top, handleSearchPress, handleNotificationsPress],
   );
 
+  // Don't render until theme is ready
+  if (!isThemeReady) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors?.background || '#000000' }]}>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors?.gold || '#D4AF37'} />
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      {/* Background watermark */}
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       <Animated.View pointerEvents="none" style={styles.watermarkWrapper}>
         <Animated.Image
           source={require("@/assets/images/mavins.png")}
-          style={[styles.watermark, { transform: [{ scale: watermarkPulse }] }]}
+          style={[
+            styles.watermark, 
+            { 
+              transform: [{ scale: watermarkPulse }], 
+              opacity: colors.watermarkOpacity,
+            }
+          ]}
           resizeMode="contain"
         />
       </Animated.View>
 
-      {/* Main scrollable home content */}
       <ScrollControllerWrapper
-        headerComponent={<CombinedHeader />}
-        showHeader
-        initialHeaderHeight={top + 68}
+        headerComponent={CombinedHeader}
+        showHeader={true}
+        initialHeaderHeight={top + 78}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={[COLORS.goldPrimary]}
-            tintColor={COLORS.goldPrimary}
+            colors={[colors.gold]}
+            tintColor={colors.gold}
           />
         }
         contentContainerStyle={styles.scrollContent}
       >
         <SectionErrorBoundary sectionName="Quick Actions">
           <QuickActionsGrid recentSongs={recentSongs} onSongPress={handleSongPress} />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary sectionName="Quick Picks">
+          <QuickPicksWrapper data={recentSongs} onSongPress={handleSongPress} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Trending Now">
@@ -477,68 +493,34 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  watermarkWrapper: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 0,
-  },
-  watermark: {
-    width: 300,
-    height: 300,
-    opacity: 0.08,
-  },
+  container: { flex: 1 },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  watermarkWrapper: { ...StyleSheet.absoluteFillObject, justifyContent: "center", alignItems: "center", zIndex: 0 },
+  watermark: { width: 300, height: 300 },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 10,
     paddingBottom: 10,
-    backgroundColor: COLORS.background,
   },
   searchContainer: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: COLORS.searchBackground,
     borderRadius: 24,
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginRight: 16,
-    borderWidth: 1,
-    borderColor: COLORS.goldPrimary + "40",
   },
-  searchIcon: {
-    marginRight: 10,
-  },
-  searchPlaceholderText: {
-    color: COLORS.searchPlaceholder,
-    fontSize: 16,
-    flex: 1,
-  },
-  headerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-  },
-  iconButton: {
-    padding: 4,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-  },
-  bottomSpacing: {
-    height: 140,
-  },
+  searchIcon: { marginRight: 10 },
+  searchPlaceholderText: { fontSize: 16, flex: 1 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 16 },
+  iconButton: { padding: 4 },
+  scrollContent: { paddingHorizontal: 16 },
+  bottomSpacing: { height: 140 },
 
-  // Quick Actions Grid
-  quickActionsContainer: {
-    marginVertical: 16,
-  },
+  quickActionsContainer: { marginVertical: 16 },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -546,84 +528,19 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingHorizontal: 4,
   },
-  sectionTitleContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  sectionTitle: {
-    color: COLORS.text,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  sectionActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-  },
-  headerButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-  },
-  headerButtonText: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  seeAllText: {
-    color: COLORS.goldPrimary,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  gridPage: {
-    width: width - 32,
-  },
-  gridRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  gridCell: {
-    width: GRID_SIZE,
-  },
-  gridItem: {
-    alignItems: "center",
-  },
-  gridImage: {
-    width: GRID_SIZE,
-    height: GRID_SIZE,
-    borderRadius: 12,
-    backgroundColor: "#2a2a2a",
-  },
-  gridTitle: {
-    color: COLORS.text,
-    fontSize: 12,
-    fontWeight: "600",
-    marginTop: 6,
-    textAlign: "center",
-    width: GRID_SIZE,
-  },
-  gridArtist: {
-    color: COLORS.textSecondary,
-    fontSize: 10,
-    textAlign: "center",
-    width: GRID_SIZE,
-  },
-  pageIndicators: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 12,
-    gap: 8,
-  },
-  pageIndicator: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.textSecondary,
-  },
-  pageIndicatorActive: {
-    width: 20,
-    backgroundColor: COLORS.goldPrimary,
-  },
+  sectionTitleContainer: { flexDirection: "row", alignItems: "center", gap: 8 },
+  sectionTitle: { fontSize: 18, fontWeight: "700" },
+  sectionActions: { flexDirection: "row", alignItems: "center", gap: 16 },
+  headerButton: { paddingHorizontal: 12, paddingVertical: 4 },
+  headerButtonText: { fontSize: 13, fontWeight: "500" },
+  seeAllText: { fontSize: 13, fontWeight: "600" },
+  gridPage: { width: width - 32 },
+  gridRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+  gridCell: { width: GRID_SIZE },
+  gridItem: { alignItems: "center" },
+  gridImage: { width: GRID_SIZE, height: GRID_SIZE, borderRadius: 12 },
+  gridTitle: { fontSize: 12, fontWeight: "600", marginTop: 6, textAlign: "center", width: GRID_SIZE },
+  gridArtist: { fontSize: 10, textAlign: "center", width: GRID_SIZE },
+  pageIndicators: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 12, gap: 8 },
+  pageIndicator: { width: 6, height: 6, borderRadius: 3 },
 });

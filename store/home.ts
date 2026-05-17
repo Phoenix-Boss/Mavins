@@ -74,6 +74,7 @@ interface HomeState {
   recentSongs: Song[];
   
   lastUpdated: number | null;
+  lastFetchedAt: number | null;
   isStale: boolean;
   isLoading: boolean;
   
@@ -100,7 +101,7 @@ interface HomeState {
     | 'setPodcasts' | 'setRadioStations' | 'setRecentSongs'
     | 'addRecentSong' | 'removeRecentSong' | 'clearRecentSongs'
     | 'setAllData' | 'markFresh' | 'markStale' | 'setLoading'
-    | 'getExcludedIdsForTop10' | 'hasAnyData'
+    | 'getExcludedIdsForTop10' | 'hasAnyData' | 'isDataFresh'
   >>) => void;
   
   markFresh: () => void;
@@ -109,6 +110,7 @@ interface HomeState {
   
   getExcludedIdsForTop10: () => string[];
   hasAnyData: () => boolean;
+  isDataFresh: () => boolean;
 }
 
 export const useHomeStore = create<HomeState>()(
@@ -131,6 +133,7 @@ export const useHomeStore = create<HomeState>()(
         recentSongs: [], // This starts empty on every app launch
         
         lastUpdated: null,
+        lastFetchedAt: null,
         isStale: true,
         isLoading: false,
         
@@ -220,6 +223,7 @@ export const useHomeStore = create<HomeState>()(
           set({ 
             ...data, 
             lastUpdated: Date.now(),
+            lastFetchedAt: Date.now(),
             isStale: false,
             isLoading: false,
           });
@@ -233,7 +237,8 @@ export const useHomeStore = create<HomeState>()(
         
         markStale: () => {
           console.log('📊 [HomeStore] markStale called');
-          set({ isStale: true });
+          // Clear lastFetchedAt so HomePreloader will re-fetch on next render
+          set({ isStale: true, lastFetchedAt: null });
         },
         
         setLoading: (isLoading) => {
@@ -279,6 +284,17 @@ export const useHomeStore = create<HomeState>()(
             state.radioStations.length > 0
           );
         },
+
+        // Returns true if data was fetched within the last 30 minutes.
+        // HomePreloader uses this to skip fetching when persisted data is fresh enough.
+        // Returns false if lastFetchedAt is null (new install, after markStale, or first
+        // launch where setAllData has never completed successfully).
+        isDataFresh: () => {
+          const { lastFetchedAt } = get();
+          if (!lastFetchedAt) return false;
+          const THIRTY_MINUTES = 30 * 60 * 1000;
+          return Date.now() - lastFetchedAt < THIRTY_MINUTES;
+        },
       };
     },
     {
@@ -299,6 +315,7 @@ export const useHomeStore = create<HomeState>()(
         radioStations: state.radioStations,
         // recentSongs is EXCLUDED from persistence - always fresh from DB
         lastUpdated: state.lastUpdated,
+        lastFetchedAt: state.lastFetchedAt,
         isStale: state.isStale,
       }),
     }

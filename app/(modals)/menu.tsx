@@ -1,6 +1,7 @@
 /**
  * (modals)/menu.tsx — Compact Gold × Black Futuristic Bottom Sheet
  * Layout: single horizontal chip scroll + 2-column action grid
+ * UPDATED: Theme-aware with light/dark mode support
  */
 
 import React, { useCallback, useEffect, useRef, useMemo } from "react";
@@ -30,23 +31,9 @@ import {
   scale,
   verticalScale,
 } from "react-native-size-matters/extend";
+import { useTheme } from "@/contexts/ThemeContext";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-
-const C = {
-  bg:          "#0A0A0A",
-  surface:     "#141414",
-  surfaceHigh: "#1C1C1C",
-  border:      "rgba(212,175,55,0.14)",
-  borderSub:   "rgba(255,255,255,0.06)",
-  gold:        "#D4AF37",
-  goldDim:     "rgba(212,175,55,0.15)",
-  text:        "#F5F0E8",
-  textSub:     "rgba(245,240,232,0.45)",
-  textMuted:   "rgba(245,240,232,0.25)",
-  danger:      "#FF453A",
-  dangerDim:   "rgba(255,69,58,0.12)",
-};
 
 // ─── Chip ────────────────────────────────────────────────────────────────────
 
@@ -54,12 +41,13 @@ interface ChipProps {
   title: string;
   thumbnail?: string;
   iconName?: string;
-  /** Item count shown below the title. Hidden when 0 or undefined. */
   count?: number;
   onPress?: () => void;
 }
 
 function Chip({ title, thumbnail, iconName, count, onPress }: ChipProps) {
+  const { colors, isDark } = useTheme();
+  
   const showCount = typeof count === "number" && count > 0;
   const countLabel = count
     ? count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}m`
@@ -68,19 +56,19 @@ function Chip({ title, thumbnail, iconName, count, onPress }: ChipProps) {
     : "";
 
   return (
-    <TouchableOpacity style={chipSt.wrap} onPress={() => { triggerHaptic(); onPress?.(); }} activeOpacity={0.7}>
-      <View style={chipSt.box}>
+    <TouchableOpacity style={[chipSt.wrap]} onPress={() => { triggerHaptic(); onPress?.(); }} activeOpacity={0.7}>
+      <View style={[chipSt.box, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {thumbnail ? (
           <Image source={{ uri: thumbnail }} style={chipSt.img} contentFit="cover" />
         ) : (
-          <View style={chipSt.placeholder}>
-            <Ionicons name={(iconName as any) || "musical-notes"} size={moderateScale(15)} color={C.gold} />
+          <View style={[chipSt.placeholder, { backgroundColor: colors.surfaceHigh }]}>
+            <Ionicons name={(iconName as any) || "musical-notes"} size={moderateScale(15)} color={colors.gold} />
           </View>
         )}
-        <View style={chipSt.accent} />
+        <View style={[chipSt.accent, { backgroundColor: colors.gold }]} />
       </View>
-      <Text style={chipSt.title} numberOfLines={1}>{title}</Text>
-      {showCount && <Text style={chipSt.count} numberOfLines={1}>{countLabel}</Text>}
+      <Text style={[chipSt.title, { color: colors.text }]} numberOfLines={1}>{title}</Text>
+      {showCount && <Text style={[chipSt.count, { color: colors.gold }]} numberOfLines={1}>{countLabel}</Text>}
     </TouchableOpacity>
   );
 }
@@ -89,14 +77,13 @@ const chipSt = StyleSheet.create({
   wrap: { width: scale(68) },
   box: {
     width: scale(68), height: scale(52), borderRadius: 6,
-    backgroundColor: C.surface, overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth, borderColor: C.border,
+    overflow: "hidden", borderWidth: StyleSheet.hairlineWidth,
   },
   img: { width: "100%", height: "100%" },
-  placeholder: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.surfaceHigh },
-  accent: { position: "absolute", bottom: 0, left: 0, right: 0, height: 2, backgroundColor: C.gold, opacity: 0.55 },
-  title: { color: C.text, fontSize: moderateScale(9), fontWeight: "600", marginTop: verticalScale(4), letterSpacing: 0.2 },
-  count: { color: C.gold, fontSize: moderateScale(8), fontWeight: "700", marginTop: 1, letterSpacing: 0.3 },
+  placeholder: { flex: 1, alignItems: "center", justifyContent: "center" },
+  accent: { position: "absolute", bottom: 0, left: 0, right: 0, height: 2, opacity: 0.55 },
+  title: { fontSize: moderateScale(9), fontWeight: "600", marginTop: verticalScale(4), letterSpacing: 0.2 },
+  count: { fontSize: moderateScale(8), fontWeight: "700", marginTop: 1, letterSpacing: 0.3 },
 });
 
 // ─── GridItem ────────────────────────────────────────────────────────────────
@@ -115,20 +102,29 @@ interface GridItemProps {
 }
 
 function GridItem({ icon, label, onPress, destructive, disabled, gold }: GridItemProps) {
+  const { colors } = useTheme();
+  
   return (
     <TouchableOpacity
-      style={[
-        gridSt.cell,
-        disabled && { opacity: 0.3 },
-      ]}
+      style={[gridSt.cell, disabled && { opacity: 0.3 }]}
       onPress={() => { if (disabled) return; triggerHaptic(); onPress?.(); }}
       activeOpacity={0.6}
       disabled={disabled}
     >
-      <View style={[gridSt.iconWrap, destructive && { backgroundColor: C.dangerDim }, gold && { backgroundColor: C.goldDim }]}>
+      <View style={[
+        gridSt.iconWrap,
+        { backgroundColor: colors.surfaceHigh },
+        destructive && { backgroundColor: `${colors.error}15` },
+        gold && { backgroundColor: `${colors.gold}15` }
+      ]}>
         {icon}
       </View>
-      <Text style={[gridSt.label, destructive && { color: C.danger }, gold && { color: C.gold }]} numberOfLines={2}>
+      <Text style={[
+        gridSt.label,
+        { color: colors.text },
+        destructive && { color: colors.error },
+        gold && { color: colors.gold }
+      ]} numberOfLines={2}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -147,11 +143,10 @@ const gridSt = StyleSheet.create({
   },
   iconWrap: {
     width: scale(32), height: scale(32), borderRadius: 8,
-    backgroundColor: C.surfaceHigh,
     alignItems: "center", justifyContent: "center", flexShrink: 0,
   },
   label: {
-    color: C.text, fontSize: moderateScale(11.5), fontWeight: "500",
+    fontSize: moderateScale(11.5), fontWeight: "500",
     letterSpacing: 0.1, flex: 1, lineHeight: moderateScale(15),
   },
 });
@@ -159,10 +154,12 @@ const gridSt = StyleSheet.create({
 // ─── Divider ─────────────────────────────────────────────────────────────────
 
 function Divider({ gold }: { gold?: boolean }) {
+  const { colors } = useTheme();
+  
   return (
     <View style={{
       height: StyleSheet.hairlineWidth,
-      backgroundColor: gold ? "rgba(212,175,55,0.22)" : C.borderSub,
+      backgroundColor: gold ? colors.borderGold : colors.border,
       marginHorizontal: scale(12),
       marginVertical: verticalScale(4),
     }} />
@@ -174,6 +171,7 @@ function Divider({ gold }: { gold?: boolean }) {
 export default function MenuModal() {
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
+  const { colors } = useTheme();
   const params  = useLocalSearchParams<{ type: string; songData?: string; playlistName?: string }>();
   const { type, songData: songDataRaw, playlistName } = params;
 
@@ -218,7 +216,6 @@ export default function MenuModal() {
   const title      = type === "playlist" ? playlistName ?? "Playlist" : songData?.title ?? "Options";
   const subtitle   = type === "playlist" ? "Playlist" : songData?.artist ?? "";
 
-  // Wire `count` to real data from your store/API — omit or pass 0 to hide.
   const chips = [
     { title: "Watch Later", iconName: "time-outline",           count: undefined as number | undefined },
     { title: "Liked Songs",  iconName: "thumbs-up",              count: undefined as number | undefined },
@@ -234,36 +231,38 @@ export default function MenuModal() {
   return (
     <Modal transparent visible={visible} animationType="none" statusBarTranslucent onRequestClose={handleClose}>
       <TouchableWithoutFeedback onPress={handleClose}>
-        <RNAnimated.View style={[st.backdrop, { opacity: backdropAnim }]} />
+        <RNAnimated.View style={[st.backdrop, { opacity: backdropAnim, backgroundColor: `rgba(0,0,0,0.78)` }]} />
       </TouchableWithoutFeedback>
 
-      <RNAnimated.View style={[st.sheet, { paddingBottom: insets.bottom + verticalScale(10) }, { transform: [{ translateY: slideAnim }] }]}>
+      <RNAnimated.View style={[
+        st.sheet,
+        { paddingBottom: insets.bottom + verticalScale(10), transform: [{ translateY: slideAnim }], backgroundColor: colors.background, borderColor: colors.border }
+      ]}>
+        <View style={st.handleRow}>
+          <View style={[st.handle, { backgroundColor: colors.gold }]} />
+        </View>
 
-        {/* Handle */}
-        <View style={st.handleRow}><View style={st.handle} /></View>
-
-        {/* Header */}
         <View style={st.header}>
           {songData?.thumbnail ? (
             <View style={st.artworkWrap}>
               <Image source={{ uri: songData.thumbnail }} style={st.artwork} contentFit="cover" />
-              <View style={st.artworkBorder} />
+              <View style={[st.artworkBorder, { borderColor: colors.gold }]} />
             </View>
           ) : (
-            <View style={[st.artwork, st.artworkPlaceholder]}>
-              <Ionicons name={type === "playlist" ? "list" : "musical-notes"} size={moderateScale(18)} color={C.gold} />
+            <View style={[st.artwork, st.artworkPlaceholder, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Ionicons name={type === "playlist" ? "list" : "musical-notes"} size={moderateScale(18)} color={colors.gold} />
             </View>
           )}
           <View style={st.headerText}>
-            <Text style={st.headerTitle} numberOfLines={1}>{title}</Text>
-            <Text style={st.headerSub} numberOfLines={1}>{subtitle}</Text>
+            <Text style={[st.headerTitle, { color: colors.text }]} numberOfLines={1}>{title}</Text>
+            <Text style={[st.headerSub, { color: colors.textSub }]} numberOfLines={1}>{subtitle}</Text>
           </View>
           <View style={st.headerActions}>
-            <TouchableOpacity style={st.headerBtn} onPress={() => triggerHaptic()} activeOpacity={0.7}>
-              <Ionicons name="thumbs-up-outline" size={moderateScale(17)} color={C.textSub} />
+            <TouchableOpacity style={[st.headerBtn, { backgroundColor: colors.surfaceHigh }]} onPress={() => triggerHaptic()} activeOpacity={0.7}>
+              <Ionicons name="thumbs-up-outline" size={moderateScale(17)} color={colors.textSub} />
             </TouchableOpacity>
-            <TouchableOpacity style={st.headerBtn} onPress={() => triggerHaptic()} activeOpacity={0.7}>
-              <Ionicons name="thumbs-down-outline" size={moderateScale(17)} color={C.textSub} />
+            <TouchableOpacity style={[st.headerBtn, { backgroundColor: colors.surfaceHigh }]} onPress={() => triggerHaptic()} activeOpacity={0.7}>
+              <Ionicons name="thumbs-down-outline" size={moderateScale(17)} color={colors.textSub} />
             </TouchableOpacity>
           </View>
         </View>
@@ -271,8 +270,6 @@ export default function MenuModal() {
         <Divider gold />
 
         <ScrollView style={st.scroll} showsVerticalScrollIndicator={false} bounces={false}>
-
-          {/* Single horizontal chip scroll */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -286,17 +283,15 @@ export default function MenuModal() {
 
           <Divider />
 
-          {/* 2-column grid — explicit rows so flexWrap is not needed inside ScrollView */}
           <View style={st.grid}>
-
             <View style={st.gridRow}>
               <GridItem
-                icon={<MaterialIcons name="playlist-add" size={moderateScale(18)} color={C.gold} />}
+                icon={<MaterialIcons name="playlist-add" size={moderateScale(18)} color={colors.gold} />}
                 label="Save to playlist" gold
                 onPress={act(() => router.push({ pathname: "/(modals)/addToPlaylist", params: { songId: songData?.id, songTitle: songData?.title } }))}
               />
               <GridItem
-                icon={<MaterialCommunityIcons name="bookmark-outline" size={moderateScale(18)} color="#fff" />}
+                icon={<MaterialCommunityIcons name="bookmark-outline" size={moderateScale(18)} color={colors.text} />}
                 label="Save to library"
                 onPress={act(() => {})}
               />
@@ -304,12 +299,12 @@ export default function MenuModal() {
 
             <View style={st.gridRow}>
               <GridItem
-                icon={<Feather name="share-2" size={moderateScale(17)} color="#fff" />}
+                icon={<Feather name="share-2" size={moderateScale(17)} color={colors.text} />}
                 label="Share"
                 onPress={act(() => {})}
               />
               <GridItem
-                icon={<MaterialCommunityIcons name="playlist-plus" size={moderateScale(18)} color="#fff" />}
+                icon={<MaterialCommunityIcons name="playlist-plus" size={moderateScale(18)} color={colors.text} />}
                 label="Add to queue"
                 onPress={act(() => {})}
               />
@@ -317,28 +312,28 @@ export default function MenuModal() {
 
             <View style={st.gridRow}>
               <GridItem
-                icon={<MaterialCommunityIcons name="radio" size={moderateScale(18)} color="#fff" />}
+                icon={<MaterialCommunityIcons name="radio" size={moderateScale(18)} color={colors.text} />}
                 label="Start radio"
                 onPress={act(() => {})}
                 disabled={!hasVideoId}
               />
               <GridItem
-                icon={<Ionicons name="person-outline" size={moderateScale(18)} color="#fff" />}
+                icon={<Ionicons name="person-outline" size={moderateScale(18)} color={colors.text} />}
                 label="Go to artist"
-                onPress={act(() => { if (hasArtist) router.push({ pathname: "/(tabs)/search/artist", params: { id: songData?.uploaderUrl || songData?.artist } }); })}
+                onPress={act(() => { if (hasArtist) router.push({ pathname: "/search/artist", params: { id: songData?.uploaderUrl || songData?.artist } }); })}
                 disabled={!hasArtist}
               />
             </View>
 
             <View style={st.gridRow}>
               <GridItem
-                icon={<MaterialCommunityIcons name="album" size={moderateScale(18)} color="#fff" />}
+                icon={<MaterialCommunityIcons name="album" size={moderateScale(18)} color={colors.text} />}
                 label="Go to album"
-                onPress={act(() => { if (songData?.albumId) router.push({ pathname: "/(tabs)/search/album", params: { id: songData.albumId } }); })}
+                onPress={act(() => { if (songData?.albumId) router.push({ pathname: "/search/album", params: { id: songData.albumId } }); })}
                 disabled={!hasAlbum}
               />
               <GridItem
-                icon={<Ionicons name="musical-notes-outline" size={moderateScale(18)} color="#fff" />}
+                icon={<Ionicons name="musical-notes-outline" size={moderateScale(18)} color={colors.text} />}
                 label="View lyrics"
                 onPress={act(() => router.push({ pathname: "/(modals)/lyrics", params: { songId: songData?.id, title: songData?.title, artist: songData?.artist } }))}
               />
@@ -346,12 +341,12 @@ export default function MenuModal() {
 
             <View style={st.gridRow}>
               <GridItem
-                icon={<Feather name="download" size={moderateScale(17)} color="#fff" />}
+                icon={<Feather name="download" size={moderateScale(17)} color={colors.text} />}
                 label="Download"
                 onPress={act(() => {})}
               />
               <GridItem
-                icon={<MaterialCommunityIcons name="weather-night" size={moderateScale(18)} color="#fff" />}
+                icon={<MaterialCommunityIcons name="weather-night" size={moderateScale(18)} color={colors.text} />}
                 label="Sleep timer"
                 onPress={act(() => {})}
               />
@@ -359,49 +354,42 @@ export default function MenuModal() {
 
             <View style={st.gridRow}>
               <GridItem
-                icon={<MaterialCommunityIcons name="flag-outline" size={moderateScale(18)} color={C.danger} />}
+                icon={<MaterialCommunityIcons name="flag-outline" size={moderateScale(18)} color={colors.error} />}
                 label="Report"
                 onPress={act(() => {})}
                 destructive
               />
-              {/* empty right cell */}
               <View style={{ width: CELL_WIDTH }} />
             </View>
-
           </View>
-
         </ScrollView>
       </RNAnimated.View>
     </Modal>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-
 const st = StyleSheet.create({
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.78)" },
+  backdrop: { ...StyleSheet.absoluteFillObject },
   sheet: {
     position: "absolute", bottom: 0, left: 0, right: 0,
-    backgroundColor: C.bg,
     borderTopLeftRadius: 14, borderTopRightRadius: 14,
     borderTopWidth: 1,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: C.border,
     maxHeight: SCREEN_HEIGHT * 0.88,
   },
   handleRow: { alignItems: "center", paddingTop: verticalScale(8), paddingBottom: verticalScale(2) },
-  handle: { width: 28, height: 3, borderRadius: 1.5, backgroundColor: C.gold, opacity: 0.5 },
+  handle: { width: 28, height: 3, borderRadius: 1.5, opacity: 0.5 },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: scale(14), paddingVertical: verticalScale(10) },
   artworkWrap: { position: "relative" },
   artwork: { width: scale(42), height: scale(42), borderRadius: 5 },
-  artworkBorder: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, borderRadius: 5, borderWidth: 1, borderColor: C.gold, opacity: 0.4 },
-  artworkPlaceholder: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: C.border },
+  artworkBorder: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, borderRadius: 5, borderWidth: 1, opacity: 0.4 },
+  artworkPlaceholder: { alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth },
   headerText: { flex: 1, marginLeft: scale(10), marginRight: scale(6) },
-  headerTitle: { color: C.text, fontSize: moderateScale(13), fontWeight: "700", letterSpacing: 0.1 },
-  headerSub: { color: C.textSub, fontSize: moderateScale(11), marginTop: 2, letterSpacing: 0.2 },
+  headerTitle: { fontSize: moderateScale(13), fontWeight: "700", letterSpacing: 0.1 },
+  headerSub: { fontSize: moderateScale(11), marginTop: 2, letterSpacing: 0.2 },
   headerActions: { flexDirection: "row", gap: scale(4) },
-  headerBtn: { width: scale(30), height: scale(30), alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.surfaceHigh },
+  headerBtn: { width: scale(30), height: scale(30), alignItems: "center", justifyContent: "center", borderRadius: 15 },
   chipScroll: { marginTop: verticalScale(10), marginBottom: verticalScale(8) },
   chipRow: { paddingHorizontal: scale(12), gap: scale(8) },
   scroll: { flex: 1 },

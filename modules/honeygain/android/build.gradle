@@ -13,7 +13,7 @@ android {
         targetSdk 36
 
         versionCode 1
-        versionName '1.3.1'
+        versionName '1.4.0'
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
@@ -41,31 +41,39 @@ android {
     sourceSets {
         main {
             manifest.srcFile 'src/main/AndroidManifest.xml'
-            java.srcDirs = ['src/main/java']
-            res.srcDirs = ['src/main/res']
-            jniLibs.srcDirs = ['libs']
+            java.srcDirs     = ['src/main/java']
+            res.srcDirs      = ['src/main/res']
         }
     }
 }
 
-// Expo module DSL (no moduleName, no extraProguardRules here)
+// Expo module DSL
 expoModule {
-    // Let Expo derive the name from package.json / expo-module.config.json
-    // name = "honeygain-sdk"   // optional, only if plugin actually supports this
-    // generateExpoModulesPackageRule = true   // usually handled automatically
+    // Name is derived from package.json / expo-module.config.json automatically
 }
 
 dependencies {
-    // Honeygain SDK + required dependencies
-    implementation files('libs/hgsdk.aar')
-    implementation 'org.msgpack:msgpack-core:0.9.11'
-    implementation 'com.google.protobuf:protobuf-javalite:3.25.3'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // ── Pawns SDK ─────────────────────────────────────────────────────────────
+    // JitPack must be added to dependencyResolutionManagement in settings.gradle:
+    //
+    //   dependencyResolutionManagement {
+    //       repositories {
+    //           google()
+    //           mavenCentral()
+    //           maven { url = uri("https://jitpack.io") }
+    //       }
+    //   }
+    //
+    // The Pawns SDK transitively pulls in the coroutines and networking deps it
+    // needs, so we do not need to declare them here separately.
+    implementation 'app.pawns:android-pawns-sdk:1.8.1'
 
-    // Kotlin stdlib
+    // Kotlin stdlib (keep aligned with your Kotlin plugin version)
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
 
-    // DO NOT manually depend on expo-modules-core in EAS-style builds
-    // Expo provides it via autolinking / expo package
+    // JSON parsing for consent log (built into Android SDK — no extra dep needed)
+    // org.json is provided by the Android platform; no implementation line required.
+
+    // DO NOT manually depend on expo-modules-core in EAS-style builds.
+    // Expo provides it via autolinking / expo package.
 }

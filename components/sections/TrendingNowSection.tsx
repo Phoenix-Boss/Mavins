@@ -1,6 +1,6 @@
-// Updated: components/sections/TrendingNowSection.tsx
+// components/sections/TrendingNowSection.tsx
 /**
- * TrendingNowSection — Store-First Version
+ * TrendingNowSection — Theme-Aware Version
  * 
  * Receives data from parent (HomeStore via index.tsx).
  * No internal data fetching, no loading states.
@@ -12,25 +12,24 @@ import { View, StyleSheet } from 'react-native';
 import { TrendingSongRow } from '@/components/cards/TrendingSongRow';
 import { SectionHeader } from '@/components/common/SectionHeader';
 import type { Song } from '@/store/home';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface TrendingNowSectionProps {
   data: Song[];
 }
 
 export const TrendingNowSection = ({ data }: TrendingNowSectionProps) => {
-  // Empty state — section handles gracefully
+  const { colors } = useTheme();
+
   if (!data?.length) {
     return (
       <View style={styles.section}>
         <SectionHeader title="Trending Now" showPlayAll />
-        <View style={styles.emptyContainer}>
-          {/* Silent empty — no text to avoid layout shift */}
-        </View>
+        <View style={[styles.emptyContainer, { backgroundColor: colors.surface }]} />
       </View>
     );
   }
 
-  // Remove duplicates within this section
   const unique = data.filter(
     (item, idx, arr) => arr.findIndex(x => x.id === item.id) === idx,
   );
@@ -53,14 +52,7 @@ export const TrendingNowSection = ({ data }: TrendingNowSectionProps) => {
 };
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: 20,
-  },
-  list: {
-    gap: 10,
-    paddingHorizontal: 16,
-  },
-  emptyContainer: {
-    height: 60,
-  },
+  section: { marginBottom: 20 },
+  list: { gap: 10, paddingHorizontal: 16 },
+  emptyContainer: { height: 60, borderRadius: 12 },
 });

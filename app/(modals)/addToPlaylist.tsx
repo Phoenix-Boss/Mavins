@@ -21,19 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { usePlaylists } from "@/store/library";
 import { triggerHaptic } from "@/helpers/haptics";
-
-const C = {
-  bg: "#0D0D0D",
-  surface: "#161616",
-  surfaceRaised: "#1F1F1F",
-  border: "rgba(255,255,255,0.07)",
-  borderGold: "rgba(212,175,55,0.22)",
-  gold: "#D4AF37",
-  goldFill: "rgba(212,175,55,0.1)",
-  text: "#FFFFFF",
-  textSub: "#888888",
-  textMuted: "#4A4A4A",
-};
+import { useTheme } from "@/contexts/ThemeContext";
 
 export default function AddToPlaylistModal() {
   const router = useRouter();
@@ -42,6 +30,7 @@ export default function AddToPlaylistModal() {
     songId: string;
     songTitle: string;
   }>();
+  const { colors } = useTheme();
 
   const playlistsMap = usePlaylists();
   const playlists = useMemo(
@@ -51,34 +40,31 @@ export default function AddToPlaylistModal() {
 
   const handleAdd = (playlistId: string, playlistName: string) => {
     triggerHaptic();
-    // TODO: dispatch addSongToPlaylist(playlistId, songId) via Redux
     Alert.alert("Added", `"${songTitle}" added to "${playlistName}"`);
     router.back();
   };
 
   return (
-    <View style={[styles.container, { paddingBottom: bottom + 16 }]}>
-      {/* Handle */}
-      <View style={styles.handle} />
-
-      {/* Header */}
+    <View style={[styles.container, { backgroundColor: colors.background, paddingBottom: bottom + 16 }]}>
+      <View style={[styles.handle, { backgroundColor: colors.textMuted }]} />
+      
       <View style={styles.header}>
-        <Text style={styles.title}>Add to Playlist</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Add to Playlist</Text>
         <TouchableOpacity onPress={() => router.back()} hitSlop={10}>
-          <Ionicons name="close" size={20} color={C.textSub} />
+          <Ionicons name="close" size={20} color={colors.textSub} />
         </TouchableOpacity>
       </View>
+      
       {songTitle && (
-        <Text style={styles.subtitle} numberOfLines={1}>
+        <Text style={[styles.subtitle, { color: colors.textSub }]} numberOfLines={1}>
           "{songTitle}"
         </Text>
       )}
 
-      <View style={styles.divider} />
+      <View style={[styles.divider, { backgroundColor: colors.borderGold }]} />
 
-      {/* Create new */}
       <TouchableOpacity
-        style={styles.createRow}
+        style={[styles.createRow, { borderBottomColor: colors.border }]}
         onPress={() => {
           triggerHaptic();
           router.back();
@@ -86,19 +72,18 @@ export default function AddToPlaylistModal() {
         }}
         activeOpacity={0.7}
       >
-        <View style={styles.createIcon}>
-          <Ionicons name="add" size={20} color={C.gold} />
+        <View style={[styles.createIcon, { backgroundColor: `${colors.gold}15`, borderColor: `${colors.gold}40` }]}>
+          <Ionicons name="add" size={20} color={colors.gold} />
         </View>
-        <Text style={styles.createLabel}>New Playlist</Text>
+        <Text style={[styles.createLabel, { color: colors.gold }]}>New Playlist</Text>
       </TouchableOpacity>
 
-      {/* Existing playlists */}
       <FlatList
         data={playlists}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8 }}
         ListEmptyComponent={
-          <Text style={styles.empty}>No playlists yet. Create one above.</Text>
+          <Text style={[styles.empty, { color: colors.textMuted }]}>No playlists yet. Create one above.</Text>
         }
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -107,27 +92,23 @@ export default function AddToPlaylistModal() {
             activeOpacity={0.7}
           >
             {item.thumbnail ? (
-              <Image
-                source={{ uri: item.thumbnail }}
-                style={styles.cover}
-                contentFit="cover"
-              />
+              <Image source={{ uri: item.thumbnail }} style={styles.cover} contentFit="cover" />
             ) : (
-              <View style={[styles.cover, styles.coverPlaceholder]}>
-                <Ionicons name="musical-notes" size={18} color={C.textMuted} />
+              <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}>
+                <Ionicons name="musical-notes" size={18} color={colors.textMuted} />
               </View>
             )}
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle} numberOfLines={1}>
+              <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={1}>
                 {item.name}
               </Text>
-              <Text style={styles.rowSub}>{item.trackCount} tracks</Text>
+              <Text style={[styles.rowSub, { color: colors.textSub }]}>{item.trackCount} tracks</Text>
             </View>
-            <Ionicons name="add-circle-outline" size={22} color={C.gold} />
+            <Ionicons name="add-circle-outline" size={22} color={colors.gold} />
           </TouchableOpacity>
         )}
         ItemSeparatorComponent={() => (
-          <View style={{ height: 0.5, backgroundColor: C.border, marginLeft: 68 }} />
+          <View style={{ height: 0.5, backgroundColor: colors.border, marginLeft: 68 }} />
         )}
       />
     </View>
@@ -135,33 +116,19 @@ export default function AddToPlaylistModal() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-  handle: {
-    alignSelf: "center", width: 36, height: 4, borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.15)", marginTop: 10, marginBottom: 16,
-  },
-  header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, paddingBottom: 6,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: C.text },
-  subtitle: { fontSize: 12, color: C.textSub, paddingHorizontal: 16, marginBottom: 12 },
-  divider: { height: 0.5, backgroundColor: C.borderGold, marginHorizontal: 16, marginBottom: 8 },
-  createRow: {
-    flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 0.5, borderBottomColor: C.border,
-  },
-  createIcon: {
-    width: 44, height: 44, borderRadius: 10,
-    backgroundColor: C.goldFill, borderWidth: 0.5, borderColor: C.borderGold,
-    alignItems: "center", justifyContent: "center", marginRight: 12,
-  },
-  createLabel: { fontSize: 15, fontWeight: "600", color: C.gold },
+  container: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  handle: { alignSelf: "center", width: 36, height: 4, borderRadius: 2, marginTop: 10, marginBottom: 16 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 6 },
+  title: { fontSize: 18, fontWeight: "700" },
+  subtitle: { fontSize: 12, paddingHorizontal: 16, marginBottom: 12 },
+  divider: { height: 0.5, marginHorizontal: 16, marginBottom: 8 },
+  createRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0.5 },
+  createIcon: { width: 44, height: 44, borderRadius: 10, borderWidth: 0.5, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  createLabel: { fontSize: 15, fontWeight: "600" },
   row: { flexDirection: "row", alignItems: "center", paddingVertical: 12 },
   cover: { width: 44, height: 44, borderRadius: 8, marginRight: 12 },
-  coverPlaceholder: { backgroundColor: C.surfaceRaised, alignItems: "center", justifyContent: "center", borderWidth: 0.5, borderColor: C.border },
-  rowTitle: { fontSize: 14, fontWeight: "600", color: C.text },
-  rowSub: { fontSize: 12, color: C.textSub, marginTop: 2 },
-  empty: { fontSize: 13, color: C.textMuted, textAlign: "center", paddingVertical: 32 },
+  coverPlaceholder: { alignItems: "center", justifyContent: "center", borderWidth: 0.5 },
+  rowTitle: { fontSize: 14, fontWeight: "600" },
+  rowSub: { fontSize: 12, marginTop: 2 },
+  empty: { fontSize: 13, textAlign: "center", paddingVertical: 32 },
 });

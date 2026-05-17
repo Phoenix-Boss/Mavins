@@ -3,7 +3,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-
+const withPawns = require("./plugins/withPawns");
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
   owner: "xacibi6468-1",
