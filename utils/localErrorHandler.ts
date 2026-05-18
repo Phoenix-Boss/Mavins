@@ -1,6 +1,6 @@
-// utils/localErrorHandler.ts
+// utils/localErrorHandler.ts - CONVERTED TO expo-file-system/next
 import { Alert, Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
+import { file } from 'expo-file-system/next';
 import { initLocalDatabase, clearAllLocalData } from '@/db/localDatabase';
 import { clearArtworkCache } from './artworkCache';
 
@@ -105,7 +105,9 @@ class LocalErrorHandler {
   
   async handleStorageFull(requiredBytes: number): Promise<boolean> {
     try {
-      const freeSpace = await FileSystem.getFreeDiskStorageAsync();
+      const testFile = file('/storage/emulated/0');
+      const freeSpace = await testFile.getFreeSpace();
+      
       if (freeSpace < requiredBytes) {
         const error: LocalMusicError = {
           type: LocalMusicErrorType.STORAGE_FULL,

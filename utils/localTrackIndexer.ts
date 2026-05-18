@@ -1,5 +1,5 @@
 // utils/localTrackIndexer.ts
-import * as FileSystem from 'expo-file-system/next';
+import { file, directory } from 'expo-file-system/next';
 import * as Crypto from 'expo-crypto';
 import { addLocalTracks } from '@/db/localDatabase';
 import { extractMetadataFromFile } from './localMetadataExtractor';
@@ -23,24 +23,24 @@ export async function indexFolderTracks(
   onProgress?: (current: number, total: number, fileName: string) => void
 ): Promise<IndexedTrack[]> {
   const audioFiles: string[] = [];
+  const audioExtensions = new Set(['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus']);
   
   const collectAudioFiles = async (dirPath: string) => {
     try {
-      const items = await (await (new Directory(dirPath)).list()).map(item => item.name);
+      const dir = directory(dirPath);
+      const contents = await dir.list();
       
-      for (const item of items) {
-        const itemPath = `${dirPath}/${item}`;
-        const stat = await (await (new File(itemPath)).exists());
+      for (const entry of contents) {
+        const itemPath = `${dirPath}/${entry.name}`;
+        const itemFile = file(itemPath);
+        const stat = await itemFile.stat();
         
-        if (stat.exists) {
-          if (stat.isDirectory) {
-            await collectAudioFiles(itemPath);
-          } else {
-            const extension = item.split('.').pop()?.toLowerCase();
-            const audioExtensions = ['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus'];
-            if (audioExtensions.includes(extension || '')) {
-              audioFiles.push(itemPath);
-            }
+        if (stat.type === 'directory') {
+          await collectAudioFiles(itemPath);
+        } else {
+          const extension = entry.name.split('.').pop()?.toLowerCase();
+          if (extension && audioExtensions.has(extension)) {
+            audioFiles.push(itemPath);
           }
         }
       }

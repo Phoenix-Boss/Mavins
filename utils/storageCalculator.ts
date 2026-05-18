@@ -1,33 +1,17 @@
 // utils/storageCalculator.ts
-import * as FileSystem from 'expo-file-system/legacy';
+import { file, directory } from 'expo-file-system/next';
+import { getCacheStats } from './artworkCache';
 
 export async function calculateArtworkCacheSize(): Promise<number> {
-  const cacheDir = `${FileSystem.cacheDirectory}local_artwork/`;
-  try {
-    const dirInfo = await (await (new File(cacheDir)).exists());
-    if (!dirInfo.exists) return 0;
-    
-    const files = await (await (new Directory(cacheDir)).list()).map(item => item.name);
-    let totalSize = 0;
-    
-    for (const file of files) {
-      const filePath = `${cacheDir}${file}`;
-      const fileInfo = await (await (new File(filePath)).exists());
-      if (fileInfo.exists && fileInfo.size) {
-        totalSize += fileInfo.size;
-      }
-    }
-    
-    return totalSize;
-  } catch (error) {
-    console.error('[StorageCalculator] Failed to calculate cache size:', error);
-    return 0;
-  }
+  const stats = await getCacheStats();
+  return stats.totalSizeMB * 1024 * 1024;
 }
 
 export async function getFreeStorageMB(): Promise<number> {
   try {
-    const freeSpace = await FileSystem.getFreeDiskStorageAsync();
+    // Get free disk space - need to use a known path
+    const testFile = file('/storage/emulated/0');
+    const freeSpace = await testFile.getFreeSpace();
     return freeSpace / (1024 * 1024);
   } catch (error) {
     console.error('[StorageCalculator] Failed to get free storage:', error);
@@ -37,7 +21,8 @@ export async function getFreeStorageMB(): Promise<number> {
 
 export async function getTotalStorageMB(): Promise<number> {
   try {
-    const totalSpace = await FileSystem.getTotalDiskCapacityAsync();
+    const testFile = file('/storage/emulated/0');
+    const totalSpace = await testFile.getTotalSpace();
     return totalSpace / (1024 * 1024);
   } catch (error) {
     console.error('[StorageCalculator] Failed to get total storage:', error);

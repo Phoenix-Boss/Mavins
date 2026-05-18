@@ -8,18 +8,21 @@
 // The player instance is created once and stored in a ref that survives
 // all React remounts, Fast Refresh, and navigation changes.
 //
-// FIXES INCLUDED:
-// - Android-only playback flow
-// - Removed all iOS conditionals and iOS-specific replace logic
-// - Fixed unsafe .catch on player.replace()
-// - Proper content:// caching for Android MediaStore
-// - Local file:// normalization
-// - Local metadata enrichment
-// - Reliable restore state handling
-// - Queue, repeat, shuffle, skipToIndex support
-// - SystemMediaControlsBridge with explicit typed props
-// - No circular dependency with player setup hooks
-// - Player instance survives provider remounts via stable ref
+// RESTORE FIX: Restore is now a module-level IIFE. It runs once at import
+// time — before any component mounts — so provider unmounts/remounts during
+// navigation initialization cannot interrupt resolveTrack. The provider's
+// useEffect only syncs React state from the global result; it never calls
+// resolveTrack itself.
+//
+// FIX: Lock screen controls now receive video position, duration, and playing state.
+// FIX: App background/foreground handlers to preserve video tab state.
+// FIX: Bridge passes video-specific props to useSystemMediaControls.
+// FIX: Video seek handler exposed via global for lock screen integration.
+// FIX: Video playing state exposed for lock screen play/pause icon.
+// FIX: deactivateAudio() and activateAudio() for audio focus management on video tab switch.
+//
+// LOCAL FILES FIX: Simple & reliable approach using direct DB URI with normalizeLocalUri
+// and getTrackById for fresh track data on each playback.
 
 import React, {
   createContext,
@@ -32,7 +35,11 @@ import React, {
 } from 'react';
 import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import {
+  createAudioPlayer,
+  useAudioPlayerStatus,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { useNetInfo } from '@react-native-community/netinfo';
 import * as FileSystem from 'expo-file-system';
 
@@ -53,6 +60,9 @@ import {
 } from '@/hooks/useSystemMediaControls';
 
 import { useAlert } from '@/contexts/AlertContext';
+
+// LOCAL DB IMPORT
+import { getTrackById } from '@/db/localDatabase';
 
 export type { Song };
 
@@ -104,6 +114,34 @@ const STORAGE_KEYS = {
   LAST_PLAYING_POSITION: 'last_playing_position',
   REPEAT_MODE: 'repeat_mode',
   SHUFFLE_MODE: 'shuffle_mode',
+  LAST_ACTIVE_TAB: 'last_active_tab',
+  LAST_VIDEO_POSITION: 'last_video_position',
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIMPLE URI NORMALIZER
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeLocalUri(uri: string): string {
+  if (!uri) return '';
+  if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
+  if (uri.startsWith('/')) return `file://${uri}`;
+  return uri;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESTORE GLOBALS
+// Keys used to pass restore results from the module-level IIFE to the
+// provider's useEffect without touching React state at all.
+// ─────────────────────────────────────────────────────────────────────────────
+const RESTORE_GLOBALS = {
+  DONE_KEY: '__MavinRestoreDone__',
+  IN_PROGRESS_KEY: '__MavinRestoreInProgress__',
+  TRACK_KEY: '__MavinRestoredTrack__',
+  POSITION_KEY: '__MavinRestoredPosition__',
+  RESOLVED_URL_KEY: '__MavinRestoredResolvedUrl__',
+  PLAYER_READY_KEY: '__MavinRestoredPlayerReady__',
+  RESTORED_TAB_KEY: '__MavinRestoredTab__',
+  RESTORED_VIDEO_POSITION_KEY: '__MavinRestoredVideoPosition__',
 } as const;
 
 const delay = (ms: number): Promise<void> =>
@@ -816,6 +854,22 @@ async function saveLastPlayingState(track: Song | null, position?: number): Prom
   }
 }
 
+async function saveLastActiveTab(tab: 'song' | 'video'): Promise<void> {
+  try {
+    await AsyncStorage.setItem(STORAGE_KEYS.LAST_ACTIVE_TAB, tab);
+  } catch (error) {
+    console.warn('[MusicPlayer] Failed to save last active tab:', error);
+  }
+}
+
+async function saveLastVideoPosition(position: number): Promise<void> {
+  try {
+    await AsyncStorage.setItem(STORAGE_KEYS.LAST_VIDEO_POSITION, String(position));
+  } catch (error) {
+    console.warn('[MusicPlayer] Failed to save video position:', error);
+  }
+}
+
 async function restoreLastPlayingState(): Promise<{ track: Song | null; position: number }> {
   try {
     const trackJson = await AsyncStorage.getItem(STORAGE_KEYS.LAST_PLAYING_TRACK);
@@ -843,6 +897,25 @@ async function restoreLastPlayingState(): Promise<{ track: Song | null; position
   } catch (error) {
     console.warn('[MusicPlayer] Failed to restore state:', error);
     return { track: null, position: 0 };
+  }
+}
+
+async function restoreLastActiveTab(): Promise<'song' | 'video' | null> {
+  try {
+    const tab = await AsyncStorage.getItem(STORAGE_KEYS.LAST_ACTIVE_TAB);
+    if (tab === 'song' || tab === 'video') return tab;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function restoreLastVideoPosition(): Promise<number> {
+  try {
+    const pos = await AsyncStorage.getItem(STORAGE_KEYS.LAST_VIDEO_POSITION);
+    return pos ? parseFloat(pos) : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -933,6 +1006,17 @@ export interface MusicPlayerContextType {
   collapsePlayer: () => void;
   setPlayerOverlayRefs: (expand: () => void, collapse: () => void) => void;
   isLocalTrack: (track?: Song | null) => boolean;
+  isVideoActive: boolean;
+  videoPosition: number;
+  videoDuration: number;
+  videoIsPlaying: boolean;
+  setVideoActive: (active: boolean) => void;
+  updateVideoPosition: (position: number) => void;
+  updateVideoDuration: (duration: number) => void;
+  updateVideoIsPlaying: (isPlaying: boolean) => void;
+  // Audio focus management for video tab
+  deactivateAudio: () => Promise<void>;
+  activateAudio: () => Promise<void>;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -957,6 +1041,15 @@ interface BridgeProps {
   onSeek: (positionSec: number) => void;
   onSetRepeatMode: (mode: RepeatMode) => void;
   onExpandPlayer: () => void;
+  isVideoActive: boolean;
+  videoPosition: number;
+  videoDuration: number;
+  videoIsPlaying: boolean;
+  onVideoSeek: (positionSec: number) => void;
+  onVideoPlay: () => void;
+  onVideoPause: () => void;
+  onAppBackground: () => void;
+  onAppForeground: () => void;
 }
 
 function SystemMediaControlsBridge({
@@ -973,6 +1066,15 @@ function SystemMediaControlsBridge({
   onSeek,
   onSetRepeatMode,
   onExpandPlayer,
+  isVideoActive,
+  videoPosition,
+  videoDuration,
+  videoIsPlaying,
+  onVideoSeek,
+  onVideoPlay,
+  onVideoPause,
+  onAppBackground,
+  onAppForeground,
 }: BridgeProps) {
   useSystemMediaControls({
     track: currentTrack
@@ -984,18 +1086,27 @@ function SystemMediaControlsBridge({
           duration: duration || undefined,
         }
       : undefined,
-    isPlaying,
+    isPlaying: isVideoActive ? videoIsPlaying : isPlaying,
     isBuffering,
-    position,
-    duration,
+    position: isVideoActive ? videoPosition : position,
+    duration: isVideoActive ? videoDuration : duration,
     repeatMode,
-    onPlay,
-    onPause,
+    onPlay: isVideoActive ? onVideoPlay : onPlay,
+    onPause: isVideoActive ? onVideoPause : onPause,
     onSkipNext,
     onSkipPrevious,
-    onSeek,
+    onSeek: isVideoActive ? onVideoSeek : onSeek,
     onSetRepeatMode,
     onExpandPlayer,
+    isVideoActive,
+    videoPosition,
+    videoDuration,
+    videoIsPlaying,
+    onVideoPlay,
+    onVideoPause,
+    onVideoSeek,
+    onAppBackground,
+    onAppForeground,
   } satisfies SystemMediaControlsProps);
 
   return null;
@@ -1006,26 +1117,119 @@ export interface MusicPlayerProviderProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL PLAYER INSTANCE (ISSUE 1 FIX)
-// ─────────────────────────────────────────────────────────────────────────────
-// This ref lives outside React. It persists across Fast Refresh, provider
-// remounts, and navigation changes. The hook only runs once because this
-// module is only evaluated once per app session.
+// MODULE-LEVEL AUDIO SESSION SETUP
 // ─────────────────────────────────────────────────────────────────────────────
 
-const playerInstanceRef: { current: ReturnType<typeof useAudioPlayer> | null } = { current: null };
+const PLAYER_GLOBAL_KEY = '__MavinAudioPlayer__';
+const AUDIO_MODE_INIT_KEY = '__MavinAudioModeInit__';
+
+if (!(global as any)[AUDIO_MODE_INIT_KEY]) {
+  (global as any)[AUDIO_MODE_INIT_KEY] = true;
+  setAudioModeAsync({
+    playsInSilentMode: true,
+    shouldPlayInBackground: true,
+    interruptionMode: 'doNotMix',
+  }).catch(e => console.warn('[MusicPlayer] setAudioModeAsync failed:', e));
+}
+
+if (!(global as any)[PLAYER_GLOBAL_KEY]) {
+  (global as any)[PLAYER_GLOBAL_KEY] = createAudioPlayer(null);
+  console.log('[MusicPlayerProvider] Created persistent audio player instance');
+}
+
+const player: ReturnType<typeof createAudioPlayer> = (global as any)[PLAYER_GLOBAL_KEY];
+
+const expandPlayerRef: { current: (() => void) | null } = { current: null };
+const collapsePlayerRef: { current: (() => void) | null } = { current: null };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL RESTORE IIFE
+// ─────────────────────────────────────────────────────────────────────────────
+
+(async () => {
+  const g = global as any;
+
+  if (g[RESTORE_GLOBALS.DONE_KEY]) return;
+
+  if (g[RESTORE_GLOBALS.IN_PROGRESS_KEY]) {
+    console.log('[MusicPlayer] Clearing stale restore lock from previous evaluation');
+    g[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
+  }
+
+  g[RESTORE_GLOBALS.IN_PROGRESS_KEY] = true;
+
+  try {
+    const { track, position: savedPos } = await restoreLastPlayingState();
+    const savedTab = await restoreLastActiveTab();
+    const savedVideoPos = await restoreLastVideoPosition();
+
+    if (!track?.url) {
+      console.log('[MusicPlayer] Module-level restore: no saved track');
+      return;
+    }
+
+    console.log('[MusicPlayer] Module-level restore starting:', track.title);
+
+    g[RESTORE_GLOBALS.TRACK_KEY] = track;
+    g[RESTORE_GLOBALS.POSITION_KEY] = savedPos;
+    g[RESTORE_GLOBALS.PLAYER_READY_KEY] = false;
+    
+    if (savedTab) {
+      g[RESTORE_GLOBALS.RESTORED_TAB_KEY] = savedTab;
+      g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY] = savedVideoPos;
+    }
+
+    const resolved = await resolveTrack(track);
+    if (!resolved?.url) {
+      console.warn('[MusicPlayer] Module-level restore: could not resolve stream URL');
+      return;
+    }
+
+    g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = resolved.url;
+
+    try {
+      await player.replace({ uri: resolved.url });
+
+      const POLL_INTERVAL_MS = 200;
+      const POLL_TIMEOUT_MS = 12000;
+      const pollStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if ((player as any).isLoaded === true) {
+            resolve();
+            return;
+          }
+          if (Date.now() - pollStart >= POLL_TIMEOUT_MS) {
+            console.warn('[MusicPlayer] Module-level restore: isLoaded poll timed out');
+            resolve();
+            return;
+          }
+          setTimeout(poll, POLL_INTERVAL_MS);
+        };
+        poll();
+      });
+
+      if (savedPos > 5 && savedPos < (resolved.duration ?? Infinity)) {
+        try { await player.seekTo(savedPos); } catch {}
+      }
+
+      try { await player.pause(); } catch {}
+      g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
+
+      console.log('[MusicPlayer] Module-level restore complete:', track.title);
+    } catch (playerErr) {
+      console.warn('[MusicPlayer] Module-level restore: player load failed:', playerErr);
+      g[RESTORE_GLOBALS.PLAYER_READY_KEY] = false;
+    }
+  } catch (err) {
+    console.warn('[MusicPlayer] Module-level restore failed:', err);
+  } finally {
+    (global as any)[RESTORE_GLOBALS.DONE_KEY] = true;
+    (global as any)[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
+  }
+})();
 
 export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ children }) => {
-  // Create player instance once and store in module-level ref.
-  // On Fast Refresh or remount, this returns the same instance.
-  const [player] = useState(() => {
-    if (!playerInstanceRef.current) {
-      playerInstanceRef.current = useAudioPlayer(null);
-      console.log('[MusicPlayerProvider] Created persistent audio player instance');
-    }
-    return playerInstanceRef.current;
-  });
-
   const status = useAudioPlayerStatus(player);
   const netInfo = useNetInfo();
   const { showAlert } = useAlert();
@@ -1037,15 +1241,16 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
   const [currentTrack, setCurrentTrack] = useState<Song | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [optimisticPlaying, setOptimisticPlaying] = useState<boolean | null>(null);
-  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  
+  const [isVideoActive, setIsVideoActive] = useState(false);
+  const [videoPosition, setVideoPosition] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoIsPlaying, setVideoIsPlaying] = useState(false);
 
   const originalQueueRef = useRef<Song[]>([]);
   const originalIndexRef = useRef<number>(-1);
   const currentSongIdRef = useRef<string | null>(null);
   const bgAbortControllerRef = useRef<AbortController | null>(null);
-  const expandPlayerRef = useRef<(() => void) | null>(null);
-  const collapsePlayerRef = useRef<(() => void) | null>(null);
-  const isInitializedRef = useRef(false);
   const playGenerationRef = useRef(0);
   const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -1084,6 +1289,15 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
   }, [currentTrack, position]);
 
   useEffect(() => {
+    if (isVideoActive) {
+      saveLastActiveTab('video');
+      saveLastVideoPosition(videoPosition);
+    } else {
+      saveLastActiveTab('song');
+    }
+  }, [isVideoActive, videoPosition]);
+
+  useEffect(() => {
     const loadModes = async () => {
       try {
         const savedRepeat = await AsyncStorage.getItem(STORAGE_KEYS.REPEAT_MODE);
@@ -1100,22 +1314,69 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
   }, []);
 
   useEffect(() => {
-    if (status && !isPlayerReady) {
-      setIsPlayerReady(true);
-      log('Audio player ready');
-    }
-  }, [status, isPlayerReady, log]);
+    const g = global as any;
+    const restoredTrack: Song | null = g[RESTORE_GLOBALS.TRACK_KEY] ?? null;
+    const restoredTab: 'song' | 'video' | null = g[RESTORE_GLOBALS.RESTORED_TAB_KEY] ?? null;
+    const restoredVideoPos: number = g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY] ?? 0;
 
+    if (!restoredTrack) return;
+
+    log(`Syncing React state from module-level restore: "${restoredTrack.title}"`);
+
+    setCurrentTrack(restoredTrack);
+    currentSongIdRef.current = restoredTrack.id;
+    setQueue([restoredTrack]);
+    setQueueIndex(0);
+
+    if (restoredTab === 'video') {
+      setIsVideoActive(true);
+      setVideoPosition(restoredVideoPos);
+    }
+
+    delete g[RESTORE_GLOBALS.TRACK_KEY];
+    delete g[RESTORE_GLOBALS.POSITION_KEY];
+    delete g[RESTORE_GLOBALS.RESTORED_TAB_KEY];
+    delete g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY];
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AUDIO FOCUS MANAGEMENT FOR VIDEO TAB
+  // ─────────────────────────────────────────────────────────────────────────────
+  const deactivateAudio = useCallback(async () => {
+    try {
+      // Pause and deactivate audio focus so video can take over
+      if (isPlaying) {
+        await player.pause();
+      }
+      // Release audio focus completely
+      if (typeof (player as any).setActiveAsync === 'function') {
+        await (player as any).setActiveAsync(false);
+        console.log('[MusicPlayer] Audio focus deactivated for video playback');
+      }
+    } catch (error) {
+      console.warn('[MusicPlayer] Failed to deactivate audio:', error);
+    }
+  }, [player, isPlaying]);
+
+  const activateAudio = useCallback(async () => {
+    try {
+      // Reactivate audio focus
+      if (typeof (player as any).setActiveAsync === 'function') {
+        await (player as any).setActiveAsync(true);
+        console.log('[MusicPlayer] Audio focus reactivated');
+      }
+    } catch (error) {
+      console.warn('[MusicPlayer] Failed to activate audio:', error);
+    }
+  }, [player]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // LOAD & PLAY TRACK (SIMPLIFIED LOCAL HANDLING)
+  // ─────────────────────────────────────────────────────────────────────────────
   const loadAndPlayTrack = useCallback(
     async (song: Song, generation?: number) => {
       if (generation !== undefined && generation !== playGenerationRef.current) {
         log('loadAndPlayTrack skipped (stale generation)');
-        return;
-      }
-
-      if (!isPlayerReady) {
-        log('Player not ready yet, queueing track', 'warn');
-        setTimeout(() => loadAndPlayTrack(song, generation), 100);
         return;
       }
 
@@ -1137,39 +1398,37 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       saveLastPlayingState(song, 0);
 
       try {
-        const resolved = await resolveTrack(song);
-        if (!resolved || !resolved.url) {
-          log(`Failed to resolve track: "${song.title}"`, 'error');
-          if (!checkIsLocalTrack(song)) {
-            showAlert('Playback Error', `Could not load "${song.title}". Please check your connection.`);
-          } else {
-            showAlert('Playback Error', `Could not play "${song.title}". The file may be corrupted or missing.`);
-          }
+        let finalUrl = song.url;
+
+        if (checkIsLocalTrack(song)) {
+          finalUrl = normalizeLocalUri(finalUrl);
+          log(`[Local] Direct playback: ${finalUrl.substring(0, 100)}...`);
+          
+          await player.replace({ uri: finalUrl });
+          await player.play();
+          setOptimisticPlaying(true);
           return;
         }
 
-        let finalUrl = resolved.url;
-
-        if (checkIsLocalTrack(song)) {
-          if (finalUrl.startsWith('content://')) {
-            const cachedPath = await cacheLocalFileForPlayback(finalUrl, song.id);
-            if (cachedPath) finalUrl = cachedPath;
-          } else if (finalUrl.startsWith('/')) {
-            finalUrl = `file://${finalUrl}`;
-          }
-          log(`Local file URI prepared: ${finalUrl.substring(0, 100)}...`);
+        // Streamed track
+        const resolved = await resolveTrack(song);
+        if (!resolved || !resolved.url) {
+          log(`Failed to resolve track: "${song.title}"`, 'error');
+          showAlert('Playback Error', `Could not load "${song.title}". Please check your connection.`);
+          return;
         }
 
+        finalUrl = resolved.url;
         await player.replace({ uri: finalUrl });
         await player.play();
         setOptimisticPlaying(true);
-        log(`Now playing: "${resolved.title}" by ${resolved.artist || 'Unknown Artist'}`);
+
       } catch (error: any) {
         log(`Error loading track: ${error?.message || error}`, 'error');
         showAlert('Playback Error', `Failed to play "${song.title}". The file may be corrupted or inaccessible.`);
       }
     },
-    [player, log, isPlayerReady, checkIsLocalTrack, showAlert],
+    [player, checkIsLocalTrack, showAlert, log],
   );
 
   useEffect(() => {
@@ -1335,6 +1594,36 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
   const expandPlayer = useCallback(() => expandPlayerRef.current?.(), []);
   const collapsePlayer = useCallback(() => collapsePlayerRef.current?.(), []);
 
+  const setVideoActive = useCallback((active: boolean) => {
+    setIsVideoActive(active);
+  }, []);
+
+  const updateVideoPosition = useCallback((position: number) => {
+    setVideoPosition(position);
+  }, []);
+
+  const updateVideoDuration = useCallback((duration: number) => {
+    setVideoDuration(duration);
+  }, []);
+
+  const updateVideoIsPlaying = useCallback((isPlaying: boolean) => {
+    setVideoIsPlaying(isPlaying);
+  }, []);
+
+  const onVideoPlay = useCallback(() => {
+    const videoPlayFn = (global as any).__mavinVideoPlay;
+    if (videoPlayFn && typeof videoPlayFn === 'function') {
+      videoPlayFn();
+    }
+  }, []);
+
+  const onVideoPause = useCallback(() => {
+    const videoPauseFn = (global as any).__mavinVideoPause;
+    if (videoPauseFn && typeof videoPauseFn === 'function') {
+      videoPauseFn();
+    }
+  }, []);
+
   const playAudio = useCallback(
     async (songToPlay: Song, playlist?: Song[], expandPlayerFn?: () => void) => {
       if (!songToPlay.url) {
@@ -1346,8 +1635,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       if (goToPlayer) {
         goToPlayer();
       } else {
-        log('ERROR: expandPlayer not registered', 'error');
-        return;
+        log('expandPlayer not registered yet — playing without expanding', 'warn');
       }
 
       setIsLoading(true);
@@ -1442,109 +1730,90 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     [queueIndex, log],
   );
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PLAY DOWNLOADED SONG — SIMPLE & RELIABLE
+  // ─────────────────────────────────────────────────────────────────────────────
   const playDownloadedSong = useCallback(
     async (
       songToPlay: DownloadedSongMetadata,
       playlist?: DownloadedSongMetadata[],
       expandPlayerFn?: () => void,
     ) => {
-      if (!songToPlay.localTrackUri) {
-        showAlert('Cannot Play', `"${songToPlay.title}" file cannot be found on your device.`);
+      if (!songToPlay.id) {
+        showAlert('Error', 'Invalid track');
         return;
       }
 
       const goToPlayer = expandPlayerFn ?? expandPlayerRef.current;
-      if (goToPlayer) {
-        goToPlayer();
-      } else {
-        log('ERROR: expandPlayer not registered for downloaded song', 'error');
-        return;
-      }
+      if (goToPlayer) goToPlayer();
 
       setIsLoading(true);
 
-      let localUri = songToPlay.localTrackUri;
-      if (localUri && Platform.OS === 'android') {
-        if (localUri.startsWith('content://')) {
-          log(`Content URI detected: ${localUri.substring(0, 100)}...`);
-        } else if (!localUri.startsWith('file://') && !localUri.startsWith('content://')) {
-          localUri = localUri.startsWith('/') ? `file://${localUri}` : localUri;
-          log(`Normalized local URI: ${localUri.substring(0, 100)}...`);
+      try {
+        // Fetch fresh track from database
+        const dbTrack = await getTrackById(songToPlay.id);
+
+        if (!dbTrack?.file_uri) {
+          showAlert('File Not Found', `"${songToPlay.title}" path is missing from database.`);
+          return;
         }
-      }
 
-      const enrichedSong = enrichLocalTrackMetadata(
-        {
-          id: songToPlay.id,
-          title: songToPlay.title,
-          artist: songToPlay.artist,
-          thumbnail: songToPlay.localArtworkUri ?? songToPlay.thumbnail ?? '',
-          url: localUri,
-          duration: songToPlay.duration,
-          videoId: undefined,
-        } as Song,
-        localUri,
-        undefined,
-      );
+        const playUri = normalizeLocalUri(dbTrack.file_uri);
 
-      (enrichedSong as any).isLocal = true;
-      (enrichedSong as any).isDownloaded = true;
+        console.log(`[Local Play] Using DB URI: ${playUri.substring(0, 100)}...`);
 
-      const newQueue: Song[] = [enrichedSong];
-      if (playlist?.length) {
-        for (let i = 1; i < playlist.length; i++) {
-          const ds = playlist[i];
-          if (!ds.localTrackUri) {
-            log(`Skipping "${ds.title}" - no local file URI`, 'warn');
-            continue;
-          }
+        const enrichedSong: Song = {
+          id: dbTrack.track_id,
+          title: dbTrack.title,
+          artist: dbTrack.artist,
+          thumbnail: dbTrack.artwork_uri || songToPlay.localArtworkUri,
+          url: playUri,
+          duration: dbTrack.duration,
+        };
 
-          let dsUri = ds.localTrackUri;
-          if (dsUri && Platform.OS === 'android') {
-            if (dsUri.startsWith('content://')) {
-              // keep as-is
-            } else if (!dsUri.startsWith('file://') && !dsUri.startsWith('content://')) {
-              dsUri = dsUri.startsWith('/') ? `file://${dsUri}` : dsUri;
+        (enrichedSong as any).isLocal = true;
+        (enrichedSong as any).isDownloaded = true;
+
+        // Build queue
+        const newQueue: Song[] = [enrichedSong];
+        if (playlist?.length) {
+          for (let i = 1; i < playlist.length; i++) {
+            const pTrack = await getTrackById(playlist[i].id);
+            if (pTrack?.file_uri) {
+              newQueue.push({
+                id: pTrack.track_id,
+                title: pTrack.title,
+                artist: pTrack.artist,
+                thumbnail: pTrack.artwork_uri,
+                url: normalizeLocalUri(pTrack.file_uri),
+                duration: pTrack.duration,
+              } as Song);
             }
           }
-
-          const enrichedDs = enrichLocalTrackMetadata(
-            {
-              id: ds.id,
-              title: ds.title,
-              artist: ds.artist,
-              thumbnail: ds.localArtworkUri ?? ds.thumbnail ?? '',
-              url: dsUri,
-              duration: ds.duration,
-              videoId: undefined,
-            } as Song,
-            dsUri,
-            undefined,
-          );
-
-          (enrichedDs as any).isLocal = true;
-          (enrichedDs as any).isDownloaded = true;
-          newQueue.push(enrichedDs);
         }
+
+        setQueue(newQueue);
+        setQueueIndex(0);
+
+        storeTrackExtras(enrichedSong.id, {
+          isLocal: true,
+          likeCount: -1,
+          dislikeCount: -1,
+          viewCount: -1,
+          commentsCount: -1,
+        });
+
+        // Play directly
+        await loadAndPlayTrack(enrichedSong);
+
+      } catch (error: any) {
+        console.error('[playDownloadedSong] Error:', error);
+        showAlert('Playback Error', `Failed to play "${songToPlay.title}"`);
+      } finally {
+        setIsLoading(false);
       }
-
-      setQueue(newQueue);
-      setQueueIndex(0);
-
-      storeTrackExtras(enrichedSong.id, {
-        isLocal: true,
-        likeCount: -1,
-        dislikeCount: -1,
-        viewCount: -1,
-        commentsCount: -1,
-      });
-
-      const generation = ++playGenerationRef.current;
-      await loadAndPlayTrack(enrichedSong, generation);
-
-      setIsLoading(false);
     },
-    [loadAndPlayTrack, log, showAlert],
+    [showAlert, loadAndPlayTrack],
   );
 
   const playAllDownloadedSongs = useCallback(
@@ -1575,25 +1844,42 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
       }
       log('Paused');
     } else {
-      try {
-        player.play();
-      } catch (e) {
-        log(`Play error: ${e}`, 'warn');
-      }
-      log('Playing');
-    }
-  }, [isPlaying, currentTrack, player, log, showAlert]);
+      const g = global as any;
+      const playerReady = g[RESTORE_GLOBALS.PLAYER_READY_KEY] === true;
+      const resolvedUrl: string | undefined = g[RESTORE_GLOBALS.RESOLVED_URL_KEY];
 
+      if (playerReady) {
+        g[RESTORE_GLOBALS.PLAYER_READY_KEY] = false;
+        g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = undefined;
+        try {
+          player.play();
+        } catch (e) {
+          log(`Play error (restored player): ${e}`, 'warn');
+        }
+        log('Playing (restored player)');
+      } else if (resolvedUrl) {
+        g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = undefined;
+        log('Re-loading from previously resolved restore URL');
+        loadAndPlayTrack(currentTrack);
+      } else {
+        try {
+          player.play();
+        } catch (e) {
+          log(`Play error: ${e}`, 'warn');
+        }
+        log('Playing');
+      }
+    }
+  }, [isPlaying, currentTrack, player, log, showAlert, loadAndPlayTrack]);
+
+  // ── BUG FIX 9: Immediate seek for Song tab, no debounce ──────────────────
   const seekTo = useCallback(
     (positionSec: number) => {
-      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
-      seekTimeoutRef.current = setTimeout(() => {
-        try {
-          player.seekTo(positionSec);
-        } catch (e: any) {
-          log(`seekTo error: ${e?.message || e}`, 'warn');
-        }
-      }, CONFIG.SEEK_DEBOUNCE_MS);
+      try {
+        player.seekTo(positionSec);
+      } catch (e: any) {
+        log(`seekTo error: ${e?.message || e}`, 'warn');
+      }
     },
     [player, log],
   );
@@ -1633,64 +1919,34 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     }
   }, [player, position, queue, queueIndex, loadAndPlayTrack]);
 
-  useEffect(() => {
-    const initializeAndRestore = async () => {
-      if (isInitializedRef.current) return;
-      if (!isPlayerReady) {
-        setTimeout(initializeAndRestore, 200);
-        return;
-      }
-
-      const { track, position: savedPos } = await restoreLastPlayingState();
-      if (!track || !track.url) {
-        isInitializedRef.current = true;
-        return;
-      }
-
-      log(`Restoring last playing track: ${track.title}`);
-      setCurrentTrack(track);
-      currentSongIdRef.current = track.id;
-      setQueue([track]);
-      setQueueIndex(0);
-
-      try {
-        const resolved = await resolveTrack(track);
-        if (resolved && resolved.url) {
-          await player.replace({ uri: resolved.url });
-          if (savedPos > 5 && savedPos < (resolved.duration || Infinity)) {
-            await player.seekTo(savedPos);
-          }
-          await player.pause();
-        }
-      } catch (error) {
-        log(`Failed to restore track: ${error}`, 'warn');
-      }
-
-      isInitializedRef.current = true;
-    };
-
-    if (isPlayerReady) {
-      initializeAndRestore();
+  const handleAppBackground = useCallback(() => {
+    log('App backgrounding - saving state');
+    saveLastPlayingState(currentTrack, position);
+    saveLastActiveTab(isVideoActive ? 'video' : 'song');
+    if (isVideoActive) {
+      saveLastVideoPosition(videoPosition);
     }
-  }, [player, log, isPlayerReady]);
+  }, [currentTrack, position, isVideoActive, videoPosition, log]);
+
+  // ── BUG FIX 6: Removed expandPlayer from foreground handler ──────────────
+  // Prevents double-expand when app returns to foreground.
+  const handleAppForeground = useCallback(() => {
+    log('App foregrounding');
+    // State restoration is handled by the restore IIFE and useEffect sync.
+    // We do NOT auto-expand here — let the user or calling code decide.
+  }, [log]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState === 'active' && isInitializedRef.current) {
-        if (nativeIsPlaying && currentTrack && expandPlayerRef.current) {
-          log('App resumed with active track — auto-expanding player');
-          setTimeout(() => expandPlayer(), CONFIG.AUTO_EXPAND_DELAY_MS);
-        }
+      if (nextAppState === 'background') {
+        handleAppBackground();
+      } else if (nextAppState === 'active') {
+        handleAppForeground();
       }
     });
 
     return () => sub.remove();
-  }, [nativeIsPlaying, currentTrack, expandPlayer, log]);
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // CLEANUP: Only save state, NEVER destroy the player instance.
-  // The player lives for the entire app lifetime.
-  // ─────────────────────────────────────────────────────────────────────────────
+  }, [handleAppBackground, handleAppForeground]);
 
   useEffect(() => {
     return () => {
@@ -1711,6 +1967,7 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     queueIndex,
     repeatMode,
     shuffleMode,
+    
     play: () => {
       setOptimisticPlaying(true);
       try {
@@ -1769,7 +2026,24 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
     collapsePlayer,
     setPlayerOverlayRefs,
     isLocalTrack: checkIsLocalTrack,
+    isVideoActive,
+    videoPosition,
+    videoDuration,
+    videoIsPlaying,
+    setVideoActive,
+    updateVideoPosition,
+    updateVideoDuration,
+    updateVideoIsPlaying,
+    deactivateAudio,
+    activateAudio,
   };
+
+  const onVideoSeek = useCallback((pos: number) => {
+    const videoSeekFn = (global as any).__mavinVideoSeek;
+    if (videoSeekFn && typeof videoSeekFn === 'function') {
+      videoSeekFn(pos);
+    }
+  }, []);
 
   return (
     <PlayerEngineContext.Provider value={engineValue}>
@@ -1798,6 +2072,15 @@ export const MusicPlayerProvider: React.FC<MusicPlayerProviderProps> = ({ childr
           onSeek={seekTo}
           onSetRepeatMode={setRepeatMode}
           onExpandPlayer={expandPlayer}
+          isVideoActive={isVideoActive}
+          videoPosition={videoPosition}
+          videoDuration={videoDuration}
+          videoIsPlaying={videoIsPlaying}
+          onVideoSeek={onVideoSeek}
+          onVideoPlay={onVideoPlay}
+          onVideoPause={onVideoPause}
+          onAppBackground={handleAppBackground}
+          onAppForeground={handleAppForeground}
         />
         {children}
       </MusicPlayerContext.Provider>

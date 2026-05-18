@@ -18,6 +18,41 @@
 // ISSUE 7 FIX: Lazy video player init — only created when user taps Video tab
 // ISSUE 7 FIX: Sync interval keeps video player aligned with audio
 // ISSUE 8 FIX: Artist tap on local track navigates to folder (onNavigateToLocalFolder prop)
+// BUG FIX 1: Back-to-song double-seek removed — single seekTo, no buffering blip
+// BUG FIX 2: Play icon source-of-truth fixed — always routes through togglePlayPause
+// BUG FIX 3: Slider optimistic update — thumb no longer snaps back on drag
+// BUG FIX 4: Comment count live-read fallback — never misses a version bump
+// BUG FIX 5: Video→Song toggle resumes audio correctly.
+//   Root cause: vp.muted=true alone does NOT release Android audio focus —
+//   expo-video holds focus even muted, ducking/pausing the expo-audio player.
+//   Fix: vp.pause() to release audio focus, then engine.play() to reclaim it.
+//   isPlayingRef (stale-closure-free) guards engine.play() so paused state is respected.
+// BUG FIX 6: Slider seek lock extended 200ms→1500ms — covers Android native rebuffer
+//   window so positionSec ticking during rebuffer cannot overwrite optimistic thumb.
+// BUG FIX 7: Progress bar source-of-truth — same pattern as visualIsPlaying.
+//   visualPositionSec: on Song tab mirrors engine.position; on Video tab polls
+//   videoPlayer.currentTime at 250 ms intervals so the thumb tracks video playback.
+//   visualDurationSec: same split — engine.duration on Song, videoPlayer.duration
+//   on Video (falls back to engine.duration when video duration is 0).
+//   Tab switches immediately snap visualPosition to the incoming player's current
+//   time so there is no jump on the progress bar when toggling.
+//   Seek on Video tab dispatches ONLY to the video player (not engine) so expo-audio
+//   focus is never disturbed during video playback.
+// BUG FIX 8: Comment icon hidden entirely when commentsCount <= 0 (no track or
+//   track has no comment data yet). Shown only when commentsCount > 0.
+// BUG FIX 9: Audio duration display fixed — visualDurationSec now syncs correctly
+//   when durationSec becomes > 0 after mount.
+// BUG FIX 10: Tap-to-seek fixed — removed isSliding guard so taps work.
+// BUG FIX 11: Lock screen media controls now sync with video tab position.
+//
+// SURGICAL FIXES 2026-05-18:
+// FIX 1: deactivateAudio()/activateAudio() called on tab switches (audio focus mgmt)
+// FIX 2: vp.pause() called before vp.muted=true on song-tab return (releases focus)
+// FIX 3: VIDEO_SYNC_INTERVAL_MS = 100 (was 500)
+// FIX 4: Status listener attached immediately in loadVideoSource, not gated on state
+// FIX 5: handlePlaylist/handleSleepTimer call onMinimize() first (mini-player visible)
+// FIX 6: Video seek does pause→seek→play for reliable Android seeking
+// FIX 7: Context video state (setVideoActive, updateVideoPosition, etc.) wired
 
 import React, {
   useMemo,
@@ -36,7 +71,7 @@ import {
   Modal as RNModal,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { createVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -82,9 +117,30 @@ import { useGestureContext } from '@/libs/playerSetup';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL VIDEO PLAYER SINGLETON
+// ─────────────────────────────────────────────────────────────────────────────
+const VIDEO_PLAYER_GLOBAL_KEY = '__MavinVideoPlayer__';
+
+if (!(global as any)[VIDEO_PLAYER_GLOBAL_KEY]) {
+  (global as any)[VIDEO_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
+  console.log('[PlayerContent] Created persistent video player singleton');
+}
+
+const videoPlayerSingleton: ReturnType<typeof createVideoPlayer> =
+  (global as any)[VIDEO_PLAYER_GLOBAL_KEY];
+
+try {
+  videoPlayerSingleton.muted = true;
+  videoPlayerSingleton.loop  = false;
+} catch {}
+
 const LYRICS_LEAD_IN_S = 0.25;
 const SK = { base: '#1A1A1A', highlight: '#2A2A2A' };
-const VIDEO_SYNC_INTERVAL_MS = 500;
+// FIX 3: Sync interval now 100ms as per spec (was 500)
+const VIDEO_SYNC_INTERVAL_MS = 100;
+// How often (ms) we poll video player's currentTime to drive the visual progress bar
+const VIDEO_POSITION_POLL_MS = 250;
 const BACKWARD_SEEK_OFFSET = 0.2;
 
 const DUMMY_TRACK = {
@@ -282,7 +338,18 @@ function PlayerContentInner({
   const { setSliderActive, setButtonActive } = useGestureContext();
 
   const engine = usePlayerEngine();
-  const { isLoading: musicPlayerLoading, togglePlayPause, isLocalTrack } = useMusicPlayer();
+  // FIX 7: Destructure video state functions from context
+  const {
+    isLoading: musicPlayerLoading,
+    togglePlayPause,
+    isLocalTrack,
+    deactivateAudio,
+    activateAudio,
+    setVideoActive,
+    updateVideoPosition,
+    updateVideoDuration,
+    updateVideoIsPlaying,
+  } = useMusicPlayer();
 
   const isPlaying = engine.isPlaying;
   const positionSec = engine.position;
@@ -312,6 +379,7 @@ function PlayerContentInner({
 
   const isLocal = useMemo(() => isLocalTrack(engine.currentTrack), [engine.currentTrack, isLocalTrack]);
 
+  // ─── FIX 4: extras with live-read fallback ───────────────────────────────
   const [extras, setExtras] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -323,14 +391,20 @@ function PlayerContentInner({
     setExtras(getTrackExtras(id) ?? {});
   }, [displayTrack?.id, trackExtrasVersion]);
 
-  const likeCount = extras?.likeCount ?? -1;
-  const dislikeCount = extras?.dislikeCount ?? -1;
-  const commentsCount = extras?.commentsCount ?? -1;
-  const viewCount = extras?.viewCount ?? -1;
-  const uploaderUrl: string | undefined = extras?.uploaderUrl;
-  const videoId: string | undefined = extras?.videoId;
-  const muxedVideoUrl: string | undefined = extras?.muxedVideoUrl;
-  const videoUrl: string | undefined = extras?.videoUrl;
+  // Fallback: always read live from store in case effect missed a version bump
+  const liveExtras = (displayTrack?.id && displayTrack.id !== DUMMY_TRACK.id)
+    ? (getTrackExtras(displayTrack.id) ?? extras)
+    : extras;
+
+  const likeCount = liveExtras?.likeCount ?? -1;
+  const dislikeCount = liveExtras?.dislikeCount ?? -1;
+  const commentsCount = liveExtras?.commentsCount ?? -1;
+  const viewCount = liveExtras?.viewCount ?? -1;
+  const uploaderUrl: string | undefined = liveExtras?.uploaderUrl;
+  const videoId: string | undefined = liveExtras?.videoId ?? displayTrack?.videoId;
+  const muxedVideoUrl: string | undefined = liveExtras?.muxedVideoUrl;
+  const videoUrl: string | undefined = liveExtras?.videoUrl;
+  // ─────────────────────────────────────────────────────────────────────────
 
   const activeVideoUrl = useMemo(() => {
     const url = muxedVideoUrl ?? videoUrl ?? undefined;
@@ -368,136 +442,100 @@ function PlayerContentInner({
   const pendingSeek = useRef<number | null>(null);
   const videoOwnsAudio = useRef(false);
   const isTransitioning = useRef(false);
+
+  // ─── Refs for stale-closure-free segment + video play state ──────────────
+  const activeSegmentRef = useRef<'song' | 'video'>('song');
+  const videoPlayingRef = useRef(false);
+  const isPlayingRef = useRef(isPlaying);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const statusListenerRef = useRef<any>(null);
   const errorCountRef = useRef(0);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ISSUE 7 FIX: Lazy video player initialization
-  // Only create the video player when user first taps Video tab.
-  // This prevents audio focus conflicts on Android during audio-only playback.
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Video position poll interval ref ─────────────────────────────────────
+  const videoPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const videoPlayer = videoPlayerSingleton;
+  const videoPlayerRef = useRef(videoPlayer);
   const [videoPlayerInitialized, setVideoPlayerInitialized] = useState(false);
+  const positionRef = useRef(positionSec);
+  const durationRef = useRef(durationSec);
+  
+  useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
+  useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
-  const videoPlayer = useVideoPlayer(
-    videoPlayerInitialized && activeVideoUrl ? activeVideoUrl : null,
-    (p) => {
-      if (!videoPlayerInitialized) return;
-      try {
-        p.muted = true;
-        p.loop = false;
-        p.pause();
-        setVideoError(null);
-        errorCountRef.current = 0;
-      } catch (e) {
-        console.warn('[PlayerContent] Video player init error:', e);
-        setVideoError('Failed to initialize video player');
+  // ── VISUAL PLAY STATE ────────────────────────────────────────────────────
+  // Decoupled from expo-audio hardware state. On Song tab syncs with isPlaying.
+  // On Video tab only changes when user taps play/pause.
+  const [visualIsPlaying, setVisualIsPlaying] = useState(isPlaying);
+  useEffect(() => {
+    if (activeSegmentRef.current === 'song') {
+      setVisualIsPlaying(isPlaying);
+    }
+  }, [isPlaying]);
+
+  // ── VISUAL POSITION / DURATION ───────────────────────────────────────────
+  const [visualPositionSec, setVisualPositionSec] = useState(positionSec);
+  const [visualDurationSec, setVisualDurationSec] = useState(durationSec);
+
+  // BUG FIX 9: Force sync duration when it becomes > 0 (for restored tracks)
+  // Also sync position when active segment is song
+  useEffect(() => {
+    if (activeSegmentRef.current === 'song') {
+      setVisualPositionSec(positionSec);
+      // Critical fix: when durationSec becomes > 0, update visualDurationSec
+      if (durationSec > 0 && visualDurationSec !== durationSec) {
+        setVisualDurationSec(durationSec);
       }
     }
-  );
+  }, [positionSec, durationSec, visualDurationSec]);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // VIDEO SOURCE LOADING — only after player is initialized
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // Poll video player's currentTime/duration while on Video tab
+  // FIX 7: Also update context video state so lock screen stays synced
   useEffect(() => {
-    if (!videoPlayerInitialized || !videoPlayer || !activeVideoUrl || isLocal) return;
-
-    let cancelled = false;
-
-    const loadVideo = async () => {
-      try {
-        if (typeof (videoPlayer as any).replaceAsync === 'function') {
-          await (videoPlayer as any).replaceAsync(activeVideoUrl);
-        } else {
-          (videoPlayer as any).replace(activeVideoUrl);
-        }
-
-        if (cancelled) return;
-
-        videoPlayer.muted = true;
-        try {
-          videoPlayer.pause();
-        } catch {
-          // ignore
-        }
-      } catch (e) {
-        console.warn('[PlayerContent] Failed to replace video source:', e);
-        setVideoError('Video unavailable. Listening to audio only.');
-      }
-    };
-
-    void loadVideo();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [videoPlayerInitialized, displayTrack?.id, activeVideoUrl, isLocal, videoPlayer]);
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // SYNC INTERVAL: Keep video aligned with audio position
-  // Only runs when video player exists and we're on Song tab
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!videoPlayerInitialized || !videoPlayer || isLocal || !activeVideoUrl) return;
-
-    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-
-    syncIntervalRef.current = setInterval(() => {
-      if (videoPlayer && !videoError && activeSegment !== 'video') {
-        const drift = Math.abs(videoPlayer.currentTime - positionSec);
-        if (drift > 0.5) {
-          try {
-            videoPlayer.currentTime = positionSec;
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }, VIDEO_SYNC_INTERVAL_MS);
-
-    return () => {
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-    };
-  }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, positionSec, activeSegment, videoError]);
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PLAY/PAUSE SYNC: Video follows audio play state when on Song tab
-  // NEVER pause the audio engine — both players stay alive
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!videoPlayerInitialized || !videoPlayer || activeSegment !== 'video' || videoError || isLocal) return;
-
-    if (muxedVideoUrl && videoOwnsAudio.current) {
-      try {
-        isPlaying ? videoPlayer.play() : videoPlayer.pause();
-      } catch {
-        // ignore
-      }
-    } else if (!muxedVideoUrl) {
-      try {
-        isPlaying ? videoPlayer.play() : videoPlayer.pause();
-      } catch {
-        // ignore
-      }
+    if (videoPollIntervalRef.current) {
+      clearInterval(videoPollIntervalRef.current);
+      videoPollIntervalRef.current = null;
     }
-  }, [isPlaying, activeSegment, videoPlayer, muxedVideoUrl, videoError, isLocal, videoPlayerInitialized]);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // VIDEO STATUS LISTENER
-  // ─────────────────────────────────────────────────────────────────────────────
+    if (activeSegment !== 'video' || !videoPlayerInitialized || isLocal) return;
 
-  useEffect(() => {
-    if (!videoPlayerInitialized || !videoPlayer || isLocal) return;
+    videoPollIntervalRef.current = setInterval(() => {
+      const vp = videoPlayerRef.current;
+      if (!vp) return;
+      try {
+        const ct = vp.currentTime ?? 0;
+        const dur = vp.duration ?? 0;
+        if (!isSlidingRef.current) {
+          setVisualPositionSec(ct);
+        }
+        // Prefer video duration; fall back to engine duration if video hasn't
+        // reported a valid duration yet (common before first frame decoded).
+        setVisualDurationSec(dur > 0 ? dur : durationRef.current);
+        // FIX 7: Wire context video state for lock screen
+        updateVideoPosition(ct);
+        updateVideoDuration(dur > 0 ? dur : durationRef.current);
+      } catch {}
+    }, VIDEO_POSITION_POLL_MS);
+
+    return () => {
+      if (videoPollIntervalRef.current) {
+        clearInterval(videoPollIntervalRef.current);
+        videoPollIntervalRef.current = null;
+      }
+    };
+  }, [activeSegment, videoPlayerInitialized, isLocal, updateVideoPosition, updateVideoDuration]);
+
+  // FIX 4: Status listener attached immediately inside loadVideoSource
+  // so readyToPlay is never missed, not gated on videoPlayerInitialized state
+  const attachStatusListener = useCallback(() => {
+    if (!videoPlayer || isLocal) return;
 
     try {
       statusListenerRef.current?.remove?.();
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     statusListenerRef.current = null;
 
@@ -510,22 +548,14 @@ function PlayerContentInner({
           if (pendingSeek.current !== null) {
             try {
               videoPlayer.currentTime = pendingSeek.current;
-            } catch {
-              // ignore
-            }
+            } catch {}
             pendingSeek.current = null;
 
-            if (isPlaying && activeSegment === 'video') {
-              if (muxedVideoUrl) {
-                videoOwnsAudio.current = true;
-                // Mute audio engine instead of pausing
-                engine.setVolume?.(0) ?? engine.pause();
-              }
+            if (activeSegmentRef.current === 'video' && isPlayingRef.current) {
               try {
                 videoPlayer.play();
-              } catch {
-                // ignore
-              }
+                videoPlayingRef.current = true;
+              } catch {}
             }
           }
         } else if (status === 'error') {
@@ -563,16 +593,84 @@ function PlayerContentInner({
     } catch (e) {
       console.error('[PlayerContent] Failed to add video listener:', e);
     }
+  }, [videoPlayer, isLocal, activeSegment, activeVideoUrl]);
+
+  const loadVideoSource = useCallback(async (url: string) => {
+    if (!url || isLocal) return;
+
+    try {
+      setVideoError(null);
+      errorCountRef.current  = 0;
+      videoPlayerReady.current = false;
+
+      const vp = videoPlayerRef.current;
+
+      if (typeof (vp as any).replaceAsync === 'function') {
+        await (vp as any).replaceAsync(url);
+      } else {
+        (vp as any).replace(url);
+      }
+
+      // FIX 4: Attach listener immediately so readyToPlay is never missed
+      attachStatusListener();
+
+      const POLL_INTERVAL_MS = 200;
+      const POLL_TIMEOUT_MS  = 12000;
+      const pollStart = Date.now();
+
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          const status = (vp as any).status;
+          if (status === 'readyToPlay') {
+            videoPlayerReady.current = true;
+            resolve();
+            return;
+          }
+          if (Date.now() - pollStart >= POLL_TIMEOUT_MS) {
+            console.warn('[PlayerContent] Video readyToPlay poll timed out');
+            resolve();
+            return;
+          }
+          setTimeout(poll, POLL_INTERVAL_MS);
+        };
+        poll();
+      });
+
+      try { vp.muted = true; } catch {}
+
+      console.log('[PlayerContent] Video source loaded:', url.substring(0, 80));
+    } catch (e) {
+      console.warn('[PlayerContent] Failed to load video source:', e);
+      setVideoError('Video unavailable. Listening to audio only.');
+    }
+  }, [isLocal, attachStatusListener]);
+
+  useEffect(() => {
+    if (!activeVideoUrl || isLocal) return;
+    void loadVideoSource(activeVideoUrl);
+  }, [activeVideoUrl, isLocal, loadVideoSource]);
+
+  useEffect(() => {
+    if (!videoPlayerInitialized || !videoPlayer || isLocal || !activeVideoUrl) return;
+
+    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+
+    // FIX 3: 100ms sync interval (was 500)
+    syncIntervalRef.current = setInterval(() => {
+      if (videoPlayer && !videoError && activeSegment !== 'video') {
+        const drift = Math.abs(videoPlayer.currentTime - positionRef.current);
+        if (drift > 0.5) {
+          try {
+            videoPlayer.currentTime = positionRef.current;
+          } catch {}
+        }
+      }
+    }, VIDEO_SYNC_INTERVAL_MS);
 
     return () => {
-      try {
-        statusListenerRef.current?.remove?.();
-      } catch {
-        // ignore
-      }
-      statusListenerRef.current = null;
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
     };
-  }, [videoPlayerInitialized, videoPlayer, activeSegment, isPlaying, muxedVideoUrl, engine, activeVideoUrl, isLocal]);
+  }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, activeSegment, videoError]);
 
   const videoProgress = useSharedValue(0);
   const artworkAnimStyle = useAnimatedStyle(() => ({
@@ -582,11 +680,9 @@ function PlayerContentInner({
     opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
   }));
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ISSUE 7 FIX: Seamless segment switch — NEVER pause either player
-  // Both players run simultaneously. We only swap which one is audible.
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // ─────────────────────────────────────────────────────────────────────────
+  // SEGMENT SWITCH
+  // ─────────────────────────────────────────────────────────────────────────
   const handleSegmentPress = useCallback(
     async (seg: 'song' | 'video') => {
       if (seg === 'video' && (!hasVideo || displayTrack.id === DUMMY_TRACK.id || videoError || isLocal)) {
@@ -600,92 +696,128 @@ function PlayerContentInner({
       isTransitioning.current = true;
       triggerHaptic();
 
-      // Lazy init video player on first video tab tap
       if (seg === 'video' && !videoPlayerInitialized) {
         setVideoPlayerInitialized(true);
-        // Give one frame for player to init before switching
-        await new Promise(r => requestAnimationFrame(r));
       }
 
+      const vp = videoPlayerRef.current;
+      const currentAudioPos = positionRef.current;
       const OFFSET = BACKWARD_SEEK_OFFSET;
-      const currentAudioPos = positionSec;
 
       try {
-        if (seg === 'video' && videoPlayer && !videoError && !isLocal) {
+        if (seg === 'video' && vp && !videoError && !isLocal) {
+          // FIX 1: Deactivate audio focus before video takes over
+          await deactivateAudio();
+
           const seekTarget = Math.max(0, currentAudioPos - OFFSET);
-          videoPlayer.currentTime = seekTarget;
-          videoPlayer.muted = false;
 
-          requestAnimationFrame(() => {
-            if (videoPlayer && Math.abs(videoPlayer.currentTime - currentAudioPos) > 0.05) {
-              videoPlayer.currentTime = currentAudioPos;
+          if (videoPlayerReady.current) {
+            try { vp.currentTime = seekTarget; } catch (e) {
+              console.warn('[PlayerContent] currentTime set failed:', e);
             }
-          });
+            vp.muted = false;
 
-          if (muxedVideoUrl) {
-            // Muxed video has audio — mute the audio engine, DON'T pause
-            videoOwnsAudio.current = true;
-            try {
-              (engine as any).setVolume?.(0) ?? engine.pause();
-            } catch {}
+            if (visualIsPlaying) {
+              try { vp.play(); videoPlayingRef.current = true; } catch {}
+            }
+          } else {
+            console.log('[PlayerContent] Video not ready yet — queuing seek at', seekTarget);
+            pendingSeek.current = seekTarget;
+            vp.muted = false;
           }
 
-          try {
-            videoPlayer.play();
-          } catch {
-            // ignore
-          }
+          setVisualPositionSec(seekTarget);
+          setVisualDurationSec(
+            (vp.duration ?? 0) > 0 ? vp.duration : durationRef.current,
+          );
 
           setActiveSegment(seg);
+          activeSegmentRef.current = seg;
           videoProgress.value = 1;
-        } else if (seg === 'song' && videoPlayer) {
-          // Switch audio back on, DON'T pause video — just mute it
+          // FIX 7: Update context video state
+          setVideoActive(true);
+          updateVideoPosition(seekTarget);
+          updateVideoDuration((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
+          updateVideoIsPlaying(visualIsPlaying);
+
+        } else if (seg === 'song' && vp) {
+          pendingSeek.current = null;
+          // FIX 2: Pause video BEFORE muting to release Android audio focus
+          try { vp.pause(); } catch {}
+          try { vp.muted = true; } catch {}
+          videoPlayingRef.current = false;
           videoOwnsAudio.current = false;
-          try {
-            (engine as any).setVolume?.(1) ?? engine.play();
-          } catch {}
 
-          // Seek audio to match video position for seamlessness
-          const currentVideoPos = videoPlayer.currentTime ?? currentAudioPos;
-          const seekTarget = Math.max(0, currentVideoPos - OFFSET);
-          engine.seekTo(seekTarget);
+          // FIX 1: Reactivate audio focus before resuming audio
+          await activateAudio();
 
-          setTimeout(() => {
-            engine.seekTo(currentVideoPos);
-          }, 50);
+          if (visualIsPlaying) {
+            try { engine.play(); } catch {}
+          }
 
-          videoPlayer.muted = true;
+          setVisualPositionSec(positionRef.current);
+          setVisualDurationSec(durationRef.current);
 
           setActiveSegment(seg);
+          activeSegmentRef.current = seg;
           videoProgress.value = 0;
+          // FIX 7: Update context video state
+          setVideoActive(false);
+          updateVideoPosition(positionRef.current);
+          updateVideoDuration(durationRef.current);
+          updateVideoIsPlaying(false);
         }
       } catch (err) {
         console.error('[PlayerContent] Segment switch error:', err);
       } finally {
         setTimeout(() => {
           isTransitioning.current = false;
-        }, 400);
+        }, 600);
       }
     },
-    [hasVideo, videoPlayer, videoProgress, positionSec, isPlaying, muxedVideoUrl, displayTrack.id, engine, videoError, isLocal, videoPlayerInitialized],
+    [
+      hasVideo,
+      videoPlayer,
+      videoProgress,
+      visualIsPlaying,
+      muxedVideoUrl,
+      displayTrack.id,
+      engine,
+      videoError,
+      isLocal,
+      videoPlayerInitialized,
+      setVisualPositionSec,
+      setVisualDurationSec,
+      deactivateAudio,
+      activateAudio,
+      setVideoActive,
+      updateVideoPosition,
+      updateVideoDuration,
+      updateVideoIsPlaying,
+    ],
   );
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // TRACK CHANGE: Reset to song tab, but DON'T destroy video player
-  // Keep it alive for seamless switching back
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // ─────────────────────────────────────────────────────────────────────────
+  // TRACK CHANGE RESET
+  // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     videoOwnsAudio.current = false;
     videoPlayerReady.current = false;
     pendingSeek.current = null;
     setActiveSegment('song');
+    activeSegmentRef.current = 'song';
     videoProgress.value = 0;
     setVideoError(null);
     errorCountRef.current = 0;
-    // NOTE: We do NOT setVideoPlayerInitialized(false) here.
-    // The video player stays alive for seamless toggling.
-  }, [displayTrack?.id, videoProgress]);
+    // Reset visual position/duration to engine values on track change
+    setVisualPositionSec(0);
+    setVisualDurationSec(0);
+    // FIX 7: Reset context video state
+    setVideoActive(false);
+    updateVideoPosition(0);
+    updateVideoDuration(0);
+    updateVideoIsPlaying(false);
+  }, [displayTrack?.id, videoProgress, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
   const artworkForColors = typeof displayTrack?.thumbnail === 'string' ? displayTrack.thumbnail : null;
   const { imageColors } = useImageColors(artworkForColors);
@@ -697,80 +829,101 @@ function PlayerContentInner({
     return [colors.playerGradientStart, colors.playerGradientMiddle, colors.playerGradientEnd];
   }, [imageColors, colors, isDark]);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // SLIDER / SEEK
+  // ─────────────────────────────────────────────────────────────────────────
   const isSliding = useSharedValue(false);
+  const isSlidingRef = useRef(false);
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sliderProgress = useSharedValue(0);
   const sliderMin = useSharedValue(0);
   const sliderMax = useSharedValue(1);
   const slidingValue = useSharedValue(0);
 
+  // Drive the slider thumb from visualPositionSec / visualDurationSec.
+  // BUG FIX 9b: Guard against division by zero
   useEffect(() => {
-    if (!isSliding.value && durationSec > 0) {
-      sliderProgress.value = positionSec / durationSec;
+    if (!isSlidingRef.current && visualDurationSec > 0) {
+      sliderProgress.value = visualPositionSec / visualDurationSec;
+    } else if (!isSlidingRef.current && visualDurationSec === 0 && visualPositionSec === 0) {
+      // Keep at 0, don't divide
+      sliderProgress.value = 0;
     }
-  }, [positionSec, durationSec, isSliding, sliderProgress]);
+  }, [visualPositionSec, visualDurationSec, sliderProgress]);
 
+  // ── Seek handler — dispatches to the ACTIVE player only ──────────────────
+  // BUG FIX 10: Removed isSliding guard to allow tap-to-seek
+  // FIX 6: Video seek does pause→seek→play for reliable Android seeking
   const handleSeek = useCallback(
     (fraction: number) => {
-      if (durationSec <= 0) return;
-      const t = fraction * durationSec;
-      engine.seekTo(t);
+      const activeDuration =
+        activeSegmentRef.current === 'video'
+          ? ((videoPlayerRef.current?.duration ?? 0) > 0
+              ? videoPlayerRef.current!.duration
+              : durationRef.current)
+          : durationRef.current;
 
-      if (activeSegment === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
-        try {
-          videoPlayer.currentTime = t;
-          if (isPlaying && !videoOwnsAudio.current) videoPlayer.play();
-        } catch {
-          // ignore
+      if (activeDuration <= 0) return;
+      const t = fraction * activeDuration;
+
+      // Hold the optimistic lock for the full Android rebuffer window
+      if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
+      seekDebounceRef.current = setTimeout(() => {
+        isSlidingRef.current = false;
+      }, 1500);
+
+      if (activeSegmentRef.current === 'video') {
+        const vp = videoPlayerRef.current;
+        if (vp && videoPlayerReady.current && !videoError && !isLocal) {
+          try {
+            // FIX 6: Pause → seek → play for instant reliable seeking
+            const wasPlaying = visualIsPlaying;
+            vp.pause();
+            vp.currentTime = t;
+            if (wasPlaying) {
+              vp.play();
+            }
+          } catch {}
         }
+        setVisualPositionSec(t);
+        // FIX 7: Update context video position
+        updateVideoPosition(t);
+      } else {
+        engine.seekTo(t);
+        // Visual position will sync via the useEffect
       }
     },
-    [durationSec, engine, activeSegment, videoPlayer, isPlaying, videoError, isLocal],
+    [engine, videoError, isLocal, visualIsPlaying, updateVideoPosition],
   );
 
   const handleSkipBack = useCallback(async () => {
     triggerHaptic();
     await engine.skipToPrevious();
-    // Video stays muted and synced via interval — no need to pause
   }, [engine]);
 
   const handleSkipNext = useCallback(async () => {
     triggerHaptic();
     await engine.skipToNext();
-    // Video stays muted and synced via interval — no need to pause
   }, [engine]);
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ISSUE 7 FIX: Play/Pause — both players stay alive
-  // Audio engine controls playback. Video follows via effects.
-  // ─────────────────────────────────────────────────────────────────────────────
 
   const handlePlayPause = useCallback(async () => {
     triggerHaptic();
     if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
 
-    try {
-      if (activeSegment === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
-        if (muxedVideoUrl && videoOwnsAudio.current) {
-          // Video owns audio — toggle video play state
-          if (isPlaying) {
-            try { videoPlayer.pause(); } catch {}
-            engine.pause();
-          } else {
-            try { videoPlayer.play(); } catch {}
-          }
-        } else {
-          // Audio engine owns playback — toggle it, video follows via effect
-          togglePlayPause();
-        }
-      } else {
-        // Song tab — normal audio toggle
-        togglePlayPause();
-      }
-    } catch (err) {
-      console.error('[PlayerContent] Play/pause error:', err);
+    const willPlay = !visualIsPlaying;
+    setVisualIsPlaying(willPlay);
+
+    if (activeSegmentRef.current === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
+      try {
+        willPlay ? videoPlayer.play() : videoPlayer.pause();
+        videoPlayingRef.current = willPlay;
+        // FIX 7: Update context video playing state
+        updateVideoIsPlaying(willPlay);
+      } catch {}
+    } else {
       togglePlayPause();
     }
-  }, [isPlaying, displayTrack, togglePlayPause, activeSegment, videoPlayer, muxedVideoUrl, engine, videoError, isLocal]);
+  }, [displayTrack, visualIsPlaying, togglePlayPause, videoPlayer, videoError, isLocal, updateVideoIsPlaying]);
 
   const handleOpenQueue = () => {
     triggerHaptic();
@@ -857,14 +1010,22 @@ function PlayerContentInner({
     onNavigateToCast?.();
   };
 
+  // FIX 5: Call onMinimize() first so mini-player shows behind the screen
   const handlePlaylist = () => {
     triggerHaptic();
-    onNavigateToPlaylist?.();
+    onMinimize();
+    setTimeout(() => {
+      onNavigateToPlaylist?.();
+    }, 50);
   };
 
+  // FIX 5: Call onMinimize() first so mini-player shows behind the screen
   const handleSleepTimer = () => {
     triggerHaptic();
-    onNavigateToSleepTimer?.();
+    onMinimize();
+    setTimeout(() => {
+      onNavigateToSleepTimer?.();
+    }, 50);
   };
 
   const handleMenuPress = useCallback(() => {
@@ -905,6 +1066,8 @@ function PlayerContentInner({
     if (repeatMode === 'off') return colors.textMuted;
     return colors.gold;
   };
+
+  const showCommentButton = !isLocal && commentsCount > 0 && displayTrack.id !== DUMMY_TRACK.id;
 
   return (
     <>
@@ -1045,7 +1208,11 @@ function PlayerContentInner({
                         size={16}
                         color={isFavorite ? colors.gold : colors.text}
                       />
-                      {likeCount > 0 && <Text style={[styles.statCount, { color: colors.text }]}>{formatCount(likeCount)}</Text>}
+                      {likeCount > 0 && (
+                        <Text style={[styles.statCount, { color: colors.text }]}>
+                          {formatCount(likeCount)}
+                        </Text>
+                      )}
                     </TouchableOpacity>
 
                     <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
@@ -1057,7 +1224,11 @@ function PlayerContentInner({
                       onPressOut={() => setButtonActive(false)}
                     >
                       <Ionicons name="thumbs-down-outline" size={16} color={colors.text} />
-                      {dislikeCount > 0 && <Text style={[styles.statCount, { color: colors.text }]}>{formatCount(dislikeCount)}</Text>}
+                      {dislikeCount > 0 && (
+                        <Text style={[styles.statCount, { color: colors.text }]}>
+                          {formatCount(dislikeCount)}
+                        </Text>
+                      )}
                     </TouchableOpacity>
                   </View>
                 ) : (
@@ -1079,35 +1250,32 @@ function PlayerContentInner({
                   </TouchableOpacity>
                 )}
 
-                <TouchableOpacity
-                  style={[
-                    styles.actionContainer,
-                    { backgroundColor: `${colors.gold}15` },
-                    isLocal && { opacity: 0.5 },
-                  ]}
-                  onPress={handleOpenComments}
-                  activeOpacity={isLocal ? 1 : 0.7}
-                  disabled={isLocal}
-                  onPressIn={() => {
-                    if (!isLocal) setButtonActive(true);
-                  }}
-                  onPressOut={() => setButtonActive(false)}
-                >
-                  <MaterialCommunityIcons
-                    name="comment-text-outline"
-                    size={16}
-                    color={isLocal ? colors.textMuted : colors.text}
-                  />
-                  {!isLocal && commentsCount > 0 && (
-                    <Text style={[styles.statCount, { color: colors.text }]}>{formatCount(commentsCount)}</Text>
-                  )}
-                </TouchableOpacity>
+                {showCommentButton && (
+                  <TouchableOpacity
+                    style={[styles.actionContainer, { backgroundColor: `${colors.gold}15` }]}
+                    onPress={handleOpenComments}
+                    activeOpacity={0.7}
+                    onPressIn={() => setButtonActive(true)}
+                    onPressOut={() => setButtonActive(false)}
+                  >
+                    <MaterialCommunityIcons
+                      name="comment-text-outline"
+                      size={16}
+                      color={colors.text}
+                    />
+                    <Text style={[styles.statCount, { color: colors.text }]}>
+                      {formatCount(commentsCount)}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {!isLocal && (
                 <View style={[styles.playCountPill, { backgroundColor: `${colors.gold}10` }]}>
                   <Ionicons name="headset-outline" size={13} color={colors.textSub} />
-                  {counterTarget > 0 ? <AnimatedCounter target={counterTarget} /> : <SkeletonPulse width={42} height={10} borderRadius={3} />}
+                  {counterTarget > 0
+                    ? <AnimatedCounter target={counterTarget} />
+                    : <SkeletonPulse width={42} height={10} borderRadius={3} />}
                 </View>
               )}
 
@@ -1129,12 +1297,12 @@ function PlayerContentInner({
                   onPressIn={() => setButtonActive(true)}
                   onPressOut={() => setButtonActive(false)}
                 >
-               
                   <MaterialCommunityIcons name="weather-night" size={18} color={colors.text} />
                 </TouchableOpacity>
               </View>
             </View>
 
+            {/* ── PROGRESS BAR ─────────────────────────────────────────── */}
             <View
               style={styles.progressWrapper}
               onTouchStart={() => setSliderActive(true)}
@@ -1149,24 +1317,30 @@ function PlayerContentInner({
                 renderBubble={() => (
                   <View style={[styles.bubbleContainer, { backgroundColor: `${colors.background}CC` }]}>
                     <Text style={[styles.bubbleText, { color: colors.text }]}>
-                      {formatTime(slidingValue.value * durationSec)}
+                      {formatTime(slidingValue.value * visualDurationSec)}
                     </Text>
                   </View>
                 )}
-                renderThumb={() => <View style={[styles.sliderThumb, { backgroundColor: colors.gold }]} />}
+                renderThumb={() => (
+                  <View style={[styles.sliderThumb, { backgroundColor: colors.gold }]} />
+                )}
                 theme={{
                   minimumTrackTintColor: colors.gold,
                   maximumTrackTintColor: colors.sliderTrack,
                 }}
                 onSlidingStart={() => {
                   isSliding.value = true;
+                  isSlidingRef.current = true;
+                  if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
                   setSliderActive(true);
                 }}
                 onValueChange={(v) => {
                   slidingValue.value = v;
                 }}
                 onSlidingComplete={(v) => {
-                  if (!isSliding.value) return;
+                  // BUG FIX 10: Remove isSliding guard so tap-to-seek works
+                  // Taps trigger onSlidingComplete without onSlidingStart
+                  sliderProgress.value = v;
                   isSliding.value = false;
                   setSliderActive(false);
                   runOnJS(handleSeek)(v);
@@ -1174,8 +1348,12 @@ function PlayerContentInner({
               />
 
               <View style={styles.timeRow}>
-                <Text style={[styles.timeText, { color: colors.textSub }]}>{formatTime(positionSec)}</Text>
-                <Text style={[styles.timeText, { color: colors.textSub }]}>{formatTime(durationSec)}</Text>
+                <Text style={[styles.timeText, { color: colors.textSub }]}>
+                  {formatTime(visualPositionSec)}
+                </Text>
+                <Text style={[styles.timeText, { color: colors.textSub }]}>
+                  {formatTime(visualDurationSec)}
+                </Text>
               </View>
             </View>
 
@@ -1187,7 +1365,11 @@ function PlayerContentInner({
                 onPressIn={() => setButtonActive(true)}
                 onPressOut={() => setButtonActive(false)}
               >
-                <Feather name="shuffle" size={20} color={shuffleMode === 'off' ? colors.textMuted : colors.gold} />
+                <Feather
+                  name="shuffle"
+                  size={20}
+                  color={shuffleMode === 'off' ? colors.textMuted : colors.gold}
+                />
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1208,7 +1390,7 @@ function PlayerContentInner({
                 onPressOut={() => setButtonActive(false)}
               >
                 <Ionicons
-                  name={showSkeleton ? 'hourglass-outline' : isPlaying ? 'pause' : 'play'}
+                  name={showSkeleton ? 'hourglass-outline' : visualIsPlaying ? 'pause' : 'play'}
                   size={32}
                   color={colors.textInverse}
                 />
@@ -1480,7 +1662,12 @@ const styles = StyleSheet.create({
   },
   repeatOneText: { color: '#fff', fontSize: moderateScale(9), fontWeight: '700', lineHeight: moderateScale(12) },
 
-  bottomTabs: { flexDirection: 'row', justifyContent: 'space-around', marginTop: verticalScale(32), paddingBottom: verticalScale(5) },
+  bottomTabs: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: verticalScale(32),
+    paddingBottom: verticalScale(5),
+  },
   bottomTabActive: { fontSize: moderateScale(13), fontWeight: '600' },
   bottomTab: { fontSize: moderateScale(13), fontWeight: '500' },
 

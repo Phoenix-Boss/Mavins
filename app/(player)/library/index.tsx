@@ -1,4 +1,4 @@
-// app/(player)/library/index.tsx - COMPLETE FILE
+// app/(player)/library/index.tsx - COMPLETE FILE WITH FIXES
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   View,
@@ -34,7 +34,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
-import { useMusicPlayer } from "@/libs/playerSetup"; // ISSUE 11: Fixed import path
+import { useMusicPlayer } from "@/libs/playerSetup";
 import {
   useFavorites,
   useDownloadedTracks,
@@ -52,6 +52,9 @@ import {
   type SortEntry,
   type SortKey,
 } from "@/hooks/useLocalSorting";
+
+// ─── Import normalizeLocalUri from player setup ─────────────────────────────
+import { normalizeLocalUri } from "@/libs/playerSetup";
 
 // ─── Self-contained sort engine ───────────────────────────────────────────────
 // applySorts() from the hook maps SortKeys to field names that don't match
@@ -1129,10 +1132,13 @@ function PinchZoomImage({
     })
   ).current;
 
-  if (uri) {
+  // Normalize artwork URI if provided
+  const normalizedUri = uri ? normalizeLocalUri(uri) : undefined;
+
+  if (normalizedUri) {
     return (
       <Animated.View style={{ transform: [{ scale: scale$ }] }} {...pinch.panHandlers}>
-        <Image source={{ uri }} style={{ width: size, height: size, borderRadius: radius }} />
+        <Image source={{ uri: normalizedUri }} style={{ width: size, height: size, borderRadius: radius }} />
       </Animated.View>
     );
   }
@@ -1389,9 +1395,12 @@ function TrackRow({
   colors: any;
 }) {
   const SIZE = moderateScale(42);
+  // Normalize artwork URI for display
+  const artworkUri = item.cached_artwork_path || item.artwork_uri || undefined;
+  
   return (
     <TouchableOpacity style={trStyles.row} onPress={onPress} activeOpacity={0.72}>
-      <PinchZoomImage uri={item.cached_artwork_path || item.artwork_uri || undefined} size={SIZE} colors={colors} />
+      <PinchZoomImage uri={artworkUri} size={SIZE} colors={colors} />
       <View style={trStyles.info}>
         <Text style={[trStyles.title, { color: isPlaying ? colors.gold : colors.text }]} numberOfLines={1}>
           {item.title}
@@ -1672,7 +1681,7 @@ function FolderDetailScreen({
   onBack: () => void;
   colors: any;
   insetTop: number;
-  initialTrackId?: string; // ISSUE 8: For scrolling to specific track
+  initialTrackId?: string;
 }) {
   const engine = usePlayerEngine();
   const { playDownloadedSong } = useMusicPlayer();
@@ -1734,20 +1743,24 @@ function FolderDetailScreen({
 
   useEffect(() => { loadTracks(); }, [loadTracks]);
 
-  const handlePlay = (track: LocalTrack) => {
+  // ─── FIX: Proper handlePlay with URI normalization ─────────────────────────
+  const handlePlay = useCallback((track: LocalTrack) => {
+    const normalizedUri = normalizeLocalUri(track.file_uri);
+    
     playDownloadedSong(
       {
         id: track.track_id,
         title: track.title,
         artist: track.artist === "Unknown Artist" ? "Upcoming Artist" : track.artist,
         thumbnail: track.cached_artwork_path || track.artwork_uri || "",
-        url: track.file_uri,
+        url: normalizedUri,
+        localTrackUri: normalizedUri,  // CRITICAL: player expects localTrackUri
         duration: track.duration,
         albumId: folderId,
       } as DownloadedSongMetadata,
       undefined
     );
-  };
+  }, [playDownloadedSong, folderId]);
 
   const handleSearchToggle = () => {
     triggerHaptic();
@@ -2093,11 +2106,11 @@ function LocalEmptyState({ colors }: { colors: any }) {
 export default function LibraryScreen() {
   const { top, bottom } = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams(); // ISSUE 8: Get navigation params
+  const params = useLocalSearchParams();
   const { colors: rawColors } = useTheme();
   const colors = useExtendedColors(rawColors);
 
-  // ISSUE 8: Read navigation params for folder navigation from player
+  // Read navigation params for folder navigation from player
   const targetFolderId = params.folderId as string | undefined;
   const targetTrackId = params.trackId as string | undefined;
 
@@ -2127,7 +2140,7 @@ export default function LibraryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState<{ id: string; name: string } | null>(null);
 
-  // ISSUE 8: Auto-navigate to folder if targetFolderId is provided
+  // Auto-navigate to folder if targetFolderId is provided
   useEffect(() => {
     if (targetFolderId && watchedFolders.length > 0 && !selectedFolder) {
       const folder = watchedFolders.find(f => f.id === targetFolderId);
@@ -2310,7 +2323,7 @@ export default function LibraryScreen() {
     setRefreshing(false);
   }, []);
 
-  // ISSUE 8: Pass initialTrackId to FolderDetailScreen when navigating from player
+  // Pass initialTrackId to FolderDetailScreen when navigating from player
   if (selectedFolder) {
     return (
       <View style={[ls.container, { backgroundColor: colors.background, paddingTop: top }]}>

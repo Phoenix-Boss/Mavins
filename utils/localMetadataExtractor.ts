@@ -1,5 +1,5 @@
 // utils/localMetadataExtractor.ts
-import * as FileSystem from 'expo-file-system/legacy';
+import { file } from 'expo-file-system/next';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
 
@@ -17,9 +17,10 @@ export interface AudioMetadata {
 
 // Extract metadata from audio file
 export async function extractMetadataFromFile(filePath: string): Promise<AudioMetadata> {
-  const fileInfo = await (await (new File(filePath)).exists());
-  const lastModified = fileInfo.modificationTime || 0;
-  const fileSize = fileInfo.size || 0;
+  const audioFile = file(filePath);
+  const stat = await audioFile.stat();
+  const lastModified = stat.modified ? new Date(stat.modified).getTime() : 0;
+  const fileSize = stat.size || 0;
   
   let title: string | undefined;
   let artist: string | undefined;
@@ -32,14 +33,7 @@ export async function extractMetadataFromFile(filePath: string): Promise<AudioMe
   // Try to extract metadata using MediaLibrary
   try {
     if (Platform.OS === 'android') {
-      // On Android, we can try to get asset info
-      const assets = await MediaLibrary.getAssetsAsync({
-        first: 1,
-        mediaType: 'audio',
-        sortBy: ['modificationTime']
-      });
-      
-      // For now, extract from filename as fallback
+      // Extract from filename as fallback
       const fileName = filePath.split('/').pop() || '';
       const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
       

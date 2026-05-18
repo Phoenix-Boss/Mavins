@@ -13,12 +13,22 @@ interface PlayerOverlayContextType {
 
 const PlayerOverlayContext = createContext<PlayerOverlayContextType | undefined>(undefined);
 
+const noop = () => {};
+
+const fallbackContext: PlayerOverlayContextType = {
+  playerMode: 'collapsed',
+  expandPlayer: noop,
+  collapsePlayer: noop,
+  hidePlayer: noop,
+  showPlayer: noop,
+};
+
 export const usePlayerOverlay = () => {
   const ctx = useContext(PlayerOverlayContext);
-  if (!ctx) {
-    throw new Error('usePlayerOverlay must be used within PlayerOverlayProvider');
-  }
-  return ctx;
+  // During Fast Refresh, MusicPlayerContext is re-evaluated before the
+  // provider tree is restored. Return safe no-op fallbacks instead of
+  // throwing so the app recovers automatically.
+  return ctx ?? fallbackContext;
 };
 
 interface PlayerOverlayProviderProps {

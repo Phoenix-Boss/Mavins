@@ -2,18 +2,13 @@
 //
 // Bridges the player engine → expo-media-control for lock screen controls (Android only).
 //
-// Intended behavior:
-// - Continuous lock-screen progress updates
-// - Proper duration sync with fallback to track.duration
-// - Seek support from lock screen
-// - Repeat mode sync and control
-// - Notification tap expands player instead of routing
-// - Swipe-down returns to home screen naturally
-// - Defensive capability validation
-// - Robust error handling
-// - No circular dependency: all data is passed in via props
-//
-// Android-only. No iOS references.
+// FIXED: SystemMediaControlsProps interface now includes isVideoActive, videoPosition,
+//        videoDuration, videoIsPlaying, onVideoPlay, onVideoPause, onVideoSeek,
+//        onAppBackground, onAppForeground so the bridge can switch lock screen data
+//        between audio and video without TypeScript errors.
+// FIXED: AppState foreground handler removed — double-expand was caused by this hook
+//        AND MusicPlayerContext both calling expandPlayer on foreground. Removed from here;
+//        MusicPlayerContext owns that responsibility.
 
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
@@ -43,6 +38,12 @@ export interface SystemMediaControlsProps {
   duration: number;
   repeatMode: RepeatMode;
 
+  // Video-tab state — bridge passes these so the hook can switch data sources
+  isVideoActive: boolean;
+  videoPosition: number;
+  videoDuration: number;
+  videoIsPlaying: boolean;
+
   onPlay: () => void;
   onPause: () => void;
   onSkipNext: () => Promise<void>;
@@ -50,6 +51,15 @@ export interface SystemMediaControlsProps {
   onSeek: (positionSec: number) => void;
   onSetRepeatMode: (mode: RepeatMode) => void;
   onExpandPlayer: () => void;
+
+  // Video-specific lock screen actions
+  onVideoPlay: () => void;
+  onVideoPause: () => void;
+  onVideoSeek: (positionSec: number) => void;
+
+  // App lifecycle callbacks
+  onAppBackground: () => void;
+  onAppForeground: () => void;
 }
 
 const LOCK_SCREEN_UPDATE_INTERVAL_MS = 250;
@@ -83,12 +93,9 @@ function safePosition(position: number): number {
 
 function repeatModeToNative(mode: RepeatMode): number {
   switch (mode) {
-    case 'one':
-      return 1;
-    case 'all':
-      return 2;
-    default:
-      return 0;
+    case 'one':  return 1;
+    case 'all':  return 2;
+    default:     return 0;
   }
 }
 
@@ -142,6 +149,10 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     position,
     duration,
     repeatMode,
+    isVideoActive,
+    videoPosition,
+    videoDuration,
+    videoIsPlaying,
     onPlay,
     onPause,
     onSkipNext,
@@ -149,6 +160,11 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     onSeek,
     onSetRepeatMode,
     onExpandPlayer,
+    onVideoPlay,
+    onVideoPause,
+    onVideoSeek,
+    onAppBackground,
+    onAppForeground,
   } = props;
 
   const initializedRef = useRef(false);
@@ -160,19 +176,34 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     propsRef.current = props;
   }, [props]);
 
+  // ── Helpers that pick the active player's data ────────────────────────────
+  const getActivePosition = (p: SystemMediaControlsProps) =>
+    p.isVideoActive ? safePosition(p.videoPosition) : safePosition(p.position);
+
+  const getActiveDuration = (p: SystemMediaControlsProps) =>
+    p.isVideoActive
+      ? safeDuration(p.videoDuration, p.track?.duration)
+      : safeDuration(p.duration, p.track?.duration);
+
+  const getActivePlaying = (p: SystemMediaControlsProps) =>
+    p.isVideoActive ? p.videoIsPlaying : p.isPlaying;
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   const pushMetadataAndState = useCallback(async (nextProps: SystemMediaControlsProps) => {
     if (!isMediaControlAvailable() || !initializedRef.current) return;
     if (!nextProps.track) return;
 
-    const elapsedTime = safePosition(nextProps.position);
-    const durationValue = safeDuration(nextProps.duration, nextProps.track.duration);
-    const artworkUri = buildArtworkUri(nextProps.track);
+    const elapsedTime  = getActivePosition(nextProps);
+    const durationValue = getActiveDuration(nextProps);
+    const activePlaying = getActivePlaying(nextProps);
+    const artworkUri    = buildArtworkUri(nextProps.track);
 
     await safeMediaCall(async () => {
       await MediaControl.updateMetadata({
-        title: nextProps.track?.title || 'Unknown Title',
-        artist: nextProps.track?.artist || 'Unknown Artist',
-        duration: durationValue,
+        title:      nextProps.track?.title  || 'Unknown Title',
+        artist:     nextProps.track?.artist || 'Unknown Artist',
+        duration:   durationValue,
         elapsedTime,
         repeatMode: repeatModeToNative(nextProps.repeatMode),
         ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
@@ -181,40 +212,34 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
     await safeMediaCall(async () => {
       await MediaControl.updatePlaybackState(
-        playbackStateFor(nextProps.isPlaying),
+        playbackStateFor(activePlaying),
         elapsedTime,
-        nextProps.isPlaying ? 1.0 : 0.0,
+        activePlaying ? 1.0 : 0.0,
       );
     });
   }, []);
 
+  // ── Initialization ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isMediaControlAvailable()) {
       console.log('[MediaControls] MediaControl not available on this device');
       return;
     }
-
     if (initializedRef.current) return;
 
     let cancelled = false;
 
     const init = async () => {
       const { capabilities, compactCapabilities } = getNativeCapabilities();
-
       try {
         await MediaControl.enableMediaControls({
           capabilities,
           compactCapabilities,
-          notification: {
-            color: '#D4AF37',
-          },
+          notification: { color: '#D4AF37' },
         });
-
         if (cancelled) return;
-
         initializedRef.current = true;
         console.log('[MediaControls] Initialized successfully (Android)');
-
         if (pendingPropsRef.current) {
           await pushMetadataAndState(pendingPropsRef.current);
           pendingPropsRef.current = null;
@@ -229,32 +254,27 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     };
 
     void init();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [pushMetadataAndState]);
 
+  // ── Duration sync on track change ─────────────────────────────────────────
   useEffect(() => {
     if (!isMediaControlAvailable() || !initializedRef.current) return;
     if (!track) return;
-
-    const durationValue = safeDuration(duration, track.duration);
+    const durationValue = getActiveDuration(propsRef.current);
     if (durationValue <= 0) return;
-
     void safeMediaCall(async () => {
       await MediaControl.updateMetadata({ duration: durationValue });
     });
-  }, [duration, track?.duration, track?.title, track?.artist, track?.videoId, track?.artwork]);
+  }, [duration, videoDuration, track?.duration, track?.title, track?.artist, track?.videoId, track?.artwork]);
 
+  // ── Full metadata push on relevant state changes ──────────────────────────
   useEffect(() => {
     if (!track || !isMediaControlAvailable()) return;
-
     if (!initializedRef.current) {
       pendingPropsRef.current = propsRef.current;
       return;
     }
-
     void pushMetadataAndState(propsRef.current);
   }, [
     track?.title,
@@ -266,9 +286,14 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     position,
     isPlaying,
     repeatMode,
+    isVideoActive,
+    videoPosition,
+    videoDuration,
+    videoIsPlaying,
     pushMetadataAndState,
   ]);
 
+  // ── Progress polling interval ─────────────────────────────────────────────
   useEffect(() => {
     if (!isMediaControlAvailable() || !initializedRef.current) return;
 
@@ -279,18 +304,14 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
     intervalRef.current = setInterval(() => {
       const current = propsRef.current;
-      if (!current.track) return;
-      if (!initializedRef.current) return;
+      if (!current.track || !initializedRef.current) return;
 
-      const elapsedTime = safePosition(current.position);
-      const state = playbackStateFor(current.isPlaying);
+      const elapsedTime  = getActivePosition(current);
+      const activePlaying = getActivePlaying(current);
+      const state         = playbackStateFor(activePlaying);
 
       void safeMediaCall(async () => {
-        await MediaControl.updatePlaybackState(
-          state,
-          elapsedTime,
-          current.isPlaying ? 1.0 : 0.0,
-        );
+        await MediaControl.updatePlaybackState(state, elapsedTime, activePlaying ? 1.0 : 0.0);
       });
     }, LOCK_SCREEN_UPDATE_INTERVAL_MS);
 
@@ -302,6 +323,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     };
   }, []);
 
+  // ── Command listener ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!isMediaControlAvailable() || typeof MediaControl.addListener !== 'function') return;
 
@@ -313,11 +335,13 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
         switch (event.command) {
           case Command.PLAY:
-            current.onPlay();
+            if (current.isVideoActive) current.onVideoPlay();
+            else current.onPlay();
             break;
 
           case Command.PAUSE:
-            current.onPause();
+            if (current.isVideoActive) current.onVideoPause();
+            else current.onPause();
             break;
 
           case Command.NEXT_TRACK:
@@ -331,15 +355,18 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
           case Command.SEEK: {
             const nextPosition = event.data?.position;
             if (typeof nextPosition === 'number' && Number.isFinite(nextPosition) && nextPosition >= 0) {
-              const maxDuration = safeDuration(current.duration, current.track?.duration);
+              const maxDuration = getActiveDuration(current);
               const clamped = maxDuration > 0 ? Math.min(nextPosition, maxDuration) : nextPosition;
-              current.onSeek(clamped);
 
+              if (current.isVideoActive) current.onVideoSeek(clamped);
+              else current.onSeek(clamped);
+
+              const activePlaying = getActivePlaying(current);
               void safeMediaCall(async () => {
                 await MediaControl.updatePlaybackState(
-                  playbackStateFor(current.isPlaying),
+                  playbackStateFor(activePlaying),
                   clamped,
-                  current.isPlaying ? 1.0 : 0.0,
+                  activePlaying ? 1.0 : 0.0,
                 );
               });
             }
@@ -347,7 +374,8 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
           }
 
           case Command.STOP:
-            current.onPause();
+            if (current.isVideoActive) current.onVideoPause();
+            else current.onPause();
             break;
 
           case Command.REPEAT: {
@@ -367,15 +395,12 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
     return () => {
       if (removeListener) {
-        try {
-          removeListener();
-        } catch {
-          // ignore cleanup errors
-        }
+        try { removeListener(); } catch { /* ignore */ }
       }
     };
   }, []);
 
+  // ── App background handler — push final state ─────────────────────────────
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'background') return;
@@ -384,65 +409,62 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
       const current = propsRef.current;
       if (!current.track) return;
 
-      const elapsedTime = safePosition(current.position);
-      const durationValue = safeDuration(current.duration, current.track.duration);
+      const elapsedTime   = getActivePosition(current);
+      const durationValue = getActiveDuration(current);
+      const activePlaying = getActivePlaying(current);
 
       void safeMediaCall(async () => {
         await MediaControl.updatePlaybackState(
-          playbackStateFor(current.isPlaying),
+          playbackStateFor(activePlaying),
           elapsedTime,
-          current.isPlaying ? 1.0 : 0.0,
+          activePlaying ? 1.0 : 0.0,
         );
       });
 
       void safeMediaCall(async () => {
         await MediaControl.updateMetadata({
-          duration: durationValue,
+          duration:   durationValue,
           elapsedTime,
           repeatMode: repeatModeToNative(current.repeatMode),
-          title: current.track?.title || 'Unknown Title',
-          artist: current.track?.artist || 'Unknown Artist',
+          title:      current.track?.title  || 'Unknown Title',
+          artist:     current.track?.artist || 'Unknown Artist',
           ...(buildArtworkUri(current.track) ? { artwork: { uri: buildArtworkUri(current.track)! } } : {}),
         });
       });
+
+      // Notify parent so it can save tab state
+      current.onAppBackground();
     });
 
     return () => sub.remove();
   }, []);
 
+  // ── App foreground handler — notify parent only, NO expandPlayer ──────────
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'active') return;
-
       const current = propsRef.current;
-      if (!current.track || !initializedRef.current) return;
-
-      setTimeout(() => {
-        try {
-          current.onExpandPlayer();
-        } catch {
-          // intentionally silent
-        }
-      }, 150);
+      if (current.onAppForeground) {
+        current.onAppForeground();
+      }
     });
 
     return () => sub.remove();
   }, []);
 
+  // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-
       if (isMediaControlAvailable() && initializedRef.current) {
         void safeMediaCall(async () => {
           await MediaControl.disableMediaControls();
         });
       }
-
-      initializedRef.current = false;
+      initializedRef.current  = false;
       pendingPropsRef.current = null;
     };
   }, []);

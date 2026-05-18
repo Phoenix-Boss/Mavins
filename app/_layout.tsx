@@ -53,6 +53,8 @@ import {
   MusicPlayerProvider,
   GestureContext,
   useGestureContext,
+  useMusicPlayer,
+  type GestureContextValue,
 } from '@/libs/playerSetup';
 import { LyricsProvider, LyricsFetcher } from '@/hooks/useLyricsContext';
 import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
@@ -65,7 +67,10 @@ import { HomePreloader } from '@/components/HomePreloader';
 import { SearchPreloader } from '@/components/SearchPreloader';
 import { queryClient } from '@/libs/supabase';
 import { initCache } from '@/libs/cache';
-import EarningsConsentGate from '@/components/EarningsConsentGate';
+import {
+  EarningsConsentGate,
+  checkAndShowConsent,
+} from '@/components/EarningsConsentGate';
 import { triggerHaptic } from '@/helpers/haptics';
 import PlayerContent from '@/components/player/playerContent';
 import { useImmersiveMode } from '@/hooks/useImmersiveMode';
@@ -322,7 +327,12 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
-  const { playerMode, collapsePlayer } = usePlayerOverlay();
+  const { playerMode, expandPlayer, collapsePlayer } = usePlayerOverlay();
+  const { setPlayerOverlayRefs } = useMusicPlayer();
+
+  useEffect(() => {
+    setPlayerOverlayRefs(expandPlayer, collapsePlayer);
+  }, [setPlayerOverlayRefs, expandPlayer, collapsePlayer]);
 
   return (
     <>
@@ -523,10 +533,65 @@ function AppShell({
 //   10. LyricsProvider
 //   11. PlayerOverlayProvider
 //   12. PlayerOverlayWrapper
-//   13. HoneygainConsentGate
-//   14. AppShell + PulsingLogoOverlay
+//   13. AppShell + PulsingLogoOverlay
+//   14. EarningsConsentGate   ← Modal, rendered as sibling via useState
+//
+// EarningsConsentGate is a Modal — it does NOT wrap children.
+// It is driven by showConsent state initialized via checkAndShowConsent().
 //
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STABLE PROVIDER TREE
+// Extracted from RootLayout so that RootLayout state changes (appReady,
+// premiumBannerVisible, navReady, showConsent) never cause these providers
+// to remount. React only remounts a component when its *parent* re-renders
+// and produces a different element type or key — by moving providers here,
+// RootLayout re-renders only propagate to AppShell/PulsingLogoOverlay.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface StableProvidersProps {
+  gestureContextValue: GestureContextValue;
+  premiumBannerVisible: boolean;
+  setPremiumBannerVisible: (v: boolean) => void;
+  fontsLoaded: boolean;
+  appReady: boolean;
+}
+
+function StableProviders({
+  gestureContextValue,
+  premiumBannerVisible,
+  setPremiumBannerVisible,
+  fontsLoaded,
+  appReady,
+}: StableProvidersProps) {
+  return (
+    <ThemeProvider>
+      <ThemeAwareNavigationProvider>
+        <GestureContext.Provider value={gestureContextValue}>
+          <AlertProvider>
+            <MusicPlayerProvider>
+              <GlobalUIStateProvider>
+                <LyricsProvider>
+                  <PlayerOverlayProvider>
+                    <PlayerOverlayWrapper>
+                      <AppShell
+                        premiumBannerVisible={premiumBannerVisible}
+                        setPremiumBannerVisible={setPremiumBannerVisible}
+                        fontsLoaded={fontsLoaded}
+                      />
+                      <PulsingLogoOverlay visible={!appReady} />
+                    </PlayerOverlayWrapper>
+                  </PlayerOverlayProvider>
+                </LyricsProvider>
+              </GlobalUIStateProvider>
+            </MusicPlayerProvider>
+          </AlertProvider>
+        </GestureContext.Provider>
+      </ThemeAwareNavigationProvider>
+    </ThemeProvider>
+  );
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -537,6 +602,9 @@ export default function RootLayout() {
   const [appReady, setAppReady] = useState(false);
   const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
   const [navReady, setNavReady] = useState(false);
+
+  // ── Consent modal state ─────────────────────────────────────────────────
+  const [showConsent, setShowConsent] = useState(false);
 
   const navigationState = useRootNavigationState();
 
@@ -565,6 +633,17 @@ export default function RootLayout() {
     };
 
     void initLocalMusic();
+  }, []);
+
+  // Check whether the consent modal should be shown on first launch
+  useEffect(() => {
+    checkAndShowConsent()
+      .then((should) => {
+        if (should) setShowConsent(true);
+      })
+      .catch((err) => {
+        console.warn('[RootLayout] checkAndShowConsent failed:', err);
+      });
   }, []);
 
   // Gesture context — stable ref, never changes
@@ -636,35 +715,19 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <GestureHandlerRootView style={styles.flex}>
-          <ThemeProvider>
-            <ThemeAwareNavigationProvider>
-              <GestureContext.Provider value={gestureContextValue}>
-                <AlertProvider>
-                  <MusicPlayerProvider>
-                    <GlobalUIStateProvider>
-                      <LyricsProvider>
-                        <PlayerOverlayProvider>
-                          <PlayerOverlayWrapper>
-                            <EarningsConsentGate>
-                              <AppShell
-                                premiumBannerVisible={premiumBannerVisible}
-                                setPremiumBannerVisible={
-                                  setPremiumBannerVisible
-                                }
-                                fontsLoaded={fontsLoaded ?? false}
-                              />
-                              <PulsingLogoOverlay visible={!appReady} />
-                            </EarningsConsentGate>
-                          </PlayerOverlayWrapper>
-                        </PlayerOverlayProvider>
-                      </LyricsProvider>
-                    </GlobalUIStateProvider>
-                  </MusicPlayerProvider>
-                </AlertProvider>
-              </GestureContext.Provider>
-            </ThemeAwareNavigationProvider>
-          </ThemeProvider>
+          <StableProviders
+            gestureContextValue={gestureContextValue}
+            premiumBannerVisible={premiumBannerVisible}
+            setPremiumBannerVisible={setPremiumBannerVisible}
+            fontsLoaded={fontsLoaded ?? false}
+            appReady={appReady}
+          />
         </GestureHandlerRootView>
+
+        <EarningsConsentGate
+          visible={showConsent}
+          onDismiss={() => setShowConsent(false)}
+        />
       </SafeAreaProvider>
     </QueryClientProvider>
   );

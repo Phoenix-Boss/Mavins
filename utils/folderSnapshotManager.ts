@@ -1,7 +1,6 @@
 // utils/folderSnapshotManager.ts
-import * as FileSystem from 'expo-file-system/legacy';
+import { file, directory } from 'expo-file-system/next';
 import * as Crypto from 'expo-crypto';
-import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
 import {
   saveFolderSnapshot,
@@ -32,21 +31,13 @@ const HIDDEN_FOLDERS = [
   'com.mavins.player', 'expo', 'Expo', 'tmp', 'temp', 'caches', 'lib', 'libs'
 ];
 
-function convertUriToPath(uri: string): string {
-  if (uri.startsWith('file://')) return uri.replace('file://', '');
-  return uri;
-}
-
 async function isPathAccessible(path: string): Promise<boolean> {
   try {
-    const rawPath = convertUriToPath(path);
-    const invalidPatterns = ['.expo', 'SQLite', 'cache', 'NoBackup', 'com.mavins.player', '/data/user/', '/data/data/'];
-    for (const pattern of invalidPatterns) {
-      if (rawPath.includes(pattern)) return false;
-    }
-    const info = await (await (new File(rawPath)).exists());
-    return info.exists;
-  } catch { return false; }
+    const item = file(path);
+    return await item.exists();
+  } catch { 
+    return false; 
+  }
 }
 
 export async function getInitialRootPath(): Promise<string> {
@@ -131,34 +122,41 @@ export async function buildSnapshotFromScan(path: string): Promise<{ items: Fold
   try {
     const items: FolderItem[] = [];
     let totalFiles = 0, totalFolders = 0;
-    const rawPath = convertUriToPath(path);
-    const fileInfo = await (await (new Directory(rawPath)).list()).map(item => item.name);
-
-    for (const name of fileInfo) {
+    
+    const dir = directory(path);
+    const contents = await dir.list();
+    
+    for (const entry of contents) {
+      const name = entry.name;
       if (HIDDEN_FOLDERS.some(hidden => name === hidden || name.startsWith('.'))) continue;
 
-      const itemPath = `${rawPath}/${name}`;
-      const stat = await (await (new File(itemPath)).exists());
+      const itemPath = `${path}/${name}`;
+      const itemFile = file(itemPath);
+      const stat = await itemFile.stat();
+      
+      const isDirectory = stat.type === 'directory';
+      const item: FolderItem = { 
+        name, 
+        path: itemPath, 
+        isDirectory 
+      };
 
-      if (stat.exists) {
-        const isDirectory = stat.isDirectory || false;
-        const item: FolderItem = { name, path: itemPath, isDirectory };
-
-        if (!isDirectory) {
-          totalFiles++;
-          const fileStat = stat as any;
-          item.size = fileStat.size || 0;
-          item.lastModified = fileStat.modificationTime || 0;
-          item.extension = name.split('.').pop()?.toLowerCase();
-        } else {
-          totalFolders++;
-          try {
-            const childContents = await (await (new Directory(itemPath)).list()).map(item => item.name);
-            item.childCount = childContents.length;
-          } catch { item.childCount = 0; }
+      if (!isDirectory) {
+        totalFiles++;
+        item.size = stat.size;
+        item.lastModified = stat.modified ? new Date(stat.modified).getTime() : 0;
+        item.extension = name.split('.').pop()?.toLowerCase();
+      } else {
+        totalFolders++;
+        try {
+          const subDir = directory(itemPath);
+          const subContents = await subDir.list();
+          item.childCount = subContents.length;
+        } catch { 
+          item.childCount = 0; 
         }
-        items.push(item);
       }
+      items.push(item);
     }
 
     items.sort((a, b) => {
@@ -206,8 +204,9 @@ export async function preloadCommonSnapshots(): Promise<void> {
   for (const path of commonPaths) {
     if (path) {
       try {
-        const exists = await (await (new File(path)).exists());
-        if (exists.exists) await getFolderContents(path, false);
+        const item = file(path);
+        const exists = await item.exists();
+        if (exists) await getFolderContents(path, false);
       } catch (error) {
         console.warn(`[SnapshotManager] Failed to preload ${path}:`, error);
       }

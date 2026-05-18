@@ -1,6 +1,5 @@
 // utils/cacheManager.ts
-import { cacheDirectory } from 'expo-file-system';
-import { File, Directory } from 'expo-file-system/next';
+import { file, directory } from 'expo-file-system/next';
 import { initArtworkCache, clearArtworkCache, getArtworkCacheSizeMB, getCacheStats, enforceCacheSizeLimit } from './artworkCache';
 import { cleanupExpiredSnapshots } from './folderSnapshotManager';
 
@@ -17,8 +16,7 @@ export async function clearAllCaches(): Promise<void> {
 }
 
 export async function getTotalCacheUsage(): Promise<{ artworkSizeMB: number; artworkFileCount: number }> {
-  const stats = await getCacheStats();
-  return { artworkSizeMB: stats.totalSizeMB, artworkFileCount: stats.totalFiles };
+  return await getCacheStats();
 }
 
 export async function manualCacheCleanup(): Promise<void> {
@@ -47,8 +45,9 @@ export function stopPeriodicCacheMaintenance(): void {
 export async function checkCacheHealth(): Promise<{ healthy: boolean; issues: string[] }> {
   const issues: string[] = [];
   try {
-    const artworkDir = new Directory(`${cacheDirectory}local_artwork/`);
-    if (!await artworkDir.exists()) issues.push('Artwork cache directory missing');
+    const artworkDir = directory(`${file('/').path}local_artwork/`);
+    const exists = await artworkDir.exists();
+    if (!exists) issues.push('Artwork cache directory missing');
     const size = await getArtworkCacheSizeMB();
     if (size > 100) issues.push(`Cache size (${size.toFixed(2)}MB) exceeds 100MB`);
   } catch (error) {

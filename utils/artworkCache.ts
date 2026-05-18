@@ -1,5 +1,5 @@
-// utils/artworkCache.ts
-import * as FileSystem from 'expo-file-system/legacy';
+// utils/artworkCache.ts - CONVERTED TO expo-file-system/next
+import { file, directory } from 'expo-file-system/next';
 import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
 import {
@@ -10,44 +10,51 @@ import {
   updateCacheAccess
 } from '@/db/localDatabase';
 
-// Get a valid cache directory - fallback to documentDirectory if cacheDirectory is invalid
-const getCacheDir = (): string => {
-  // Try cacheDirectory first (preferred for temporary files)
-  if (FileSystem.cacheDirectory && FileSystem.cacheDirectory.startsWith('file://')) {
-    return `${FileSystem.cacheDirectory}local_artwork/`;
+// Get cache directory path using file system API
+const getCacheDir = async (): Promise<string> => {
+  // Use the cache directory from the file system
+  const cacheDir = file('/').cacheDirectory;
+  if (cacheDir) {
+    return `${cacheDir}local_artwork/`;
   }
-  // Fallback to documentDirectory (more reliable on some devices)
-  if (FileSystem.documentDirectory) {
-    return `${FileSystem.documentDirectory}local_artwork/`;
+  // Fallback to document directory
+  const docDir = file('/').documentDirectory;
+  if (docDir) {
+    return `${docDir}local_artwork/`;
   }
-  // Last resort - use a relative path (might not work but better than nothing)
-  return `local_artwork/`;
+  return 'local_artwork/';
 };
 
-const ARTWORK_CACHE_DIR = getCacheDir();
+let ARTWORK_CACHE_DIR: string = '';
 const MAX_CACHE_SIZE_MB = 50;
 const MAX_CACHE_SIZE_BYTES = MAX_CACHE_SIZE_MB * 1024 * 1024;
 
+// Initialize cache directory
 export async function initArtworkCache(): Promise<void> {
   try {
-    // Try primary cache directory
-    const dirInfo = await FileSystem.getInfoAsync(ARTWORK_CACHE_DIR);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(ARTWORK_CACHE_DIR, { intermediates: true });
+    ARTWORK_CACHE_DIR = await getCacheDir();
+    const cacheDir = directory(ARTWORK_CACHE_DIR);
+    const exists = await cacheDir.exists();
+    
+    if (!exists) {
+      await cacheDir.create();
       console.log('[ArtworkCache] Created cache directory:', ARTWORK_CACHE_DIR);
     }
   } catch (error) {
     console.error('[ArtworkCache] Failed to create cache directory:', error);
     
     // Try alternative location using documentDirectory
-    if (FileSystem.documentDirectory) {
-      const altDir = `${FileSystem.documentDirectory}local_artwork/`;
+    const docDir = file('/').documentDirectory;
+    if (docDir) {
+      const altDir = `${docDir}local_artwork/`;
       console.log('[ArtworkCache] Trying alternative directory:', altDir);
       try {
-        const altInfo = await FileSystem.getInfoAsync(altDir);
-        if (!altInfo.exists) {
-          await FileSystem.makeDirectoryAsync(altDir, { intermediates: true });
+        const altCacheDir = directory(altDir);
+        const altExists = await altCacheDir.exists();
+        if (!altExists) {
+          await altCacheDir.create();
           console.log('[ArtworkCache] Created alternative cache directory:', altDir);
+          ARTWORK_CACHE_DIR = altDir;
         }
       } catch (altError) {
         console.error('[ArtworkCache] Alternative directory also failed:', altError);
@@ -76,18 +83,20 @@ export async function cacheArtworkFromUri(contentUri: string, assetId: string): 
     await initArtworkCache();
     
     const cachePath = getArtworkCachePath(assetId);
+    const cacheFile = file(cachePath);
+    const exists = await cacheFile.exists();
     
-    const existingInfo = await FileSystem.getInfoAsync(cachePath);
-    if (existingInfo.exists) {
+    if (exists) {
       return cachePath;
     }
     
     if (Platform.OS === 'android') {
       try {
-        await FileSystem.copyAsync({ from: contentUri, to: cachePath });
+        const sourceFile = file(contentUri);
+        await sourceFile.copy(cachePath);
         
-        const fileInfo = await FileSystem.getInfoAsync(cachePath);
-        const fileSize = fileInfo.size || 0;
+        const stats = await cacheFile.stat();
+        const fileSize = stats.size || 0;
         
         await addCacheMetadata(assetId, cachePath, fileSize);
         await enforceCacheSizeLimit();
@@ -109,9 +118,10 @@ export async function cacheArtworkFromUri(contentUri: string, assetId: string): 
 export async function loadArtworkFromCache(assetId: string): Promise<string | null> {
   try {
     const cachePath = getArtworkCachePath(assetId);
-    const fileInfo = await FileSystem.getInfoAsync(cachePath);
+    const cacheFile = file(cachePath);
+    const exists = await cacheFile.exists();
     
-    if (fileInfo.exists) {
+    if (exists) {
       await updateCacheAccess(assetId);
       return cachePath;
     }
@@ -125,8 +135,8 @@ export async function loadArtworkFromCache(assetId: string): Promise<string | nu
 export async function hasArtworkInCache(assetId: string): Promise<boolean> {
   try {
     const cachePath = getArtworkCachePath(assetId);
-    const fileInfo = await FileSystem.getInfoAsync(cachePath);
-    return fileInfo.exists;
+    const cacheFile = file(cachePath);
+    return await cacheFile.exists();
   } catch {
     return false;
   }
@@ -135,10 +145,11 @@ export async function hasArtworkInCache(assetId: string): Promise<boolean> {
 export async function deleteArtworkFromCache(assetId: string): Promise<void> {
   try {
     const cachePath = getArtworkCachePath(assetId);
-    const fileInfo = await FileSystem.getInfoAsync(cachePath);
+    const cacheFile = file(cachePath);
+    const exists = await cacheFile.exists();
     
-    if (fileInfo.exists) {
-      await FileSystem.deleteAsync(cachePath);
+    if (exists) {
+      await cacheFile.remove();
       await removeCacheMetadata(assetId);
     }
   } catch (error) {
@@ -157,9 +168,10 @@ export async function enforceCacheSizeLimit(): Promise<void> {
       
       for (const entry of oldestEntries) {
         try {
-          const fileInfo = await FileSystem.getInfoAsync(entry.file_path);
-          if (fileInfo.exists) {
-            await FileSystem.deleteAsync(entry.file_path);
+          const cacheFile = file(entry.file_path);
+          const exists = await cacheFile.exists();
+          if (exists) {
+            await cacheFile.remove();
           }
           await removeCacheMetadata(entry.cache_key);
           totalSize -= entry.file_size;
@@ -180,14 +192,20 @@ export async function enforceCacheSizeLimit(): Promise<void> {
 export async function clearArtworkCache(): Promise<void> {
   try {
     await initArtworkCache();
-    const cacheFiles = await FileSystem.readDirectoryAsync(ARTWORK_CACHE_DIR);
+    const cacheDir = directory(ARTWORK_CACHE_DIR);
+    const exists = await cacheDir.exists();
     
-    for (const file of cacheFiles) {
-      const filePath = `${ARTWORK_CACHE_DIR}${file}`;
-      await FileSystem.deleteAsync(filePath);
+    if (exists) {
+      const contents = await cacheDir.list();
+      
+      for (const entry of contents) {
+        const filePath = `${ARTWORK_CACHE_DIR}${entry.name}`;
+        const cacheFile = file(filePath);
+        await cacheFile.remove();
+      }
+      
+      console.log(`[ArtworkCache] Cleared ${contents.length} cache files`);
     }
-    
-    console.log(`[ArtworkCache] Cleared ${cacheFiles.length} cache files`);
   } catch (error) {
     console.error('[ArtworkCache] Failed to clear cache:', error);
   }
@@ -203,17 +221,19 @@ export async function getCacheStats(): Promise<{ totalSizeMB: number; totalFiles
     let totalSize = 0;
     let totalFiles = 0;
     
-    const dirInfo = await FileSystem.getInfoAsync(ARTWORK_CACHE_DIR);
-    if (dirInfo.exists) {
-      const files = await FileSystem.readDirectoryAsync(ARTWORK_CACHE_DIR);
-      totalFiles = files.length;
+    await initArtworkCache();
+    const cacheDir = directory(ARTWORK_CACHE_DIR);
+    const exists = await cacheDir.exists();
+    
+    if (exists) {
+      const contents = await cacheDir.list();
+      totalFiles = contents.length;
       
-      for (const file of files) {
-        const filePath = `${ARTWORK_CACHE_DIR}${file}`;
-        const fileInfo = await FileSystem.getInfoAsync(filePath);
-        if (fileInfo.exists && fileInfo.size) {
-          totalSize += fileInfo.size;
-        }
+      for (const entry of contents) {
+        const filePath = `${ARTWORK_CACHE_DIR}${entry.name}`;
+        const cacheFile = file(filePath);
+        const stats = await cacheFile.stat();
+        totalSize += stats.size || 0;
       }
     }
     

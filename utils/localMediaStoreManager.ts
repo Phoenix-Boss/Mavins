@@ -1,6 +1,6 @@
-// utils/localMediaStoreManager.ts
+// utils/localMediaStoreManager.ts - Update validateFileUri to use /next
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system/legacy';
+import { file } from 'expo-file-system/next';
 import { Platform } from 'react-native';
 import {
   addWatchedAlbum,
@@ -23,6 +23,7 @@ import {
   type AvailableFolder
 } from '@/db/localDatabase';
 import { cacheArtworkFromUri } from './artworkCache';
+import { normalizeLocalUri } from '@/libs/playerSetup';
 
 export interface AlbumInfo {
   id: string;
@@ -63,7 +64,53 @@ class LocalMediaStoreManager {
     return this.permissionGranted;
   }
 
-  // Get available albums for folder browser - returns ALL folders from DB instantly
+  // Validate a single file URI - UPDATED to use expo-file-system/next
+  private async validateFileUri(uri: string): Promise<boolean> {
+    if (!uri || uri.length === 0) {
+      return false;
+    }
+    
+    // content:// URIs from MediaStore are always considered valid
+    // They will be handled correctly by expo-audio
+    if (uri.startsWith('content://')) {
+      return true;
+    }
+    
+    // For file:// URIs, convert to path and check if file exists
+    if (uri.startsWith('file://')) {
+      try {
+        const filePath = uri.substring(7);
+        const audioFile = file(filePath);
+        const exists = await audioFile.exists();
+        if (exists) {
+          const stats = await audioFile.stat();
+          return stats.size > 0;
+        }
+        return false;
+      } catch (error) {
+        return false;
+      }
+    }
+    
+    // For absolute paths, check if file exists
+    if (uri.startsWith('/')) {
+      try {
+        const audioFile = file(uri);
+        const exists = await audioFile.exists();
+        if (exists) {
+          const stats = await audioFile.stat();
+          return stats.size > 0;
+        }
+        return false;
+      } catch (error) {
+        return false;
+      }
+    }
+    
+    return false;
+  }
+
+  // Rest of the file remains the same...
   async getAvailableAlbums(forceRefresh: boolean = false): Promise<AlbumInfo[]> {
     if (!forceRefresh && await hasAvailableFolders()) {
       const cachedFolders = await getAllAvailableFolders();
@@ -82,7 +129,6 @@ class LocalMediaStoreManager {
     return await this.scanAndStoreAllAlbums();
   }
 
-  // Scan ALL audio folders from MediaStore and store them in DB (called once)
   async scanAndStoreAllAlbums(): Promise<AlbumInfo[]> {
     if (isFullScanInProgress) {
       console.log('[MediaStoreManager] Scan already in progress, waiting...');
@@ -177,12 +223,10 @@ class LocalMediaStoreManager {
     }
   }
 
-  // Get user-selected folders for the library view
   async getUserSelectedFolders(): Promise<AvailableFolder[]> {
     return await getUserSelectedFolders();
   }
 
-  // Toggle user selection for a folder
   async toggleUserSelected(folderId: string, selected: boolean): Promise<void> {
     await updateFolderUserSelected(folderId, selected ? 1 : 0);
     
@@ -196,7 +240,6 @@ class LocalMediaStoreManager {
     }
   }
 
-  // Refresh in background - adds new folders without re-scanning existing ones
   async refreshAlbumsInBackground(): Promise<void> {
     if (isFullScanInProgress) {
       console.log('[MediaStoreManager] Scan already in progress');
@@ -255,10 +298,6 @@ class LocalMediaStoreManager {
   }
 
   async getAlbumTracks(albumId: string): Promise<MediaLibrary.Asset[]> {
-    if (albumId.startsWith('fs_')) {
-      return await this.scanFolderForTracks(albumId);
-    }
-    
     const allTracks: MediaLibrary.Asset[] = [];
     let hasNextPage = true;
     let after: string | undefined = undefined;
@@ -278,104 +317,6 @@ class LocalMediaStoreManager {
     }
     
     return allTracks;
-  }
-
-  async scanFolderForTracks(folderId: string): Promise<MediaLibrary.Asset[]> {
-    const folders = await getAllAvailableFolders();
-    const folder = folders.find(f => f.folder_id === folderId);
-    if (!folder || !folder.folder_path) {
-      return [];
-    }
-    
-    const audioExtensions = new Set(['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus']);
-    const audioFiles: { path: string; name: string; modified: number }[] = [];
-    
-    const scanDir = async (dirPath: string, depth: number = 0) => {
-      if (depth > 2) return;
-      
-      try {
-        const items = await (await (new Directory(dirPath)).list()).map(item => item.name);
-        
-        for (const item of items) {
-          if (item.startsWith('.')) continue;
-          
-          const itemPath = `${dirPath}/${item}`;
-          try {
-            const stat = await (await (new File(itemPath)).exists());
-            if (stat.exists) {
-              if (stat.isDirectory) {
-                await scanDir(itemPath, depth + 1);
-              } else {
-                const ext = item.split('.').pop()?.toLowerCase();
-                if (ext && audioExtensions.has(ext)) {
-                  audioFiles.push({
-                    path: itemPath,
-                    name: item,
-                    modified: stat.modificationTime || Date.now()
-                  });
-                }
-              }
-            }
-          } catch (e) {}
-        }
-      } catch (e) {}
-    };
-    
-    await scanDir(folder.folder_path);
-    
-    const assets: MediaLibrary.Asset[] = audioFiles.map((file, index) => ({
-      id: `fs_${Buffer.from(file.path).toString('base64').substring(0, 32)}`,
-      uri: `file://${file.path}`,
-      filename: file.name,
-      duration: 0,
-      mediaType: 'audio',
-      modificationTime: file.modified,
-      width: 0,
-      height: 0,
-      creationTime: file.modified,
-      albumId: folderId,
-      mediaSubtypes: [],
-      favorite: false,
-      isLivePhoto: false
-    } as MediaLibrary.Asset));
-    
-    return assets;
-  }
-
-  // Validate a single file URI - For content:// URIs from MediaStore, they are always valid
-  private async validateFileUri(uri: string): Promise<boolean> {
-    if (!uri || uri.length === 0) {
-      return false;
-    }
-    
-    // content:// URIs from MediaStore are always considered valid
-    // They will be handled correctly by expo-audio
-    if (uri.startsWith('content://')) {
-      return true;
-    }
-    
-    // For file:// URIs, check if file exists
-    if (uri.startsWith('file://')) {
-      try {
-        const filePath = uri.substring(7);
-        const info = await (await (new File(filePath)).exists());
-        return info.exists && info.size > 0;
-      } catch (error) {
-        return false;
-      }
-    }
-    
-    // For absolute paths, check if file exists
-    if (uri.startsWith('/')) {
-      try {
-        const info = await (await (new File(uri)).exists());
-        return info.exists && info.size > 0;
-      } catch (error) {
-        return false;
-      }
-    }
-    
-    return false;
   }
 
   async addWatchedAlbumWithTracksInBackground(
@@ -406,33 +347,33 @@ class LocalMediaStoreManager {
       const tracks = await this.getAlbumTracks(albumId);
       const localTracks: Omit<LocalTrack, 'added_to_library'>[] = [];
       let validatedCount = 0;
+      let invalidCount = 0;
       
       console.log(`[MediaStoreManager] Indexing ${tracks.length} tracks for ${album.album_name}...`);
       
       for (const asset of tracks) {
         let cachedArtworkPath: string | null = null;
-        const fileUri = asset.uri;
+        const rawUri = asset.uri;
         
-        // Validate file URI - content:// URIs are automatically valid
-        const isValid = await this.validateFileUri(fileUri);
+        const normalizedUri = normalizeLocalUri(rawUri);
+        const isValid = await this.validateFileUri(normalizedUri);
         
         if (isValid) {
           validatedCount++;
         } else {
-          console.warn(`[MediaStoreManager] Invalid file URI for ${asset.filename}: ${fileUri}`);
+          invalidCount++;
+          console.warn(`[MediaStoreManager] Invalid file URI for ${asset.filename}: ${normalizedUri}`);
         }
         
-        if (!albumId.startsWith('fs_')) {
-          const artworkUri = (asset as any).artworkUri || (asset as any).albumArtUri;
-          if (artworkUri) {
-            cachedArtworkPath = await cacheArtworkFromUri(artworkUri, asset.id);
-          }
+        const artworkUri = (asset as any).artworkUri || (asset as any).albumArtUri || null;
+        if (artworkUri) {
+          cachedArtworkPath = await cacheArtworkFromUri(artworkUri, asset.id);
         }
         
         let title = (asset as any).filename?.replace(/\.[^/.]+$/, '') || 'Unknown';
         let artist = (asset as any).artist || 'Unknown Artist';
         
-        if (albumId.startsWith('fs_') && title.includes(' - ')) {
+        if ((artist === 'Unknown Artist' || !artist) && title.includes(' - ')) {
           const parts = title.split(' - ');
           if (parts.length >= 2) {
             artist = parts[0];
@@ -443,23 +384,28 @@ class LocalMediaStoreManager {
         localTracks.push({
           track_id: asset.id,
           album_id: albumId,
-          title: title,
-          artist: artist === 'Unknown Artist' ? 'Upcoming Artist' : artist,
+          title: title.trim(),
+          artist: artist === 'Unknown Artist' ? 'Upcoming Artist' : artist.trim(),
           album: album.album_name,
           duration: Math.floor(asset.duration * 1000) || 180000,
-          artwork_uri: (asset as any).artworkUri || null,
+          artwork_uri: artworkUri,
           cached_artwork_path: cachedArtworkPath,
-          file_uri: fileUri,
-          last_modified: asset.modificationTime
+          file_uri: normalizedUri,
+          last_modified: asset.modificationTime || Date.now(),
+          is_valid: isValid ? 1 : 0
         });
       }
       
       if (localTracks.length > 0) {
         await addTracks(localTracks);
         await updateAlbumTrackCount(albumId, localTracks.length);
+        
+        for (const track of localTracks) {
+          await updateTrackValidationStatus(track.track_id, track.is_valid === 1);
+        }
       }
       
-      console.log(`[MediaStoreManager] Indexed ${localTracks.length} tracks for ${album.album_name} (${validatedCount} valid, ${localTracks.length - validatedCount} invalid)`);
+      console.log(`[MediaStoreManager] Indexed ${localTracks.length} tracks for ${album.album_name} (${validatedCount} valid, ${invalidCount} invalid)`);
     } catch (error) {
       console.error('[MediaStoreManager] Background indexing failed:', error);
     } finally {

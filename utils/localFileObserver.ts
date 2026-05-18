@@ -1,5 +1,5 @@
 // utils/localFileObserver.ts
-import * as FileSystem from 'expo-file-system/legacy';
+import { file, directory } from 'expo-file-system/next';
 import { mediaStoreManager } from './localMediaStoreManager';
 import { localErrorHandler, LocalMusicErrorType } from './localErrorHandler';
 
@@ -39,27 +39,27 @@ class LocalFileObserver {
     
     try {
       const lastSnapshot = new Map<string, number>();
-      const items = await (await (new Directory(folderPath)).list()).map(item => item.name);
+      const dir = directory(folderPath);
+      const contents = await dir.list();
       
-      for (const item of items) {
-        const itemPath = `${folderPath}/${item}`;
-        const stat = await (await (new File(itemPath)).exists());
-        if (stat.exists) {
-          lastSnapshot.set(itemPath, stat.modificationTime || 0);
-        }
+      for (const entry of contents) {
+        const itemPath = `${folderPath}/${entry.name}`;
+        const itemFile = file(itemPath);
+        const stat = await itemFile.stat();
+        lastSnapshot.set(itemPath, stat.modified ? new Date(stat.modified).getTime() : 0);
       }
       
       const interval = setInterval(async () => {
         try {
-          const currentItems = await (await (new Directory(folderPath)).list()).map(item => item.name);
+          const currentDir = directory(folderPath);
+          const currentContents = await currentDir.list();
           const currentSnapshot = new Map<string, number>();
           
-          for (const item of currentItems) {
-            const itemPath = `${folderPath}/${item}`;
-            const stat = await (await (new File(itemPath)).exists());
-            if (stat.exists) {
-              currentSnapshot.set(itemPath, stat.modificationTime || 0);
-            }
+          for (const entry of currentContents) {
+            const itemPath = `${folderPath}/${entry.name}`;
+            const itemFile = file(itemPath);
+            const stat = await itemFile.stat();
+            currentSnapshot.set(itemPath, stat.modified ? new Date(stat.modified).getTime() : 0);
           }
           
           // Check for added/modified
