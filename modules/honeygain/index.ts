@@ -16,7 +16,9 @@
 
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 
-const API_KEY = '2125ae20cfd8855abc0bee8cc9c997c4';
+// With this:
+import { PAWNS_API_KEY } from './secrets';
+const API_KEY = PAWNS_API_KEY;
 
 // ─── Default notification configuration ──────────────────────────────────────
 // Adjust these to match your drawable resource name and preferred copy.

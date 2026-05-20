@@ -110,3 +110,5 @@ temp/
 *.seed
 *.pid.lock
 !android/gradle.properties
+
+modules/honeygain/secrets.ts

@@ -9,9 +9,10 @@
 // FIXED: AppState foreground handler removed — double-expand was caused by this hook
 //        AND MusicPlayerContext both calling expandPlayer on foreground. Removed from here;
 //        MusicPlayerContext owns that responsibility.
+// FIXED: Fallback artwork for local songs without album art - uses app icon.
 
 import { useCallback, useEffect, useRef } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, type AppStateStatus, Image } from 'react-native';
 import {
   Command,
   MediaControl,
@@ -20,6 +21,9 @@ import {
 } from 'expo-media-control';
 
 import type { RepeatMode } from '@/libs/playerSetup';
+
+// Import fallback image
+const FALLBACK_ICON = require('@/assets/images/icon.png');
 
 export interface SystemMediaControlsTrack {
   title: string;
@@ -76,6 +80,22 @@ const MEDIA_CAPABILITY_KEYS = [
 
 const COMPACT_CAPABILITY_KEYS = ['PREVIOUS_TRACK', 'PLAY', 'NEXT_TRACK'] as const;
 
+// Cache for fallback artwork URI
+let cachedFallbackUri: string | null = null;
+
+function getFallbackArtworkUri(): string {
+  if (!cachedFallbackUri) {
+    try {
+      const resolved = Image.resolveAssetSource(FALLBACK_ICON);
+      cachedFallbackUri = resolved?.uri || '';
+    } catch (error) {
+      console.warn('[MediaControls] Failed to resolve fallback icon:', error);
+      cachedFallbackUri = '';
+    }
+  }
+  return cachedFallbackUri || '';
+}
+
 function isMediaControlAvailable(): boolean {
   return !!MediaControl && typeof MediaControl.enableMediaControls === 'function';
 }
@@ -120,10 +140,23 @@ async function safeMediaCall<T>(action: () => Promise<T>, fallback?: T): Promise
 }
 
 function buildArtworkUri(track?: SystemMediaControlsTrack): string | undefined {
-  if (!track) return undefined;
-  if (track.artwork) return track.artwork;
-  if (track.videoId) return `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
-  return undefined;
+  // Always return a valid URI - fallback to app icon if no artwork available
+  const fallbackUri = getFallbackArtworkUri();
+  
+  if (!track) {
+    return fallbackUri || undefined;
+  }
+  
+  if (track.artwork && track.artwork.trim().length > 0) {
+    return track.artwork;
+  }
+  
+  if (track.videoId) {
+    return `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+  }
+  
+  // Return fallback icon for local songs without artwork
+  return fallbackUri || undefined;
 }
 
 function getNativeCapabilities(): {
@@ -175,6 +208,11 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
   useEffect(() => {
     propsRef.current = props;
   }, [props]);
+
+  // Preload fallback URI on mount
+  useEffect(() => {
+    getFallbackArtworkUri();
+  }, []);
 
   // ── Helpers that pick the active player's data ────────────────────────────
   const getActivePosition = (p: SystemMediaControlsProps) =>
@@ -412,6 +450,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
       const elapsedTime   = getActivePosition(current);
       const durationValue = getActiveDuration(current);
       const activePlaying = getActivePlaying(current);
+      const artworkUri    = buildArtworkUri(current.track);
 
       void safeMediaCall(async () => {
         await MediaControl.updatePlaybackState(
@@ -428,7 +467,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
           repeatMode: repeatModeToNative(current.repeatMode),
           title:      current.track?.title  || 'Unknown Title',
           artist:     current.track?.artist || 'Unknown Artist',
-          ...(buildArtworkUri(current.track) ? { artwork: { uri: buildArtworkUri(current.track)! } } : {}),
+          ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
         });
       });
 

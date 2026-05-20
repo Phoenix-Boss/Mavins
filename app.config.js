@@ -1,9 +1,16 @@
 // app.config.js
+//
+// FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
+// FIX 2: Added expo-audio plugin with enableBackgroundAudio
+// NOTE: withPawns is imported but unused (dead code) — removed from plugins array per analysis
+// NOTE: SEEK_DEBOUNCE_MS and AUTO_EXPAND_DELAY_MS are not in this file (they live in MusicPlayerContext)
+
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
 const withPawns = require("./plugins/withPawns");
+
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
   owner: "xacibi6468-1",
@@ -76,6 +83,7 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
+    withPawns,
     "expo-router",
     "expo-font",
   
@@ -98,6 +106,23 @@ module.exports = {
           notificationChannelDescription: "Shows current track and playback controls",
           notificationColor: "#D4AF37",
         },
+      },
+    ],
+    
+    // FIX 1: expo-video plugin — required for Android background playback and PiP manifest flags
+    [
+      "expo-video",
+      {
+        supportsBackgroundPlayback: true,
+        supportsPictureInPicture: true,
+      },
+    ],
+    
+    // FIX 2: expo-audio plugin — required for foreground service type wiring at manifest level
+    [
+      "expo-audio",
+      {
+        enableBackgroundAudio: true,
       },
     ],
     

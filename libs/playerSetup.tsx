@@ -6,18 +6,76 @@
 // Architecture:
 //   MusicPlayerContext.tsx  ← owns all logic, defines contexts, exports hooks
 //   playerSetup.tsx         ← re-exports everything + adds GestureContext
-//   All other files         ← import from playerSetup ONLY
+//   preload.ts              ← owns ALL preload logic (search + queue)
+//   All other files         ← import from playerSetup
 //
-// This breaks the circular dependency: playerSetup never imports from itself,
-// and MusicPlayerContext never imports from playerSetup.
+// IMPORTANT: All components and screens should import from this file only.
+// Do NOT import directly from MusicPlayerContext.tsx or preload.ts.
 
 import { createContext, useContext } from 'react';
 import { type SharedValue } from 'react-native-reanimated';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Import from MusicPlayerContext (the actual implementation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  // Types
+  type Song,
+  type RepeatMode,
+  type ShuffleMode,
+  type PlayerEngineState,
+  type MusicPlayerContextType,
+  type TrackExtras,
+  type ResolvedTrack,
+  type MusicPlayerProviderProps,
+  // Hooks and functions
+  usePlayerEngine,
+  useMusicPlayer,
+  useTrackExtrasVersion,
+  getTrackExtras,
+  storeTrackExtras,
+  MusicPlayerProvider,
+} from '@/components/MusicPlayerContext';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Import from preload
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  preloadSearchResults,
+  preloadNextTracks,
+  cancelAllPreloads,
+  getPreloadAbortSignal,
+  getActivePreloadCount,
+  getResolvedCacheSize,
+  clearResolvedUrlCache,
+  type PreloadSong,
+} from '@/libs/preload';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URI NORMALIZER - Shared utility for local file URIs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalizes a local file URI to a format compatible with expo-audio
+ * - content:// URIs (Android MediaStore) are kept as-is (expo-audio handles them)
+ * - file:// URIs are kept as-is
+ * - Absolute paths are prefixed with file://
+ * - Empty strings return empty string
+ */
+export function normalizeLocalUri(uri: string): string {
+  if (!uri) return '';
+  if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
+  if (uri.startsWith('/')) return `file://${uri}`;
+  return uri;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Re-export everything consumers need from MusicPlayerContext
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Types
 export type {
   Song,
   RepeatMode,
@@ -27,76 +85,32 @@ export type {
   TrackExtras,
   ResolvedTrack,
   MusicPlayerProviderProps,
-} from '@/components/MusicPlayerContext';
+};
 
+// Hooks and Context exports
 export {
   usePlayerEngine,
   useMusicPlayer,
   useTrackExtrasVersion,
   getTrackExtras,
+  storeTrackExtras,
   MusicPlayerProvider,
-} from '@/components/MusicPlayerContext';
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Preload function for search results (ISSUE 3 FIX)
+// Re-export preload utilities (for advanced use cases)
+// Most components won't need these directly - they're used internally
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface PreloadSong {
-  id: string;
-  title: string;
-  artist: string;
-  thumbnail: string;
-  url: string;
-  videoId: string;
-  duration: number;
-}
-
-/**
- * Preloads search results for instant playback
- * This caches the track metadata and optionally prefetches audio data
- */
-export const preloadSearchResults = async (songs: PreloadSong[]): Promise<void> => {
-  if (!songs || songs.length === 0) return;
-  
-  try {
-    // Option 1: Cache track metadata for faster access
-    const { cache } = await import('@/libs/cache');
-    
-    const preloadPromises = songs.map(async (song) => {
-      const cacheKey = `preload:track:${song.id}`;
-      await cache.set(
-        cacheKey,
-        {
-          preloaded: true,
-          timestamp: Date.now(),
-          track: {
-            id: song.id,
-            title: song.title,
-            artist: song.artist,
-            url: song.url,
-            videoId: song.videoId,
-          }
-        },
-        3600000 // 1 hour TTL
-      ).catch(() => {});
-      
-      // Option 2: Prefetch the URL headers (lightweight)
-      // This can help with faster initial load
-      if (song.url) {
-        // Use HEAD request to pre-connect and cache DNS
-        fetch(song.url, { 
-          method: 'HEAD',
-          mode: 'no-cors' // This prevents CORS issues
-        }).catch(() => {});
-      }
-    });
-    
-    await Promise.allSettled(preloadPromises);
-    console.log(`[PlayerSetup] Preloaded ${songs.length} search results`);
-  } catch (error) {
-    // Non-critical, don't throw
-    console.warn('[PlayerSetup] Failed to preload search results:', error);
-  }
+export {
+  preloadSearchResults,
+  preloadNextTracks,
+  cancelAllPreloads,
+  getPreloadAbortSignal,
+  getActivePreloadCount,
+  getResolvedCacheSize,
+  clearResolvedUrlCache,
+  type PreloadSong,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,8 +119,8 @@ export const preloadSearchResults = async (songs: PreloadSong[]): Promise<void> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface GestureContextValue {
-  setSliderActive:  (active: boolean) => void;
-  setButtonActive:  (active: boolean) => void;
+  setSliderActive: (active: boolean) => void;
+  setButtonActive: (active: boolean) => void;
   isGestureBlocked: () => boolean;
   gestureBlockedSV: SharedValue<boolean>;
 }
@@ -120,7 +134,7 @@ export const useGestureContext = (): GestureContextValue => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper function to check if expandPlayer is registered
+// Helper functions for expandPlayer registration
 // ─────────────────────────────────────────────────────────────────────────────
 
 let expandPlayerRegistered = false;
@@ -148,3 +162,120 @@ export const getRegisteredExpandPlayer = (): (() => void) | null => {
 export const isExpandPlayerRegistered = (): boolean => {
   return expandPlayerRegistered;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Create a song object from minimal data
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CreateSongParams {
+  id: string;
+  title: string;
+  artist?: string;
+  thumbnail?: string;
+  url: string;
+  videoId?: string;
+  duration?: number;
+  isLocal?: boolean;
+  isDownloaded?: boolean;
+}
+
+/**
+ * Utility to create a standardized Song object
+ */
+export function createSong(params: CreateSongParams): Song {
+  // Ensure required fields have values
+  if (!params.id) {
+    throw new Error('createSong: id is required');
+  }
+  if (!params.title) {
+    throw new Error('createSong: title is required');
+  }
+  if (!params.url) {
+    throw new Error('createSong: url is required');
+  }
+
+  return {
+    id: params.id,
+    title: params.title,
+    artist: params.artist || 'Unknown Artist',
+    thumbnail: params.thumbnail,
+    url: params.url,
+    videoId: params.videoId,
+    duration: params.duration,
+    isLocal: params.isLocal,
+    isDownloaded: params.isDownloaded,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Check if a track is local
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function isLocalTrack(track: { url?: string; isLocal?: boolean; isDownloaded?: boolean } | null | undefined): boolean {
+  if (!track) return false;
+  const url = track.url || '';
+  return (
+    url.startsWith('file://') === true ||
+    url.startsWith('/') === true ||
+    url.startsWith('content://') === true ||
+    track.isLocal === true ||
+    track.isDownloaded === true
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Format duration (seconds) to MM:SS or HH:MM:SS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function formatDuration(seconds: number | undefined | null): string {
+  if (!seconds || seconds <= 0) return '0:00';
+  
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Format number of plays/listens
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function formatPlayCount(count: number | undefined | null): string {
+  if (!count || count <= 0) return '';
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return count.toString();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Extract video ID from various YouTube URL formats
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function extractVideoId(url: string): string | null {
+  if (!url) return null;
+  
+  // Regular expressions for different YouTube URL formats
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&?#]+)/,
+    /youtube\.com\/shorts\/([^&?#]+)/,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Build watch URL from video ID
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function toWatchUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}

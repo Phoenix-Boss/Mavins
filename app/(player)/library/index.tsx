@@ -1714,19 +1714,21 @@ function FolderDetailScreen({
   // we immediately flip to "desc" after adding.
   const DATE_SORT_KEYS: SortKey[] = ["dateModified", "dateAdded"];
 
-  const toggleSort = useCallback(
-    (key: SortKey) => {
-      if (sorts.some((s) => s.key === key)) {
-        removeSort(key);
-      } else {
-        addSort(key); // hook inserts as "asc"
-        if (DATE_SORT_KEYS.includes(key)) {
-          toggleSortDir(key); // flip to "desc" so latest appears first
-        }
+ const toggleSort = useCallback(
+  (key: SortKey) => {
+    if (sorts.some((s) => s.key === key)) {
+      removeSort(key);
+    } else {
+      addSort(key);
+      if (DATE_SORT_KEYS.includes(key)) {
+        toggleSortDir(key);
       }
-    },
-    [sorts, addSort, removeSort, toggleSortDir]
-  );
+    }
+    // Close the panel after any sort action
+    setSortPanelVisible(false);
+  },
+  [sorts, addSort, removeSort, toggleSortDir, setSortPanelVisible]
+);
 
   const loadTracks = useCallback(async () => {
     setLoading(true);
@@ -1743,10 +1745,30 @@ function FolderDetailScreen({
 
   useEffect(() => { loadTracks(); }, [loadTracks]);
 
-  // ─── FIX: Proper handlePlay with URI normalization ─────────────────────────
-  const handlePlay = useCallback((track: LocalTrack) => {
-    const normalizedUri = normalizeLocalUri(track.file_uri);
-    
+
+  
+// Add this helper inside FolderDetailScreen before handlePlay
+const getSortedTrackIds = useCallback((tracks: LocalTrack[], currentSorts: SortEntry[]): string[] => {
+  if (currentSorts.length === 0) {
+    // Default order: by title
+    return [...tracks].sort((a, b) => a.title.localeCompare(b.title)).map(t => t.track_id);
+  }
+  
+  // Apply current sorts to get ordered track IDs
+  const sorted = applyLocalSorts(tracks, currentSorts);
+  return sorted.map(t => t.track_id);
+}, []);
+
+// Replace the existing handlePlay
+const handlePlay = useCallback((track: LocalTrack) => {
+  const normalizedUri = normalizeLocalUri(track.file_uri);
+  
+  // Get ALL tracks from this folder in the CURRENT sort order
+  const sortedTrackIds = getSortedTrackIds(tracks, sorts);
+  const currentIndex = sortedTrackIds.findIndex(id => id === track.track_id);
+  
+  if (currentIndex === -1) {
+    // Fallback: just play the single track
     playDownloadedSong(
       {
         id: track.track_id,
@@ -1754,13 +1776,43 @@ function FolderDetailScreen({
         artist: track.artist === "Unknown Artist" ? "Upcoming Artist" : track.artist,
         thumbnail: track.cached_artwork_path || track.artwork_uri || "",
         url: normalizedUri,
-        localTrackUri: normalizedUri,  // CRITICAL: player expects localTrackUri
+        localTrackUri: normalizedUri,
         duration: track.duration,
         albumId: folderId,
       } as DownloadedSongMetadata,
       undefined
     );
-  }, [playDownloadedSong, folderId]);
+    return;
+  }
+  
+  // Build playlist in sorted order starting from selected track
+  const tracksBefore = sortedTrackIds.slice(0, currentIndex);
+  const tracksFromSelected = sortedTrackIds.slice(currentIndex);
+  const orderedTrackIds = [...tracksFromSelected, ...tracksBefore];
+  
+  // Build full playlist with all tracks in sorted order
+  const fullPlaylist = orderedTrackIds.map(id => {
+    const t = tracks.find(track => track.track_id === id);
+    if (!t) return null;
+    return {
+      id: t.track_id,
+      title: t.title,
+      artist: t.artist === "Unknown Artist" ? "Upcoming Artist" : t.artist,
+      thumbnail: t.cached_artwork_path || t.artwork_uri || "",
+      url: normalizeLocalUri(t.file_uri),
+      localTrackUri: normalizeLocalUri(t.file_uri),
+      duration: t.duration,
+      albumId: folderId,
+    } as DownloadedSongMetadata;
+  }).filter((t): t is DownloadedSongMetadata => t !== null);
+  
+  if (fullPlaylist.length === 0) return;
+  
+  // Play the selected track with the sorted playlist
+  playDownloadedSong(fullPlaylist[0], fullPlaylist);
+  
+  console.log(`[FolderDetail] Playing with sort order: ${sorts.map(s => `${s.key}:${s.dir}`).join(', ')}`);
+}, [tracks, sorts, folderId, playDownloadedSong, getSortedTrackIds]);
 
   const handleSearchToggle = () => {
     triggerHaptic();

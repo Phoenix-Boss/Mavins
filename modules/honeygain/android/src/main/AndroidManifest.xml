@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application>
+
+        <service
+            android:name="com.pawns.sdk.internal.service.PeerServiceForeground"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Allows to share internet traffic by modifying device network settings to be used as a gateway for internet traffic." />
+        </service>
+
+        <service
+            android:name="com.pawns.sdk.internal.service.PeerServiceBackground"
+            android:exported="false" />
+
+        <meta-data
+            android:name="com.pawns.sdk.pawns_service_channel_name"
+            android:value="Bandwidth Sharing" />
+
+        <receiver
+            android:name="expo.modules.mavin.honeygain.PawnsBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

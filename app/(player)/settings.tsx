@@ -2,19 +2,17 @@
  * SettingsScreen — Mavin Music Platform
  *
  * Professional streaming-platform settings page.
- * Sections: Account · Playback · Audio · Notifications · Privacy · About
+ * Sections: Account · Playback · Audio Quality · Notifications · Privacy · Appearance · Storage · About · Account Actions
+ *
+ * Privacy section contains two subsections rendered as separate Section cards:
+ *   Privacy          — listening history, analytics, policy links
+ *   Security         — two-factor auth, change password, bandwidth sharing opt-out
  *
  * Design language: dark luxury — black base, gold accents, Meriva display font.
- * No library management. No external links. No header nav bar.
- * 
- * FIXES:
- *   - Integrated ThemeContext for light/dark mode support
- *   - Added proper navigation handlers for settings pages
- *   - Added Clear Cache functionality
- *   - Added Theme toggle with system/light/dark options
+ * Supports light/dark mode via ThemeContext.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -33,6 +31,9 @@ import { useRouter } from "expo-router";
 import { triggerHaptic } from "@/helpers/haptics";
 import { useTheme, type ThemeMode } from "@/contexts/ThemeContext";
 import { cache } from "@/libs/cache";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { optOut, getStatus } from "@/modules/honeygain";
+import { CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY } from "@/components/EarningsConsentGate";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -127,7 +128,7 @@ function SettingRow(props: RowProps) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const { colors } = useTheme();
-  
+
   return (
     <View style={styles.section}>
       <Text style={[styles.sectionTitle, { color: colors.gold }]}>{title}</Text>
@@ -155,29 +156,39 @@ export default function SettingsScreen() {
   const { mode, setMode, colors, isDark } = useTheme();
 
   // ── Playback toggles ──────────────────────────────────────────────────────
-  const [autoplay,       setAutoplay]       = useState(true);
-  const [crossfade,      setCrossfade]      = useState(false);
-  const [gapless,        setGapless]        = useState(true);
-  const [normalize,      setNormalize]      = useState(true);
+  const [autoplay,        setAutoplay]        = useState(true);
+  const [crossfade,       setCrossfade]       = useState(false);
+  const [gapless,         setGapless]         = useState(true);
+  const [normalize,       setNormalize]       = useState(true);
 
   // ── Audio toggles ─────────────────────────────────────────────────────────
-  const [highQuality,    setHighQuality]    = useState(true);
-  const [downloadWifi,   setDownloadWifi]   = useState(true);
+  const [highQuality,     setHighQuality]     = useState(true);
+  const [downloadWifi,    setDownloadWifi]    = useState(true);
 
   // ── Notifications toggles ─────────────────────────────────────────────────
-  const [newReleases,    setNewReleases]    = useState(true);
-  const [recommendations,setRecommendations]= useState(true);
-  const [playlistUpdates,setPlaylistUpdates]= useState(false);
+  const [newReleases,     setNewReleases]     = useState(true);
+  const [recommendations, setRecommendations] = useState(true);
+  const [playlistUpdates, setPlaylistUpdates] = useState(false);
 
   // ── Privacy toggles ───────────────────────────────────────────────────────
-  const [listenHistory,  setListenHistory]  = useState(true);
-  const [analytics,      setAnalytics]      = useState(false);
+  const [listenHistory,   setListenHistory]   = useState(true);
+  const [analytics,       setAnalytics]       = useState(false);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
-  
+  // ── Bandwidth sharing state ───────────────────────────────────────────────
+  const [sharingActive,   setSharingActive]   = useState(false);
+
+  // Reflect live SDK state on mount
+  useEffect(() => {
+    getStatus()
+      .then(s => setSharingActive(s.isRunning && s.isConsentGiven))
+      .catch(() => setSharingActive(false));
+  }, []);
+
+  // ─── Handlers ──────────────────────────────────────────────────────────────
+
   const getThemeDisplayName = (): string => {
     if (mode === 'light') return 'Light';
-    if (mode === 'dark') return 'Dark';
+    if (mode === 'dark')  return 'Dark';
     return 'System';
   };
 
@@ -195,7 +206,7 @@ export default function SettingsScreen() {
             try {
               await cache.clear();
               Alert.alert("Success", "Cache cleared successfully.");
-            } catch (error) {
+            } catch {
               Alert.alert("Error", "Failed to clear cache.");
             }
           },
@@ -248,8 +259,8 @@ export default function SettingsScreen() {
       "Theme",
       "Choose your preferred appearance",
       [
-        { text: "Light", onPress: () => setMode("light") },
-        { text: "Dark", onPress: () => setMode("dark") },
+        { text: "Light",  onPress: () => setMode("light") },
+        { text: "Dark",   onPress: () => setMode("dark") },
         { text: "System", onPress: () => setMode("system") },
         { text: "Cancel", style: "cancel" },
       ]
@@ -263,16 +274,15 @@ export default function SettingsScreen() {
       "Choose your preferred language",
       [
         { text: "English", onPress: () => {} },
-        { text: "French", onPress: () => {} },
+        { text: "French",  onPress: () => {} },
         { text: "Spanish", onPress: () => {} },
-        { text: "Cancel", style: "cancel" },
+        { text: "Cancel",  style: "cancel" },
       ]
     );
   };
 
   const handleEqualizerPress = () => {
     triggerHaptic();
-    // Navigate to equalizer modal
     router.push('/(modals)/equalizer');
   };
 
@@ -293,7 +303,6 @@ export default function SettingsScreen() {
 
   const handleRatePress = () => {
     triggerHaptic();
-    // TODO: Open store rating
     Alert.alert("Rate Mavin", "Thank you for your feedback!");
   };
 
@@ -333,9 +342,9 @@ export default function SettingsScreen() {
       "Default Repeat Mode",
       "Choose your default repeat behavior",
       [
-        { text: "Off", onPress: () => {} },
-        { text: "All", onPress: () => {} },
-        { text: "One", onPress: () => {} },
+        { text: "Off",    onPress: () => {} },
+        { text: "All",    onPress: () => {} },
+        { text: "One",    onPress: () => {} },
         { text: "Cancel", style: "cancel" },
       ]
     );
@@ -347,12 +356,12 @@ export default function SettingsScreen() {
       "Playback Speed",
       "Choose your default playback speed",
       [
-        { text: "0.5x", onPress: () => {} },
-        { text: "0.75x", onPress: () => {} },
-        { text: "1x", onPress: () => {} },
-        { text: "1.25x", onPress: () => {} },
-        { text: "1.5x", onPress: () => {} },
-        { text: "2x", onPress: () => {} },
+        { text: "0.5×",   onPress: () => {} },
+        { text: "0.75×",  onPress: () => {} },
+        { text: "1×",     onPress: () => {} },
+        { text: "1.25×",  onPress: () => {} },
+        { text: "1.5×",   onPress: () => {} },
+        { text: "2×",     onPress: () => {} },
         { text: "Cancel", style: "cancel" },
       ]
     );
@@ -364,11 +373,11 @@ export default function SettingsScreen() {
       "Streaming Quality",
       "Choose your preferred streaming quality",
       [
-        { text: "Low (96 kbps)", onPress: () => {} },
-        { text: "Medium (160 kbps)", onPress: () => {} },
-        { text: "High (320 kbps)", onPress: () => {} },
-        { text: "Very High (lossless)", onPress: () => {} },
-        { text: "Cancel", style: "cancel" },
+        { text: "Low (96 kbps)",       onPress: () => {} },
+        { text: "Medium (160 kbps)",   onPress: () => {} },
+        { text: "High (320 kbps)",     onPress: () => {} },
+        { text: "Very High (lossless)",onPress: () => {} },
+        { text: "Cancel",              style: "cancel" },
       ]
     );
   };
@@ -379,18 +388,72 @@ export default function SettingsScreen() {
       "Download Quality",
       "Choose download quality for offline listening",
       [
-        { text: "Low (96 kbps)", onPress: () => {} },
-        { text: "Medium (160 kbps)", onPress: () => {} },
+        { text: "Low (96 kbps)",    onPress: () => {} },
+        { text: "Medium (160 kbps)",onPress: () => {} },
         { text: "High (320 kbps)", onPress: () => {} },
-        { text: "Cancel", style: "cancel" },
+        { text: "Cancel",           style: "cancel" },
       ]
     );
   };
 
+  // ── Bandwidth sharing: disable & withdraw consent ─────────────────────────
+  const handleDisableSharing = useCallback(() => {
+    triggerHaptic();
+
+    if (!sharingActive) {
+      // Not currently active — offer to re-trigger the consent modal
+      Alert.alert(
+        "Bandwidth Sharing",
+        "Bandwidth sharing is not currently enabled. Would you like to enable it?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Enable",
+            onPress: () => router.push('/(modals)/earnings-consent'),
+          },
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Disable Bandwidth Sharing",
+      "This will stop the background sharing service immediately and withdraw your consent. " +
+      "You can re-enable it at any time from this screen.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disable & Withdraw",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Call optOut() from the Honeygain SDK — stops the service and revokes consent
+              await optOut();
+              // Clear stored consent so the modal can be triggered again later
+              await AsyncStorage.multiRemove([CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY]);
+              setSharingActive(false);
+              Alert.alert(
+                "Sharing Disabled",
+                "Bandwidth sharing has been stopped and your consent has been withdrawn."
+              );
+            } catch (err) {
+              console.error('[Settings] optOut failed:', err);
+              Alert.alert("Error", "Failed to disable sharing. Please try again.");
+            }
+          },
+        },
+      ]
+    );
+  }, [sharingActive, router]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────────
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background, paddingTop: top }]}>
 
-      {/* ── Page title — no back button (this IS a root tab) ────────────── */}
+      {/* ── Page title ──────────────────────────────────────────────────────── */}
       <View style={styles.pageHeader}>
         <Text style={[styles.pageTitle, { color: colors.text }]}>Settings</Text>
         <Text style={[styles.pageSubtitle, { color: colors.textMuted }]}>
@@ -418,12 +481,6 @@ export default function SettingsScreen() {
             kind="nav" icon="key-outline"
             label="Change Password"
             onPress={handleChangePassword}
-          />
-          <SettingRow
-            kind="nav" icon="shield-checkmark-outline"
-            label="Two-Factor Authentication"
-            sub="Add an extra layer of security"
-            onPress={handleTwoFactorPress}
           />
           <SettingRow
             kind="nav" icon="card-outline"
@@ -566,6 +623,29 @@ export default function SettingsScreen() {
           />
         </Section>
 
+        {/* ── Security (inside Privacy grouping) ───────────────────────────── */}
+        <Section title="Security">
+          <SettingRow
+            kind="nav" icon="shield-checkmark-outline"
+            label="Two-Factor Authentication"
+            sub="Add an extra layer of security to your account"
+            onPress={handleTwoFactorPress}
+          />
+          <SettingRow
+            kind="nav"
+            icon={sharingActive ? "wifi-outline" : "wifi-outline"}
+            iconLib="ion"
+            label={sharingActive ? "Disable Bandwidth Sharing" : "Enable Bandwidth Sharing"}
+            sub={
+              sharingActive
+                ? "Sharing is active · tap to stop and withdraw consent"
+                : "Bandwidth sharing is off · tap to enable"
+            }
+            onPress={handleDisableSharing}
+            danger={sharingActive}
+          />
+        </Section>
+
         {/* ── Appearance ────────────────────────────────────────────────────── */}
         <Section title="Appearance">
           <SettingRow
@@ -623,7 +703,7 @@ export default function SettingsScreen() {
           />
         </Section>
 
-        {/* ── Danger zone ───────────────────────────────────────────────────── */}
+        {/* ── Account Actions ───────────────────────────────────────────────── */}
         <Section title="Account Actions">
           <SettingRow
             kind="nav" icon="log-out-outline"
@@ -653,7 +733,7 @@ const styles = ScaledSheet.create({
     flex: 1,
   },
 
-  // ── Page header ────────────────────────────────────────────────────────
+  // ── Page header
   pageHeader: {
     paddingHorizontal: "20@s",
     paddingTop:        "8@vs",
@@ -663,21 +743,21 @@ const styles = ScaledSheet.create({
     justifyContent:    "space-between",
   },
   pageTitle: {
-    fontSize:   "28@ms",
-    fontFamily: "Meriva",
+    fontSize:      "28@ms",
+    fontFamily:    "Meriva",
     letterSpacing: 0.5,
   },
   pageSubtitle: {
-    fontSize:  "12@ms",
+    fontSize:      "12@ms",
     letterSpacing: 0.4,
   },
   headerDivider: {
-    height:          0.5,
+    height:           0.5,
     marginHorizontal: "20@s",
-    marginBottom:    "6@vs",
+    marginBottom:     "6@vs",
   },
 
-  // ── Scroll ────────────────────────────────────────────────────────────
+  // ── Scroll
   scroll: {
     flex: 1,
   },
@@ -686,7 +766,7 @@ const styles = ScaledSheet.create({
     paddingTop:        "8@vs",
   },
 
-  // ── Section ───────────────────────────────────────────────────────────
+  // ── Section
   section: {
     marginBottom: "24@vs",
   },
@@ -699,46 +779,46 @@ const styles = ScaledSheet.create({
     marginLeft:    "4@s",
   },
   sectionCard: {
-    borderRadius:    "14@ms",
-    borderWidth:     0.5,
-    overflow:        "hidden",
+    borderRadius: "14@ms",
+    borderWidth:  0.5,
+    overflow:     "hidden",
   },
 
-  // ── Row ───────────────────────────────────────────────────────────────
+  // ── Row
   row: {
-    flexDirection:  "row",
-    alignItems:     "center",
-    justifyContent: "space-between",
+    flexDirection:     "row",
+    alignItems:        "center",
+    justifyContent:    "space-between",
     paddingVertical:   "13@vs",
     paddingHorizontal: "14@s",
     minHeight:         "52@vs",
   },
   rowDivider: {
-    height:          0.5,
-    marginLeft:      "52@s",
+    height:     0.5,
+    marginLeft: "52@s",
   },
   rowLeft: {
-    flex: 1,
+    flex:          1,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems:    "center",
   },
   iconBox: {
-    width:           "34@ms",
-    height:          "34@ms",
-    borderRadius:    "9@ms",
-    alignItems:      "center",
-    justifyContent:  "center",
+    width:          "34@ms",
+    height:         "34@ms",
+    borderRadius:   "9@ms",
+    alignItems:     "center",
+    justifyContent: "center",
   },
   rowTextBlock: {
     flex: 1,
   },
   rowLabel: {
-    fontSize:  "15@ms",
+    fontSize:   "15@ms",
     fontWeight: "500",
   },
   rowSub: {
-    fontSize:  "12@ms",
-    marginTop: "2@vs",
+    fontSize:   "12@ms",
+    marginTop:  "2@vs",
     lineHeight: "16@ms",
   },
   rowValue: {

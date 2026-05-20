@@ -41,7 +41,8 @@ export const SORT_META: Record<SortKey, { label: string; icon: string }> = {
 export const SORT_KEYS = Object.keys(SORT_META) as SortKey[];
 
 export function applySorts<T extends Record<string, any>>(items: T[], sorts: SortEntry[]): T[] {
-  if (!sorts.length) return items;
+  if (!sorts.length) return [...items];
+  
   return [...items].sort((a, b) => {
     for (const { key, dir } of sorts) {
       let va: any, vb: any;
@@ -50,17 +51,24 @@ export function applySorts<T extends Record<string, any>>(items: T[], sorts: Sor
         case "artist":       va = a.artist  ?? "";             vb = b.artist  ?? "";             break;
         case "album":        va = a.album   ?? "";             vb = b.album   ?? "";             break;
         case "filename":     va = a.file_uri ?? a.filename ?? ""; vb = b.file_uri ?? b.filename ?? ""; break;
-        case "folder":       va = a.folder  ?? "";             vb = b.folder  ?? "";             break;
+        case "folder":       va = a.folder  ?? a.album_id ?? ""; vb = b.folder  ?? b.album_id ?? ""; break;
         case "year":         va = Number(a.year ?? 0);         vb = Number(b.year ?? 0);         break;
         case "duration":     va = Number(a.duration ?? 0);     vb = Number(b.duration ?? 0);     break;
         case "trackNumber":  va = Number(a.track_number ?? 0); vb = Number(b.track_number ?? 0); break;
         case "rating":       va = Number(a.rating ?? 0);       vb = Number(b.rating ?? 0);       break;
         case "playCount":    va = Number(a.play_count ?? 0);   vb = Number(b.play_count ?? 0);   break;
-        case "dateAdded":    va = a.date_added    ?? "";        vb = b.date_added    ?? "";        break;
-        case "dateModified": va = a.date_modified ?? "";        vb = b.date_modified ?? "";        break;
+        case "dateAdded":    va = a.added_to_library ?? a.date_added ?? ""; vb = b.added_to_library ?? b.date_added ?? ""; break;
+        case "dateModified": va = a.last_modified ?? a.date_modified ?? ""; vb = b.last_modified ?? b.date_modified ?? ""; break;
         default:             va = ""; vb = "";
       }
-      let cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+      
+      let cmp: number;
+      if (typeof va === "string") {
+        cmp = va.localeCompare(vb, undefined, { numeric: true, sensitivity: "base" });
+      } else {
+        cmp = va - vb;
+      }
+      
       if (dir === "desc") cmp = -cmp;
       if (cmp !== 0) return cmp;
     }
@@ -78,11 +86,13 @@ export interface UseLocalSortingReturn {
   toggleSortDir: (key: SortKey) => void;
   setLimit: (limit: number) => void;
   clearAllSorts: () => void;
+  clearSorts: () => void;  // Alias for clearAllSorts
   activeSortCount: number;
   getSortedAndLimited: <T extends Record<string, any>>(items: T[]) => T[];
   getSortLabel: (key: SortKey) => string;
   getSortIcon: (key: SortKey) => string;
   isSortedBy: (key: SortKey) => boolean;
+  setSorts: (sorts: SortEntry[]) => void;  // For restoring saved sorts
 }
 
 export function useLocalSorting(): UseLocalSortingReturn {
@@ -111,6 +121,10 @@ export function useLocalSorting(): UseLocalSortingReturn {
     setSorts([]);
   }, []);
 
+  const clearSorts = useCallback(() => {
+    setSorts([]);
+  }, []);
+
   const getSortedAndLimited = useCallback(
     <T extends Record<string, any>>(items: T[]): T[] => {
       let result = applySorts(items, sorts);
@@ -136,10 +150,12 @@ export function useLocalSorting(): UseLocalSortingReturn {
     toggleSortDir,
     setLimit,
     clearAllSorts,
+    clearSorts,
     activeSortCount,
     getSortedAndLimited,
     getSortLabel,
     getSortIcon,
     isSortedBy,
+    setSorts,
   };
 }

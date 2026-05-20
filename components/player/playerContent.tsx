@@ -49,10 +49,23 @@
 // FIX 1: deactivateAudio()/activateAudio() called on tab switches (audio focus mgmt)
 // FIX 2: vp.pause() called before vp.muted=true on song-tab return (releases focus)
 // FIX 3: VIDEO_SYNC_INTERVAL_MS = 100 (was 500)
-// FIX 4: Status listener attached immediately in loadVideoSource, not gated on state
+// FIX 4: Status listener attached once at module level, not re-attached per load
 // FIX 5: handlePlaylist/handleSleepTimer call onMinimize() first (mini-player visible)
 // FIX 6: Video seek does pause→seek→play for reliable Android seeking
 // FIX 7: Context video state (setVideoActive, updateVideoPosition, etc.) wired
+// FIX 8: loadVideoSource guarded by lastLoadedUrlRef — NEVER reloads on tab switch
+// FIX 9: Sync interval only runs on Song tab, never during video playback
+// FIX 10: Tab switch sequence: deactivateAudio → seek → unmute → play (video)
+//         pause → mute → activateAudio → play (song)
+//
+// PiP & BACKGROUND FIXES 2026-05-19:
+// FIX 10: videoPlayerSingleton.staysActiveInBackground = true (module level)
+// FIX 11: VideoView allowsPictureInPicture changed from false to true
+// FIX 12: AppState listener triggers PiP on background when video is active
+// FIX 13: pictureInPictureStatusChange listener tracks PiP state
+// FIX 14: isPipActiveRef guards expandPlayer/UI restoration when PiP is active
+// FIX 15: Global __mavinVideoPlay/__mavinVideoPause/__mavinVideoSeek registered
+//         with updateVideoIsPlaying calls to keep lock screen sync correct
 
 import React, {
   useMemo,
@@ -69,6 +82,8 @@ import {
   Dimensions,
   Animated as RNAnimated,
   Modal as RNModal,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer, VideoView } from 'expo-video';
@@ -132,7 +147,9 @@ const videoPlayerSingleton: ReturnType<typeof createVideoPlayer> =
 
 try {
   videoPlayerSingleton.muted = true;
-  videoPlayerSingleton.loop  = false;
+  videoPlayerSingleton.loop = false;
+  // FIX 10: Keep video player alive when app backgrounds (required for PiP)
+  videoPlayerSingleton.staysActiveInBackground = true;
 } catch {}
 
 const LYRICS_LEAD_IN_S = 0.25;
@@ -338,7 +355,6 @@ function PlayerContentInner({
   const { setSliderActive, setButtonActive } = useGestureContext();
 
   const engine = usePlayerEngine();
-  // FIX 7: Destructure video state functions from context
   const {
     isLoading: musicPlayerLoading,
     togglePlayPause,
@@ -356,7 +372,7 @@ function PlayerContentInner({
   const durationSec = engine.duration;
   const repeatMode = engine.repeatMode;
   const shuffleMode = engine.shuffleMode;
-  const isResolving = engine.isResolving;
+  const isResolving = (engine as any).isResolving ?? false;
 
   const trackExtrasVersion = useTrackExtrasVersion();
 
@@ -379,7 +395,6 @@ function PlayerContentInner({
 
   const isLocal = useMemo(() => isLocalTrack(engine.currentTrack), [engine.currentTrack, isLocalTrack]);
 
-  // ─── FIX 4: extras with live-read fallback ───────────────────────────────
   const [extras, setExtras] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -391,7 +406,6 @@ function PlayerContentInner({
     setExtras(getTrackExtras(id) ?? {});
   }, [displayTrack?.id, trackExtrasVersion]);
 
-  // Fallback: always read live from store in case effect missed a version bump
   const liveExtras = (displayTrack?.id && displayTrack.id !== DUMMY_TRACK.id)
     ? (getTrackExtras(displayTrack.id) ?? extras)
     : extras;
@@ -404,7 +418,6 @@ function PlayerContentInner({
   const videoId: string | undefined = liveExtras?.videoId ?? displayTrack?.videoId;
   const muxedVideoUrl: string | undefined = liveExtras?.muxedVideoUrl;
   const videoUrl: string | undefined = liveExtras?.videoUrl;
-  // ─────────────────────────────────────────────────────────────────────────
 
   const activeVideoUrl = useMemo(() => {
     const url = muxedVideoUrl ?? videoUrl ?? undefined;
@@ -443,17 +456,13 @@ function PlayerContentInner({
   const videoOwnsAudio = useRef(false);
   const isTransitioning = useRef(false);
 
-  // ─── Refs for stale-closure-free segment + video play state ──────────────
   const activeSegmentRef = useRef<'song' | 'video'>('song');
   const videoPlayingRef = useRef(false);
   const isPlayingRef = useRef(isPlaying);
-  // ─────────────────────────────────────────────────────────────────────────
 
   const statusListenerRef = useRef<any>(null);
   const errorCountRef = useRef(0);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── Video position poll interval ref ─────────────────────────────────────
   const videoPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const videoPlayer = videoPlayerSingleton;
@@ -462,13 +471,17 @@ function PlayerContentInner({
   const positionRef = useRef(positionSec);
   const durationRef = useRef(durationSec);
   
+  // FIX 8: Track last loaded URL to prevent reload on tab switch
+  const lastLoadedUrlRef = useRef<string | null>(null);
+  
+  // FIX 13 / FIX 14: Track PiP active state
+  const isPipActiveRef = useRef(false);
+  
   useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
   useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   // ── VISUAL PLAY STATE ────────────────────────────────────────────────────
-  // Decoupled from expo-audio hardware state. On Song tab syncs with isPlaying.
-  // On Video tab only changes when user taps play/pause.
   const [visualIsPlaying, setVisualIsPlaying] = useState(isPlaying);
   useEffect(() => {
     if (activeSegmentRef.current === 'song') {
@@ -480,12 +493,9 @@ function PlayerContentInner({
   const [visualPositionSec, setVisualPositionSec] = useState(positionSec);
   const [visualDurationSec, setVisualDurationSec] = useState(durationSec);
 
-  // BUG FIX 9: Force sync duration when it becomes > 0 (for restored tracks)
-  // Also sync position when active segment is song
   useEffect(() => {
     if (activeSegmentRef.current === 'song') {
       setVisualPositionSec(positionSec);
-      // Critical fix: when durationSec becomes > 0, update visualDurationSec
       if (durationSec > 0 && visualDurationSec !== durationSec) {
         setVisualDurationSec(durationSec);
       }
@@ -493,7 +503,6 @@ function PlayerContentInner({
   }, [positionSec, durationSec, visualDurationSec]);
 
   // Poll video player's currentTime/duration while on Video tab
-  // FIX 7: Also update context video state so lock screen stays synced
   useEffect(() => {
     if (videoPollIntervalRef.current) {
       clearInterval(videoPollIntervalRef.current);
@@ -511,10 +520,7 @@ function PlayerContentInner({
         if (!isSlidingRef.current) {
           setVisualPositionSec(ct);
         }
-        // Prefer video duration; fall back to engine duration if video hasn't
-        // reported a valid duration yet (common before first frame decoded).
         setVisualDurationSec(dur > 0 ? dur : durationRef.current);
-        // FIX 7: Wire context video state for lock screen
         updateVideoPosition(ct);
         updateVideoDuration(dur > 0 ? dur : durationRef.current);
       } catch {}
@@ -528,16 +534,9 @@ function PlayerContentInner({
     };
   }, [activeSegment, videoPlayerInitialized, isLocal, updateVideoPosition, updateVideoDuration]);
 
-  // FIX 4: Status listener attached immediately inside loadVideoSource
-  // so readyToPlay is never missed, not gated on videoPlayerInitialized state
-  const attachStatusListener = useCallback(() => {
+  // ── MODULE-LEVEL STATUS LISTENER (FIX 4: attached once, never re-attached) ─
+  useEffect(() => {
     if (!videoPlayer || isLocal) return;
-
-    try {
-      statusListenerRef.current?.remove?.();
-    } catch {}
-
-    statusListenerRef.current = null;
 
     try {
       statusListenerRef.current = videoPlayer.addListener('statusChange', ({ status, error }: any) => {
@@ -565,23 +564,18 @@ function PlayerContentInner({
 
           if (errorMsg.includes('403') || errorMsg.includes('forbidden')) {
             setVideoError('Video unavailable (access denied). Listening to audio only.');
-            if (activeSegment === 'video') {
-              setTimeout(() => {
-                handleSegmentPress('song');
-              }, 100);
-            }
           } else {
             setVideoError(errorMsg);
           }
 
           errorCountRef.current += 1;
-          if (errorCountRef.current === 1 && activeVideoUrl) {
+          if (errorCountRef.current === 1 && lastLoadedUrlRef.current) {
             setTimeout(() => {
               try {
                 if (typeof (videoPlayer as any).replaceAsync === 'function') {
-                  void (videoPlayer as any).replaceAsync(activeVideoUrl);
+                  void (videoPlayer as any).replaceAsync(lastLoadedUrlRef.current);
                 } else {
-                  (videoPlayer as any).replace(activeVideoUrl);
+                  (videoPlayer as any).replace(lastLoadedUrlRef.current);
                 }
               } catch (e) {
                 console.warn('[PlayerContent] Failed to retry video:', e);
@@ -593,14 +587,154 @@ function PlayerContentInner({
     } catch (e) {
       console.error('[PlayerContent] Failed to add video listener:', e);
     }
-  }, [videoPlayer, isLocal, activeSegment, activeVideoUrl]);
 
+    return () => {
+      try {
+        statusListenerRef.current?.remove?.();
+      } catch {}
+      statusListenerRef.current = null;
+    };
+  }, [videoPlayer, isLocal]);
+
+  // ── PICTURE-IN-PICTURE STATUS LISTENER (FIX 13) ──────────────────────────
+  useEffect(() => {
+    if (!videoPlayer || isLocal) return;
+
+    let pipListener: any = null;
+
+    try {
+      pipListener = videoPlayer.addListener('pictureInPictureStatusChange', ({ status }: any) => {
+        if (status === 'started') {
+          isPipActiveRef.current = true;
+          console.log('[PlayerContent] PiP started');
+        } else if (status === 'stopped') {
+          isPipActiveRef.current = false;
+          console.log('[PlayerContent] PiP stopped');
+          
+          // If user dismissed PiP manually while app is in background, pause video
+          const currentAppState = AppState.currentState;
+          if (currentAppState === 'background' && activeSegmentRef.current === 'video') {
+            try {
+              videoPlayer.pause();
+              videoPlayingRef.current = false;
+              updateVideoIsPlaying(false);
+              setVisualIsPlaying(false);
+            } catch {}
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('[PlayerContent] Failed to add PiP listener:', e);
+    }
+
+    return () => {
+      try {
+        pipListener?.remove?.();
+      } catch {}
+    };
+  }, [videoPlayer, isLocal, updateVideoIsPlaying]);
+
+  // ── APPSTATE LISTENER FOR PiP AUTO-TRIGGER (FIX 12 / FIX 14) ──────────────
+  useEffect(() => {
+    if (isLocal) return;
+
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      const vp = videoPlayerRef.current;
+      if (!vp) return;
+
+      if (nextAppState === 'background') {
+        // FIX 12: Auto-enter PiP when going background on video tab
+        if (
+          activeSegmentRef.current === 'video' &&
+          videoPlayerReady.current &&
+          videoPlayerInitialized &&
+          !isPipActiveRef.current
+        ) {
+          try {
+            vp.startPictureInPicture();
+          } catch (e) {
+            console.warn('[PlayerContent] Failed to start PiP:', e);
+          }
+        }
+      } else if (nextAppState === 'active') {
+        // FIX 14: Only restore normal UI if PiP is NOT active
+        if (!isPipActiveRef.current) {
+          // Normal foreground restoration — nothing special needed here
+          // The video stays in its tab, audio focus managed by segment switch
+        }
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [isLocal, videoPlayerInitialized]);
+
+  // ── GLOBAL VIDEO COMMAND REGISTRATION (FIX 15) ───────────────────────────
+  useEffect(() => {
+    if (!videoPlayerInitialized || isLocal) return;
+
+    const vp = videoPlayerRef.current;
+    if (!vp) return;
+
+    // Register globals so MusicPlayerContext lock-screen handlers can control video
+    (global as any).__mavinVideoPlay = () => {
+      try {
+        vp.play();
+        videoPlayingRef.current = true;
+        updateVideoIsPlaying(true);
+        setVisualIsPlaying(true);
+      } catch (e) {
+        console.warn('[PlayerContent] Global play failed:', e);
+      }
+    };
+
+    (global as any).__mavinVideoPause = () => {
+      try {
+        vp.pause();
+        videoPlayingRef.current = false;
+        updateVideoIsPlaying(false);
+        setVisualIsPlaying(false);
+      } catch (e) {
+        console.warn('[PlayerContent] Global pause failed:', e);
+      }
+    };
+
+    (global as any).__mavinVideoSeek = (position: number) => {
+      try {
+        vp.currentTime = position;
+        updateVideoPosition(position);
+        setVisualPositionSec(position);
+      } catch (e) {
+        console.warn('[PlayerContent] Global seek failed:', e);
+      }
+    };
+
+    console.log('[PlayerContent] Registered global video command handlers');
+
+    return () => {
+      delete (global as any).__mavinVideoPlay;
+      delete (global as any).__mavinVideoPause;
+      delete (global as any).__mavinVideoSeek;
+      console.log('[PlayerContent] Unregistered global video command handlers');
+    };
+  }, [videoPlayerInitialized, isLocal, updateVideoIsPlaying, updateVideoPosition]);
+
+  // ── LOAD VIDEO SOURCE (FIX 8: only loads when URL changes, never on tab switch) ─
   const loadVideoSource = useCallback(async (url: string) => {
     if (!url || isLocal) return;
+    
+    // FIX 8: Skip if this URL is already loaded
+    if (lastLoadedUrlRef.current === url && videoPlayerReady.current) {
+      console.log('[PlayerContent] Video URL already loaded, skipping replaceAsync');
+      return;
+    }
 
     try {
       setVideoError(null);
-      errorCountRef.current  = 0;
+      errorCountRef.current = 0;
       videoPlayerReady.current = false;
 
       const vp = videoPlayerRef.current;
@@ -611,8 +745,7 @@ function PlayerContentInner({
         (vp as any).replace(url);
       }
 
-      // FIX 4: Attach listener immediately so readyToPlay is never missed
-      attachStatusListener();
+      lastLoadedUrlRef.current = url;
 
       const POLL_INTERVAL_MS = 200;
       const POLL_TIMEOUT_MS  = 12000;
@@ -643,21 +776,23 @@ function PlayerContentInner({
       console.warn('[PlayerContent] Failed to load video source:', e);
       setVideoError('Video unavailable. Listening to audio only.');
     }
-  }, [isLocal, attachStatusListener]);
+  }, [isLocal]);
 
+  // FIX 8: Only run when activeVideoUrl actually changes, NOT when videoPlayerInitialized changes
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
     void loadVideoSource(activeVideoUrl);
-  }, [activeVideoUrl, isLocal, loadVideoSource]);
+  }, [activeVideoUrl, isLocal]);
 
+  // FIX 9: Sync interval only runs on Song tab, never during video playback
   useEffect(() => {
     if (!videoPlayerInitialized || !videoPlayer || isLocal || !activeVideoUrl) return;
 
     if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
 
-    // FIX 3: 100ms sync interval (was 500)
     syncIntervalRef.current = setInterval(() => {
-      if (videoPlayer && !videoError && activeSegment !== 'video') {
+      // Only sync when on Song tab — during video playback we don't touch video position
+      if (videoPlayer && !videoError && activeSegmentRef.current === 'song') {
         const drift = Math.abs(videoPlayer.currentTime - positionRef.current);
         if (drift > 0.5) {
           try {
@@ -670,7 +805,7 @@ function PlayerContentInner({
     return () => {
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
     };
-  }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, activeSegment, videoError]);
+  }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, videoError]);
 
   const videoProgress = useSharedValue(0);
   const artworkAnimStyle = useAnimatedStyle(() => ({
@@ -681,7 +816,7 @@ function PlayerContentInner({
   }));
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SEGMENT SWITCH
+  // SEGMENT SWITCH (FIX 10: correct sequence, no source reload)
   // ─────────────────────────────────────────────────────────────────────────
   const handleSegmentPress = useCallback(
     async (seg: 'song' | 'video') => {
@@ -706,24 +841,39 @@ function PlayerContentInner({
 
       try {
         if (seg === 'video' && vp && !videoError && !isLocal) {
-          // FIX 1: Deactivate audio focus before video takes over
+          // FIX 10: Step 1 — Deactivate audio (pause + release focus)
           await deactivateAudio();
 
+          // FIX 10: Step 2 — Calculate seek target
           const seekTarget = Math.max(0, currentAudioPos - OFFSET);
 
+          // FIX 10: Step 3 — Set video position FIRST, before unmuting
           if (videoPlayerReady.current) {
-            try { vp.currentTime = seekTarget; } catch (e) {
+            try { 
+              vp.currentTime = seekTarget; 
+            } catch (e) {
               console.warn('[PlayerContent] currentTime set failed:', e);
-            }
-            vp.muted = false;
-
-            if (visualIsPlaying) {
-              try { vp.play(); videoPlayingRef.current = true; } catch {}
+              pendingSeek.current = seekTarget;
             }
           } else {
             console.log('[PlayerContent] Video not ready yet — queuing seek at', seekTarget);
             pendingSeek.current = seekTarget;
-            vp.muted = false;
+          }
+
+          // FIX 10: Step 4 — Unmute video (now at correct position)
+          vp.muted = false;
+
+          // FIX 10: Step 5 — Play video if audio was playing
+          if (visualIsPlaying) {
+            try { 
+              await vp.play(); 
+              videoPlayingRef.current = true; 
+            } catch (e) {
+              console.warn('[PlayerContent] vp.play() failed:', e);
+            }
+          } else {
+            // Even if not playing, ensure video is loaded and ready at correct position
+            console.log('[PlayerContent] Video tab switched but audio was paused, video ready at', seekTarget);
           }
 
           setVisualPositionSec(seekTarget);
@@ -734,7 +884,6 @@ function PlayerContentInner({
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           videoProgress.value = 1;
-          // FIX 7: Update context video state
           setVideoActive(true);
           updateVideoPosition(seekTarget);
           updateVideoDuration((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
@@ -742,28 +891,39 @@ function PlayerContentInner({
 
         } else if (seg === 'song' && vp) {
           pendingSeek.current = null;
-          // FIX 2: Pause video BEFORE muting to release Android audio focus
+          
+          // FIX 10: Step 1 — Pause video FIRST (stops sound + releases focus)
           try { vp.pause(); } catch {}
+          
+          // FIX 10: Step 2 — Mute video
           try { vp.muted = true; } catch {}
+          
           videoPlayingRef.current = false;
           videoOwnsAudio.current = false;
 
-          // FIX 1: Reactivate audio focus before resuming audio
+          // FIX 10: Step 3 — Reactivate audio focus
           await activateAudio();
 
+          // FIX 10: Step 4 — Resume audio from exact video position
+          const videoStoppedAt = vp.currentTime ?? positionRef.current;
+          if (videoStoppedAt > 0 && videoStoppedAt !== positionRef.current) {
+            try { engine.seekTo(videoStoppedAt); } catch {}
+          }
+          
           if (visualIsPlaying) {
-            try { engine.play(); } catch {}
+            try { await engine.play(); } catch (e) {
+              console.warn('[PlayerContent] engine.play() failed:', e);
+            }
           }
 
-          setVisualPositionSec(positionRef.current);
+          setVisualPositionSec(videoStoppedAt);
           setVisualDurationSec(durationRef.current);
 
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           videoProgress.value = 0;
-          // FIX 7: Update context video state
           setVideoActive(false);
-          updateVideoPosition(positionRef.current);
+          updateVideoPosition(videoStoppedAt);
           updateVideoDuration(durationRef.current);
           updateVideoIsPlaying(false);
         }
@@ -804,15 +964,14 @@ function PlayerContentInner({
     videoOwnsAudio.current = false;
     videoPlayerReady.current = false;
     pendingSeek.current = null;
+    lastLoadedUrlRef.current = null; // FIX 8: Reset so new track loads
     setActiveSegment('song');
     activeSegmentRef.current = 'song';
     videoProgress.value = 0;
     setVideoError(null);
     errorCountRef.current = 0;
-    // Reset visual position/duration to engine values on track change
     setVisualPositionSec(0);
     setVisualDurationSec(0);
-    // FIX 7: Reset context video state
     setVideoActive(false);
     updateVideoPosition(0);
     updateVideoDuration(0);
@@ -840,20 +999,14 @@ function PlayerContentInner({
   const sliderMax = useSharedValue(1);
   const slidingValue = useSharedValue(0);
 
-  // Drive the slider thumb from visualPositionSec / visualDurationSec.
-  // BUG FIX 9b: Guard against division by zero
   useEffect(() => {
     if (!isSlidingRef.current && visualDurationSec > 0) {
       sliderProgress.value = visualPositionSec / visualDurationSec;
     } else if (!isSlidingRef.current && visualDurationSec === 0 && visualPositionSec === 0) {
-      // Keep at 0, don't divide
       sliderProgress.value = 0;
     }
   }, [visualPositionSec, visualDurationSec, sliderProgress]);
 
-  // ── Seek handler — dispatches to the ACTIVE player only ──────────────────
-  // BUG FIX 10: Removed isSliding guard to allow tap-to-seek
-  // FIX 6: Video seek does pause→seek→play for reliable Android seeking
   const handleSeek = useCallback(
     (fraction: number) => {
       const activeDuration =
@@ -866,7 +1019,6 @@ function PlayerContentInner({
       if (activeDuration <= 0) return;
       const t = fraction * activeDuration;
 
-      // Hold the optimistic lock for the full Android rebuffer window
       if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
       seekDebounceRef.current = setTimeout(() => {
         isSlidingRef.current = false;
@@ -876,7 +1028,6 @@ function PlayerContentInner({
         const vp = videoPlayerRef.current;
         if (vp && videoPlayerReady.current && !videoError && !isLocal) {
           try {
-            // FIX 6: Pause → seek → play for instant reliable seeking
             const wasPlaying = visualIsPlaying;
             vp.pause();
             vp.currentTime = t;
@@ -886,11 +1037,9 @@ function PlayerContentInner({
           } catch {}
         }
         setVisualPositionSec(t);
-        // FIX 7: Update context video position
         updateVideoPosition(t);
       } else {
         engine.seekTo(t);
-        // Visual position will sync via the useEffect
       }
     },
     [engine, videoError, isLocal, visualIsPlaying, updateVideoPosition],
@@ -915,11 +1064,16 @@ function PlayerContentInner({
 
     if (activeSegmentRef.current === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
       try {
-        willPlay ? videoPlayer.play() : videoPlayer.pause();
+        if (willPlay) {
+          await videoPlayer.play();
+        } else {
+          await videoPlayer.pause();
+        }
         videoPlayingRef.current = willPlay;
-        // FIX 7: Update context video playing state
         updateVideoIsPlaying(willPlay);
-      } catch {}
+      } catch (e) {
+        console.warn('[PlayerContent] Video play/pause failed:', e);
+      }
     } else {
       togglePlayPause();
     }
@@ -1010,7 +1164,6 @@ function PlayerContentInner({
     onNavigateToCast?.();
   };
 
-  // FIX 5: Call onMinimize() first so mini-player shows behind the screen
   const handlePlaylist = () => {
     triggerHaptic();
     onMinimize();
@@ -1019,7 +1172,6 @@ function PlayerContentInner({
     }, 50);
   };
 
-  // FIX 5: Call onMinimize() first so mini-player shows behind the screen
   const handleSleepTimer = () => {
     triggerHaptic();
     onMinimize();
@@ -1147,7 +1299,17 @@ function PlayerContentInner({
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                     nativeControls={false}
-                    allowsPictureInPicture={false}
+                    // FIX 11: Enable PiP on the native VideoView
+                    allowsPictureInPicture={true}
+                    startsPictureInPictureAutomatically={false}
+                    onPictureInPictureStart={() => {
+                      isPipActiveRef.current = true;
+                      console.log('[PlayerContent] VideoView PiP started');
+                    }}
+                    onPictureInPictureStop={() => {
+                      isPipActiveRef.current = false;
+                      console.log('[PlayerContent] VideoView PiP stopped');
+                    }}
                   />
                   {videoError && activeSegment === 'video' && (
                     <View style={[styles.videoErrorOverlay, { backgroundColor: 'rgba(0,0,0,0.8)' }]}>
@@ -1302,7 +1464,6 @@ function PlayerContentInner({
               </View>
             </View>
 
-            {/* ── PROGRESS BAR ─────────────────────────────────────────── */}
             <View
               style={styles.progressWrapper}
               onTouchStart={() => setSliderActive(true)}
@@ -1338,8 +1499,6 @@ function PlayerContentInner({
                   slidingValue.value = v;
                 }}
                 onSlidingComplete={(v) => {
-                  // BUG FIX 10: Remove isSliding guard so tap-to-seek works
-                  // Taps trigger onSlidingComplete without onSlidingStart
                   sliderProgress.value = v;
                   isSliding.value = false;
                   setSliderActive(false);

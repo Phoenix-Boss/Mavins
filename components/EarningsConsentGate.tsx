@@ -2,46 +2,36 @@
  * EarningsConsentGate.tsx
  *
  * Four-tab consent modal for Pawns SDK bandwidth sharing.
- * Themed to match Mavin's ThemeContext — gold accents, dark/light surfaces.
+ * Themed to match Mavin's ThemeContext — gold accents on dark (white text + gold),
+ * gold accents on light (black text + gold).
  *
- * Tabs:
- *   1. General       — information about the app feature (no Pawns branding)
- *   2. Data Sharing  — required Pawns SDK disclosures (Section 3.6.5 a–e)
- *   3. Privacy       — your privacy policy + Pawns policies + age confirmation
- *   4. Data Protection — data retention, security, user rights
+ * Tabs (in order):
+ *   1. General         — Mavin earnings feature only; NO Pawns branding
+ *   2. Privacy         — Mavin privacy policy links + Pawns policy links; no age checkbox
+ *   3. Data Protection — how Mavin encrypts and protects user info & stored data
+ *   4. Data Sharing    — ALL Pawns SDK disclosures (Section 3.6.5 a–e); Pawns-only
  *
- * Buttons:
- *   ✕ (header)  — soft dismiss, no stored decision, modal can re-appear next launch
- *   Accept      — enabled only after age checkbox is checked
- *                 → stores 'accepted' in AsyncStorage
- *                 → if "Don't show again" is checked, sets permanent suppression flag
- *   Decline     — stores 'rejected' permanently (no auto re-prompt ever)
- *                 → user must go to settings and tap "Enable Sharing" to re-trigger
+ * Footer (always rendered, beneath tab content):
+ *   [ ] Don't show this message again
+ *   [ ] By checking this box you confirm you have read and agree to the above terms,
+ *       Mavin's Privacy Policy and Terms of Service, the Pawns Privacy Policy and
+ *       Acceptable Use Policy, and that you are at least 18 years of age and the
+ *       primary account holder on the internet connection used by this device.
+ *   ⚠  age warning shown while unchecked
+ *   [        Accept        ]   ← always rendered; opacity-dimmed until age box ticked
+ *      No thanks, decline
  *
- * Show logic (call checkAndShowConsent() from your app's init code):
- *   - No stored decision          → show modal
- *   - stored 'accepted'           → never auto-show
- *   - stored 'rejected'           → never auto-show (manual re-trigger via settings)
+ * Accept flow:
+ *   initialize() → optIn() → start()   (all from @/modules/honeygain)
+ *   stores 'accepted' in AsyncStorage
+ *   if "Don't show again" is ticked → sets permanent suppression flag
  *
- * Usage:
- *   import { EarningsConsentGate, checkAndShowConsent } from './EarningsConsentGate';
+ * Decline flow:
+ *   stores 'rejected' permanently — user must re-enable via
+ *   Settings → Privacy → Security → Enable Bandwidth Sharing
  *
- *   const [showConsent, setShowConsent] = useState(false);
- *   useEffect(() => {
- *     checkAndShowConsent().then(should => { if (should) setShowConsent(true); });
- *   }, []);
- *
- *   <EarningsConsentGate
- *     visible={showConsent}
- *     onDismiss={() => setShowConsent(false)}
- *   />
- *
- * To manually re-trigger from settings:
- *   await clearConsentRejection();
- *   setShowConsent(true);
- *
- * NOTE: Wire up handleAccept to your Pawns/Honeygain SDK calls once the SDK
- * is available. Placeholder comments mark the exact locations.
+ * ✕ (header close):
+ *   soft dismiss — no decision stored — modal re-appears next session
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -58,6 +48,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type ThemeColors } from '@/contexts/ThemeContext';
+import { initialize, optIn, start } from '@/modules/honeygain';
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -77,8 +68,9 @@ const URLS = {
 } as const;
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
+// Order: General → Privacy → Data Protection → Data Sharing
 
-const TABS = ['General', 'Data Sharing', 'Privacy', 'Data Protection'] as const;
+const TABS = ['General', 'Privacy', 'Data Protection', 'Data Sharing'] as const;
 type Tab = typeof TABS[number];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,7 +88,7 @@ interface ThemedProps {
 interface CheckboxProps extends ThemedProps {
   checked:  boolean;
   onPress:  () => void;
-  label:    string;
+  label:    string | React.ReactNode;
   testID?:  string;
 }
 
@@ -113,15 +105,25 @@ function Checkbox({ checked, onPress, label, testID, colors }: CheckboxProps) {
       <View
         style={[
           styles.checkboxBox,
-          { borderColor: colors.borderGold, backgroundColor: colors.surface },
-          checked && { backgroundColor: colors.gold, borderColor: colors.gold },
+          {
+            borderColor:     colors.borderGold,
+            backgroundColor: colors.surface,
+          },
+          checked && {
+            backgroundColor: colors.gold,
+            borderColor:     colors.gold,
+          },
         ]}
       >
         {checked && (
           <Text style={[styles.checkboxTick, { color: colors.textInverse }]}>✓</Text>
         )}
       </View>
-      <Text style={[styles.checkboxLabel, { color: colors.text }]}>{label}</Text>
+      {typeof label === 'string' ? (
+        <Text style={[styles.checkboxLabel, { color: colors.text }]}>{label}</Text>
+      ) : (
+        <View style={styles.checkboxLabelWrap}>{label}</View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -144,121 +146,65 @@ function LinkText({ children, url, colors }: LinkTextProps) {
   );
 }
 
-// ─── Tab content ──────────────────────────────────────────────────────────────
+// ─── Tab 1 — General ─────────────────────────────────────────────────────────
+// Mavin-only. No Pawns branding. Describes the earnings feature in the context
+// of the music app.
 
 function GeneralTab({ colors }: ThemedProps) {
   return (
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Earn While You Share</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Earn While You Listen</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin offers you the opportunity to passively earn rewards by allowing a portion of your
-        unused internet bandwidth to be used when your device is idle.
+        Mavin gives you the opportunity to passively earn rewards simply by having the app
+        running. When your device is idle and connected to Wi-Fi, you can opt in to let Mavin's
+        earnings feature run quietly in the background alongside your music — no interaction
+        needed.
       </Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        This feature is entirely optional and has no effect on your core Mavin experience. You
-        can enable or disable it at any time from the Settings screen.
+        This feature is entirely separate from your music experience. Enabling it has no effect
+        on playback, streaming quality, downloads, playlists, or any other part of Mavin.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>How It Works</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        When the sharing feature is active, a lightweight background service runs on your device.
-        This service uses a small portion of your internet connection to route encrypted traffic
-        through your device. Your personal data is never accessed or shared.
+        Once you opt in, a lightweight background service starts when your device has idle
+        capacity to spare. The service uses a small portion of your unused internet bandwidth
+        to generate rewards. When you actively use your device or stream music, it steps back
+        automatically so your experience is never affected.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>What You Earn</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Rewards accumulate passively while sharing is active. You can track your balance and
-        redeem rewards from within the Mavin app. Reward rates may vary based on your region
-        and connection quality.
+        Rewards accumulate passively while the feature is active. You can track your balance
+        and redeem earnings directly from within the Mavin app. Reward rates may vary based
+        on your region and connection quality.
       </Text>
 
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Control</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Always Your Choice</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        You are always in control. Sharing only starts after you give explicit consent on the
-        next screens, and you can withdraw your consent at any time from Settings → Sharing.
-      </Text>
-      <View style={styles.tabSpacer} />
-    </ScrollView>
-  );
-}
-
-function DataSharingTab({ colors }: ThemedProps) {
-  return (
-    <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Important Disclosures</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        By enabling bandwidth sharing, you acknowledge and agree to the following (as required
-        by the Pawns SDK Terms of Service, Section 3.6.5):
-      </Text>
-
-      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>a) Internet Traffic Routing</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Your device will act as a network node. Internet traffic from third parties will be
-        routed through your device and your internet connection. This is the mechanism by which
-        rewards are generated.
-      </Text>
-
-      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>b) Resource Consumption</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        The sharing service consumes device resources including internet bandwidth, battery, and
-        processing capacity. The service is designed to operate at low priority to minimise
-        impact on your device's performance.
-      </Text>
-
-      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>c) IP Address Visibility</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Your device's IP address will be visible to the network during sharing sessions. This
-        is an inherent property of acting as a network node. Pawns' policies govern how this
-        information is handled — see the{' '}
-        <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Pawns Privacy Policy</LinkText>.
-      </Text>
-
-      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>d) Eligibility Requirements</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        You must be the primary user of this device and the primary account holder of the
-        internet connection used. You must be at least 18 years of age. You should review your
-        internet service provider's terms to ensure participation is permitted.
-      </Text>
-
-      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>e) How to Disable</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        You may stop sharing and withdraw your consent at any time by navigating to{' '}
+        This feature only starts after you give explicit consent below. You can disable it and
+        withdraw your consent at any time from{' '}
         <Text style={[styles.emphasis, { color: colors.text }]}>
-          Settings → Sharing → Disable & Withdraw Consent
+          Settings → Privacy → Security → Disable Bandwidth Sharing
         </Text>
-        . Disabling will stop the background service immediately.
-      </Text>
-
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>SDK Policies</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Bandwidth sharing is powered by Pawns SDK. By enabling this feature you also agree to:
-      </Text>
-      <Text style={[styles.bulletItem, { color: colors.textSub }]}>
-        •{'  '}
-        <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Pawns Privacy Policy</LinkText>
-      </Text>
-      <Text style={[styles.bulletItem, { color: colors.textSub }]}>
-        •{'  '}
-        <LinkText url={URLS.pawnsAcceptableUse} colors={colors}>Pawns Acceptable Use Policy</LinkText>
+        . The service stops immediately when you disable it.
       </Text>
       <View style={styles.tabSpacer} />
     </ScrollView>
   );
 }
 
-interface PrivacyTabProps extends ThemedProps {
-  ageConfirmed: boolean;
-  onToggleAge:  () => void;
-}
+// ─── Tab 2 — Privacy ─────────────────────────────────────────────────────────
+// Mavin privacy policy links + Pawns policy links. No age checkbox here —
+// age confirmation is in the footer.
 
-function PrivacyTab({ ageConfirmed, onToggleAge, colors }: PrivacyTabProps) {
+function PrivacyTab({ colors }: ThemedProps) {
   return (
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Privacy (Mavin)</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Mavin Privacy</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin is committed to protecting your personal data. Our full legal documentation is
-        available at the links below:
+        Mavin is committed to protecting your personal data. By enabling this feature you
+        confirm you have read and agree to Mavin's legal documentation:
       </Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>
         •{'  '}
@@ -273,10 +219,12 @@ function PrivacyTab({ ageConfirmed, onToggleAge, colors }: PrivacyTabProps) {
         <LinkText url={URLS.appLegalNotice} colors={colors}>Legal Notice</LinkText>
       </Text>
 
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>SDK Privacy (Pawns)</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Third-Party SDK Privacy</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        The bandwidth sharing feature is powered by Pawns SDK. Pawns' data handling is governed
-        by their own policies, which are independent of Mavin's:
+        The bandwidth sharing feature uses a third-party SDK with its own independent privacy
+        policies. Enabling this feature also means you agree to those policies. You can read
+        the full technical disclosures about what the SDK does on the{' '}
+        <Text style={[styles.emphasis, { color: colors.text }]}>Data Sharing</Text> tab.
       </Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>
         •{'  '}
@@ -287,69 +235,142 @@ function PrivacyTab({ ageConfirmed, onToggleAge, colors }: PrivacyTabProps) {
         <LinkText url={URLS.pawnsAcceptableUse} colors={colors}>Pawns Acceptable Use Policy</LinkText>
       </Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Pawns may collect device identifiers, IP addresses, and bandwidth usage statistics as
-        described in their Privacy Policy. Mavin does not receive or store this data.
+        The SDK may collect device identifiers, IP addresses, and bandwidth usage statistics
+        as described in the Pawns Privacy Policy. Mavin does not receive or store this data.
       </Text>
-
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Age Confirmation</Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Participation in the bandwidth sharing programme requires you to be at least 18 years
-        old (or the age of majority in your jurisdiction, if higher).
-      </Text>
-      <Checkbox
-        checked={ageConfirmed}
-        onPress={onToggleAge}
-        label="I confirm that I am at least 18 years old"
-        testID="age-confirmation-checkbox"
-        colors={colors}
-      />
       <View style={styles.tabSpacer} />
     </ScrollView>
   );
 }
 
+// ─── Tab 3 — Data Protection ─────────────────────────────────────────────────
+// How Mavin uses encryption to protect user info and data. No Pawns content.
+
 function DataProtectionTab({ colors }: ThemedProps) {
   return (
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Data Retention</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Encryption in Transit</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Consent records (the fact that you gave or withdrew consent, and the timestamp) are
-        retained for 24 months from the date of each event. This is required for legal
-        compliance and may be provided to Pawns upon request.
-      </Text>
-      <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Bandwidth usage logs generated by the Pawns SDK are subject to Pawns' own retention
-        schedule as described in their{' '}
-        <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
+        All traffic passing through your device while the earnings feature is active is fully
+        encrypted using industry-standard TLS protocols. Mavin never has access to the contents
+        of this traffic — and neither does anyone on your local network.
       </Text>
 
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Security Measures</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>On-Device Data Security</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        All traffic routed through your device by the Pawns SDK is encrypted. Mavin stores your
-        consent decision securely on-device using Android's SharedPreferences and React Native's
-        AsyncStorage. No consent data is transmitted to Mavin's servers.
+        Your consent decision and its timestamp are stored securely on your device using
+        Android's SharedPreferences and React Native's AsyncStorage. This data never leaves
+        your device and is never transmitted to Mavin's servers or any third party.
+      </Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        Consent records are retained on-device for 24 months from each event date. This
+        retention supports legal compliance and lets you audit your own consent history at
+        any time from within the app.
+      </Text>
+
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>No Personal Data Sold</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        Mavin does not sell, rent, or share your personal information with advertisers or
+        data brokers. Your account data, listening history, and device identifiers held by
+        Mavin are kept strictly separate from the bandwidth sharing feature.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Rights</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         Depending on your jurisdiction, you may have the right to:
       </Text>
-      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Access the personal data we hold about you</Text>
+      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Access the personal data Mavin holds about you</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Request correction of inaccurate data</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Request erasure of your data</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Object to or restrict processing</Text>
-      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Withdraw consent at any time</Text>
+      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Withdraw consent at any time without penalty</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        To exercise these rights regarding Mavin's data, contact us via{' '}
-        <LinkText url={URLS.appPrivacyPolicy} colors={colors}>our Privacy Policy</LinkText>. For
-        rights regarding Pawns' data, contact Pawns directly via their{' '}
+        To exercise any of these rights in relation to Mavin's data, use the contact details
+        in our{' '}
+        <LinkText url={URLS.appPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
+        For rights regarding data held by Pawns, contact Pawns directly via their{' '}
         <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Data Protection Contact</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        For data protection enquiries relating to Mavin, please use the contact details in our{' '}
+        For any data protection enquiry relating to Mavin, please use the contact details
+        found in our{' '}
         <LinkText url={URLS.appPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
+      </Text>
+      <View style={styles.tabSpacer} />
+    </ScrollView>
+  );
+}
+
+// ─── Tab 4 — Data Sharing ────────────────────────────────────────────────────
+// ALL Pawns SDK disclosures (Section 3.6.5 a–e). This is the ONLY tab that
+// references Pawns directly. Every item here is about the Pawns SDK and app.
+
+function DataSharingTab({ colors }: ThemedProps) {
+  return (
+    <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Powered by Pawns</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        Mavin's bandwidth sharing feature is powered entirely by the Pawns SDK. Pawns is a
+        third-party platform that connects devices sharing idle bandwidth with businesses
+        that need distributed network infrastructure. The disclosures below are required by
+        the Pawns SDK Terms of Service, Section 3.6.5, and must be acknowledged before you
+        enable this feature.
+      </Text>
+
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Required Disclosures (Pawns SDK §3.6.5)</Text>
+
+      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>a) Internet Traffic Routing</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        When enabled, your device acts as a network node in the Pawns network. Internet
+        traffic from Pawns' third-party customers is routed through your device and your
+        internet connection. This routing is the mechanism by which rewards are generated.
+      </Text>
+
+      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>b) Resource Consumption</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        The Pawns sharing service consumes device resources including internet bandwidth,
+        battery, and processing capacity. The service is designed to operate at low priority
+        to minimise impact, but some resource usage will occur while it is active.
+      </Text>
+
+      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>c) IP Address Visibility</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        Your device's IP address will be visible to the Pawns network during sharing sessions.
+        This is an inherent property of acting as a network node. How Pawns handles this
+        information is governed by the{' '}
+        <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Pawns Privacy Policy</LinkText>.
+      </Text>
+
+      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>d) Eligibility Requirements</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        To use the Pawns SDK you must be the primary user of this device and the primary
+        account holder of the internet connection used. You must be at least 18 years of age.
+        You should also review your internet service provider's terms to confirm participation
+        is permitted under your plan.
+      </Text>
+
+      <Text style={[styles.disclosureLabel, { color: colors.gold }]}>e) How to Disable</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        You may stop sharing and withdraw your Pawns consent at any time by navigating to{' '}
+        <Text style={[styles.emphasis, { color: colors.text }]}>
+          Settings → Privacy → Security → Disable Bandwidth Sharing
+        </Text>
+        . This stops the Pawns background service immediately and revokes consent.
+      </Text>
+
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Pawns Policies</Text>
+      <Text style={[styles.bodyText, { color: colors.textSub }]}>
+        By enabling this feature you also agree directly to the following Pawns documents:
+      </Text>
+      <Text style={[styles.bulletItem, { color: colors.textSub }]}>
+        •{'  '}
+        <LinkText url={URLS.pawnsPrivacyPolicy} colors={colors}>Pawns Privacy Policy</LinkText>
+      </Text>
+      <Text style={[styles.bulletItem, { color: colors.textSub }]}>
+        •{'  '}
+        <LinkText url={URLS.pawnsAcceptableUse} colors={colors}>Pawns Acceptable Use Policy</LinkText>
       </Text>
       <View style={styles.tabSpacer} />
     </ScrollView>
@@ -381,14 +402,14 @@ export interface EarningsConsentGateProps {
 }
 
 export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateProps) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
 
   const [activeTab,     setActiveTab]     = useState<Tab>('General');
   const [ageConfirmed,  setAgeConfirmed]  = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [isLoading,     setIsLoading]     = useState(false);
 
-  // Reset state each time the modal opens
+  // Reset each time the modal opens
   useEffect(() => {
     if (visible) {
       setActiveTab('General');
@@ -398,7 +419,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
     }
   }, [visible]);
 
-  // ✕ — soft close with no stored decision; modal can re-appear next session
+  // ✕ — soft close, no decision stored
   const handleDismiss = useCallback(() => {
     if (!isLoading) onDismiss();
   }, [isLoading, onDismiss]);
@@ -407,10 +428,10 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
     if (!ageConfirmed || isLoading) return;
     setIsLoading(true);
     try {
-      // ── SDK integration point ─────────────────────────────────────────────
-      // import Honeygain from '@/native/HoneygainSDK';  // your actual path
-      // await Honeygain.optIn();
-      // await Honeygain.start();
+      // ── Honeygain SDK integration ─────────────────────────────────────────
+      await initialize();
+      await optIn();
+      await start();
       // ─────────────────────────────────────────────────────────────────────
       await AsyncStorage.setItem(CONSENT_STORAGE_KEY, CONSENT_DECISION_ACCEPTED);
       if (dontShowAgain) {
@@ -436,22 +457,48 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'General':
-        return <GeneralTab colors={colors} />;
-      case 'Data Sharing':
-        return <DataSharingTab colors={colors} />;
-      case 'Privacy':
-        return (
-          <PrivacyTab
-            ageConfirmed={ageConfirmed}
-            onToggleAge={() => setAgeConfirmed(v => !v)}
-            colors={colors}
-          />
-        );
-      case 'Data Protection':
-        return <DataProtectionTab colors={colors} />;
+      case 'General':         return <GeneralTab colors={colors} />;
+      case 'Privacy':         return <PrivacyTab colors={colors} />;
+      case 'Data Protection': return <DataProtectionTab colors={colors} />;
+      case 'Data Sharing':    return <DataSharingTab colors={colors} />;
     }
   };
+
+  // ── Consent checkbox label — full legal text ──────────────────────────────
+  const consentLabel = (
+    <Text style={[styles.checkboxLabel, { color: colors.text }]}>
+      By checking this box you confirm that you have read and agree to Mavin's{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => openUrl(URLS.appPrivacyPolicy)}
+      >
+        Privacy Policy
+      </Text>
+      {' '}and{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => openUrl(URLS.appTerms)}
+      >
+        Terms of Service
+      </Text>
+      , the{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => openUrl(URLS.pawnsPrivacyPolicy)}
+      >
+        Pawns Privacy Policy
+      </Text>
+      {' '}and{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => openUrl(URLS.pawnsAcceptableUse)}
+      >
+        Acceptable Use Policy
+      </Text>
+      , and that you are at least 18 years of age and the primary account holder on the
+      internet connection used by this device.
+    </Text>
+  );
 
   return (
     <Modal
@@ -467,7 +514,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
             styles.card,
             {
               backgroundColor: colors.surface,
-              borderColor:      colors.borderGold,
+              borderColor:     colors.borderGold,
             },
           ]}
         >
@@ -482,7 +529,6 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
               },
             ]}
           >
-            {/* Gold accent bar + title */}
             <View style={styles.headerLeft}>
               <View style={[styles.accentBar, { backgroundColor: colors.gold }]} />
               <View style={styles.headerTextBlock}>
@@ -490,12 +536,11 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
                   Bandwidth Sharing
                 </Text>
                 <Text style={[styles.headerSubtitle, { color: colors.textSub }]}>
-                  Review before enabling this feature
+                  Review all tabs before enabling this feature
                 </Text>
               </View>
             </View>
 
-            {/* ✕ dismiss */}
             <TouchableOpacity
               style={[styles.closeBtn, { backgroundColor: colors.surfaceHigh }]}
               onPress={handleDismiss}
@@ -554,12 +599,12 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
             style={[
               styles.footer,
               {
-                backgroundColor: colors.surface,
-                borderTopColor:  colors.border,
+                backgroundColor: colors.surfaceRaised,
+                borderTopColor:  colors.borderGold,
               },
             ]}
           >
-            {/* "Don't show again" */}
+            {/* Don't show again */}
             <Checkbox
               checked={dontShowAgain}
               onPress={() => setDontShowAgain(v => !v)}
@@ -568,19 +613,34 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
               colors={colors}
             />
 
-            {/* Age reminder */}
+            {/* Age + full consent checkbox */}
+            <View style={styles.consentCheckboxWrap}>
+              <Checkbox
+                checked={ageConfirmed}
+                onPress={() => setAgeConfirmed(v => !v)}
+                label={consentLabel}
+                testID="age-confirmation-checkbox"
+                colors={colors}
+              />
+            </View>
+
+            {/* Warning shown while consent not ticked */}
             {!ageConfirmed && (
-              <Text style={[styles.ageWarning, { color: colors.warning }]}>
-                ⚠ Confirm your age on the Privacy tab to enable Accept
+              <Text style={[styles.ageWarning, { color: colors.warning ?? colors.gold }]}>
+                ⚠ You must agree to the above terms to enable Accept
               </Text>
             )}
 
-            {/* Full-width Accept */}
+            {/* Accept — always rendered; disabled until consent ticked */}
             <TouchableOpacity
               style={[
                 styles.acceptButton,
                 { backgroundColor: colors.gold },
-                (!ageConfirmed || isLoading) && { backgroundColor: colors.goldDim },
+                (!ageConfirmed || isLoading) && {
+                  backgroundColor: isDark
+                    ? `${colors.gold}55`   // dark mode: dim gold
+                    : `${colors.gold}66`,  // light mode: dim gold
+                },
               ]}
               onPress={handleAccept}
               accessibilityRole="button"
@@ -595,8 +655,11 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
                 <Text
                   style={[
                     styles.acceptText,
-                    { color: colors.textInverse },
-                    !ageConfirmed && { color: colors.textMuted },
+                    {
+                      color: ageConfirmed
+                        ? colors.textInverse
+                        : colors.textMuted,
+                    },
                   ]}
                 >
                   Accept
@@ -604,7 +667,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
               )}
             </TouchableOpacity>
 
-            {/* Subtle decline link */}
+            {/* Decline */}
             <TouchableOpacity
               style={styles.declineRow}
               onPress={handleDecline}
@@ -625,7 +688,8 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
   );
 }
 
-// ─── Styles (layout only — all colours injected at render time via theme) ─────
+// ─── Styles ───────────────────────────────────────────────────────────────────
+// Layout only — all colours injected at render time via ThemeContext.
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_MAX_WIDTH  = Math.min(SCREEN_WIDTH - 32, 480);
@@ -688,7 +752,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  // ✕ close
+  // ── Close btn
   closeBtn: {
     width:          32,
     height:         32,
@@ -718,7 +782,7 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabLabel: {
-    fontSize:   11,
+    fontSize:  11,
     fontWeight: '500',
     textAlign:  'center',
   },
@@ -727,7 +791,7 @@ const styles = StyleSheet.create({
   contentArea: {
     flex:      1,
     minHeight: 180,
-    maxHeight: CARD_MAX_HEIGHT - 320,
+    maxHeight: CARD_MAX_HEIGHT - 340,
   },
   tabContent: {
     flex:              1,
@@ -777,20 +841,23 @@ const styles = StyleSheet.create({
     paddingTop:        14,
     paddingBottom:     20,
   },
+  consentCheckboxWrap: {
+    marginTop: 8,
+  },
   ageWarning: {
     fontSize:     11,
     marginTop:    6,
-    marginBottom: 8,
+    marginBottom: 4,
   },
 
-  // Full-width Accept
+  // Accept button — always rendered
   acceptButton: {
     width:           '100%',
     alignItems:      'center',
     justifyContent:  'center',
     paddingVertical: 14,
     borderRadius:    10,
-    marginTop:       10,
+    marginTop:       12,
   },
   acceptText: {
     fontSize:      15,
@@ -798,10 +865,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
 
-  // Subtle decline link
+  // Decline link
   declineRow: {
-    alignItems:   'center',
-    paddingTop:   12,
+    alignItems:    'center',
+    paddingTop:    12,
     paddingBottom: 2,
   },
   declineText: {
@@ -812,17 +879,19 @@ const styles = StyleSheet.create({
   // ── Checkbox
   checkboxRow: {
     flexDirection:  'row',
-    alignItems:     'center',
+    alignItems:     'flex-start',
     marginVertical: 4,
     gap:            10,
   },
   checkboxBox: {
-    width:           20,
-    height:          20,
-    borderRadius:    5,
-    borderWidth:     1.5,
-    alignItems:      'center',
-    justifyContent:  'center',
+    width:          20,
+    height:         20,
+    borderRadius:   5,
+    borderWidth:    1.5,
+    alignItems:     'center',
+    justifyContent: 'center',
+    marginTop:      1,   // align with first line of label text
+    flexShrink:     0,
   },
   checkboxTick: {
     fontSize:   12,
@@ -833,6 +902,9 @@ const styles = StyleSheet.create({
     flex:       1,
     fontSize:   13,
     lineHeight: 18,
+  },
+  checkboxLabelWrap: {
+    flex: 1,
   },
 });
 

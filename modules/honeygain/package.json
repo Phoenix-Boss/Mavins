@@ -4,19 +4,22 @@
   "main": "index.ts",
   "types": "index.ts",
   "scripts": {
-    "build": "tsc",
-    "clean": "rm -rf build"
-  },
-  "dependencies": {
-    "react": "*",
-    "react-native": "*"
-  },
-  "devDependencies": {
-    "@types/react": "*",
-    "typescript": "^5.0.0"
+    "android": "cd android && ./gradlew build"
   },
   "peerDependencies": {
-    "react": "*",
-    "react-native": "*"
-  }
+    "expo": "*",
+    "expo-modules-core": "*"
+  },
+  "expo": {
+    "modules": [
+      "./android/src/main/java/expo/modules/mavin/honeygain/HoneygainModule.kt"
+    ],
+    "autolinking": {
+      "android": {
+        "packageName": "expo.modules.mavin.honeygain",
+        "excludeLibraries": []
+      }
+    }
+  },
+  "platforms": ["android"]
 }

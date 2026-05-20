@@ -3,7 +3,7 @@ import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system/next';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
-const DATABASE_VERSION = 5; // Incremented version for is_validated column
+const DATABASE_VERSION = 5;
 const DATABASE_NAME = 'mavin_local_music.db';
 
 export interface AvailableFolder {
@@ -39,7 +39,7 @@ export interface LocalTrack {
   file_uri: string;
   last_modified: number;
   added_to_library: number;
-  is_validated: number; // 1 = file exists and is playable, 0 = needs validation/repair
+  is_validated: number;
 }
 
 export interface CacheMetadata {
@@ -118,7 +118,7 @@ async function createTables(db: SQLite.SQLiteDatabase) {
       file_uri TEXT NOT NULL,
       last_modified INTEGER NOT NULL,
       added_to_library INTEGER NOT NULL,
-      is_validated INTEGER DEFAULT 0,
+      is_validated INTEGER DEFAULT 1,
       FOREIGN KEY (album_id) REFERENCES watched_albums (album_id) ON DELETE CASCADE
     );
   `);
@@ -229,14 +229,13 @@ async function runMigrations(db: SQLite.SQLiteDatabase, fromVersion: number) {
     }
   }
   
-  // Migration for version 5 - add is_validated column to album_tracks
   if (fromVersion < 5) {
     try {
       const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(album_tracks);");
       const columnNames = columns.map(c => c.name);
       
       if (!columnNames.includes('is_validated')) {
-        await db.execAsync(`ALTER TABLE album_tracks ADD COLUMN is_validated INTEGER DEFAULT 0;`);
+        await db.execAsync(`ALTER TABLE album_tracks ADD COLUMN is_validated INTEGER DEFAULT 1;`);
         console.log('[LocalDatabase] Added is_validated column to album_tracks');
       }
       
@@ -249,57 +248,15 @@ async function runMigrations(db: SQLite.SQLiteDatabase, fromVersion: number) {
   }
 }
 
-// ==================== Helper to validate and repair file URIs ====================
+// ==================== REMOVED validateAndRepairFileUri - Trust MediaStore URIs ====================
 
-async function validateAndRepairFileUri(fileUri: string, trackId: string, folderPath?: string): Promise<{ uri: string; isValid: boolean }> {
-  // If fileUri is valid and file exists, return it
-  if (fileUri && fileUri.length > 0) {
-    try {
-      // Handle file:// prefix
-      let filePath = fileUri;
-      if (fileUri.startsWith('file://')) {
-        filePath = fileUri.substring(7);
-      } else if (fileUri.startsWith('content://')) {
-        // content:// URIs are handled by the system, assume valid
-        return { uri: fileUri, isValid: true };
-      }
-      
-      const info = await (await (new File(filePath)).exists());
-      if (info.exists && info.size > 0) {
-        return { uri: fileUri, isValid: true };
-      }
-    } catch (error) {
-      console.warn(`[LocalDatabase] File not found at ${fileUri}, attempting to repair...`);
-    }
-  }
-  
-  // Try to repair by searching for the file in the folder
-  if (folderPath) {
-    try {
-      const files = await (await (new Directory(folderPath)).list()).map(item => item.name);
-      const audioExtensions = ['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus'];
-      
-      for (const file of files) {
-        const ext = file.split('.').pop()?.toLowerCase();
-        if (audioExtensions.includes(ext || '')) {
-          const fullPath = `${folderPath}/${file}`;
-          try {
-            const info = await (await (new File(fullPath)).exists());
-            if (info.exists && info.size > 0) {
-              console.log(`[LocalDatabase] Repaired file URI for track ${trackId}: ${fullPath}`);
-              return { uri: fullPath, isValid: true };
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-      }
-    } catch (error) {
-      console.warn(`[LocalDatabase] Failed to repair file URI for track ${trackId}:`, error);
-    }
-  }
-  
-  return { uri: fileUri || '', isValid: false };
+// Simple validation - trust the URI from MediaStore
+function isFileUriValid(fileUri: string): boolean {
+  if (!fileUri || fileUri.length === 0) return false;
+  // content:// and file:// URIs from MediaStore are trusted
+  return fileUri.startsWith('content://') || 
+         fileUri.startsWith('file://') || 
+         fileUri.startsWith('/');
 }
 
 // Update validation status for a track
@@ -442,14 +399,13 @@ export async function updateAlbumTrackCount(album_id: string, track_count: numbe
   );
 }
 
-// ==================== Track Operations with Validation ====================
+// ==================== Track Operations - No Validation/Repair ====================
 
 export async function addTracks(tracks: Omit<LocalTrack, 'added_to_library'>[]): Promise<void> {
   const db = await initLocalDatabase();
   const now = Date.now();
 
   for (const track of tracks) {
-    // Skip tracks without file_uri (can't play them anyway)
     if (!track.file_uri || track.file_uri.length === 0) {
       console.warn('[LocalDatabase] Skipping track with empty file_uri:', track.title);
       continue;
@@ -459,7 +415,7 @@ export async function addTracks(tracks: Omit<LocalTrack, 'added_to_library'>[]):
       `INSERT OR REPLACE INTO album_tracks (
         track_id, album_id, title, artist, album, duration, artwork_uri,
         cached_artwork_path, file_uri, last_modified, added_to_library, is_validated
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);`,
       track.track_id, 
       track.album_id || 'unknown',
       track.title || 'Unknown Track',
@@ -470,128 +426,37 @@ export async function addTracks(tracks: Omit<LocalTrack, 'added_to_library'>[]):
       track.cached_artwork_path || null,
       track.file_uri,
       track.last_modified || Date.now(),
-      now,
-      track.is_validated || 0
+      now
     );
   }
 }
 
 export async function getTracksByAlbum(album_id: string): Promise<LocalTrack[]> {
   const db = await initLocalDatabase();
-  const tracks = await db.getAllAsync<LocalTrack>(
+  return await db.getAllAsync<LocalTrack>(
     `SELECT * FROM album_tracks WHERE album_id = ? ORDER BY title ASC;`, album_id
   );
-  
-  // Get folder path for this album to repair URIs if needed
-  const folder = await db.getFirstAsync<{ folder_path: string }>(
-    `SELECT folder_path FROM available_folders WHERE folder_id = ?;`, album_id
-  );
-  
-  // Validate and repair each track's file_uri
-  const validatedTracks = await Promise.all(tracks.map(async (track) => {
-    const result = await validateAndRepairFileUri(track.file_uri, track.track_id, folder?.folder_path);
-    
-    // Update validation status if changed
-    if (result.isValid !== (track.is_validated === 1)) {
-      await updateTrackValidationStatus(track.track_id, result.isValid);
-    }
-    
-    return {
-      ...track,
-      file_uri: result.uri,
-      title: track.title || 'Unknown Track',
-      artist: track.artist || 'Upcoming Artist',
-      album: track.album || 'Unknown Album',
-      is_validated: result.isValid ? 1 : 0
-    };
-  }));
-  
-  return validatedTracks;
 }
 
 export async function getAllTracks(): Promise<LocalTrack[]> {
   const db = await initLocalDatabase();
-  const tracks = await db.getAllAsync<LocalTrack>(`SELECT * FROM album_tracks ORDER BY title ASC;`);
-  
-  // Validate and repair each track's file_uri
-  const validatedTracks = await Promise.all(tracks.map(async (track) => {
-    // Get folder path for this track's album
-    const folder = await db.getFirstAsync<{ folder_path: string }>(
-      `SELECT folder_path FROM available_folders WHERE folder_id = ?;`, track.album_id
-    );
-    
-    const result = await validateAndRepairFileUri(track.file_uri, track.track_id, folder?.folder_path);
-    
-    // Update validation status if changed
-    if (result.isValid !== (track.is_validated === 1)) {
-      await updateTrackValidationStatus(track.track_id, result.isValid);
-    }
-    
-    return {
-      ...track,
-      file_uri: result.uri,
-      title: track.title || 'Unknown Track',
-      artist: track.artist || 'Upcoming Artist',
-      album: track.album || 'Unknown Album',
-      is_validated: result.isValid ? 1 : 0
-    };
-  }));
-  
-  return validatedTracks;
+  return await db.getAllAsync<LocalTrack>(`SELECT * FROM album_tracks ORDER BY title ASC;`);
 }
 
 export async function searchTracks(query: string): Promise<LocalTrack[]> {
   const db = await initLocalDatabase();
   const searchTerm = `%${query}%`;
-  const tracks = await db.getAllAsync<LocalTrack>(
+  return await db.getAllAsync<LocalTrack>(
     `SELECT * FROM album_tracks WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? ORDER BY title ASC;`,
     searchTerm, searchTerm, searchTerm
   );
-  
-  // Validate and repair each track's file_uri
-  const validatedTracks = await Promise.all(tracks.map(async (track) => {
-    const folder = await db.getFirstAsync<{ folder_path: string }>(
-      `SELECT folder_path FROM available_folders WHERE folder_id = ?;`, track.album_id
-    );
-    
-    const result = await validateAndRepairFileUri(track.file_uri, track.track_id, folder?.folder_path);
-    
-    return {
-      ...track,
-      file_uri: result.uri,
-      title: track.title || 'Unknown Track',
-      artist: track.artist || 'Upcoming Artist',
-      album: track.album || 'Unknown Album',
-      is_validated: result.isValid ? 1 : 0
-    };
-  }));
-  
-  return validatedTracks;
 }
 
 export async function getTrackById(track_id: string): Promise<LocalTrack | null> {
   const db = await initLocalDatabase();
-  const track = await db.getFirstAsync<LocalTrack>(
+  return await db.getFirstAsync<LocalTrack>(
     `SELECT * FROM album_tracks WHERE track_id = ?;`, track_id
   );
-  
-  if (!track) return null;
-  
-  // Validate and repair file_uri
-  const folder = await db.getFirstAsync<{ folder_path: string }>(
-    `SELECT folder_path FROM available_folders WHERE folder_id = ?;`, track.album_id
-  );
-  
-  const result = await validateAndRepairFileUri(track.file_uri, track.track_id, folder?.folder_path);
-  
-  return {
-    ...track,
-    file_uri: result.uri,
-    title: track.title || 'Unknown Track',
-    artist: track.artist || 'Upcoming Artist',
-    album: track.album || 'Unknown Album',
-    is_validated: result.isValid ? 1 : 0
-  };
 }
 
 export async function deleteTracksByAlbum(album_id: string): Promise<void> {

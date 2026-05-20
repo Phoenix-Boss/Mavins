@@ -1,18 +1,3 @@
-// app/(player)/search/index.tsx
-/**
- * Search Screen — Professional redesign
- * Fixes:
- *  - Uses SearchPreloader for cached discovery data (loads instantly on arrival)
- *  - Trending carousel is a continuously auto-scrolling conveyor belt (marquee style)
- *  - Suggestions overlay hidden when results are present
- *  - Beats section placed after Discover grid
- *  - Themed alerts using AlertContext
- * 
- * ISSUE 3 FIX: Preload top 4 search results for instant playback
- *  - Calls preloadSearchResults() after results are displayed
- *  - Imports preloadSearchResults from playerSetup
- */
-
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
@@ -25,6 +10,7 @@ import {
   Dimensions,
   Animated,
   Easing,
+  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons, MaterialIcons, Entypo } from "@expo/vector-icons";
@@ -55,18 +41,14 @@ const SEARCH_CACHE_TTL_MS = DEVICE_CACHE_TTL.SEARCH_RESULT;
 const DEBOUNCE_MS = 300;
 const GLOBAL_HISTORY_LIMIT = 20;
 
-// Card dimensions for 2×2 grid
 const GRID_CARD_WIDTH = (SCREEN_WIDTH - 32 - 8) / 2.3;
 const GRID_CARD_HEIGHT = 100;
 
-// Trending item sizing
 const TRENDING_ITEM_WIDTH = 68;
 const TRENDING_ITEM_GAP = 16;
 const TRENDING_ITEM_FULL = TRENDING_ITEM_WIDTH + TRENDING_ITEM_GAP;
 
 type FilterTab = "all" | "songs" | "albums" | "artists" | "playlists";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface SongResult {
   type: "song";
@@ -141,8 +123,6 @@ interface GlobalSearchItem {
   track_id?: string;
 }
 
-// ─── Fallback Data (only used if store has no data) ────────────────────────────
-
 const FALLBACK_GLOBAL_HISTORY: GlobalSearchItem[] = [
   { id: "1", query: "Burna Boy", thumbnail_url: "", artist_name: "Burna Boy", search_count: 15000, last_searched: new Date().toISOString() },
   { id: "2", query: "Davido", thumbnail_url: "", artist_name: "Davido", search_count: 12000, last_searched: new Date().toISOString() },
@@ -151,8 +131,6 @@ const FALLBACK_GLOBAL_HISTORY: GlobalSearchItem[] = [
   { id: "5", query: "Rema", thumbnail_url: "", artist_name: "Rema", search_count: 8000, last_searched: new Date().toISOString() },
   { id: "6", query: "Amapiano", thumbnail_url: "", artist_name: "", search_count: 7000, last_searched: new Date().toISOString() },
 ];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const bestThumb = (thumbs: { url: string; resolutionLevel: string }[]): string =>
   thumbs.find(t => t.resolutionLevel === "MEDIUM")?.url ??
@@ -222,8 +200,6 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
 
 const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
 
-// ─── Global Search History API ────────────────────────────────────────────────
-
 async function saveToGlobalHistory(query: string, thumbnail = "", artist = "", trackId = ""): Promise<void> {
   try {
     await supabase.from("global_search_history").upsert(
@@ -258,8 +234,6 @@ async function getGlobalSearchHistory(): Promise<GlobalSearchItem[]> {
     return FALLBACK_GLOBAL_HISTORY;
   }
 }
-
-// ─── Conveyor Belt Trending Carousel ─────────────────────────────────────────
 
 function TrendingConveyorBelt({
   history,
@@ -350,8 +324,6 @@ const conveyorStyles = StyleSheet.create({
   label: { fontSize: 10, marginTop: 5, textAlign: "center", maxWidth: 68 },
 });
 
-// ─── Suggestions Overlay ──────────────────────────────────────────────────────
-
 function SuggestionsOverlay({
   suggestions,
   onSelect,
@@ -387,8 +359,6 @@ const suggStyles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   text: { fontSize: 14, flex: 1 },
 });
-
-// ─── Recommended Playlists ────────────────────────────────────────────────────
 
 function RecommendedPlaylists({
   items,
@@ -454,8 +424,6 @@ const plStyles = StyleSheet.create({
   title: { fontSize: 12, fontWeight: "600", marginBottom: 3 },
   sub: { fontSize: 11 },
 });
-
-// ─── Discover 2×2 Grid Pager ──────────────────────────────────────────────────
 
 function DiscoverGrid({
   items,
@@ -546,8 +514,6 @@ const dgStyles = StyleSheet.create({
   cardTitle: { fontSize: 11, fontWeight: "600", marginBottom: 2 },
   cardSub: { fontSize: 10 },
 });
-
-// ─── Beats Section (2×2 Grid) ─────────────────────────────────────────────────
 
 function BeatsSection({
   items,
@@ -657,8 +623,6 @@ const bStyles = StyleSheet.create({
   metaChip: { fontSize: 9, fontWeight: "600", borderWidth: 1, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1 },
 });
 
-// ─── Result Row Components ────────────────────────────────────────────────────
-
 function SongResultRow({ item, onPress, onMenu, colors }: { item: SongResult; onPress: () => void; onMenu: () => void; colors: any }) {
   return (
     <TouchableOpacity style={[rowStyles.container, { borderBottomColor: colors.border }]} onPress={onPress} activeOpacity={0.7}>
@@ -717,8 +681,6 @@ const rowStyles = StyleSheet.create({
   menuBtn: { padding: 4 },
 });
 
-// ─── Top Result Card ──────────────────────────────────────────────────────────
-
 function TopResultCard({ item, onPress, onPlay, colors }: { item: SearchResult; onPress: () => void; onPlay: () => void; colors: any }) {
   const isArtist = item.type === "artist";
   const icon = isArtist ? "person" : item.type === "album" ? "disc" : "musical-notes";
@@ -758,8 +720,6 @@ const topStyles = StyleSheet.create({
   playBtn: { position: "absolute", right: 12, bottom: 12, width: 38, height: 38, borderRadius: 19, justifyContent: "center", alignItems: "center" },
 });
 
-// ─── Filter Chips ──────────────────────────────────────────────────────────────
-
 function FilterChips({ activeTab, setActiveTab, colors }: { activeTab: FilterTab; setActiveTab: (t: FilterTab) => void; colors: any }) {
   const tabs: FilterTab[] = ["all", "songs", "albums", "artists", "playlists"];
 
@@ -791,8 +751,6 @@ const chipStyles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: "500" },
 });
 
-// ─── Empty Results ────────────────────────────────────────────────────────────
-
 function EmptyResultsView({ colors }: { colors: any }) {
   return (
     <View style={{ alignItems: "center", paddingTop: 64, gap: 12 }}>
@@ -802,8 +760,6 @@ function EmptyResultsView({ colors }: { colors: any }) {
     </View>
   );
 }
-
-// ─── Search Results View ──────────────────────────────────────────────────────
 
 function SearchResultsView({
   results,
@@ -815,6 +771,7 @@ function SearchResultsView({
   onPlaylistPress,
   onMenuPress,
   colors,
+  isRefreshing,
 }: {
   results: SearchResults;
   activeTab: FilterTab;
@@ -825,6 +782,7 @@ function SearchResultsView({
   onPlaylistPress: (p: PlaylistResult) => void;
   onMenuPress: (s: SongResult) => void;
   colors: any;
+  isRefreshing: boolean;
 }) {
   const topResult: SearchResult | null = results.artists[0] ?? results.songs[0] ?? results.albums[0] ?? results.playlists[0] ?? null;
 
@@ -848,6 +806,11 @@ function SearchResultsView({
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
+      {isRefreshing && (
+        <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+          <ActivityIndicator size="small" color={colors.gold} />
+        </View>
+      )}
       <FilterChips activeTab={activeTab} setActiveTab={setActiveTab} colors={colors} />
       {activeTab === "all" ? (
         <>
@@ -922,8 +885,6 @@ const resStyles = StyleSheet.create({
   section: { marginTop: 16, marginBottom: 4, paddingHorizontal: 16 },
 });
 
-// ─── Loading Skeleton ─────────────────────────────────────────────────────────
-
 function SkeletonResultRow({ colors }: { colors: any }) {
   return (
     <View style={[rowStyles.container, { borderBottomColor: colors.border }]}>
@@ -936,7 +897,7 @@ function SkeletonResultRow({ colors }: { colors: any }) {
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+let searchAbortController: AbortController | null = null;
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -945,7 +906,6 @@ export default function SearchScreen() {
   const { colors } = useTheme();
   const { showAlert } = useAlert();
 
-  // Get cached search data from store
   const { data: searchData, loading: searchDataLoading, hasAnyData: searchHasData } = useSearchStore();
 
   const [query, setQuery] = useState("");
@@ -956,7 +916,6 @@ export default function SearchScreen() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [globalHistory, setGlobalHistory] = useState<GlobalSearchItem[]>(FALLBACK_GLOBAL_HISTORY);
 
-  // Use cached data from store instead of fetching on mount
   const discoverItems = searchData?.discoverSongs || [];
   const playlists = searchData?.playlists || [];
   const beats = searchData?.beats || [];
@@ -965,7 +924,6 @@ export default function SearchScreen() {
   const inputRef = useRef<TextInput>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Mount: load only global history (lightweight) ──
   useEffect(() => {
     const loadHistory = async () => {
       const history = await getGlobalSearchHistory();
@@ -973,9 +931,15 @@ export default function SearchScreen() {
     };
     loadHistory();
     setTimeout(() => inputRef.current?.focus(), 150);
+
+    return () => {
+      if (searchAbortController) {
+        searchAbortController.abort();
+        searchAbortController = null;
+      }
+    };
   }, []);
 
-  // ── Suggestions debounce ────────────────────────────────────────────────────
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
@@ -996,16 +960,19 @@ export default function SearchScreen() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query, results]);
 
-  // ── Perform search ──────────────────────────────────────────────────────────
   const performSearch = useCallback(async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) return;
+
+    if (searchAbortController) {
+      searchAbortController.abort();
+    }
+    searchAbortController = new AbortController();
 
     Keyboard.dismiss();
     setSuggestions([]);
     setLoading(true);
     setError(null);
-    setResults(null);
     setActiveTab("all");
 
     (async () => {
@@ -1031,10 +998,11 @@ export default function SearchScreen() {
 
     try {
       const raw = await MavinEngine.search(trimmed, "", undefined, 0);
+      if (searchAbortController?.signal.aborted) return;
+      
       const mapped = mapEngineResults(raw.results ?? []);
       setResults(mapped);
       
-      // ISSUE 3: Preload top 4 songs for instant playback
       if (mapped.songs && mapped.songs.length > 0) {
         const songsToPreload = mapped.songs.slice(0, 4).map(song => ({
           id: song.id,
@@ -1052,9 +1020,12 @@ export default function SearchScreen() {
         cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => { });
       }
     } catch (e: any) {
+      if (searchAbortController?.signal.aborted) return;
       setError(e?.message ?? "Search failed");
     } finally {
-      setLoading(false);
+      if (!searchAbortController?.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -1064,6 +1035,10 @@ export default function SearchScreen() {
 
   const handleCancel = () => {
     Keyboard.dismiss();
+    if (searchAbortController) {
+      searchAbortController.abort();
+      searchAbortController = null;
+    }
     if (results || query) {
       setQuery("");
       setResults(null);
@@ -1119,15 +1094,19 @@ export default function SearchScreen() {
     }
   };
 
-  const showDiscovery = !results && !loading && !error;
-  const showResults = !!results && !loading;
+  const showDiscovery = !results && !error;
+  const showResults = !!results;
   const showSuggestions = !results && suggestions.length > 0 && query.trim().length >= 2;
 
   return (
     <View style={[mainStyles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
       <View style={mainStyles.searchRow}>
         <View style={[mainStyles.searchBar, { backgroundColor: colors.surfaceRaised }]}>
-          <Ionicons name="search" size={17} color={colors.textMuted} style={{ marginRight: 8 }} />
+          {loading && !results ? (
+            <ActivityIndicator size="small" color={colors.gold} style={{ marginRight: 8 }} />
+          ) : (
+            <Ionicons name="search" size={17} color={colors.textMuted} style={{ marginRight: 8 }} />
+          )}
           <TextInput
             ref={inputRef}
             style={[mainStyles.searchInput, { color: colors.text }]}
@@ -1164,15 +1143,6 @@ export default function SearchScreen() {
           </ScrollView>
         )}
 
-        {loading && (
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
-            <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
-              <View style={{ height: 30, width: 180, borderRadius: 20, backgroundColor: colors.surfaceLight, marginBottom: 12 }} />
-            </View>
-            {[1, 2, 3, 4, 5, 6].map(i => <SkeletonResultRow key={i} colors={colors} />)}
-          </ScrollView>
-        )}
-
         {!!error && !loading && (
           <View style={mainStyles.errorBox}>
             <Ionicons name="alert-circle-outline" size={32} color={colors.error} />
@@ -1194,6 +1164,7 @@ export default function SearchScreen() {
             onPlaylistPress={handlePlaylistPress}
             onMenuPress={handleMenuPress}
             colors={colors}
+            isRefreshing={loading && !!results}
           />
         )}
 
