@@ -36,18 +36,82 @@
  *
  * ─── Dependencies ─────────────────────────────────────────────────────────────
  *   @expo/config-plugins  (installed as part of expo)
- *   xml2js                (installed as part of @expo/config-plugins transitive deps)
  */
 
-const {
-  withAndroidManifest,
-  AndroidConfig,
-} = require('@expo/config-plugins');
+const { withAndroidManifest } = require('@expo/config-plugins');
 
-const {
-  addPermission,
-  getMainApplicationOrThrow,
-} = AndroidConfig.Manifest;
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/**
+ * Idempotently adds a permission to the manifest.
+ * Checks for existence before inserting to avoid duplicates.
+ * 
+ * @param {Object} manifest - AndroidManifest object
+ * @param {string} permissionName - Full permission name (e.g., 'android.permission.INTERNET')
+ * @returns {Object} - Updated manifest
+ */
+function addPermission(manifest, permissionName) {
+  // Ensure manifest structure exists
+  if (!manifest) {
+    manifest = {};
+  }
+  if (!manifest['uses-permission']) {
+    manifest['uses-permission'] = [];
+  }
+
+  // Check if permission already exists
+  const exists = manifest['uses-permission'].some(
+    (p) => p.$ && p.$['android:name'] === permissionName
+  );
+
+  // Add if not exists
+  if (!exists) {
+    manifest['uses-permission'].push({
+      $: {
+        'android:name': permissionName,
+      },
+    });
+  }
+
+  return manifest;
+}
+
+/**
+ * Gets the main <application> element or throws an error.
+ * 
+ * @param {Object} androidManifest - The parsed AndroidManifest object
+ * @returns {Object} - The main application element
+ * @throws {Error} - If application element is not found
+ */
+function getMainApplicationOrThrow(androidManifest) {
+  if (!androidManifest.manifest) {
+    androidManifest.manifest = {};
+  }
+  if (!androidManifest.manifest.application) {
+    androidManifest.manifest.application = [{}];
+  }
+  if (!androidManifest.manifest.application[0]) {
+    androidManifest.manifest.application[0] = {};
+  }
+  
+  return androidManifest.manifest.application[0];
+}
+
+/**
+ * Ensures a permission exists in the manifest.
+ * 
+ * @param {Object} manifest - AndroidManifest object
+ * @param {string} permission - Permission name
+ */
+function ensurePermission(manifest, permission) {
+  const permissions = manifest['uses-permission'] || [];
+  const exists = permissions.some(
+    (p) => p.$ && p.$['android:name'] === permission
+  );
+  if (!exists) {
+    addPermission(manifest, permission);
+  }
+}
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
 
@@ -60,48 +124,37 @@ const REQUIRED_PERMISSIONS = [
   'android.permission.RECEIVE_BOOT_COMPLETED',
 ];
 
-/**
- * Idempotently adds a permission to the manifest.
- * Checks for existence before inserting to avoid duplicates.
- */
-function ensurePermission(manifest, name) {
-  const permissions = manifest['uses-permission'] || [];
-  const exists = permissions.some(
-    (p) => p.$?.['android:name'] === name
-  );
-  if (!exists) {
-    addPermission(manifest, name);
-  }
-}
-
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 /**
  * Idempotently inserts the PeerServiceForeground <service> element.
+ * 
+ * @param {Object} mainApplication - The main application element
  */
 function ensureForegroundService(mainApplication) {
   const serviceName = 'com.pawns.sdk.internal.service.PeerServiceForeground';
 
   const services = mainApplication['service'] || [];
   const exists = services.some(
-    (s) => s.$?.['android:name'] === serviceName
+    (s) => s.$ && s.$['android:name'] === serviceName
   );
 
   if (!exists) {
-    mainApplication['service'] = mainApplication['service'] || [];
+    if (!mainApplication['service']) {
+      mainApplication['service'] = [];
+    }
+    
     mainApplication['service'].push({
       $: {
-        'android:name':                serviceName,
-        'android:exported':            'false',
+        'android:name': serviceName,
+        'android:exported': 'false',
         'android:foregroundServiceType': 'specialUse',
       },
       property: [
         {
           $: {
-            'android:name':
-              'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE',
-            'android:value':
-              "Allows to share internet traffic by modifying device's " +
+            'android:name': 'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE',
+            'android:value': "Allows to share internet traffic by modifying device's " +
               'network settings to be used as a gateway for internet traffic.',
           },
         },
@@ -114,20 +167,25 @@ function ensureForegroundService(mainApplication) {
  * Idempotently inserts the PeerServiceBackground <service> element.
  * Only needed if you ever switch to ServiceType.BACKGROUND — included here
  * for completeness and to avoid a manifest crash if the SDK references it.
+ * 
+ * @param {Object} mainApplication - The main application element
  */
 function ensureBackgroundService(mainApplication) {
   const serviceName = 'com.pawns.sdk.internal.service.PeerServiceBackground';
 
   const services = mainApplication['service'] || [];
   const exists = services.some(
-    (s) => s.$?.['android:name'] === serviceName
+    (s) => s.$ && s.$['android:name'] === serviceName
   );
 
   if (!exists) {
-    mainApplication['service'] = mainApplication['service'] || [];
+    if (!mainApplication['service']) {
+      mainApplication['service'] = [];
+    }
+    
     mainApplication['service'].push({
       $: {
-        'android:name':     serviceName,
+        'android:name': serviceName,
         'android:exported': 'false',
       },
     });
@@ -140,19 +198,25 @@ function ensureBackgroundService(mainApplication) {
  * Idempotently inserts the notification channel name meta-data entry.
  * The value is a literal string (not a @string/ reference) so that no
  * strings.xml changes are required.
+ * 
+ * @param {Object} mainApplication - The main application element
+ * @param {string} channelName - Notification channel name
  */
 function ensureChannelMetaData(mainApplication, channelName) {
   const metaDataName = 'com.pawns.sdk.pawns_service_channel_name';
-  const metaDatas    = mainApplication['meta-data'] || [];
-  const exists       = metaDatas.some(
-    (m) => m.$?.['android:name'] === metaDataName
+  const metaDatas = mainApplication['meta-data'] || [];
+  const exists = metaDatas.some(
+    (m) => m.$ && m.$['android:name'] === metaDataName
   );
 
   if (!exists) {
-    mainApplication['meta-data'] = mainApplication['meta-data'] || [];
+    if (!mainApplication['meta-data']) {
+      mainApplication['meta-data'] = [];
+    }
+    
     mainApplication['meta-data'].push({
       $: {
-        'android:name':  metaDataName,
+        'android:name': metaDataName,
         'android:value': channelName,
       },
     });
@@ -163,24 +227,26 @@ function ensureChannelMetaData(mainApplication, channelName) {
 
 /**
  * Idempotently inserts the PawnsBootReceiver <receiver> element.
+ * 
+ * @param {Object} mainApplication - The main application element
  */
 function ensureBootReceiver(mainApplication) {
-  // Use the module's package so it resolves correctly regardless of the host
-  // app's package name. The host app may also use a relative name like
-  // ".PawnsBootReceiver" only if the receiver is in the same package as the
-  // application — safest to use the fully-qualified name here.
-  const receiverName = 'expo.modules.mavin.honeygain.PawnsBootReceiver';
+  // Use relative name so it resolves to the host app's package
+  const receiverName = '.PawnsBootReceiver';
 
   const receivers = mainApplication['receiver'] || [];
-  const exists    = receivers.some(
-    (r) => r.$?.['android:name'] === receiverName
+  const exists = receivers.some(
+    (r) => r.$ && r.$['android:name'] === receiverName
   );
 
   if (!exists) {
-    mainApplication['receiver'] = mainApplication['receiver'] || [];
+    if (!mainApplication['receiver']) {
+      mainApplication['receiver'] = [];
+    }
+    
     mainApplication['receiver'].push({
       $: {
-        'android:name':     receiverName,
+        'android:name': receiverName,
         'android:exported': 'false',
       },
       'intent-filter': [
@@ -199,31 +265,56 @@ function ensureBootReceiver(mainApplication) {
 // ─── Plugin entry point ───────────────────────────────────────────────────────
 
 /**
- * @param {import('@expo/config-plugins').ExpoConfig} config
- * @param {{ notificationChannelName?: string }} options
+ * Expo config plugin for Pawns SDK integration.
+ * 
+ * @param {import('@expo/config-plugins').ExpoConfig} config - Expo config object
+ * @param {{ notificationChannelName?: string }} options - Plugin options
+ * @returns {import('@expo/config-plugins').ExpoConfig} - Modified config
  */
 function withPawns(config, options = {}) {
   const channelName = options.notificationChannelName ?? 'Bandwidth Sharing';
 
+  console.log('[withPawns] Applying Pawns SDK configuration with channel name:', channelName);
+
   return withAndroidManifest(config, (cfg) => {
-    const manifest      = cfg.modResults.manifest;
-    const mainApp       = getMainApplicationOrThrow(cfg.modResults);
-
-    // 1. Permissions
-    for (const permission of REQUIRED_PERMISSIONS) {
-      ensurePermission(manifest, permission);
+    console.log('[withPawns] Modifying AndroidManifest.xml...');
+    
+    // Get the manifest object
+    const androidManifest = cfg.modResults;
+    
+    // Ensure manifest structure exists
+    if (!androidManifest.manifest) {
+      androidManifest.manifest = {};
     }
-
-    // 2. Services
+    
+    // 1. Add all required permissions
+    console.log('[withPawns] Adding permissions...');
+    for (const permission of REQUIRED_PERMISSIONS) {
+      ensurePermission(androidManifest.manifest, permission);
+      console.log('[withPawns]   - Added:', permission);
+    }
+    
+    // 2. Get the main application element
+    const mainApp = getMainApplicationOrThrow(androidManifest);
+    
+    // 3. Add foreground service
+    console.log('[withPawns] Adding foreground service...');
     ensureForegroundService(mainApp);
+    
+    // 4. Add background service
+    console.log('[withPawns] Adding background service...');
     ensureBackgroundService(mainApp);
-
-    // 3. Meta-data
+    
+    // 5. Add channel meta-data
+    console.log('[withPawns] Adding notification channel meta-data...');
     ensureChannelMetaData(mainApp, channelName);
-
-    // 4. Boot receiver
+    
+    // 6. Add boot receiver
+    console.log('[withPawns] Adding boot receiver...');
     ensureBootReceiver(mainApp);
-
+    
+    console.log('[withPawns] AndroidManifest.xml modification complete.');
+    
     return cfg;
   });
 }

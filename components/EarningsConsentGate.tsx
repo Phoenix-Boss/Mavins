@@ -693,7 +693,8 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_MAX_WIDTH  = Math.min(SCREEN_WIDTH - 32, 480);
-const CARD_MAX_HEIGHT = SCREEN_HEIGHT * 0.88;
+// FIXED: Increased max height to 95% of screen height to ensure footer visibility
+const CARD_MAX_HEIGHT = SCREEN_HEIGHT * 0.92;
 
 const styles = StyleSheet.create({
   // ── Overlay
@@ -703,13 +704,14 @@ const styles = StyleSheet.create({
     justifyContent:    'center',
     alignItems:        'center',
     paddingHorizontal: 16,
+    paddingVertical:   8,  // Added vertical padding for better spacing on small screens
   },
 
   // ── Card
   card: {
     width:         CARD_MAX_WIDTH,
     maxHeight:     CARD_MAX_HEIGHT,
-    borderRadius:  16,
+    borderRadius:  20,  // Slightly larger radius
     borderWidth:   1,
     overflow:      'hidden',
     elevation:     16,
@@ -723,8 +725,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection:     'row',
     alignItems:        'center',
-    paddingVertical:   14,
-    paddingHorizontal: 16,
+    paddingVertical:   16,   // Increased from 14
+    paddingHorizontal: 20,   // Increased from 16
     borderBottomWidth: 1,
   },
   headerLeft: {
@@ -734,15 +736,15 @@ const styles = StyleSheet.create({
     gap:           12,
   },
   accentBar: {
-    width:        3,
-    height:       34,
+    width:        4,         // Increased from 3
+    height:       40,        // Increased from 34
     borderRadius: 2,
   },
   headerTextBlock: {
     flex: 1,
   },
   headerTitle: {
-    fontSize:      15,
+    fontSize:      16,       // Increased from 15
     fontWeight:    '700',
     letterSpacing: 0.2,
     marginBottom:  2,
@@ -762,7 +764,7 @@ const styles = StyleSheet.create({
     marginLeft:     8,
   },
   closeBtnText: {
-    fontSize:   14,
+    fontSize:   16,       // Increased from 14
     fontWeight: '600',
     lineHeight: 17,
   },
@@ -774,24 +776,25 @@ const styles = StyleSheet.create({
   },
   tabItem: {
     flex:              1,
-    paddingVertical:   10,
-    paddingHorizontal: 4,
+    paddingVertical:   12,     // Increased from 10
+    paddingHorizontal: 6,      // Increased from 4
     alignItems:        'center',
     justifyContent:    'center',
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
   tabLabel: {
-    fontSize:  11,
-    fontWeight: '500',
+    fontSize:  12,              // Increased from 11
+    fontWeight: '600',          // Increased weight for better visibility
     textAlign:  'center',
   },
 
   // ── Content area
   contentArea: {
     flex:      1,
-    minHeight: 180,
-    maxHeight: CARD_MAX_HEIGHT - 340,
+    minHeight: 200,
+    // FIXED: Dynamic max height to leave enough room for footer
+    maxHeight: SCREEN_HEIGHT * 0.55,  // 55% of screen for tabs, rest for footer
   },
   tabContent: {
     flex:              1,
@@ -804,16 +807,16 @@ const styles = StyleSheet.create({
 
   // ── Typography
   sectionTitle: {
-    fontSize:      14,
+    fontSize:      15,       // Increased from 14
     fontWeight:    '700',
     letterSpacing: 0.3,
     marginTop:     16,
-    marginBottom:  6,
+    marginBottom:  8,        // Increased from 6
   },
   bodyText: {
     fontSize:     13,
     lineHeight:   20,
-    marginBottom: 8,
+    marginBottom: 10,        // Increased from 8
   },
   disclosureLabel: {
     fontSize:     13,
@@ -838,16 +841,16 @@ const styles = StyleSheet.create({
   footer: {
     borderTopWidth:    1,
     paddingHorizontal: 20,
-    paddingTop:        14,
-    paddingBottom:     20,
+    paddingTop:        16,      // Increased from 14
+    paddingBottom:     24,      // Increased from 20
   },
   consentCheckboxWrap: {
     marginTop: 8,
   },
   ageWarning: {
-    fontSize:     11,
-    marginTop:    6,
-    marginBottom: 4,
+    fontSize:     12,           // Increased from 11
+    marginTop:    8,            // Increased from 6
+    marginBottom: 6,            // Increased from 4
   },
 
   // Accept button — always rendered
@@ -855,12 +858,12 @@ const styles = StyleSheet.create({
     width:           '100%',
     alignItems:      'center',
     justifyContent:  'center',
-    paddingVertical: 14,
-    borderRadius:    10,
-    marginTop:       12,
+    paddingVertical: 16,        // Increased from 14
+    borderRadius:    12,        // Increased from 10
+    marginTop:       16,        // Increased from 12
   },
   acceptText: {
-    fontSize:      15,
+    fontSize:      16,          // Increased from 15
     fontWeight:    '700',
     letterSpacing: 0.4,
   },
@@ -868,11 +871,11 @@ const styles = StyleSheet.create({
   // Decline link
   declineRow: {
     alignItems:    'center',
-    paddingTop:    12,
-    paddingBottom: 2,
+    paddingTop:    16,          // Increased from 12
+    paddingBottom: 4,           // Increased from 2
   },
   declineText: {
-    fontSize:   13,
+    fontSize:   14,             // Increased from 13
     fontWeight: '500',
   },
 
@@ -880,28 +883,28 @@ const styles = StyleSheet.create({
   checkboxRow: {
     flexDirection:  'row',
     alignItems:     'flex-start',
-    marginVertical: 4,
-    gap:            10,
+    marginVertical: 6,          // Increased from 4
+    gap:            12,         // Increased from 10
   },
   checkboxBox: {
-    width:          20,
-    height:         20,
-    borderRadius:   5,
+    width:          22,         // Increased from 20
+    height:         22,         // Increased from 20
+    borderRadius:   6,          // Increased from 5
     borderWidth:    1.5,
     alignItems:     'center',
     justifyContent: 'center',
-    marginTop:      1,   // align with first line of label text
+    marginTop:      1,
     flexShrink:     0,
   },
   checkboxTick: {
-    fontSize:   12,
+    fontSize:   13,             // Increased from 12
     fontWeight: '700',
-    lineHeight: 14,
+    lineHeight: 15,             // Increased from 14
   },
   checkboxLabel: {
     flex:       1,
     fontSize:   13,
-    lineHeight: 18,
+    lineHeight: 20,             // Increased from 18
   },
   checkboxLabelWrap: {
     flex: 1,
