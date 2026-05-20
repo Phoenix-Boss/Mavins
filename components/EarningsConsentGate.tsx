@@ -155,14 +155,14 @@ function GeneralTab({ colors }: ThemedProps) {
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Earn While You Listen</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin gives you the opportunity to passively earn rewards simply by having the app
-        running. When your device is idle and connected to Wi-Fi, you can opt in to let Mavin's
+        Mavin Player gives you the opportunity to passively earn rewards simply by having the app
+        running. When your device is idle and connected to Wi-Fi, you can opt in to let Mavin Player's
         earnings feature run quietly in the background alongside your music — no interaction
         needed.
       </Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         This feature is entirely separate from your music experience. Enabling it has no effect
-        on playback, streaming quality, downloads, playlists, or any other part of Mavin.
+        on playback, streaming quality, downloads, playlists, or any other part of Mavin Player.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>How It Works</Text>
@@ -176,7 +176,7 @@ function GeneralTab({ colors }: ThemedProps) {
       <Text style={[styles.sectionTitle, { color: colors.text }]}>What You Earn</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         Rewards accumulate passively while the feature is active. You can track your balance
-        and redeem earnings directly from within the Mavin app. Reward rates may vary based
+        and redeem earnings directly from within the Mavin Player app. Reward rates may vary based
         on your region and connection quality.
       </Text>
 
@@ -201,10 +201,10 @@ function GeneralTab({ colors }: ThemedProps) {
 function PrivacyTab({ colors }: ThemedProps) {
   return (
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Mavin Privacy</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>Mavin Player Privacy</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin is committed to protecting your personal data. By enabling this feature you
-        confirm you have read and agree to Mavin's legal documentation:
+        Mavin Player is committed to protecting your personal data. By enabling this feature you
+        confirm you have read and agree to Mavin Player's legal documentation:
       </Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>
         •{'  '}
@@ -236,7 +236,7 @@ function PrivacyTab({ colors }: ThemedProps) {
       </Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         The SDK may collect device identifiers, IP addresses, and bandwidth usage statistics
-        as described in the Pawns Privacy Policy. Mavin does not receive or store this data.
+        as described in the Pawns Privacy Policy. Mavin Player does not receive or store this data.
       </Text>
       <View style={styles.tabSpacer} />
     </ScrollView>
@@ -252,7 +252,7 @@ function DataProtectionTab({ colors }: ThemedProps) {
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Encryption in Transit</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         All traffic passing through your device while the earnings feature is active is fully
-        encrypted using industry-standard TLS protocols. Mavin never has access to the contents
+        encrypted using industry-standard TLS protocols. Mavin Player never has access to the contents
         of this traffic — and neither does anyone on your local network.
       </Text>
 
@@ -260,7 +260,7 @@ function DataProtectionTab({ colors }: ThemedProps) {
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         Your consent decision and its timestamp are stored securely on your device using
         Android's SharedPreferences and React Native's AsyncStorage. This data never leaves
-        your device and is never transmitted to Mavin's servers or any third party.
+        your device and is never transmitted to Mavin Player's servers or any third party.
       </Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         Consent records are retained on-device for 24 months from each event date. This
@@ -270,22 +270,22 @@ function DataProtectionTab({ colors }: ThemedProps) {
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>No Personal Data Sold</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin does not sell, rent, or share your personal information with advertisers or
+        Mavin Player does not sell, rent, or share your personal information with advertisers or
         data brokers. Your account data, listening history, and device identifiers held by
-        Mavin are kept strictly separate from the bandwidth sharing feature.
+        Mavin Player are kept strictly separate from the bandwidth sharing feature.
       </Text>
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Rights</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
         Depending on your jurisdiction, you may have the right to:
       </Text>
-      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Access the personal data Mavin holds about you</Text>
+      <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Access the personal data Mavin Player holds about you</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Request correction of inaccurate data</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Request erasure of your data</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Object to or restrict processing</Text>
       <Text style={[styles.bulletItem, { color: colors.textSub }]}>•{'  '}Withdraw consent at any time without penalty</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        To exercise any of these rights in relation to Mavin's data, use the contact details
+        To exercise any of these rights in relation to Mavin Player's data, use the contact details
         in our{' '}
         <LinkText url={URLS.appPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
         For rights regarding data held by Pawns, contact Pawns directly via their{' '}
@@ -294,7 +294,7 @@ function DataProtectionTab({ colors }: ThemedProps) {
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Data Protection Contact</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        For any data protection enquiry relating to Mavin, please use the contact details
+        For any data protection enquiry relating to Mavin Player, please use the contact details
         found in our{' '}
         <LinkText url={URLS.appPrivacyPolicy} colors={colors}>Privacy Policy</LinkText>.
       </Text>
@@ -312,7 +312,7 @@ function DataSharingTab({ colors }: ThemedProps) {
     <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: colors.text }]}>Powered by Pawns</Text>
       <Text style={[styles.bodyText, { color: colors.textSub }]}>
-        Mavin's bandwidth sharing feature is powered entirely by the Pawns SDK. Pawns is a
+        Mavin Player's bandwidth sharing feature is powered entirely by the Pawns SDK. Pawns is a
         third-party platform that connects devices sharing idle bandwidth with businesses
         that need distributed network infrastructure. The disclosures below are required by
         the Pawns SDK Terms of Service, Section 3.6.5, and must be acknowledged before you
@@ -467,7 +467,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
   // ── Consent checkbox label — full legal text ──────────────────────────────
   const consentLabel = (
     <Text style={[styles.checkboxLabel, { color: colors.text }]}>
-      By checking this box you confirm that you have read and agree to Mavin's{' '}
+      By checking this box you confirm that you have read and agree to Mavin Player's{' '}
       <Text
         style={[styles.link, { color: colors.gold }]}
         onPress={() => openUrl(URLS.appPrivacyPolicy)}
@@ -533,7 +533,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
               <View style={[styles.accentBar, { backgroundColor: colors.gold }]} />
               <View style={styles.headerTextBlock}>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>
-                  Bandwidth Sharing
+                  Mavin Player
                 </Text>
                 <Text style={[styles.headerSubtitle, { color: colors.textSub }]}>
                   Review all tabs before enabling this feature
@@ -604,82 +604,88 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
               },
             ]}
           >
-            {/* Don't show again */}
-            <Checkbox
-              checked={dontShowAgain}
-              onPress={() => setDontShowAgain(v => !v)}
-              label="Don't show this message again"
-              testID="dont-show-again-checkbox"
-              colors={colors}
-            />
-
-            {/* Age + full consent checkbox */}
-            <View style={styles.consentCheckboxWrap}>
+            <ScrollView 
+              style={styles.footerScrollView}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {/* Don't show again */}
               <Checkbox
-                checked={ageConfirmed}
-                onPress={() => setAgeConfirmed(v => !v)}
-                label={consentLabel}
-                testID="age-confirmation-checkbox"
+                checked={dontShowAgain}
+                onPress={() => setDontShowAgain(v => !v)}
+                label="Don't show this message again"
+                testID="dont-show-again-checkbox"
                 colors={colors}
               />
-            </View>
 
-            {/* Warning shown while consent not ticked */}
-            {!ageConfirmed && (
-              <Text style={[styles.ageWarning, { color: colors.warning ?? colors.gold }]}>
-                ⚠ You must agree to the above terms to enable Accept
-              </Text>
-            )}
+              {/* Age + full consent checkbox */}
+              <View style={styles.consentCheckboxWrap}>
+                <Checkbox
+                  checked={ageConfirmed}
+                  onPress={() => setAgeConfirmed(v => !v)}
+                  label={consentLabel}
+                  testID="age-confirmation-checkbox"
+                  colors={colors}
+                />
+              </View>
 
-            {/* Accept — always rendered; disabled until consent ticked */}
-            <TouchableOpacity
-              style={[
-                styles.acceptButton,
-                { backgroundColor: colors.gold },
-                (!ageConfirmed || isLoading) && {
-                  backgroundColor: isDark
-                    ? `${colors.gold}55`   // dark mode: dim gold
-                    : `${colors.gold}66`,  // light mode: dim gold
-                },
-              ]}
-              onPress={handleAccept}
-              accessibilityRole="button"
-              accessibilityLabel="Accept bandwidth sharing"
-              accessibilityState={{ disabled: !ageConfirmed || isLoading }}
-              disabled={!ageConfirmed || isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator color={colors.textInverse} size="small" />
-              ) : (
-                <Text
-                  style={[
-                    styles.acceptText,
-                    {
-                      color: ageConfirmed
-                        ? colors.textInverse
-                        : colors.textMuted,
-                    },
-                  ]}
-                >
-                  Accept
+              {/* Warning shown while consent not ticked */}
+              {!ageConfirmed && (
+                <Text style={[styles.ageWarning, { color: colors.warning ?? colors.gold }]}>
+                  ⚠ You must agree to the above terms to enable Accept
                 </Text>
               )}
-            </TouchableOpacity>
 
-            {/* Decline */}
-            <TouchableOpacity
-              style={styles.declineRow}
-              onPress={handleDecline}
-              accessibilityRole="button"
-              accessibilityLabel="Decline bandwidth sharing"
-              disabled={isLoading}
-              activeOpacity={0.6}
-            >
-              <Text style={[styles.declineText, { color: colors.textMuted }]}>
-                No thanks, decline
-              </Text>
-            </TouchableOpacity>
+              {/* Accept — always rendered; disabled until consent ticked */}
+              <TouchableOpacity
+                style={[
+                  styles.acceptButton,
+                  { backgroundColor: colors.gold },
+                  (!ageConfirmed || isLoading) && {
+                    backgroundColor: isDark
+                      ? `${colors.gold}55`
+                      : `${colors.gold}66`,
+                  },
+                ]}
+                onPress={handleAccept}
+                accessibilityRole="button"
+                accessibilityLabel="Accept"
+                accessibilityState={{ disabled: !ageConfirmed || isLoading }}
+                disabled={!ageConfirmed || isLoading}
+                activeOpacity={0.8}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color={colors.textInverse} size="small" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.acceptText,
+                      {
+                        color: ageConfirmed
+                          ? colors.textInverse
+                          : colors.textMuted,
+                      },
+                    ]}
+                  >
+                    Accept
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              {/* Decline */}
+              <TouchableOpacity
+                style={styles.declineRow}
+                onPress={handleDecline}
+                accessibilityRole="button"
+                accessibilityLabel="Decline"
+                disabled={isLoading}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.declineText, { color: colors.textMuted }]}>
+                  No thanks, decline
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
 
         </View>
@@ -693,7 +699,6 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_MAX_WIDTH  = Math.min(SCREEN_WIDTH - 32, 480);
-// FIXED: Increased max height to 95% of screen height to ensure footer visibility
 const CARD_MAX_HEIGHT = SCREEN_HEIGHT * 0.92;
 
 const styles = StyleSheet.create({
@@ -704,14 +709,14 @@ const styles = StyleSheet.create({
     justifyContent:    'center',
     alignItems:        'center',
     paddingHorizontal: 16,
-    paddingVertical:   8,  // Added vertical padding for better spacing on small screens
+    paddingVertical:   8,
   },
 
   // ── Card
   card: {
     width:         CARD_MAX_WIDTH,
     maxHeight:     CARD_MAX_HEIGHT,
-    borderRadius:  20,  // Slightly larger radius
+    borderRadius:  20,
     borderWidth:   1,
     overflow:      'hidden',
     elevation:     16,
@@ -725,8 +730,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection:     'row',
     alignItems:        'center',
-    paddingVertical:   16,   // Increased from 14
-    paddingHorizontal: 20,   // Increased from 16
+    paddingVertical:   16,
+    paddingHorizontal: 20,
     borderBottomWidth: 1,
   },
   headerLeft: {
@@ -736,15 +741,15 @@ const styles = StyleSheet.create({
     gap:           12,
   },
   accentBar: {
-    width:        4,         // Increased from 3
-    height:       40,        // Increased from 34
+    width:        4,
+    height:       40,
     borderRadius: 2,
   },
   headerTextBlock: {
     flex: 1,
   },
   headerTitle: {
-    fontSize:      16,       // Increased from 15
+    fontSize:      16,
     fontWeight:    '700',
     letterSpacing: 0.2,
     marginBottom:  2,
@@ -764,7 +769,7 @@ const styles = StyleSheet.create({
     marginLeft:     8,
   },
   closeBtnText: {
-    fontSize:   16,       // Increased from 14
+    fontSize:   16,
     fontWeight: '600',
     lineHeight: 17,
   },
@@ -776,25 +781,24 @@ const styles = StyleSheet.create({
   },
   tabItem: {
     flex:              1,
-    paddingVertical:   12,     // Increased from 10
-    paddingHorizontal: 6,      // Increased from 4
+    paddingVertical:   12,
+    paddingHorizontal: 6,
     alignItems:        'center',
     justifyContent:    'center',
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
   tabLabel: {
-    fontSize:  12,              // Increased from 11
-    fontWeight: '600',          // Increased weight for better visibility
+    fontSize:  12,
+    fontWeight: '600',
     textAlign:  'center',
   },
 
   // ── Content area
   contentArea: {
-    flex:      1,
+    flex:      2,
     minHeight: 200,
-    // FIXED: Dynamic max height to leave enough room for footer
-    maxHeight: SCREEN_HEIGHT * 0.55,  // 55% of screen for tabs, rest for footer
+    maxHeight: SCREEN_HEIGHT * 0.45,
   },
   tabContent: {
     flex:              1,
@@ -807,16 +811,16 @@ const styles = StyleSheet.create({
 
   // ── Typography
   sectionTitle: {
-    fontSize:      15,       // Increased from 14
+    fontSize:      15,
     fontWeight:    '700',
     letterSpacing: 0.3,
     marginTop:     16,
-    marginBottom:  8,        // Increased from 6
+    marginBottom:  8,
   },
   bodyText: {
     fontSize:     13,
     lineHeight:   20,
-    marginBottom: 10,        // Increased from 8
+    marginBottom: 10,
   },
   disclosureLabel: {
     fontSize:     13,
@@ -840,17 +844,21 @@ const styles = StyleSheet.create({
   // ── Footer
   footer: {
     borderTopWidth:    1,
+    maxHeight:         SCREEN_HEIGHT * 0.35,
+    backgroundColor:   'transparent',
+  },
+  footerScrollView: {
     paddingHorizontal: 20,
-    paddingTop:        16,      // Increased from 14
-    paddingBottom:     24,      // Increased from 20
+    paddingTop:        16,
+    paddingBottom:     24,
   },
   consentCheckboxWrap: {
     marginTop: 8,
   },
   ageWarning: {
-    fontSize:     12,           // Increased from 11
-    marginTop:    8,            // Increased from 6
-    marginBottom: 6,            // Increased from 4
+    fontSize:     12,
+    marginTop:    8,
+    marginBottom: 6,
   },
 
   // Accept button — always rendered
@@ -858,12 +866,12 @@ const styles = StyleSheet.create({
     width:           '100%',
     alignItems:      'center',
     justifyContent:  'center',
-    paddingVertical: 16,        // Increased from 14
-    borderRadius:    12,        // Increased from 10
-    marginTop:       16,        // Increased from 12
+    paddingVertical: 16,
+    borderRadius:    12,
+    marginTop:       16,
   },
   acceptText: {
-    fontSize:      16,          // Increased from 15
+    fontSize:      16,
     fontWeight:    '700',
     letterSpacing: 0.4,
   },
@@ -871,11 +879,11 @@ const styles = StyleSheet.create({
   // Decline link
   declineRow: {
     alignItems:    'center',
-    paddingTop:    16,          // Increased from 12
-    paddingBottom: 4,           // Increased from 2
+    paddingTop:    16,
+    paddingBottom: 4,
   },
   declineText: {
-    fontSize:   14,             // Increased from 13
+    fontSize:   14,
     fontWeight: '500',
   },
 
@@ -883,13 +891,13 @@ const styles = StyleSheet.create({
   checkboxRow: {
     flexDirection:  'row',
     alignItems:     'flex-start',
-    marginVertical: 6,          // Increased from 4
-    gap:            12,         // Increased from 10
+    marginVertical: 6,
+    gap:            12,
   },
   checkboxBox: {
-    width:          22,         // Increased from 20
-    height:         22,         // Increased from 20
-    borderRadius:   6,          // Increased from 5
+    width:          22,
+    height:         22,
+    borderRadius:   6,
     borderWidth:    1.5,
     alignItems:     'center',
     justifyContent: 'center',
@@ -897,14 +905,14 @@ const styles = StyleSheet.create({
     flexShrink:     0,
   },
   checkboxTick: {
-    fontSize:   13,             // Increased from 12
+    fontSize:   13,
     fontWeight: '700',
-    lineHeight: 15,             // Increased from 14
+    lineHeight: 15,
   },
   checkboxLabel: {
     flex:       1,
     fontSize:   13,
-    lineHeight: 20,             // Increased from 18
+    lineHeight: 20,
   },
   checkboxLabelWrap: {
     flex: 1,
