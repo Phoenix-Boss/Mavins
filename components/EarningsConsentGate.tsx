@@ -467,7 +467,7 @@ export function EarningsConsentGate({ visible, onDismiss }: EarningsConsentGateP
   // ── Consent checkbox label — full legal text ──────────────────────────────
   const consentLabel = (
     <Text style={[styles.checkboxLabel, { color: colors.text }]}>
-      By checking this box you confirm that you have read and agree to Mavin Player's{' '}
+      Mavin Player's{' '}
       <Text
         style={[styles.link, { color: colors.gold }]}
         onPress={() => openUrl(URLS.appPrivacyPolicy)}
@@ -844,7 +844,7 @@ const styles = StyleSheet.create({
   // ── Footer
   footer: {
     borderTopWidth:    1,
-    maxHeight:         SCREEN_HEIGHT * 0.35,
+    maxHeight:         SCREEN_HEIGHT * 0.90,
     backgroundColor:   'transparent',
   },
   footerScrollView: {

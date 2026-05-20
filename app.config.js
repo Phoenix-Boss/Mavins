@@ -9,7 +9,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-const withPawns = require("./plugins/withPawns");
+// const withPawns = require("./plugins/withPawns"); // Removed - causing manifest conflicts
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
@@ -83,7 +83,7 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
-    withPawns,
+    // withPawns, // REMOVED - causing manifest merger conflict with honeygain-sdk
     "expo-router",
     "expo-font",
   
