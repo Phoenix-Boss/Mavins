@@ -13,21 +13,15 @@
  * HoneygainModule.applyNotifOptions(). If no values are stored, the defaults embedded
  * in HoneygainModule.companion are used.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- *  AndroidManifest.xml registration (already listed in HoneygainModule.kt header):
- * ─────────────────────────────────────────────────────────────────────────────
+ * AndroidManifest.xml registration:
  *
  *  <receiver
- *      android:name=".PawnsBootReceiver"
+ *      android:name="expo.modules.mavin.honeygain.PawnsBootReceiver"
  *      android:exported="false">
  *      <intent-filter>
  *          <action android:name="android.intent.action.BOOT_COMPLETED" />
  *      </intent-filter>
  *  </receiver>
- *
- *  NOTE: The fully-qualified class name in the manifest must match this file's
- *  package. If your app package differs from the module package, use the full
- *  class name: "expo.modules.mavin.honeygain.PawnsBootReceiver".
  */
 
 package expo.modules.mavin.honeygain

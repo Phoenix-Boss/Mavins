@@ -1,3 +1,5 @@
+// build.gradle (module-level: modules/honeygain/android/build.gradle)
+
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
@@ -47,33 +49,19 @@ android {
     }
 }
 
-// Expo module DSL
 expoModule {
     // Name is derived from package.json / expo-module.config.json automatically
 }
 
 dependencies {
     // ── Pawns SDK ─────────────────────────────────────────────────────────────
-    // JitPack must be added to dependencyResolutionManagement in settings.gradle:
-    //
-    //   dependencyResolutionManagement {
-    //       repositories {
-    //           google()
-    //           mavenCentral()
-    //           maven { url = uri("https://jitpack.io") }
-    //       }
-    //   }
-    //
-    // The Pawns SDK transitively pulls in the coroutines and networking deps it
-    // needs, so we do not need to declare them here separately.
+    // Distributed via JitPack. Ensure dependencyResolutionManagement in
+    // settings.gradle includes: maven { url = uri("https://jitpack.io") }
     implementation 'app.pawns:android-pawns-sdk:1.8.1'
 
-    // Kotlin stdlib (keep aligned with your Kotlin plugin version)
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
+    // AndroidX Activity Result APIs (required for registerForActivityResult)
+    implementation 'androidx.activity:activity-ktx:1.9.3'
 
-    // JSON parsing for consent log (built into Android SDK — no extra dep needed)
-    // org.json is provided by the Android platform; no implementation line required.
-
-    // DO NOT manually depend on expo-modules-core in EAS-style builds.
-    // Expo provides it via autolinking / expo package.
+    // Expo modules core is provided transitively via autolinking.
+    // Do NOT manually depend on expo-modules-core in EAS-style builds.
 }

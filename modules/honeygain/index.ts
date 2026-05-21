@@ -16,9 +16,10 @@
 
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 
-// With this:
-import { PAWNS_API_KEY } from './secrets';
-const API_KEY = PAWNS_API_KEY;
+// ─── API Key Configuration ───────────────────────────────────────────────────
+// Replace inline string with environment variable or secrets import for production.
+// Example: import { PAWNS_API_KEY } from './secrets';
+const API_KEY = ''; // <-- Replace with your actual API key
 
 // ─── Default notification configuration ──────────────────────────────────────
 // Adjust these to match your drawable resource name and preferred copy.
@@ -177,7 +178,7 @@ export const optOut = (): Promise<SdkResult> =>
  * Prefer using your custom EarningsConsentGate component + optIn() instead.
  * This function is provided for completeness / fallback.
  */
-export const requestConsent = (): Promise<ConsentResult> =>
+export const requestConsent = (): Promise<<ConsentResult> =>
   HoneygainModule.requestConsent();
 
 /**
@@ -209,7 +210,7 @@ export const requestBatteryOptimisation = (): Promise<BatteryResult> =>
  * For compliance and internal audit use only.
  * Each entry: { type, timestamp (epoch ms), source }
  */
-export const getConsentLog = (): Promise<ConsentLogEntry[]> =>
+export const getConsentLog = (): Promise<<ConsentLogEntry[]> =>
   HoneygainModule.getConsentLog();
 
 // ─── Events ───────────────────────────────────────────────────────────────────
