@@ -12,7 +12,9 @@ plugins {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // FAIL_ON_PROJECT_REPOS removed — allows project-level repositories
+    // to resolve expo-modules-core and other autolinked dependencies
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
@@ -20,7 +22,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'Mavins player'
+rootProject.name = 'YourAppName'
 
 apply from: new File(["node", "--print", "require.resolve('expo/package.json')"].execute(null, rootDir).text.trim(), "../scripts/autolinking.gradle")
 useExpoModules()
