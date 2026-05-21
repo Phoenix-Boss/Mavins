@@ -84,7 +84,6 @@ import {
   Modal as RNModal,
   AppState,
   AppStateStatus,
-  ActivityIndicator,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer, VideoView } from 'expo-video';
@@ -373,7 +372,7 @@ function PlayerContentInner({
   const durationSec = engine.duration;
   const repeatMode = engine.repeatMode;
   const shuffleMode = engine.shuffleMode;
-  const isResolving = engine.isResolving ?? false;
+  const isResolving = (engine as any).isResolving ?? false;
 
   const trackExtrasVersion = useTrackExtrasVersion();
 
@@ -448,11 +447,7 @@ function PlayerContentInner({
     return () => clearTimeout(t);
   }, [displayTrack?.id, viewCount]);
 
-  // showSkeleton: true only when we have no track metadata yet (dummy track state).
-  // isResolving/musicPlayerLoading shows a spinner on the play button but title/artwork
-  // are already set immediately when playAudio is called, so we don't blank the screen.
-  const isLoadingAudio = musicPlayerLoading || isResolving;
-  const showSkeleton = !engine.currentTrack || engine.currentTrack.id === DUMMY_TRACK.id;
+  const showSkeleton = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
 
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
   const [videoError, setVideoError] = useState<string | null>(null);
@@ -871,9 +866,14 @@ function PlayerContentInner({
           // FIX 10: Step 5 — Play video if audio was playing
           if (visualIsPlaying) {
             try { 
-              vp.play(); 
+              await vp.play(); 
               videoPlayingRef.current = true; 
-            } catch {}
+            } catch (e) {
+              console.warn('[PlayerContent] vp.play() failed:', e);
+            }
+          } else {
+            // Even if not playing, ensure video is loaded and ready at correct position
+            console.log('[PlayerContent] Video tab switched but audio was paused, video ready at', seekTarget);
           }
 
           setVisualPositionSec(seekTarget);
@@ -911,7 +911,9 @@ function PlayerContentInner({
           }
           
           if (visualIsPlaying) {
-            try { engine.play(); } catch {}
+            try { await engine.play(); } catch (e) {
+              console.warn('[PlayerContent] engine.play() failed:', e);
+            }
           }
 
           setVisualPositionSec(videoStoppedAt);
@@ -1062,10 +1064,16 @@ function PlayerContentInner({
 
     if (activeSegmentRef.current === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
       try {
-        willPlay ? videoPlayer.play() : videoPlayer.pause();
+        if (willPlay) {
+          await videoPlayer.play();
+        } else {
+          await videoPlayer.pause();
+        }
         videoPlayingRef.current = willPlay;
         updateVideoIsPlaying(willPlay);
-      } catch {}
+      } catch (e) {
+        console.warn('[PlayerContent] Video play/pause failed:', e);
+      }
     } else {
       togglePlayPause();
     }
@@ -1293,6 +1301,15 @@ function PlayerContentInner({
                     nativeControls={false}
                     // FIX 11: Enable PiP on the native VideoView
                     allowsPictureInPicture={true}
+                    startsPictureInPictureAutomatically={false}
+                    onPictureInPictureStart={() => {
+                      isPipActiveRef.current = true;
+                      console.log('[PlayerContent] VideoView PiP started');
+                    }}
+                    onPictureInPictureStop={() => {
+                      isPipActiveRef.current = false;
+                      console.log('[PlayerContent] VideoView PiP stopped');
+                    }}
                   />
                   {videoError && activeSegment === 'video' && (
                     <View style={[styles.videoErrorOverlay, { backgroundColor: 'rgba(0,0,0,0.8)' }]}>

@@ -63,8 +63,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationCompat
 import com.pawns.sdk.Pawns
 import com.pawns.sdk.PawnsServiceListener
-import com.pawns.sdk.ServiceType
 import com.pawns.sdk.ServiceState
+import com.pawns.sdk.ServiceType
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -243,7 +243,9 @@ class HoneygainModule : Module() {
         }
     }
 
-    private var consentActivityLauncher: ActivityResultLauncher<<Intent>? = null
+    // FIX: was "ActivityResultLauncher<<Intent>" — double '<' was the root-cause
+    // compile error that made every Pawns SDK reference "unresolved".
+    private var consentActivityLauncher: ActivityResultLauncher<Intent>? = null
     private var pendingConsentPromise: Promise? = null
 
     // ─── Internal helpers ─────────────────────────────────────────────────────

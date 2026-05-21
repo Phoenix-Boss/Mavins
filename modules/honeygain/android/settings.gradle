@@ -11,17 +11,20 @@ plugins {
     id 'expo-module-gradle-plugin' version '0.17.0' apply false
 }
 
-// Repository mode removed — allows both settings-level and project-level repositories
-// to resolve expo-modules-core, mavin-media-session deps, and JitPack artifacts
+// PREFER_SETTINGS mode (default when dependencyResolutionManagement is declared)
+// means ALL repositories must be declared here — project-level build.gradle
+// repositories blocks are ignored. This is the correct setup for AGP 7+.
 dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
+        // Required for app.pawns:android-pawns-sdk
         maven { url = uri("https://jitpack.io") }
     }
 }
 
-rootProject.name = 'YourAppName'
+rootProject.name = 'mavinsplayer'
 
 apply from: new File(["node", "--print", "require.resolve('expo/package.json')"].execute(null, rootDir).text.trim(), "../scripts/autolinking.gradle")
 useExpoModules()

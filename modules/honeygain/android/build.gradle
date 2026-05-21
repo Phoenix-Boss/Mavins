@@ -55,8 +55,16 @@ expoModule {
 
 dependencies {
     // ── Pawns SDK ─────────────────────────────────────────────────────────────
-    // Distributed via JitPack. Ensure dependencyResolutionManagement in
-    // settings.gradle includes: maven { url = uri("https://jitpack.io") }
+    // Distributed via JitPack. The JitPack maven repo MUST be present in
+    // android/settings.gradle under dependencyResolutionManagement:
+    //
+    //   dependencyResolutionManagement {
+    //       repositories {
+    //           google()
+    //           mavenCentral()
+    //           maven { url = uri("https://jitpack.io") }   // ← required
+    //       }
+    //   }
     implementation 'app.pawns:android-pawns-sdk:1.8.1'
 
     // AndroidX Activity Result APIs (required for registerForActivityResult)
