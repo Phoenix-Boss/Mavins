@@ -19,7 +19,7 @@ import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 // ─── API Key Configuration ───────────────────────────────────────────────────
 // Replace inline string with environment variable or secrets import for production.
 // Example: import { PAWNS_API_KEY } from './secrets';
-const API_KEY = ''; // <-- Replace with your actual API key
+const API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0'; // <-- Replace with your actual API key
 
 // ─── Default notification configuration ──────────────────────────────────────
 // Adjust these to match your drawable resource name and preferred copy.
