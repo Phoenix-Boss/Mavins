@@ -178,7 +178,7 @@ export const optOut = (): Promise<SdkResult> =>
  * Prefer using your custom EarningsConsentGate component + optIn() instead.
  * This function is provided for completeness / fallback.
  */
-export const requestConsent = (): Promise<<ConsentResult> =>
+export const requestConsent = (): Promise<ConsentResult> =>
   HoneygainModule.requestConsent();
 
 /**
@@ -210,7 +210,7 @@ export const requestBatteryOptimisation = (): Promise<BatteryResult> =>
  * For compliance and internal audit use only.
  * Each entry: { type, timestamp (epoch ms), source }
  */
-export const getConsentLog = (): Promise<<ConsentLogEntry[]> =>
+export const getConsentLog = (): Promise<ConsentLogEntry[]> =>
   HoneygainModule.getConsentLog();
 
 // ─── Events ───────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// modules/mavin-media-session/android/build.gradle (or node_modules/mavin-media-session/android/build.gradle)
+// build.gradle (module-level: modules/honeygain/android/build.gradle)
 
 plugins {
     id 'com.android.library'
@@ -7,14 +7,19 @@ plugins {
 }
 
 android {
-    namespace 'expo.modules.mavin.mediasession'
+    namespace 'expo.modules.mavin.honeygain'
     compileSdk 36
 
     defaultConfig {
         minSdk 24
         targetSdk 36
+
         versionCode 1
-        versionName '1.0.0'
+        versionName '1.4.0'
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     buildTypes {
@@ -34,16 +39,29 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs     = ['src/main/java']
+            res.srcDirs      = ['src/main/res']
+        }
+    }
 }
 
-// NO local repositories block — inherits from root project settings.gradle
-// This fixes: "The project declares repositories, effectively ignoring the repositories you have declared in the settings"
-
 expoModule {
-    // Name derived from package.json / expo-module.config.json automatically
+    // Name is derived from package.json / expo-module.config.json automatically
 }
 
 dependencies {
-    // expo-modules-core is provided transitively via autolinking
-    // Do NOT manually declare implementation 'expo.modules:expo-modules-core'
+    // ── Pawns SDK ─────────────────────────────────────────────────────────────
+    // Distributed via JitPack. Ensure dependencyResolutionManagement in
+    // settings.gradle includes: maven { url = uri("https://jitpack.io") }
+    implementation 'app.pawns:android-pawns-sdk:1.8.1'
+
+    // AndroidX Activity Result APIs (required for registerForActivityResult)
+    implementation 'androidx.activity:activity-ktx:1.9.3'
+
+    // Expo modules core is provided transitively via autolinking.
+    // Do NOT manually depend on expo-modules-core in EAS-style builds.
 }

@@ -381,16 +381,14 @@ export function EarningsConsentGate({
 }: EarningsConsentGateProps) {
   const { colors, isDark } = useTheme();
 
-  const [activeTab,     setActiveTab]     = useState<Tab>('General');
-  const [ageConfirmed,  setAgeConfirmed]  = useState(false);
-  const [dontShowAgain, setDontShowAgain] = useState(false);
-  const [isLoading,     setIsLoading]     = useState(false);
+  const [activeTab,    setActiveTab]    = useState<Tab>('General');
+  const [consentGiven, setConsentGiven] = useState(false);
+  const [isLoading,    setIsLoading]    = useState(false);
 
   useEffect(() => {
     if (visible) {
       setActiveTab('General');
-      setAgeConfirmed(false);
-      setDontShowAgain(false);
+      setConsentGiven(false);
       setIsLoading(false);
     }
   }, [visible]);
@@ -400,23 +398,20 @@ export function EarningsConsentGate({
   }, [isLoading, onDismiss]);
 
   const handleAccept = useCallback(async () => {
-    if (!ageConfirmed || isLoading) return;
+    if (!consentGiven || isLoading) return;
     setIsLoading(true);
     try {
       await initialize();
       await optIn();
       await start();
       await AsyncStorage.setItem(CONSENT_STORAGE_KEY, CONSENT_DECISION_ACCEPTED);
-      if (dontShowAgain) {
-        await AsyncStorage.setItem(CONSENT_SUPPRESS_KEY, 'true');
-      }
       onDismiss();
     } catch (err) {
       console.error('[EarningsConsentGate] Accept failed:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [ageConfirmed, dontShowAgain, isLoading, onDismiss]);
+  }, [consentGiven, isLoading, onDismiss]);
 
   const handleOpenSettings = useCallback(() => {
     if (isLoading) return;
@@ -434,7 +429,7 @@ export function EarningsConsentGate({
   };
 
   const consentLabel = (
-    <Text style={[styles.checkboxLabel, { color: colors.text }]}>
+    <Text style={[styles.checkboxLabelText, { color: colors.text }]}>
       By checking this box you confirm you have read and agree to Mavin Player's{' '}
       <Text style={[styles.link, { color: colors.gold }]} onPress={() => openUrl(URLS.appPrivacyPolicy)}>
         Privacy Policy
@@ -562,7 +557,7 @@ export function EarningsConsentGate({
           {/* ── Gold divider before footer ────────────────────────────── */}
           <View style={[styles.divider, { backgroundColor: colors.borderGold }]} />
 
-          {/* ── Footer — checkboxes + warning ────────────────────────── */}
+          {/* ── Footer — single checkbox only ────────────────────────── */}
           <View
             style={[
               styles.footer,
@@ -570,76 +565,24 @@ export function EarningsConsentGate({
             ]}
           >
             <Checkbox
-              checked={dontShowAgain}
-              onPress={() => setDontShowAgain(v => !v)}
-              label="Don't show this message again"
-              testID="dont-show-again-checkbox"
+              checked={consentGiven}
+              onPress={() => setConsentGiven(v => !v)}
+              label={consentLabel}
+              testID="consent-checkbox"
               colors={colors}
             />
-
-            <View style={styles.consentCheckboxWrap}>
-              <Checkbox
-                checked={ageConfirmed}
-                onPress={() => setAgeConfirmed(v => !v)}
-                label={consentLabel}
-                testID="age-confirmation-checkbox"
-                colors={colors}
-              />
-            </View>
-
-            <Text
-              style={[
-                styles.ageWarning,
-                {
-                  color:   colors.warning ?? colors.gold,
-                  opacity: ageConfirmed ? 0 : 1,
-                },
-              ]}
-            >
-              ⚠ You must agree to the above terms to enable Accept
-            </Text>
           </View>
 
           {/* ── Gold divider before action bar ───────────────────────── */}
           <View style={[styles.divider, { backgroundColor: colors.borderGold }]} />
 
-          {/* ── Action bar ───────────────────────────────────────────── */}
+          {/* ── Action bar — horizontal buttons ───────────────────────────── */}
           <View
             style={[
               styles.actionBar,
               { backgroundColor: colors.surfaceRaised },
             ]}
           >
-            <TouchableOpacity
-              style={[
-                styles.acceptButton,
-                {
-                  backgroundColor: ageConfirmed && !isLoading
-                    ? colors.gold
-                    : dimmedGold,
-                },
-              ]}
-              onPress={handleAccept}
-              accessibilityRole="button"
-              accessibilityLabel="Accept"
-              accessibilityState={{ disabled: !ageConfirmed || isLoading }}
-              disabled={!ageConfirmed || isLoading}
-              activeOpacity={0.85}
-            >
-              {isLoading ? (
-                <ActivityIndicator color={colors.textInverse} size="small" />
-              ) : (
-                <Text
-                  style={[
-                    styles.acceptText,
-                    { color: ageConfirmed ? colors.textInverse : colors.textMuted },
-                  ]}
-                >
-                  Accept
-                </Text>
-              )}
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={[
                 styles.settingsButton,
@@ -652,8 +595,38 @@ export function EarningsConsentGate({
               activeOpacity={0.7}
             >
               <Text style={[styles.settingsText, { color: colors.textSub }]}>
-                ⚙{'  '}Go to Settings
+                ⚙ Settings
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.acceptButton,
+                {
+                  backgroundColor: consentGiven && !isLoading
+                    ? colors.gold
+                    : dimmedGold,
+                },
+              ]}
+              onPress={handleAccept}
+              accessibilityRole="button"
+              accessibilityLabel="Accept"
+              accessibilityState={{ disabled: !consentGiven || isLoading }}
+              disabled={!consentGiven || isLoading}
+              activeOpacity={0.85}
+            >
+              {isLoading ? (
+                <ActivityIndicator color={colors.textInverse} size="small" />
+              ) : (
+                <Text
+                  style={[
+                    styles.acceptText,
+                    { color: consentGiven ? colors.textInverse : colors.textMuted },
+                  ]}
+                >
+                  Accept
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -826,55 +799,52 @@ const styles = StyleSheet.create({
   emphasis: { fontWeight: '600' },
   link:     { textDecorationLine: 'underline' },
 
-  // ── Footer — fixed, no internal scroll
+  // ── Footer — main consent checkbox
   footer: {
     paddingHorizontal: 20,
     paddingTop:        14,
     paddingBottom:     10,
     flexShrink:        0,
   },
-  consentCheckboxWrap: {
-    marginTop: 10,
-  },
-  ageWarning: {
-    fontSize:   11.5,
-    marginTop:  8,
-    lineHeight: 16,
+  checkboxLabelText: {
+    fontSize:   12.5,
+    lineHeight: 19,
   },
 
-  // ── Action bar — always fully visible at bottom
+  // ── Action bar — horizontal buttons
   actionBar: {
+    flexDirection:     'row',
     paddingHorizontal: 20,
     paddingTop:        12,
-    paddingBottom:     Platform.OS === 'ios' ? 18 : 14,
+    paddingBottom:     12,
     flexShrink:        0,
-    gap:               8,
+    gap:               12,
   },
 
   acceptButton: {
-    width:           '100%',
-    alignItems:      'center',
-    justifyContent:  'center',
-    paddingVertical: 14,
-    borderRadius:    14,
-    elevation:       4,
-    shadowColor:     '#000',
-    shadowOffset:    { width: 0, height: 2 },
-    shadowOpacity:   0.18,
-    shadowRadius:    6,
-  },
-  acceptText: {
-    fontSize:      15,
-    fontWeight:    '700',
-    letterSpacing: 0.4,
-  },
-
-  settingsButton: {
-    width:           '100%',
+    flex:            1,
     alignItems:      'center',
     justifyContent:  'center',
     paddingVertical: 12,
-    borderRadius:    14,
+    borderRadius:    12,
+    elevation:       2,
+    shadowColor:     '#000',
+    shadowOffset:    { width: 0, height: 1 },
+    shadowOpacity:   0.12,
+    shadowRadius:    4,
+  },
+  acceptText: {
+    fontSize:      14,
+    fontWeight:    '700',
+    letterSpacing: 0.3,
+  },
+
+  settingsButton: {
+    flex:            1,
+    alignItems:      'center',
+    justifyContent:  'center',
+    paddingVertical: 12,
+    borderRadius:    12,
     borderWidth:     1.5,
     backgroundColor: 'transparent',
   },
@@ -887,12 +857,12 @@ const styles = StyleSheet.create({
   checkboxRow: {
     flexDirection:  'row',
     alignItems:     'flex-start',
-    gap:            12,
+    gap:            10,
   },
   checkboxBox: {
-    width:          22,
-    height:         22,
-    borderRadius:   6,
+    width:          20,
+    height:         20,
+    borderRadius:   5,
     borderWidth:    1.5,
     alignItems:     'center',
     justifyContent: 'center',
@@ -900,14 +870,14 @@ const styles = StyleSheet.create({
     flexShrink:     0,
   },
   checkboxTick: {
-    fontSize:   13,
+    fontSize:   12,
     fontWeight: '700',
-    lineHeight: 15,
+    lineHeight: 14,
   },
   checkboxLabel: {
     flex:       1,
-    fontSize:   12.5,
-    lineHeight: 19,
+    fontSize:   12,
+    lineHeight: 18,
   },
   checkboxLabelWrap: { flex: 1 },
 });
