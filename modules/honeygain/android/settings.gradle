@@ -11,10 +11,9 @@ plugins {
     id 'expo-module-gradle-plugin' version '0.17.0' apply false
 }
 
+// Repository mode removed — allows both settings-level and project-level repositories
+// to resolve expo-modules-core, mavin-media-session deps, and JitPack artifacts
 dependencyResolutionManagement {
-    // FAIL_ON_PROJECT_REPOS removed — allows project-level repositories
-    // to resolve expo-modules-core and other autolinked dependencies
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
