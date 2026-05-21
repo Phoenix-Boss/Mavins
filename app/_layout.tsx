@@ -132,7 +132,8 @@ configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const PREMIUM_BANNER_DELAY_MS = 2200;
+// PREMIUM_FEATURE_DISABLED: restore when premium goes live
+// const PREMIUM_BANNER_DELAY_MS = 2200;
 
 const SPRING_EXPAND = {
   damping: 28,
@@ -451,12 +452,14 @@ function ThemeAwareNavigationProvider({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function AppShell({
-  premiumBannerVisible,
-  setPremiumBannerVisible,
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // premiumBannerVisible,
+  // setPremiumBannerVisible,
   fontsLoaded,
 }: {
-  premiumBannerVisible: boolean;
-  setPremiumBannerVisible: (v: boolean) => void;
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // premiumBannerVisible: boolean;
+  // setPremiumBannerVisible: (v: boolean) => void;
   fontsLoaded: boolean;
 }) {
   const { colors } = useTheme();
@@ -505,10 +508,11 @@ function AppShell({
       <UpdateModal />
       <MessageModal />
 
-      <PremiumBanner
+      {/* PREMIUM_FEATURE_DISABLED: restore when premium goes live */}
+      {/* <PremiumBanner
         visible={premiumBannerVisible}
         onDismiss={() => setPremiumBannerVisible(false)}
-      />
+      /> */}
     </View>
   );
 }
@@ -552,16 +556,18 @@ function AppShell({
 
 interface StableProvidersProps {
   gestureContextValue: GestureContextValue;
-  premiumBannerVisible: boolean;
-  setPremiumBannerVisible: (v: boolean) => void;
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // premiumBannerVisible: boolean;
+  // setPremiumBannerVisible: (v: boolean) => void;
   fontsLoaded: boolean;
   appReady: boolean;
 }
 
 function StableProviders({
   gestureContextValue,
-  premiumBannerVisible,
-  setPremiumBannerVisible,
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // premiumBannerVisible,
+  // setPremiumBannerVisible,
   fontsLoaded,
   appReady,
 }: StableProvidersProps) {
@@ -576,8 +582,9 @@ function StableProviders({
                   <PlayerOverlayProvider>
                     <PlayerOverlayWrapper>
                       <AppShell
-                        premiumBannerVisible={premiumBannerVisible}
-                        setPremiumBannerVisible={setPremiumBannerVisible}
+                        // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+                        // premiumBannerVisible={premiumBannerVisible}
+                        // setPremiumBannerVisible={setPremiumBannerVisible}
                         fontsLoaded={fontsLoaded}
                       />
                       <PulsingLogoOverlay visible={!appReady} />
@@ -600,7 +607,8 @@ export default function RootLayout() {
   });
 
   const [appReady, setAppReady] = useState(false);
-  const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
   const [navReady, setNavReady] = useState(false);
 
   // ── Consent modal state ─────────────────────────────────────────────────
@@ -690,15 +698,15 @@ export default function RootLayout() {
     }
   }, []);
 
-  // Show premium banner after app is ready
-  useEffect(() => {
-    if (!appReady) return;
-    const t = setTimeout(
-      () => setPremiumBannerVisible(true),
-      PREMIUM_BANNER_DELAY_MS,
-    );
-    return () => clearTimeout(t);
-  }, [appReady]);
+  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+  // useEffect(() => {
+  //   if (!appReady) return;
+  //   const t = setTimeout(
+  //     () => setPremiumBannerVisible(true),
+  //     PREMIUM_BANNER_DELAY_MS,
+  //   );
+  //   return () => clearTimeout(t);
+  // }, [appReady]);
 
   // Deep link handling
   useEffect(() => {
@@ -717,8 +725,9 @@ export default function RootLayout() {
         <GestureHandlerRootView style={styles.flex}>
           <StableProviders
             gestureContextValue={gestureContextValue}
-            premiumBannerVisible={premiumBannerVisible}
-            setPremiumBannerVisible={setPremiumBannerVisible}
+            // PREMIUM_FEATURE_DISABLED: restore when premium goes live
+            // premiumBannerVisible={premiumBannerVisible}
+            // setPremiumBannerVisible={setPremiumBannerVisible}
             fontsLoaded={fontsLoaded ?? false}
             appReady={appReady}
           />
