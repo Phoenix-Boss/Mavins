@@ -13,12 +13,12 @@ const withIconXml = require("./plugins/withIconXml");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "xacibi6468-1",
-  slug: "xacibi6468",
+  owner: "mewaf99256-1",
+  slug: "mewaf99256",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "01b4b11c-49dd-4680-9889-3b6c9ff3b792",
+      projectId: "7c4a770e-c289-49fe-8232-aee108bc56fe",
     },
   },
   platforms: ["android"], // Only Android
