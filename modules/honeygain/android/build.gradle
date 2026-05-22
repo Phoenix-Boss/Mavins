@@ -1,4 +1,14 @@
 // build.gradle (module-level: modules/honeygain/android/build.gradle)
+//
+// JitPack is declared here via repositories {} so this module is fully
+// self-contained. EAS does not touch this file, so no settings.gradle
+// entry is needed — and none should be added.
+
+repositories {
+    google()
+    mavenCentral()
+    maven { url = uri("https://jitpack.io") }
+}
 
 plugins {
     id 'com.android.library'
@@ -55,16 +65,8 @@ expoModule {
 
 dependencies {
     // ── Pawns SDK ─────────────────────────────────────────────────────────────
-    // Distributed via JitPack. The JitPack maven repo MUST be present in
-    // android/settings.gradle under dependencyResolutionManagement:
-    //
-    //   dependencyResolutionManagement {
-    //       repositories {
-    //           google()
-    //           mavenCentral()
-    //           maven { url = uri("https://jitpack.io") }   // ← required
-    //       }
-    //   }
+    // JitPack repo is declared in the repositories {} block at the top of this
+    // file — no settings.gradle entry required.
     implementation 'app.pawns:android-pawns-sdk:1.8.1'
 
     // AndroidX Activity Result APIs (required for registerForActivityResult)

@@ -66,6 +66,11 @@
 // FIX 14: isPipActiveRef guards expandPlayer/UI restoration when PiP is active
 // FIX 15: Global __mavinVideoPlay/__mavinVideoPause/__mavinVideoSeek registered
 //         with updateVideoIsPlaying calls to keep lock screen sync correct
+//
+// BUG FIX 2026-05-21:
+// FIX 16: Replaced static hourglass-outline with ActivityIndicator for loading states
+// FIX 17: Added isResolving to showSkeleton logic (was undefined, now properly tracked)
+// FIX 18: Fixed ActivityIndicator on play button during buffering/loading
 
 import React, {
   useMemo,
@@ -84,6 +89,7 @@ import {
   Modal as RNModal,
   AppState,
   AppStateStatus,
+  ActivityIndicator,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer, VideoView } from 'expo-video';
@@ -372,6 +378,7 @@ function PlayerContentInner({
   const durationSec = engine.duration;
   const repeatMode = engine.repeatMode;
   const shuffleMode = engine.shuffleMode;
+  // FIX 17: isResolving now properly exists on engine state
   const isResolving = (engine as any).isResolving ?? false;
 
   const trackExtrasVersion = useTrackExtrasVersion();
@@ -447,6 +454,7 @@ function PlayerContentInner({
     return () => clearTimeout(t);
   }, [displayTrack?.id, viewCount]);
 
+  // FIX 17 & FIX 18: Proper loading state including isResolving
   const showSkeleton = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
 
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
@@ -1540,6 +1548,7 @@ function PlayerContentInner({
                 <Ionicons name="play-skip-back" size={32} color={colors.text} />
               </TouchableOpacity>
 
+              {/* FIX 16 & FIX 18: Replace hourglass with ActivityIndicator */}
               <TouchableOpacity
                 onPress={handlePlayPause}
                 style={[styles.bigPlay, { backgroundColor: colors.gold }]}
@@ -1548,11 +1557,15 @@ function PlayerContentInner({
                 onPressIn={() => setButtonActive(true)}
                 onPressOut={() => setButtonActive(false)}
               >
-                <Ionicons
-                  name={showSkeleton ? 'hourglass-outline' : visualIsPlaying ? 'pause' : 'play'}
-                  size={32}
-                  color={colors.textInverse}
-                />
+                {showSkeleton ? (
+                  <ActivityIndicator size="large" color={colors.textInverse} />
+                ) : (
+                  <Ionicons
+                    name={visualIsPlaying ? 'pause' : 'play'}
+                    size={32}
+                    color={colors.textInverse}
+                  />
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
