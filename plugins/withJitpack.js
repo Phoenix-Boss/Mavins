@@ -5,10 +5,8 @@ module.exports = function withJitpack(config) {
     if (!config.modResults.contents.includes('jitpack.io')) {
       config.modResults.contents += `
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
-        google()
-        mavenCentral()
         maven { url 'https://jitpack.io' }
     }
 }
