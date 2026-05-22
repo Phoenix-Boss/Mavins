@@ -1,84 +1,31 @@
-// build.gradle (module-level: modules/honeygain/android/build.gradle)
-//
-// JitPack is declared in buildscript.repositories so this module is fully
-// self-contained. No settings.gradle entry needed.
-
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url = uri("https://jitpack.io") }
-    }
-}
-
-plugins {
-    id 'com.android.library'
-    id 'kotlin-android'
-    id 'expo-module-gradle-plugin'
-}
-
-// Also add JitPack to this project's own dependency resolution
-// (buildscript block above covers plugin classpath; this covers implementation deps)
-project.repositories {
-    google()
-    mavenCentral()
-    maven { url = uri("https://jitpack.io") }
-}
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
 
 android {
-    namespace 'expo.modules.mavin.honeygain'
     compileSdk 36
-
+    namespace 'expo.modules.mavin.honeygain'
     defaultConfig {
         minSdk 24
-        targetSdk 36
-
-        versionCode 1
         versionName '1.4.0'
-
-        ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
-        }
     }
-
-    buildTypes {
-        debug {
-            debuggable true
-        }
-        release {
-            minifyEnabled false
-        }
-    }
-
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-
     kotlinOptions {
         jvmTarget = '17'
     }
-
-    sourceSets {
-        main {
-            manifest.srcFile 'src/main/AndroidManifest.xml'
-            java.srcDirs     = ['src/main/java']
-            res.srcDirs      = ['src/main/res']
-        }
-    }
 }
 
-expoModule {
-    // Name is derived from package.json / expo-module.config.json automatically
+repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
-    // Pawns SDK via JitPack (repo declared in project.repositories above)
+    implementation project(':expo-modules-core')
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
     implementation 'app.pawns:android-pawns-sdk:1.8.1'
-
-    // AndroidX Activity Result APIs (required for registerForActivityResult)
     implementation 'androidx.activity:activity-ktx:1.9.3'
-
-    // Expo modules core is provided transitively via autolinking.
-    // Do NOT manually depend on expo-modules-core in EAS-style builds.
 }
