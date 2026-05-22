@@ -9,6 +9,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
+const withJitpack = require("./plugins/withJitpack");
 // const withPawns = require("./plugins/withPawns"); // Removed - causing manifest conflicts
 
 module.exports = {
@@ -83,6 +84,7 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
+    withJitpack.js,
     // withPawns, // REMOVED - causing manifest merger conflict with honeygain-sdk
     "expo-router",
     "expo-font",
