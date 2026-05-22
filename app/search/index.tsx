@@ -1,3 +1,4 @@
+// app/(player)/search/index.tsx
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
@@ -120,17 +121,8 @@ interface GlobalSearchItem {
   artist_name: string;
   search_count: number;
   last_searched: string;
-  track_id?: string;
+  track_uuid: string | null;
 }
-
-const FALLBACK_GLOBAL_HISTORY: GlobalSearchItem[] = [
-  { id: "1", query: "Burna Boy", thumbnail_url: "", artist_name: "Burna Boy", search_count: 15000, last_searched: new Date().toISOString() },
-  { id: "2", query: "Davido", thumbnail_url: "", artist_name: "Davido", search_count: 12000, last_searched: new Date().toISOString() },
-  { id: "3", query: "Asake", thumbnail_url: "", artist_name: "Asake", search_count: 10000, last_searched: new Date().toISOString() },
-  { id: "4", query: "Wizkid", thumbnail_url: "", artist_name: "Wizkid", search_count: 9000, last_searched: new Date().toISOString() },
-  { id: "5", query: "Rema", thumbnail_url: "", artist_name: "Rema", search_count: 8000, last_searched: new Date().toISOString() },
-  { id: "6", query: "Amapiano", thumbnail_url: "", artist_name: "", search_count: 7000, last_searched: new Date().toISOString() },
-];
 
 const bestThumb = (thumbs: { url: string; resolutionLevel: string }[]): string =>
   thumbs.find(t => t.resolutionLevel === "MEDIUM")?.url ??
@@ -200,18 +192,24 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
 
 const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
 
-async function saveToGlobalHistory(query: string, thumbnail = "", artist = "", trackId = ""): Promise<void> {
+async function saveToGlobalHistory(query: string, thumbnail = "", artist = "", trackUuid = ""): Promise<void> {
   try {
-    await supabase.from("global_search_history").upsert(
+    const { error: upsertError } = await supabase.from("global_search_history").upsert(
       {
         query: query.trim(),
         thumbnail_url: thumbnail,
         artist_name: artist,
-        track_id: trackId,
+        track_uuid: trackUuid || null,
         last_searched: new Date().toISOString(),
       },
       { onConflict: "query" }
     );
+    
+    if (upsertError) {
+      console.error("[Search] Upsert error:", upsertError);
+      return;
+    }
+
     await supabase.rpc("increment_search_count", { search_query: query.trim() });
   } catch (e) {
     console.warn("[Search] saveToGlobalHistory:", e);
@@ -224,14 +222,32 @@ async function getGlobalSearchHistory(): Promise<GlobalSearchItem[]> {
     since.setHours(since.getHours() - 24);
     const { data, error } = await supabase
       .from("global_search_history")
-      .select("id, query, thumbnail_url, artist_name, track_id, search_count, last_searched")
+      .select("id, query, thumbnail_url, artist_name, track_uuid, search_count, last_searched")
       .gte("last_searched", since.toISOString())
       .order("search_count", { ascending: false })
       .limit(GLOBAL_HISTORY_LIMIT);
-    if (error || !data?.length) return FALLBACK_GLOBAL_HISTORY;
+
+    if (error || !data?.length) return [];
     return data;
   } catch {
-    return FALLBACK_GLOBAL_HISTORY;
+    return [];
+  }
+}
+
+async function getStreamUrlByTrackUuid(trackUuid: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("streams")
+      .select("stream_url")
+      .eq("track_id", trackUuid)
+      .eq("stream_type", "audio")
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data.stream_url;
+  } catch (e) {
+    console.warn("[Search] getStreamUrlByTrackUuid error:", e);
+    return null;
   }
 }
 
@@ -241,7 +257,7 @@ function TrendingConveyorBelt({
   colors,
 }: {
   history: GlobalSearchItem[];
-  onSelect: (q: string) => void;
+  onSelect: (item: GlobalSearchItem) => void;
   colors: any;
 }) {
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -286,7 +302,7 @@ function TrendingConveyorBelt({
               <TouchableOpacity
                 key={`${item.id}-${index}`}
                 style={conveyorStyles.item}
-                onPress={() => onSelect(item.query)}
+                onPress={() => onSelect(item)}
                 activeOpacity={0.75}
               >
                 <View style={[conveyorStyles.avatarRing, { borderColor: bg + "70" }]}>
@@ -914,7 +930,7 @@ export default function SearchScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [globalHistory, setGlobalHistory] = useState<GlobalSearchItem[]>(FALLBACK_GLOBAL_HISTORY);
+  const [globalHistory, setGlobalHistory] = useState<GlobalSearchItem[]>([]);
 
   const discoverItems = searchData?.discoverSongs || [];
   const playlists = searchData?.playlists || [];
@@ -979,8 +995,21 @@ export default function SearchScreen() {
       try {
         const preview = await MavinEngine.search(trimmed, "", undefined, 0);
         const first = preview?.results?.find((i: any) => i.type === "stream");
-        const trackId = first ? extractVideoId(first.url) : "";
-        await saveToGlobalHistory(trimmed, first ? bestThumb(first.thumbnails) : "", first?.uploaderName ?? "", trackId);
+        const videoId = first ? extractVideoId(first.url) : "";
+        
+        let trackUuid = "";
+        if (videoId) {
+          const { data: songData } = await supabase
+            .from("songs")
+            .select("id")
+            .eq("video_id", videoId)
+            .maybeSingle();
+          if (songData) {
+            trackUuid = songData.id;
+          }
+        }
+        
+        await saveToGlobalHistory(trimmed, first ? bestThumb(first.thumbnails) : "", first?.uploaderName ?? "", trackUuid);
         const updated = await getGlobalSearchHistory();
         setGlobalHistory(updated);
       } catch { }
@@ -1031,7 +1060,31 @@ export default function SearchScreen() {
 
   const handleSubmit = () => performSearch(query);
   const handleSuggestionTap = (s: string) => { setQuery(s); performSearch(s); };
-  const handleTrendingTap = (q: string) => { setQuery(q); performSearch(q); };
+  
+  const handleTrendingTap = useCallback(async (item: GlobalSearchItem) => {
+    triggerHaptic();
+    
+    setQuery(item.query);
+    
+    if (item.track_uuid) {
+      const streamUrl = await getStreamUrlByTrackUuid(item.track_uuid);
+      
+      if (streamUrl) {
+        setPendingTrack({ title: item.query, artist: item.artist_name, artwork: item.thumbnail_url });
+        await playAudio({
+          id: item.track_uuid,
+          title: item.query,
+          artist: item.artist_name || "Trending",
+          thumbnail: item.thumbnail_url,
+          url: streamUrl,
+          videoId: "",
+        });
+        return;
+      }
+    }
+    
+    performSearch(item.query);
+  }, [playAudio, performSearch]);
 
   const handleCancel = () => {
     Keyboard.dismiss();

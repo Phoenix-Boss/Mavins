@@ -9,7 +9,7 @@ const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-const withJitpack = require("./plugins/withJitpack");
+// const withJitpack = require("./plugins/withJitpack"); // REMOVED - causing duplicate mavenLocal entries
 // const withPawns = require("./plugins/withPawns"); // Removed - causing manifest conflicts
 
 module.exports = {
@@ -22,7 +22,7 @@ module.exports = {
       projectId: "7c4a770e-c289-49fe-8232-aee108bc56fe",
     },
   },
-  platforms: ["android"], // Only Android
+  platforms: ["android"],
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
@@ -84,7 +84,7 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
-    withJitpack,
+    // withJitpack, // REMOVED - causing duplicate mavenLocal entries in settings.gradle
     // withPawns, // REMOVED - causing manifest merger conflict with honeygain-sdk
     "expo-router",
     "expo-font",
@@ -97,7 +97,6 @@ module.exports = {
       },
     ],
     
-    // ── expo-media-control for lock screen controls (Android only) ────────────
     [
       "expo-media-control",
       {
@@ -111,7 +110,6 @@ module.exports = {
       },
     ],
     
-    // FIX 1: expo-video plugin — required for Android background playback and PiP manifest flags
     [
       "expo-video",
       {
@@ -120,7 +118,6 @@ module.exports = {
       },
     ],
     
-    // FIX 2: expo-audio plugin — required for foreground service type wiring at manifest level
     [
       "expo-audio",
       {
@@ -145,8 +142,8 @@ module.exports = {
       {
         android: {
           extraProguardRules:
-            "-keep class com.honeygain.hgsdk.** { *; }\n" +
-            "-dontwarn com.honeygain.hgsdk.**\n",
+            "-keep class com.pawns.sdk.** { *; }\n" +
+            "-dontwarn com.pawns.sdk.**\n",
           foregroundServiceTypes: [
             "dataSync",
             "mediaPlayback",

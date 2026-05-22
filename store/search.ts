@@ -9,7 +9,7 @@ export interface TrendingSearchItem {
   thumbnail_url: string;
   artist_name: string;
   search_count: number;
-  track_id?: string;
+  track_uuid: string | null;
 }
 
 export interface DiscoverySong {
