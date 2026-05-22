@@ -84,7 +84,7 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
-    withJitpack.js,
+    withJitpack,
     // withPawns, // REMOVED - causing manifest merger conflict with honeygain-sdk
     "expo-router",
     "expo-font",
