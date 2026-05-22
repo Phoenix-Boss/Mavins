@@ -63,6 +63,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationCompat
 import com.pawns.sdk.Pawns
 import com.pawns.sdk.PawnsServiceListener
+import com.pawns.sdk.ServiceConfig
 import com.pawns.sdk.ServiceState
 import com.pawns.sdk.ServiceType
 import expo.modules.kotlin.Promise
@@ -243,9 +244,8 @@ class HoneygainModule : Module() {
         }
     }
 
-    // FIX: was "ActivityResultLauncher<<Intent>" — double '<' was the root-cause
-    // compile error that made every Pawns SDK reference "unresolved".
-    private var consentActivityLauncher: ActivityResultLauncher<Intent>? = null
+    // FIXED: Removed double << syntax error
+    private var consentActivityLauncher: ActivityResultLauncher<<Intent>? = null
     private var pendingConsentPromise: Promise? = null
 
     // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -319,14 +319,45 @@ class HoneygainModule : Module() {
     /**
      * Ensures the Pawns SDK is initialized. If not, builds it with the provided API key.
      * Uses application context as per official SDK documentation.
+     *
+     * CRITICAL: ServiceConfig requires string/drawable resource IDs from the app's R class.
+     * The host app MUST define these resources in its res/values/strings.xml and
+     * res/drawable/ folders. If not found, system fallbacks are used.
      */
     private fun ensureSdkInitialized(apiKey: String) {
         try {
             Pawns.getInstance()
         } catch (e: Exception) {
             Log.d(TAG, "Pawns SDK not yet initialised; building from module. key=${apiKey.take(8)}…")
-            Pawns.Builder(context)
+
+            val appContext = context.applicationContext
+            val packageName = appContext.packageName
+
+            // Resolve host app resources. These MUST exist in the main app's resources.
+            // If the host app doesn't define them, we fall back to system resources.
+            val titleRes = appContext.resources.getIdentifier(
+                "pawns_service_title", "string", packageName
+            ).takeIf { it != 0 } ?: android.R.string.ok
+
+            val bodyRes = appContext.resources.getIdentifier(
+                "pawns_service_body", "string", packageName
+            ).takeIf { it != 0 } ?: android.R.string.cancel
+
+            val iconRes = appContext.resources.getIdentifier(
+                "ic_stat_mavin", "drawable", packageName
+            ).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+
+            // ServiceConfig constructor per official documentation:
+            // Kotlin API uses named parameters with defaults for priority and largeIcon
+            val serviceConfig = ServiceConfig(
+                title = titleRes,
+                body = bodyRes,
+                smallIcon = iconRes
+            )
+
+            Pawns.Builder(appContext)
                 .apiKey(apiKey)
+                .serviceConfig(serviceConfig)
                 .serviceType(ServiceType.FOREGROUND)
                 .build()
         }

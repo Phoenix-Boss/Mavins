@@ -6,8 +6,7 @@
  *
  * Conditions for auto-restart:
  *   1. The user has previously given consent (Pawns.getInstance().isConsentGiven() == true).
- *   2. The SDK was already initialised at some point (i.e. the Application class called
- *      Pawns.Builder, or the module's initialize() was called before reboot).
+ *   2. The SDK is initialized in this receiver (since app process may not have run yet).
  *
  * The notification is reconstructed from values persisted in SharedPreferences by
  * HoneygainModule.applyNotifOptions(). If no values are stored, the defaults embedded
@@ -31,23 +30,52 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.pawns.sdk.Pawns
+import com.pawns.sdk.ServiceConfig
+import com.pawns.sdk.ServiceType
 
 class PawnsBootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "PawnsBootReceiver"
+        
+        // Same API key from index.ts — required for SDK initialization after reboot
+        // when the JS layer has not yet run.
+        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
 
-        Log.d(TAG, "BOOT_COMPLETED received — checking Pawns SDK consent state")
+        Log.d(TAG, "BOOT_COMPLETED received — initializing Pawns SDK and checking consent")
 
         try {
-            // If the SDK is not yet initialised (e.g. Application.onCreate() hasn't run
-            // yet at this broadcast delivery point), getInstance() will throw.
-            // In that case there is nothing we can restart — the foreground service will
-            // be started normally when the user next opens the app.
+            val appContext = context.applicationContext
+
+            // Initialize SDK first (getInstance() will fail if not initialized)
+            val titleRes = appContext.resources.getIdentifier(
+                "pawns_service_title", "string", appContext.packageName
+            ).takeIf { it != 0 } ?: android.R.string.ok
+
+            val bodyRes = appContext.resources.getIdentifier(
+                "pawns_service_body", "string", appContext.packageName
+            ).takeIf { it != 0 } ?: android.R.string.cancel
+
+            val iconRes = appContext.resources.getIdentifier(
+                "ic_stat_mavin", "drawable", appContext.packageName
+            ).takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+
+            val serviceConfig = ServiceConfig(
+                title = titleRes,
+                body = bodyRes,
+                smallIcon = iconRes
+            )
+
+            Pawns.Builder(appContext)
+                .apiKey(API_KEY)
+                .serviceConfig(serviceConfig)
+                .serviceType(ServiceType.FOREGROUND)
+                .build()
+
             val pawns = Pawns.getInstance()
 
             if (!pawns.isConsentGiven()) {
@@ -76,8 +104,6 @@ class PawnsBootReceiver : BroadcastReceiver() {
 
             Log.d(TAG, "Pawns sharing restarted successfully after boot")
         } catch (e: Exception) {
-            // SDK not initialised yet — this is acceptable; the app will start sharing
-            // normally when the user opens it next.
             Log.w(TAG, "Could not restart Pawns after boot: ${e.message}")
         }
     }
