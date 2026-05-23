@@ -24,13 +24,12 @@ repositories {
     google()
     mavenCentral()
     maven { url 'https://jitpack.io' }
-    maven { url 'https://sdk.pawns.app/android/' }
 }
 
 dependencies {
     implementation project(':expo-modules-core')
     compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
-    implementation 'app.pawns:android-pawns-sdk:1.8.1'
+    implementation 'com.github.pawns-app:android-pawns-sdk:1.8.1'
     implementation 'androidx.activity:activity-ktx:1.9.3'
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
 }
