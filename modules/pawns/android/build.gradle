@@ -3,11 +3,11 @@ apply plugin: 'kotlin-android'
 
 android {
     compileSdk 36
-    namespace 'expo.modules.mavin.honeygain'
+    namespace "expo.modules.mavin.pawns"
 
     defaultConfig {
         minSdk 24
-        versionName '1.4.0'
+        versionName "1.0"
     }
 
     compileOptions {
@@ -20,8 +20,16 @@ android {
     }
 }
 
+repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
 dependencies {
     implementation project(':expo-modules-core')
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
     implementation 'app.pawns:android-pawns-sdk:1.8.1'
     implementation 'androidx.activity:activity-ktx:1.9.3'
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
 }

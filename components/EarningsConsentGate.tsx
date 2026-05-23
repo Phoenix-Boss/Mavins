@@ -34,7 +34,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type ThemeColors } from '@/contexts/ThemeContext';
-import { initialize, optIn, start } from '@/modules/honeygain';
+import { initialize, optIn, start } from '@/modules/pawns';
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 

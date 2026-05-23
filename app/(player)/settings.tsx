@@ -32,7 +32,7 @@ import { triggerHaptic } from "@/helpers/haptics";
 import { useTheme, type ThemeMode } from "@/contexts/ThemeContext";
 import { cache } from "@/libs/cache";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { optOut, getStatus } from "@/modules/honeygain";
+import { optOut, getStatus } from "@/modules/pawns";
 import { CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY } from "@/components/EarningsConsentGate";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ export default function SettingsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              // Call optOut() from the Honeygain SDK — stops the service and revokes consent
+              // Call optOut() from the pawns SDK — stops the service and revokes consent
               await optOut();
               // Clear stored consent so the modal can be triggered again later
               await AsyncStorage.multiRemove([CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY]);

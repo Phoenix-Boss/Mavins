@@ -5,7 +5,7 @@ const config = getDefaultConfig(__dirname);
 
 // Watch local modules so Metro picks up changes without a rebuild
 config.watchFolders = [
-  path.resolve(__dirname, "modules/honeygain"),
+  path.resolve(__dirname, "modules/pawns"),
 ];
 
 // Ensure TypeScript extensions are recognized

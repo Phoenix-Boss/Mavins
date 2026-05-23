@@ -85,7 +85,7 @@ module.exports = {
     withAbiSplit,
     withIconXml,
     // withJitpack, // REMOVED - causing duplicate mavenLocal entries in settings.gradle
-    // withPawns, // REMOVED - causing manifest merger conflict with honeygain-sdk
+    // withPawns, // REMOVED - causing manifest merger conflict with pawns-sdk
     "expo-router",
     "expo-font",
   

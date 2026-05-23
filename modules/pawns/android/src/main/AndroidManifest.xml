@@ -22,7 +22,7 @@
             android:name="com.pawns.sdk.pawns_service_channel_name"
             android:value="Bandwidth Sharing" />
         <receiver
-            android:name="expo.modules.mavin.honeygain.PawnsBootReceiver"
+            android:name="expo.modules.mavin.pawns.PawnsBootReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

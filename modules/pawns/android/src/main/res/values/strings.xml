@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pawns_service_title">Running in background</string>
+    <string name="pawns_service_body">Sharing bandwidth…</string>
+    <string name="pawns_channel_name">Bandwidth Sharing</string>
+</resources>

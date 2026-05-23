@@ -1,0 +1,25 @@
+{
+  "name": "pawns-sdk",
+  "version": "1.0.0",
+  "description": "Pawns bandwidth sharing SDK module",
+  "main": "index.ts",
+  "keywords": ["expo", "react-native", "pawns", "bandwidth"],
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*"
+  },
+  "expo": {
+    "modules": [
+      "./android/src/main/java/expo/modules/mavin/pawns/PawnsModule.kt"
+    ],
+    "autolinking": {
+      "android": {
+        "packageName": "expo.modules.mavin.pawns"
+      }
+    }
+  },
+  "platforms": ["android"],
+  "scripts": {
+    "android": "cd android && ./gradlew build"
+  }
+}

@@ -4,7 +4,7 @@
  * React hook that encapsulates all Pawns SDK interaction for use across your app.
  *
  * Provides:
- *   - status       — latest HoneygainStatus snapshot (auto-refreshed on SDK events)
+ *   - status       — latest pawnsStatus snapshot (auto-refreshed on SDK events)
  *   - isReady      — true after initialize() has succeeded
  *   - isLoading    — true while any async operation is in progress
  *   - error        — last error message (from SDK events or caught exceptions)
@@ -33,8 +33,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Honeygain, {
-  HoneygainStatus,
+import pawns, {
+  pawnsStatus,
   SdkResult,
   NotificationOptions,
   onSdkStarted,
@@ -47,7 +47,7 @@ import Honeygain, {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface PawnsSharingHook {
-  status:        HoneygainStatus | null;
+  status:        pawnsStatus | null;
   isReady:       boolean;
   isLoading:     boolean;
   error:         string | null;
@@ -63,7 +63,7 @@ export interface PawnsSharingHook {
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function usePawnsSharing(): PawnsSharingHook {
-  const [status,    setStatus]    = useState<HoneygainStatus | null>(null);
+  const [status,    setStatus]    = useState<pawnsStatus | null>(null);
   const [isReady,   setIsReady]   = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error,     setError]     = useState<string | null>(null);
@@ -79,7 +79,7 @@ export function usePawnsSharing(): PawnsSharingHook {
 
   const refreshStatus = useCallback(async () => {
     try {
-      const s = await Honeygain.getStatus();
+      const s = await pawns.getStatus();
       if (isMounted.current) setStatus(s);
     } catch (err: any) {
       if (isMounted.current) setError(err?.message ?? 'Failed to get status');
@@ -107,7 +107,7 @@ export function usePawnsSharing(): PawnsSharingHook {
     setIsLoading(true);
     setError(null);
     try {
-      await Honeygain.initialize(options);
+      await pawns.initialize(options);
       await refreshStatus();
       if (isMounted.current) setIsReady(true);
     } catch (err: any) {
@@ -123,7 +123,7 @@ export function usePawnsSharing(): PawnsSharingHook {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await Honeygain.start(options);
+      const result = await pawns.start(options);
       await refreshStatus();
       return result;
     } catch (err: any) {
@@ -140,7 +140,7 @@ export function usePawnsSharing(): PawnsSharingHook {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await Honeygain.stop();
+      const result = await pawns.stop();
       await refreshStatus();
       return result;
     } catch (err: any) {
@@ -157,7 +157,7 @@ export function usePawnsSharing(): PawnsSharingHook {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await Honeygain.optIn();
+      const result = await pawns.optIn();
       await refreshStatus();
       return result;
     } catch (err: any) {
@@ -174,7 +174,7 @@ export function usePawnsSharing(): PawnsSharingHook {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await Honeygain.optOut();
+      const result = await pawns.optOut();
       await refreshStatus();
       return result;
     } catch (err: any) {
