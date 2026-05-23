@@ -4,9 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import com.pawns.sdk.Pawns
-import com.pawns.sdk.ServiceConfig
-import com.pawns.sdk.ServiceType
+import com.pawns.sdk.common.dto.ServiceConfig
+import com.pawns.sdk.common.dto.ServiceType
+import com.pawns.sdk.common.sdk.Pawns
 
 class PawnsBootReceiver : BroadcastReceiver() {
 
@@ -17,14 +17,14 @@ class PawnsBootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
-        Log.d(TAG, "BOOT_COMPLETED � initializing Pawns SDK")
+        Log.d(TAG, "BOOT_COMPLETED — initializing Pawns SDK")
         try {
-            val ctx     = context.applicationContext
-            val iconRes = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
+            val ctx      = context.applicationContext
+            val iconRes  = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
                 .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
             val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
                 .takeIf { it != 0 } ?: android.R.string.ok
-            val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
+            val bodyRes  = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
                 .takeIf { it != 0 } ?: android.R.string.cancel
 
             Pawns.Builder(ctx)
@@ -34,11 +34,14 @@ class PawnsBootReceiver : BroadcastReceiver() {
                 .build()
 
             val pawns = Pawns.getInstance()
-            if (!pawns.isConsentGiven()) { Log.d(TAG, "No consent � skipping"); return }
+            if (!pawns.isConsentGiven()) {
+                Log.d(TAG, "No consent — skipping")
+                return
+            }
 
             val prefs   = context.getSharedPreferences(PawnsModule.PREFS_NAME, Context.MODE_PRIVATE)
             val title   = prefs.getString(PawnsModule.PREF_NOTIF_TITLE, "Running in background") ?: "Running in background"
-            val body    = prefs.getString(PawnsModule.PREF_NOTIF_BODY,  "Sharing bandwidth�")    ?: "Sharing bandwidth�"
+            val body    = prefs.getString(PawnsModule.PREF_NOTIF_BODY,  "Sharing bandwidth…")    ?: "Sharing bandwidth…"
             val icon    = prefs.getString(PawnsModule.PREF_NOTIF_ICON,  "ic_notification")        ?: "ic_notification"
             val notifId = prefs.getInt(PawnsModule.PREF_NOTIF_ID, PawnsModule.NOTIFICATION_ID)
 

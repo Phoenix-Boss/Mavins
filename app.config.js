@@ -2,15 +2,12 @@
 //
 // FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
 // FIX 2: Added expo-audio plugin with enableBackgroundAudio
-// NOTE: withPawns is imported but unused (dead code) — removed from plugins array per analysis
-// NOTE: SEEK_DEBOUNCE_MS and AUTO_EXPAND_DELAY_MS are not in this file (they live in MusicPlayerContext)
+// FIX 3: Removed extraMavenRepos jitpack — pawns SDK now bundled as local AAR in modules/pawns/android/libs/
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-// const withJitpack = require("./plugins/withJitpack"); // REMOVED - causing duplicate mavenLocal entries
-// const withPawns = require("./plugins/withPawns"); // Removed - causing manifest conflicts
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
@@ -84,11 +81,9 @@ module.exports = {
   plugins: [
     withAbiSplit,
     withIconXml,
-    // withJitpack, // REMOVED - causing duplicate mavenLocal entries in settings.gradle
-    // withPawns, // REMOVED - causing manifest merger conflict with pawns-sdk
     "expo-router",
     "expo-font",
-  
+
     [
       "expo-notifications",
       {
@@ -96,7 +91,7 @@ module.exports = {
         color: "#D4AF37",
       },
     ],
-    
+
     [
       "expo-media-control",
       {
@@ -109,7 +104,7 @@ module.exports = {
         },
       },
     ],
-    
+
     [
       "expo-video",
       {
@@ -117,16 +112,16 @@ module.exports = {
         supportsPictureInPicture: true,
       },
     ],
-    
+
     [
       "expo-audio",
       {
         enableBackgroundAudio: true,
       },
     ],
-    
+
     "react-native-edge-to-edge",
-    
+
     [
       "expo-splash-screen",
       {
@@ -136,12 +131,11 @@ module.exports = {
         backgroundColor: "#000",
       },
     ],
-    
+
     [
       "expo-build-properties",
       {
         android: {
-          extraMavenRepos: ["https://jitpack.io"],
           extraProguardRules:
             "-keep class com.pawns.sdk.** { *; }\n" +
             "-dontwarn com.pawns.sdk.**\n",
@@ -154,11 +148,11 @@ module.exports = {
       },
     ],
   ],
-  
+
   experiments: {
     typedRoutes: true,
   },
-  
+
   autolinking: {
     modulesPaths: ["./modules"],
   },

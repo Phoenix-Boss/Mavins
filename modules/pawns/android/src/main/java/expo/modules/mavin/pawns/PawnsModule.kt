@@ -10,12 +10,11 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import androidx.activity.result.ActivityResultLauncher
 import androidx.core.app.NotificationCompat
-import com.pawns.sdk.Pawns
-import com.pawns.sdk.ServiceConfig
-import com.pawns.sdk.ServiceState
-import com.pawns.sdk.ServiceType
+import com.pawns.sdk.common.dto.ServiceConfig
+import com.pawns.sdk.common.dto.ServiceState
+import com.pawns.sdk.common.dto.ServiceType
+import com.pawns.sdk.common.sdk.Pawns
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -29,12 +28,12 @@ import kotlinx.coroutines.launch
 class PawnsModule : Module() {
 
     companion object {
-        private const val TAG = "PawnsModule"
+        private const val TAG              = "PawnsModule"
         const val NOTIFICATION_ID          = 9901
         private const val CHANNEL_ID       = "pawns_sharing_channel"
         private const val CHANNEL_NAME     = "Bandwidth Sharing"
         private const val DEFAULT_TITLE    = "Running in background"
-        private const val DEFAULT_BODY     = "Sharing bandwidth…"
+        private const val DEFAULT_BODY     = "Sharing bandwidthâ€¦"
         private const val DEFAULT_ICON     = "ic_notification"
         const val PREFS_NAME               = "pawns_module_prefs"
         const val PREF_NOTIF_TITLE         = "notif_title"
@@ -47,7 +46,7 @@ class PawnsModule : Module() {
             val iconRes = resolveIcon(context, iconName)
             val intent  = context.packageManager.getLaunchIntentForPackage(context.packageName)
                 ?.apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }
-            val flags   = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             else PendingIntent.FLAG_UPDATE_CURRENT
             val pi = intent?.let { PendingIntent.getActivity(context, 0, it, flags) }
@@ -79,16 +78,14 @@ class PawnsModule : Module() {
         }
     }
 
-    private var initialized   = false
+    private var initialized      = false
     private var lastError: String? = null
-    private var stateJob: Job? = null
-    private val scope          = CoroutineScope(Dispatchers.Main)
-    private var notifTitle     = DEFAULT_TITLE
-    private var notifBody      = DEFAULT_BODY
-    private var notifIcon      = DEFAULT_ICON
-    private var notifId        = NOTIFICATION_ID
-    private var pendingConsent: Promise? = null
-    private var consentLauncher: ActivityResultLauncher<Intent>? = null
+    private var stateJob: Job?   = null
+    private val scope            = CoroutineScope(Dispatchers.Main)
+    private var notifTitle       = DEFAULT_TITLE
+    private var notifBody        = DEFAULT_BODY
+    private var notifIcon        = DEFAULT_ICON
+    private var notifId          = NOTIFICATION_ID
 
     override fun definition() = ModuleDefinition {
 
@@ -99,10 +96,10 @@ class PawnsModule : Module() {
         AsyncFunction("initialize") { apiKey: String, promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
-                val iconRes = resolveIcon(ctx, notifIcon)
+                val iconRes  = resolveIcon(ctx, notifIcon)
                 val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.string.ok
-                val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
+                val bodyRes  = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.string.cancel
                 Pawns.Builder(ctx)
                     .apiKey(apiKey)
@@ -110,7 +107,7 @@ class PawnsModule : Module() {
                     .serviceType(ServiceType.FOREGROUND)
                     .build()
                 initialized = true
-                subscribeStateChanges(ctx)
+                subscribeStateChanges()
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
@@ -120,7 +117,7 @@ class PawnsModule : Module() {
 
         AsyncFunction("start") { promise: Promise ->
             try {
-                val ctx = appContext.reactContext!!
+                val ctx   = appContext.reactContext!!
                 val notif = buildNotification(ctx, notifTitle, notifBody, notifIcon)
                 Pawns.getInstance().startSharing(ctx, notif, notifId)
                 promise.resolve(mapOf("success" to true))
@@ -169,10 +166,19 @@ class PawnsModule : Module() {
             try {
                 val state   = Pawns.getInstance().getServiceStateSnapshot()
                 val consent = Pawns.getInstance().isConsentGiven()
+                val isRunning = state is ServiceState.Launched.Running
+                val stateName = when (state) {
+                    is ServiceState.Off              -> "STOPPED"
+                    is ServiceState.On               -> "STARTING"
+                    is ServiceState.Launched.Running -> "RUNNING"
+                    is ServiceState.Launched.LowBattery -> "LOW_BATTERY"
+                    is ServiceState.Launched.Error   -> "ERROR"
+                    else                             -> "UNKNOWN"
+                }
                 promise.resolve(mapOf(
-                    "isRunning"      to (state == ServiceState.RUNNING),
+                    "isRunning"      to isRunning,
                     "isConsentGiven" to consent,
-                    "serviceState"   to state.name,
+                    "serviceState"   to stateName,
                     "initialized"    to initialized,
                     "lastError"      to lastError
                 ))
@@ -196,10 +202,12 @@ class PawnsModule : Module() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     val pm = ctx.getSystemService(android.os.PowerManager::class.java)
                     if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
-                        ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data  = Uri.parse("package:${ctx.packageName}")
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        })
+                        ctx.startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data  = Uri.parse("package:${ctx.packageName}")
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                        )
                     }
                 }
                 promise.resolve(mapOf("success" to true))
@@ -214,17 +222,27 @@ class PawnsModule : Module() {
         }
     }
 
-    private fun subscribeStateChanges(ctx: Context) {
+    private fun subscribeStateChanges() {
         stateJob?.cancel()
         stateJob = scope.launch {
             try {
                 Pawns.getInstance().getServiceState().collectLatest { state ->
                     when (state) {
-                        ServiceState.RUNNING -> sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
-                        ServiceState.STOPPED -> sendEvent("onSdkStopped", mapOf("timestamp" to System.currentTimeMillis()))
-                        ServiceState.ERROR   -> {
-                            lastError = "Service error"
-                            sendEvent("onError", mapOf("message" to lastError, "timestamp" to System.currentTimeMillis()))
+                        is ServiceState.Launched.Running -> {
+                            sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
+                        }
+                        is ServiceState.Launched.LowBattery -> {
+                            sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
+                        }
+                        is ServiceState.Launched.Error -> {
+                            lastError = state.error.toString()
+                            sendEvent("onError", mapOf(
+                                "message"   to lastError,
+                                "timestamp" to System.currentTimeMillis()
+                            ))
+                        }
+                        is ServiceState.Off -> {
+                            sendEvent("onSdkStopped", mapOf("timestamp" to System.currentTimeMillis()))
                         }
                         else -> {}
                     }
