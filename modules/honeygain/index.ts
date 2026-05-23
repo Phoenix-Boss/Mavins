@@ -1,15 +1,12 @@
-// modules/honeygain/index.ts
-// JS entry point for the Honeygain Expo module.
-// Imported via package.json alias: "honeygain-sdk": "file:./modules/honeygain"
-// Native side registered as Name("Honeygain") in HoneygainModule.kt.
+// modules/pawns-sdk/index.ts
+// JS entry point for the Pawns Expo module.
+// Imported via package.json alias: "pawns-sdk": "file:./modules/pawns-sdk"
+// Native side registered as Name("PawnsModule") in PawnsModule.kt.
 //
 // ─── KEY OWNERSHIP ────────────────────────────────────────────────────────────
 // API_KEY lives here and ONLY here in JS-land.
 // No caller (ConsentGate, screens, hooks) ever sees or passes the key.
 // initialize() is intentionally no-arg — the module injects the key itself.
-//
-// To keep the key out of source control, replace the inline string with:
-//   import { HONEYGAIN_API_KEY } from '../secrets'; // secrets.ts is gitignored
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
@@ -17,12 +14,8 @@ import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 const API_KEY = '2125ae20cfd8855abc0bee8cc9c997c4';
 
 // ─── Event map ────────────────────────────────────────────────────────────────
-// expo-modules-core's EventEmitter<T> requires T to extend EventsMap, which
-// demands an index signature: [key: string]: (...args: any[]) => void
-// Without it TS raises: "Type does not satisfy the constraint 'EventsMap'.
-//   Index signature for type 'string' is missing in type '...'"
-interface HoneygainEvents {
-  [key: string]:    (...args: any[]) => void; // satisfies EventsMap constraint
+interface PawnsEvents {
+  [key: string]:    (...args: any[]) => void;
   onError:          (e: { message: string })   => void;
   onConsentGranted: (e: { timestamp: number }) => void;
   onConsentDenied:  (e: { timestamp: number }) => void;
@@ -31,30 +24,68 @@ interface HoneygainEvents {
 }
 
 // ─── Native module ────────────────────────────────────────────────────────────
-export const HoneygainModule  = requireNativeModule('Honeygain');
-export const HoneygainEmitter = new EventEmitter<HoneygainEvents>(HoneygainModule);
+export const PawnsModule  = requireNativeModule('PawnsModule');
+export const PawnsEmitter = new EventEmitter<PawnsEvents>(PawnsModule);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface HoneygainStatus {
-  isRunning: boolean;
-  isOptedIn: boolean;
-  isBackground: boolean;
-  launchOnBoot: boolean;
-  enableLogging: boolean;
-  lastError?: string | null;
-  initialized: boolean;
+export interface PawnsStatus {
+  isRunning:      boolean;
+  isOptedIn:      boolean;
+  isBackground:   boolean;
+  launchOnBoot:   boolean;
+  enableLogging:  boolean;
+  lastError?:     string | null;
+// modules/pawns-sdk/index.ts
+// JS entry point for the Pawns Expo module.
+// Imported via package.json alias: "pawns-sdk": "file:./modules/pawns-sdk"
+// Native side registered as Name("PawnsModule") in PawnsModule.kt.
+//
+// ─── KEY OWNERSHIP ────────────────────────────────────────────────────────────
+// API_KEY lives here and ONLY here in JS-land.
+// No caller (ConsentGate, screens, hooks) ever sees or passes the key.
+// initialize() is intentionally no-arg — the module injects the key itself.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { requireNativeModule, EventEmitter } from 'expo-modules-core';
+
+const API_KEY = '2125ae20cfd8855abc0bee8cc9c997c4';
+
+// ─── Event map ────────────────────────────────────────────────────────────────
+interface PawnsEvents {
+  [key: string]:    (...args: any[]) => void;
+  onError:          (e: { message: string })   => void;
+  onConsentGranted: (e: { timestamp: number }) => void;
+  onConsentDenied:  (e: { timestamp: number }) => void;
+  onSdkStarted:     (e: { timestamp: number }) => void;
+  onSdkStopped:     (e: { timestamp: number }) => void;
 }
 
-export interface HoneygainConfig {
-  isBackground?: boolean;
-  launchOnBoot?: boolean;
+// ─── Native module ────────────────────────────────────────────────────────────
+export const PawnsModule  = requireNativeModule('PawnsModule');
+export const PawnsEmitter = new EventEmitter<PawnsEvents>(PawnsModule);
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface PawnsStatus {
+  isRunning:      boolean;
+  isOptedIn:      boolean;
+  isBackground:   boolean;
+  launchOnBoot:   boolean;
+  enableLogging:  boolean;
+  lastError?:     string | null;
+  initialized:    boolean;
+}
+
+export interface PawnsConfig {
+  isBackground?:  boolean;
+  launchOnBoot?:  boolean;
   enableLogging?: boolean;
 }
 
 export interface SdkResult {
-  success: boolean;
-  message?: string;
+  success:          boolean;
+  message?:         string;
   requiresConsent?: boolean;
 }
 
@@ -65,85 +96,58 @@ export interface SdkResult {
  * Must be called before optIn() + start().
  */
 export const initialize = (): Promise<SdkResult> =>
-  HoneygainModule.initialize(API_KEY);
+  PawnsModule.initialize(API_KEY);
 
 /** Start bandwidth sharing. Returns { requiresConsent: true } if optIn() hasn't been called. */
 export const start = (): Promise<SdkResult> =>
-  HoneygainModule.start();
+  PawnsModule.start();
 
-/** Temporarily stop the SDK. Restarts on next init / reboot if launchOnBoot is true. */
+/** Temporarily stop the SDK. */
 export const stop = (): Promise<SdkResult> =>
-  HoneygainModule.stop();
+  PawnsModule.stop();
 
 /** Grant consent programmatically (custom consent UI). Must be called before start(). */
 export const optIn = (): Promise<SdkResult> =>
-  HoneygainModule.optIn();
+  PawnsModule.optIn();
 
 /** Revoke consent and stop the SDK immediately. */
 export const optOut = (): Promise<SdkResult> =>
-  HoneygainModule.optOut();
+  PawnsModule.optOut();
 
 /** Get the full SDK status snapshot. */
-export const getStatus = (): Promise<HoneygainStatus> =>
-  HoneygainModule.getStatus();
+export const getStatus = (): Promise<PawnsStatus> =>
+  PawnsModule.getStatus();
 
 /** Get the last error that caused the SDK to stop, or null if none. */
 export const getLastError = (): Promise<{ message: string } | null> =>
-  HoneygainModule.getLastError();
+  PawnsModule.getLastError();
 
 /** Update runtime config (isBackground, launchOnBoot, enableLogging). */
-export const configure = (config: HoneygainConfig): Promise<SdkResult> =>
-  HoneygainModule.configure(config);
+export const configure = (config: PawnsConfig): Promise<SdkResult> =>
+  PawnsModule.configure(config);
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 
 export const onError = (cb: (e: { message: string }) => void) =>
-  HoneygainEmitter.addListener('onError', cb);
+  PawnsEmitter.addListener('onError', cb);
 
 export const onConsentGranted = (cb: (e: { timestamp: number }) => void) =>
-  HoneygainEmitter.addListener('onConsentGranted', cb);
+  PawnsEmitter.addListener('onConsentGranted', cb);
 
 export const onConsentDenied = (cb: (e: { timestamp: number }) => void) =>
-  HoneygainEmitter.addListener('onConsentDenied', cb);
+  PawnsEmitter.addListener('onConsentDenied', cb);
 
 export const onSdkStarted = (cb: (e: { timestamp: number }) => void) =>
-  HoneygainEmitter.addListener('onSdkStarted', cb);
+  PawnsEmitter.addListener('onSdkStarted', cb);
 
 export const onSdkStopped = (cb: (e: { timestamp: number }) => void) =>
-  HoneygainEmitter.addListener('onSdkStopped', cb);
-
-// ─── Backward-compat stubs ────────────────────────────────────────────────────
-
-/** @deprecated → stop() */
-export const stopSharing = (): Promise<SdkResult> => {
-  console.warn('[Honeygain] stopSharing() is deprecated → use stop()');
-  return stop();
-};
-
-/** @deprecated → getStatus() */
-export const getEarnings = (): Promise<HoneygainStatus> => {
-  console.warn('[Honeygain] getEarnings() is deprecated → use getStatus()');
-  return getStatus();
-};
-
-/** @deprecated → initialize() + start() */
-export const startBandwidthSession = async (_durationSeconds: number): Promise<boolean> => {
-  console.warn('[Honeygain] startBandwidthSession() is deprecated → use initialize() + start()');
-  return getStatus().then(s => s.isRunning);
-};
-
-/** @deprecated → stop() */
-export const stopSession = (): Promise<SdkResult> => {
-  console.warn('[Honeygain] stopSession() is deprecated → use stop()');
-  return stop();
-};
+  PawnsEmitter.addListener('onSdkStopped', cb);
 
 // ─── Default export ───────────────────────────────────────────────────────────
 
 export default {
-  HoneygainModule,
-  HoneygainEmitter,
-  // core
+  PawnsModule,
+  PawnsEmitter,
   initialize,
   start,
   stop,
@@ -152,6 +156,89 @@ export default {
   getStatus,
   getLastError,
   configure,
+  onError,
+  onConsentGranted,
+  onConsentDenied,
+  onSdkStarted,
+  onSdkStopped,
+};  success:          boolean;
+  message?:         string;
+  requiresConsent?: boolean;
+}
+
+// ─── Core functions ───────────────────────────────────────────────────────────
+
+/**
+ * Initialise the SDK. No arguments — key is managed inside this module.
+ * Must be called before optIn() + start().
+ */
+export const initialize = (): Promise<SdkResult> =>
+  PawnsModule.initialize(API_KEY);
+
+/** Start bandwidth sharing. Returns { requiresConsent: true } if optIn() hasn't been called. */
+export const start = (): Promise<SdkResult> =>
+  PawnsModule.start();
+
+/** Temporarily stop the SDK. */
+export const stop = (): Promise<SdkResult> =>
+  PawnsModule.stop();
+
+/** Grant consent programmatically (custom consent UI). Must be called before start(). */
+export const optIn = (): Promise<SdkResult> =>
+  PawnsModule.optIn();
+
+/** Revoke consent and stop the SDK immediately. */
+export const optOut = (): Promise<SdkResult> =>
+  PawnsModule.optOut();
+
+/** Get the full SDK status snapshot. */
+export const getStatus = (): Promise<PawnsStatus> =>
+  PawnsModule.getStatus();
+
+/** Get the last error that caused the SDK to stop, or null if none. */
+export const getLastError = (): Promise<{ message: string } | null> =>
+  PawnsModule.getLastError();
+
+/** Update runtime config (isBackground, launchOnBoot, enableLogging). */
+export const configure = (config: PawnsConfig): Promise<SdkResult> =>
+  PawnsModule.configure(config);
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+export const onError = (cb: (e: { message: string }) => void) =>
+  PawnsEmitter.addListener('onError', cb);
+
+export const onConsentGranted = (cb: (e: { timestamp: number }) => void) =>
+  PawnsEmitter.addListener('onConsentGranted', cb);
+
+export const onConsentDenied = (cb: (e: { timestamp: number }) => void) =>
+  PawnsEmitter.addListener('onConsentDenied', cb);
+
+export const onSdkStarted = (cb: (e: { timestamp: number }) => void) =>
+  PawnsEmitter.addListener('onSdkStarted', cb);
+
+export const onSdkStopped = (cb: (e: { timestamp: number }) => void) =>
+  PawnsEmitter.addListener('onSdkStopped', cb);
+
+// ─── Default export ───────────────────────────────────────────────────────────
+
+export default {
+  PawnsModule,
+  PawnsEmitter,
+  initialize,
+  start,
+  stop,
+  optIn,
+  optOut,
+  getStatus,
+  getLastError,
+  configure,
+  onError,
+  onConsentGranted,
+  onConsentDenied,
+  onSdkStarted,
+  onSdkStopped,
+};  configure,
   // events
   onError,
   onConsentGranted,
