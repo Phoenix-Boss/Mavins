@@ -1,5 +1,8 @@
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+    id 'expo-module-gradle-plugin'
+}
 
 android {
     compileSdk 36
@@ -18,18 +21,20 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
-}
 
-repositories {
-    google()
-    mavenCentral()
-    flatDir { dirs 'libs' }
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = ['src/main/java']
+            res.srcDirs = ['src/main/res']
+            jniLibs.srcDirs = ['libs']
+        }
+    }
 }
 
 dependencies {
-    implementation project(':expo-modules-core')
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
-    implementation(name: 'internet-sharing-1.8.1', ext: 'aar')
+    implementation files('libs/internet-sharing-1.8.1.aar')
     implementation 'androidx.activity:activity-ktx:1.9.3'
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
 }
