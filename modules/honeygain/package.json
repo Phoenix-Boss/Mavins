@@ -1,5 +1,5 @@
 {
-  "name": "honeygain-sdk",
+  "name": "pawns-sdk",
   "version": "1.0.0",
   "main": "index.ts",
   "types": "index.ts",
