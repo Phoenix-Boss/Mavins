@@ -24,6 +24,7 @@ repositories {
     google()
     mavenCentral()
     maven { url 'https://jitpack.io' }
+    maven { url 'https://sdk.pawns.app/android/' }
 }
 
 dependencies {
