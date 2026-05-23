@@ -1,16 +1,13 @@
 package expo.modules.mavin.pawns
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import com.pawns.sdk.common.dto.ServiceConfig
 import com.pawns.sdk.common.dto.ServiceState
 import com.pawns.sdk.common.dto.ServiceType
@@ -28,37 +25,15 @@ import kotlinx.coroutines.launch
 class PawnsModule : Module() {
 
     companion object {
-        private const val TAG              = "PawnsModule"
-        const val NOTIFICATION_ID          = 9901
-        private const val CHANNEL_ID       = "pawns_sharing_channel"
-        private const val CHANNEL_NAME     = "Bandwidth Sharing"
-        private const val DEFAULT_TITLE    = "Running in background"
-        private const val DEFAULT_BODY     = "Sharing bandwidth…"
-        private const val DEFAULT_ICON     = "ic_notification"
-        const val PREFS_NAME               = "pawns_module_prefs"
-        const val PREF_NOTIF_TITLE         = "notif_title"
-        const val PREF_NOTIF_BODY          = "notif_body"
-        const val PREF_NOTIF_ICON          = "notif_icon"
-        const val PREF_NOTIF_ID            = "notif_id"
-
-        fun buildNotification(context: Context, title: String, body: String, iconName: String): Notification {
-            ensureChannel(context)
-            val iconRes = resolveIcon(context, iconName)
-            val intent  = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                ?.apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = intent?.let { PendingIntent.getActivity(context, 0, it, flags) }
-            return NotificationCompat.Builder(context, CHANNEL_ID)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setSmallIcon(iconRes)
-                .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .apply { if (pi != null) setContentIntent(pi) }
-                .build()
-        }
+        private const val TAG          = "PawnsModule"
+        const val NOTIFICATION_ID      = 9901
+        private const val CHANNEL_ID   = "pawns_sharing_channel"
+        private const val CHANNEL_NAME = "Bandwidth Sharing"
+        const val PREFS_NAME           = "pawns_module_prefs"
+        const val PREF_NOTIF_TITLE     = "notif_title"
+        const val PREF_NOTIF_BODY      = "notif_body"
+        const val PREF_NOTIF_ICON      = "notif_icon"
+        const val PREF_NOTIF_ID        = "notif_id"
 
         fun ensureChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -78,14 +53,11 @@ class PawnsModule : Module() {
         }
     }
 
-    private var initialized      = false
+    private var initialized        = false
     private var lastError: String? = null
-    private var stateJob: Job?   = null
-    private val scope            = CoroutineScope(Dispatchers.Main)
-    private var notifTitle       = DEFAULT_TITLE
-    private var notifBody        = DEFAULT_BODY
-    private var notifIcon        = DEFAULT_ICON
-    private var notifId          = NOTIFICATION_ID
+    private var stateJob: Job?     = null
+    private val scope              = CoroutineScope(Dispatchers.Main)
+    private var notifIcon          = "ic_notification"
 
     override fun definition() = ModuleDefinition {
 
@@ -95,12 +67,13 @@ class PawnsModule : Module() {
 
         AsyncFunction("initialize") { apiKey: String, promise: Promise ->
             try {
-                val ctx = appContext.reactContext!!
+                val ctx      = appContext.reactContext!!
                 val iconRes  = resolveIcon(ctx, notifIcon)
                 val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.string.ok
                 val bodyRes  = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.string.cancel
+                ensureChannel(ctx)
                 Pawns.Builder(ctx)
                     .apiKey(apiKey)
                     .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
@@ -117,9 +90,8 @@ class PawnsModule : Module() {
 
         AsyncFunction("start") { promise: Promise ->
             try {
-                val ctx   = appContext.reactContext!!
-                val notif = buildNotification(ctx, notifTitle, notifBody, notifIcon)
-                Pawns.getInstance().startSharing(ctx, notif, notifId)
+                val ctx = appContext.reactContext!!
+                Pawns.getInstance().startSharing(ctx)
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
@@ -168,12 +140,12 @@ class PawnsModule : Module() {
                 val consent = Pawns.getInstance().isConsentGiven()
                 val isRunning = state is ServiceState.Launched.Running
                 val stateName = when (state) {
-                    is ServiceState.Off              -> "STOPPED"
-                    is ServiceState.On               -> "STARTING"
-                    is ServiceState.Launched.Running -> "RUNNING"
+                    is ServiceState.Off                 -> "STOPPED"
+                    is ServiceState.On                  -> "STARTING"
+                    is ServiceState.Launched.Running    -> "RUNNING"
                     is ServiceState.Launched.LowBattery -> "LOW_BATTERY"
-                    is ServiceState.Launched.Error   -> "ERROR"
-                    else                             -> "UNKNOWN"
+                    is ServiceState.Launched.Error      -> "ERROR"
+                    else                                -> "UNKNOWN"
                 }
                 promise.resolve(mapOf(
                     "isRunning"      to isRunning,

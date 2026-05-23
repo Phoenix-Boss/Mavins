@@ -39,13 +39,7 @@ class PawnsBootReceiver : BroadcastReceiver() {
                 return
             }
 
-            val prefs   = context.getSharedPreferences(PawnsModule.PREFS_NAME, Context.MODE_PRIVATE)
-            val title   = prefs.getString(PawnsModule.PREF_NOTIF_TITLE, "Running in background") ?: "Running in background"
-            val body    = prefs.getString(PawnsModule.PREF_NOTIF_BODY,  "Sharing bandwidth…")    ?: "Sharing bandwidth…"
-            val icon    = prefs.getString(PawnsModule.PREF_NOTIF_ICON,  "ic_notification")        ?: "ic_notification"
-            val notifId = prefs.getInt(PawnsModule.PREF_NOTIF_ID, PawnsModule.NOTIFICATION_ID)
-
-            pawns.startSharing(ctx, PawnsModule.buildNotification(ctx, title, body, icon), notifId)
+            pawns.startSharing(ctx)
             Log.d(TAG, "Pawns restarted after boot")
         } catch (e: Exception) {
             Log.w(TAG, "Boot restart failed: ${e.message}")
