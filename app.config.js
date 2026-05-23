@@ -141,6 +141,7 @@ module.exports = {
       "expo-build-properties",
       {
         android: {
+          extraMavenRepos: ["https://jitpack.io"],
           extraProguardRules:
             "-keep class com.pawns.sdk.** { *; }\n" +
             "-dontwarn com.pawns.sdk.**\n",
