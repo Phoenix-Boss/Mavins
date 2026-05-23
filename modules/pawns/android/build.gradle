@@ -29,7 +29,8 @@ repositories {
 dependencies {
     implementation project(':expo-modules-core')
     compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
-    implementation 'com.github.pawns-app:android-pawns-sdk:1.8.1'
+    implementation 'com.github.pawns-app.android-pawns-sdk:internet-sharing:1.8.1'  // ✅ fixed
     implementation 'androidx.activity:activity-ktx:1.9.3'
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
 }
