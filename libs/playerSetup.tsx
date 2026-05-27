@@ -3,11 +3,11 @@
 // SINGLE SOURCE OF TRUTH for consumers.
 // All player types, hooks, and contexts are re-exported from here.
 //
-// Architecture:
-//   MusicPlayerContext.tsx  ← owns all logic, defines contexts, exports hooks
-//   playerSetup.tsx         ← re-exports everything + adds GestureContext
-//   preload.ts              ← owns ALL preload logic (search + queue)
-//   All other files         ← import from playerSetup
+// ARCHITECTURE: SINGLE-PLAYER (expo-video only)
+//   - MusicPlayerContext.tsx  ← owns all logic, defines contexts, exports hooks
+//   - playerSetup.tsx         ← re-exports everything + adds GestureContext
+//   - preload.ts              ← owns ALL preload logic (search + queue)
+//   - All other files         ← import from playerSetup
 //
 // IMPORTANT: All components and screens should import from this file only.
 // Do NOT import directly from MusicPlayerContext.tsx or preload.ts.
@@ -28,7 +28,6 @@ import {
   type MusicPlayerContextType,
   type TrackExtras,
   type ResolvedTrack,
-  type MusicPlayerProviderProps,
   // Hooks and functions
   usePlayerEngine,
   useMusicPlayer,
@@ -36,6 +35,10 @@ import {
   getTrackExtras,
   storeTrackExtras,
   MusicPlayerProvider,
+  // SSL fast-path reset utility
+  resetSSLFastPath,
+  // Video state updaters (for components that need them)
+  type VideoPlayer,
 } from '@/components/MusicPlayerContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,16 +57,19 @@ import {
 } from '@/libs/preload';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// URI NORMALIZER - Shared utility for local file URIs
+// URI NORMALIZER — Shared utility for local file URIs
+//
+// Normalizes a local file URI to a format compatible with expo-video:
+//   content:// URIs (Android MediaStore) → kept as-is (expo-video handles them)
+//   file:// URIs                         → kept as-is
+//   Absolute paths (starting with /)     → prefixed with file://
+//   Empty strings                        → returned as empty string
+//
+// NOTE: This is the canonical implementation. MusicPlayerContext.tsx has an
+// identical private copy (normalizeLocalUri) for module-level use. Keep both
+// in sync. This export is for component-level use outside the context module.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Normalizes a local file URI to a format compatible with expo-audio
- * - content:// URIs (Android MediaStore) are kept as-is (expo-audio handles them)
- * - file:// URIs are kept as-is
- * - Absolute paths are prefixed with file://
- * - Empty strings return empty string
- */
 export function normalizeLocalUri(uri: string): string {
   if (!uri) return '';
   if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
@@ -84,7 +90,7 @@ export type {
   MusicPlayerContextType,
   TrackExtras,
   ResolvedTrack,
-  MusicPlayerProviderProps,
+  VideoPlayer,
 };
 
 // Hooks and Context exports
@@ -95,6 +101,7 @@ export {
   getTrackExtras,
   storeTrackExtras,
   MusicPlayerProvider,
+  resetSSLFastPath,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +148,7 @@ let expandPlayerRegistered = false;
 let registeredExpandPlayer: (() => void) | null = null;
 
 /**
- * For internal use by MusicPlayerContext to register the expand function
+ * For internal use by MusicPlayerContext to register the expand function.
  */
 export const registerExpandPlayer = (expandFn: () => void): void => {
   registeredExpandPlayer = expandFn;
@@ -150,14 +157,14 @@ export const registerExpandPlayer = (expandFn: () => void): void => {
 };
 
 /**
- * For internal use by MusicPlayerContext to get the registered expand function
+ * For internal use by MusicPlayerContext to get the registered expand function.
  */
 export const getRegisteredExpandPlayer = (): (() => void) | null => {
   return registeredExpandPlayer;
 };
 
 /**
- * Check if expandPlayer is registered
+ * Check if expandPlayer is registered.
  */
 export const isExpandPlayerRegistered = (): boolean => {
   return expandPlayerRegistered;
@@ -180,10 +187,10 @@ export interface CreateSongParams {
 }
 
 /**
- * Utility to create a standardized Song object
+ * Utility to create a standardized Song object.
+ * Throws if required fields are missing.
  */
 export function createSong(params: CreateSongParams): Song {
-  // Ensure required fields have values
   if (!params.id) {
     throw new Error('createSong: id is required');
   }
@@ -211,7 +218,9 @@ export function createSong(params: CreateSongParams): Song {
 // Helper: Check if a track is local
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function isLocalTrack(track: { url?: string; isLocal?: boolean; isDownloaded?: boolean } | null | undefined): boolean {
+export function isLocalTrack(
+  track: { url?: string; isLocal?: boolean; isDownloaded?: boolean } | null | undefined,
+): boolean {
   if (!track) return false;
   const url = track.url || '';
   return (
@@ -229,11 +238,11 @@ export function isLocalTrack(track: { url?: string; isLocal?: boolean; isDownloa
 
 export function formatDuration(seconds: number | undefined | null): string {
   if (!seconds || seconds <= 0) return '0:00';
-  
+
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-  
+
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
@@ -257,18 +266,17 @@ export function formatPlayCount(count: number | undefined | null): string {
 
 export function extractVideoId(url: string): string | null {
   if (!url) return null;
-  
-  // Regular expressions for different YouTube URL formats
+
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&?#]+)/,
     /youtube\.com\/shorts\/([^&?#]+)/,
   ];
-  
+
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match && match[1]) return match[1];
   }
-  
+
   return null;
 }
 

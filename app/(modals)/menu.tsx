@@ -2,6 +2,9 @@
  * (modals)/menu.tsx — Compact Gold × Black Futuristic Bottom Sheet
  * Layout: single horizontal chip scroll + 2-column action grid
  * UPDATED: Theme-aware with light/dark mode support
+ * UPDATED: Downloads count shows number of downloaded songs
+ * UPDATED: Downloads chip navigates to downloads page
+ * REMOVED: View lyrics and sleep timer from grid
  */
 
 import React, { useCallback, useEffect, useRef, useMemo } from "react";
@@ -32,6 +35,7 @@ import {
   verticalScale,
 } from "react-native-size-matters/extend";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useDownloadedTracks } from "@/store/library";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -56,7 +60,14 @@ function Chip({ title, thumbnail, iconName, count, onPress }: ChipProps) {
     : "";
 
   return (
-    <TouchableOpacity style={[chipSt.wrap]} onPress={() => { triggerHaptic(); onPress?.(); }} activeOpacity={0.7}>
+    <TouchableOpacity 
+      style={[chipSt.wrap]} 
+      onPress={() => { 
+        triggerHaptic(); 
+        onPress?.(); 
+      }} 
+      activeOpacity={0.7}
+    >
       <View style={[chipSt.box, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         {thumbnail ? (
           <Image source={{ uri: thumbnail }} style={chipSt.img} contentFit="cover" />
@@ -175,6 +186,10 @@ export default function MenuModal() {
   const params  = useLocalSearchParams<{ type: string; songData?: string; playlistName?: string }>();
   const { type, songData: songDataRaw, playlistName } = params;
 
+  // Get downloaded tracks count
+  const downloadedTracks = useDownloadedTracks();
+  const downloadCount = downloadedTracks.length;
+
   const songData = useMemo(() => {
     if (!songDataRaw) return null;
     try {
@@ -216,14 +231,20 @@ export default function MenuModal() {
   const title      = type === "playlist" ? playlistName ?? "Playlist" : songData?.title ?? "Options";
   const subtitle   = type === "playlist" ? "Playlist" : songData?.artist ?? "";
 
+  // Chips with download count and navigation
   const chips = [
-    { title: "Watch Later", iconName: "time-outline",           count: undefined as number | undefined },
-    { title: "Liked Songs",  iconName: "thumbs-up",              count: undefined as number | undefined },
-    { title: "My Mix",       iconName: "musical-notes",          count: undefined as number | undefined },
-    { title: "Downloads",    iconName: "cloud-download-outline", count: undefined as number | undefined },
-    { title: "Similar",      iconName: "albums-outline",         count: undefined as number | undefined },
-    { title: "Discography",  iconName: "person",                 count: undefined as number | undefined },
-    { title: "Radio",        iconName: "radio",                  count: undefined as number | undefined },
+    { title: "Watch Later", iconName: "time-outline",           count: undefined as number | undefined, action: null },
+    { title: "Liked Songs",  iconName: "thumbs-up",              count: undefined as number | undefined, action: null },
+    { title: "My Mix",       iconName: "musical-notes",          count: undefined as number | undefined, action: null },
+    { 
+      title: "Downloads",    
+      iconName: "cloud-download-outline", 
+      count: downloadCount,
+      action: () => router.push("/(modals)/downloads")
+    },
+    { title: "Similar",      iconName: "albums-outline",         count: undefined as number | undefined, action: null },
+    { title: "Discography",  iconName: "person",                 count: undefined as number | undefined, action: null },
+    { title: "Radio",        iconName: "radio",                  count: undefined as number | undefined, action: null },
   ];
 
   if (!visible) return null;
@@ -277,7 +298,13 @@ export default function MenuModal() {
             style={st.chipScroll}
           >
             {chips.map((c, i) => (
-              <Chip key={i} title={c.title} iconName={c.iconName} count={c.count} />
+              <Chip 
+                key={i} 
+                title={c.title} 
+                iconName={c.iconName} 
+                count={c.count} 
+                onPress={c.action ? act(c.action) : undefined}
+              />
             ))}
           </ScrollView>
 
@@ -333,21 +360,8 @@ export default function MenuModal() {
                 disabled={!hasAlbum}
               />
               <GridItem
-                icon={<Ionicons name="musical-notes-outline" size={moderateScale(18)} color={colors.text} />}
-                label="View lyrics"
-                onPress={act(() => router.push({ pathname: "/(modals)/lyrics", params: { songId: songData?.id, title: songData?.title, artist: songData?.artist } }))}
-              />
-            </View>
-
-            <View style={st.gridRow}>
-              <GridItem
                 icon={<Feather name="download" size={moderateScale(17)} color={colors.text} />}
                 label="Download"
-                onPress={act(() => {})}
-              />
-              <GridItem
-                icon={<MaterialCommunityIcons name="weather-night" size={moderateScale(18)} color={colors.text} />}
-                label="Sleep timer"
                 onPress={act(() => {})}
               />
             </View>

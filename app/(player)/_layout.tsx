@@ -4,7 +4,7 @@ import { View, StyleSheet, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePlayerOverlay } from '@/libs/playerOverlay';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function PlayerLayout() {
   const { colors } = useTheme();
@@ -92,12 +92,6 @@ export default function PlayerLayout() {
             ),
           }}
         />
-        {/* Remove these - they don't have corresponding files
-        <Tabs.Screen name="search" options={{ href: null }} />
-        <Tabs.Screen name="artist" options={{ href: null }} />
-        <Tabs.Screen name="album" options={{ href: null }} />
-        <Tabs.Screen name="playlist" options={{ href: null }} />
-        */}
       </Tabs>
     </View>
   );

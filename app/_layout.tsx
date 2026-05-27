@@ -132,8 +132,6 @@ configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-// PREMIUM_FEATURE_DISABLED: restore when premium goes live
-// const PREMIUM_BANNER_DELAY_MS = 2200;
 
 const SPRING_EXPAND = {
   damping: 28,
@@ -328,21 +326,77 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
-  const { playerMode, expandPlayer, collapsePlayer } = usePlayerOverlay();
-  const { setPlayerOverlayRefs } = useMusicPlayer();
+  const { playerMode, expandPlayer, collapsePlayer, isPlayerVisible, showPlayer } = usePlayerOverlay();
+  const { setPlayerOverlayRefs, currentTrack } = useMusicPlayer();
 
+  // Register overlay functions with MusicPlayerContext
   useEffect(() => {
-    setPlayerOverlayRefs(expandPlayer, collapsePlayer);
+    if (setPlayerOverlayRefs) {
+      setPlayerOverlayRefs(expandPlayer, collapsePlayer);
+    }
   }, [setPlayerOverlayRefs, expandPlayer, collapsePlayer]);
+
+  // Auto-show mini-player when a track is loaded and player is hidden
+  useEffect(() => {
+    if (currentTrack && !isPlayerVisible) {
+      showPlayer();
+    }
+  }, [currentTrack, isPlayerVisible, showPlayer]);
 
   return (
     <>
       {children}
+      {/* Only show FloatingPlayer when player is visible (collapsed or expanded, not hidden) */}
+      {/* The FloatingPlayer component now handles checking isPlayerVisible internally */}
       <FloatingPlayer />
       {playerMode === 'expanded' && (
         <FullPlayerOverlay onCollapse={collapsePlayer} />
       )}
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME-AWARE NAVIGATION PROVIDER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ThemeAwareNavigationProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const { isDark, colors } = useTheme();
+
+  const navTheme = isDark
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          background: colors.background,
+          card: colors.tabBarBackground,
+          text: colors.text,
+          border: colors.border,
+          primary: colors.gold,
+          notification: colors.gold,
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: colors.background,
+          card: colors.tabBarBackground,
+          text: colors.text,
+          border: colors.border,
+          primary: colors.gold,
+          notification: colors.gold,
+        },
+      };
+
+  return (
+    <NavigationThemeProvider value={navTheme}>
+      {children}
+    </NavigationThemeProvider>
   );
 }
 
@@ -404,62 +458,12 @@ function PulsingLogoOverlay({ visible }: { visible: boolean }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THEME-AWARE NAVIGATION PROVIDER
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ThemeAwareNavigationProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const { isDark, colors } = useTheme();
-
-  const navTheme = isDark
-    ? {
-        ...DarkTheme,
-        colors: {
-          ...DarkTheme.colors,
-          background: colors.background,
-          card: colors.tabBarBackground,
-          text: colors.text,
-          border: colors.border,
-          primary: colors.gold,
-          notification: colors.gold,
-        },
-      }
-    : {
-        ...DefaultTheme,
-        colors: {
-          ...DefaultTheme.colors,
-          background: colors.background,
-          card: colors.tabBarBackground,
-          text: colors.text,
-          border: colors.border,
-          primary: colors.gold,
-          notification: colors.gold,
-        },
-      };
-
-  return (
-    <NavigationThemeProvider value={navTheme}>
-      {children}
-    </NavigationThemeProvider>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // APP SHELL (Navigation Stack + UI)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function AppShell({
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // premiumBannerVisible,
-  // setPremiumBannerVisible,
   fontsLoaded,
 }: {
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // premiumBannerVisible: boolean;
-  // setPremiumBannerVisible: (v: boolean) => void;
   fontsLoaded: boolean;
 }) {
   const { colors } = useTheme();
@@ -507,67 +511,22 @@ function AppShell({
       <LyricsFetcher />
       <UpdateModal />
       <MessageModal />
-
-      {/* PREMIUM_FEATURE_DISABLED: restore when premium goes live */}
-      {/* <PremiumBanner
-        visible={premiumBannerVisible}
-        onDismiss={() => setPremiumBannerVisible(false)}
-      /> */}
     </View>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROOT LAYOUT — FIXED PROVIDER ORDER
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// CRITICAL FIX: AlertProvider MUST be above MusicPlayerProvider
-// because MusicPlayerProvider uses useAlert() internally.
-//
-// CORRECT ORDER (outer to inner):
-//   1. QueryClientProvider
-//   2. SafeAreaProvider
-//   3. GestureHandlerRootView
-//   4. ThemeProvider
-//   5. ThemeAwareNavigationProvider
-//   6. GestureContext.Provider
-//   7. AlertProvider          ← MUST be above MusicPlayerProvider
-//   8. MusicPlayerProvider    ← Uses useAlert()
-//   9. GlobalUIStateProvider
-//   10. LyricsProvider
-//   11. PlayerOverlayProvider
-//   12. PlayerOverlayWrapper
-//   13. AppShell + PulsingLogoOverlay
-//   14. EarningsConsentGate   ← Modal, rendered as sibling via useState
-//
-// EarningsConsentGate is a Modal — it does NOT wrap children.
-// It is driven by showConsent state initialized via checkAndShowConsent().
-//
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
 // STABLE PROVIDER TREE
-// Extracted from RootLayout so that RootLayout state changes (appReady,
-// premiumBannerVisible, navReady, showConsent) never cause these providers
-// to remount. React only remounts a component when its *parent* re-renders
-// and produces a different element type or key — by moving providers here,
-// RootLayout re-renders only propagate to AppShell/PulsingLogoOverlay.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface StableProvidersProps {
   gestureContextValue: GestureContextValue;
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // premiumBannerVisible: boolean;
-  // setPremiumBannerVisible: (v: boolean) => void;
   fontsLoaded: boolean;
   appReady: boolean;
 }
 
 function StableProviders({
   gestureContextValue,
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // premiumBannerVisible,
-  // setPremiumBannerVisible,
   fontsLoaded,
   appReady,
 }: StableProvidersProps) {
@@ -581,12 +540,7 @@ function StableProviders({
                 <LyricsProvider>
                   <PlayerOverlayProvider>
                     <PlayerOverlayWrapper>
-                      <AppShell
-                        // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-                        // premiumBannerVisible={premiumBannerVisible}
-                        // setPremiumBannerVisible={setPremiumBannerVisible}
-                        fontsLoaded={fontsLoaded}
-                      />
+                      <AppShell fontsLoaded={fontsLoaded} />
                       <PulsingLogoOverlay visible={!appReady} />
                     </PlayerOverlayWrapper>
                   </PlayerOverlayProvider>
@@ -600,6 +554,10 @@ function StableProviders({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT LAYOUT
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     SpaceMono: require('@/assets/fonts/SpaceMono-Regular.ttf'),
@@ -607,14 +565,11 @@ export default function RootLayout() {
   });
 
   const [appReady, setAppReady] = useState(false);
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // const [premiumBannerVisible, setPremiumBannerVisible] = useState(false);
   const [navReady, setNavReady] = useState(false);
-
-  // ── Consent modal state ─────────────────────────────────────────────────
   const [showConsent, setShowConsent] = useState(false);
 
   const navigationState = useRootNavigationState();
+  const router = useRouter();
 
   const sliderActiveRef = useRef(false);
   const buttonActiveRef = useRef(false);
@@ -698,16 +653,6 @@ export default function RootLayout() {
     }
   }, []);
 
-  // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-  // useEffect(() => {
-  //   if (!appReady) return;
-  //   const t = setTimeout(
-  //     () => setPremiumBannerVisible(true),
-  //     PREMIUM_BANNER_DELAY_MS,
-  //   );
-  //   return () => clearTimeout(t);
-  // }, [appReady]);
-
   // Deep link handling
   useEffect(() => {
     const handle = (url: string | null) => {
@@ -725,9 +670,6 @@ export default function RootLayout() {
         <GestureHandlerRootView style={styles.flex}>
           <StableProviders
             gestureContextValue={gestureContextValue}
-            // PREMIUM_FEATURE_DISABLED: restore when premium goes live
-            // premiumBannerVisible={premiumBannerVisible}
-            // setPremiumBannerVisible={setPremiumBannerVisible}
             fontsLoaded={fontsLoaded ?? false}
             appReady={appReady}
           />
@@ -736,6 +678,13 @@ export default function RootLayout() {
         <EarningsConsentGate
           visible={showConsent}
           onDismiss={() => setShowConsent(false)}
+          onOpenSettings={() => {
+            triggerHaptic();
+            router.push({
+              pathname: '/(player)/settings',
+              params: { scrollTo: 'privacy' }
+            });
+          }}
         />
       </SafeAreaProvider>
     </QueryClientProvider>

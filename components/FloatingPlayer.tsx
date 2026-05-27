@@ -8,7 +8,7 @@ import {
   Animated as RNAnimated,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters/extend';
 
 import { usePlayerEngine, useMusicPlayer } from '@/libs/playerSetup';
@@ -67,21 +67,26 @@ export default function FloatingPlayer() {
   const [progress, setProgress] = useState(0);
   const progressInterval = useRef<NodeJS.Timeout | null>(null);
 
-  const { expandPlayer, collapsePlayer, isPlayerVisible } = usePlayerOverlay();
+  const { expandPlayer, isPlayerVisible } = usePlayerOverlay();
   const { setPlayerOverlayRefs } = useMusicPlayer();
   const engine = usePlayerEngine();
 
   const track = engine.currentTrack;
   const isPlaying = engine.isPlaying;
   const isBuffering = engine.isBuffering;
+  const hasVideoStream = engine.hasVideoStream;
+  const isAudioOnlyTrack = engine.isAudioOnlyTrack;
+  const isVideoOnlyTrack = engine.isVideoOnlyTrack;
 
-  // Register the overlay's expand/collapse functions with MusicPlayerContext
+  // Register overlay functions (but don't auto-expand)
   useEffect(() => {
     if (setPlayerOverlayRefs) {
-      setPlayerOverlayRefs(expandPlayer, collapsePlayer);
+      // We only need expandPlayer - collapsePlayer is handled internally
+      setPlayerOverlayRefs(expandPlayer, () => {});
     }
-  }, [setPlayerOverlayRefs, expandPlayer, collapsePlayer]);
+  }, [setPlayerOverlayRefs, expandPlayer]);
 
+  // Progress tracking
   useEffect(() => {
     if (progressInterval.current) {
       clearInterval(progressInterval.current);
@@ -105,11 +110,16 @@ export default function FloatingPlayer() {
     };
   }, [isPlaying, track?.duration, engine.position]);
 
+  // Reset progress on track change
   useEffect(() => {
     setProgress(0);
   }, [track?.id]);
 
-  if (!track || isPlayerVisible) return null;
+  // Don't show mini-player when full player is expanded
+  if (isPlayerVisible) return null;
+  
+  // Don't show mini-player when no track is loaded
+  if (!track) return null;
 
   const showPlayingState = isBuffering ? false : isPlaying;
 
@@ -135,12 +145,26 @@ export default function FloatingPlayer() {
     }
   };
 
+  const handleSkipPrevious = async (e: any) => {
+    e?.stopPropagation?.();
+    try {
+      await engine.skipToPrevious();
+      setProgress(0);
+    } catch (error) {
+      console.warn('[FloatingPlayer] Skip previous error:', error);
+    }
+  };
+
   const handleExpandPlayer = () => {
     expandPlayer();
   };
 
   const trackTitle = track?.title || 'Unknown Track';
   const trackArtist = track?.artist || 'Unknown Artist';
+
+  // Determine which icons to show based on track type
+  const showShuffle = !isAudioOnlyTrack && !isVideoOnlyTrack;
+  const showRepeat = !isAudioOnlyTrack && !isVideoOnlyTrack;
 
   return (
     <TouchableOpacity
@@ -167,6 +191,7 @@ export default function FloatingPlayer() {
         backgroundColor={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}
       />
 
+      {/* Artwork */}
       <Image
         source={artworkSource}
         style={styles.artwork}
@@ -174,6 +199,7 @@ export default function FloatingPlayer() {
         transition={200}
       />
 
+      {/* Track Info */}
       <View style={styles.textWrapper}>
         <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
           {trackTitle}
@@ -183,31 +209,86 @@ export default function FloatingPlayer() {
         </Text>
       </View>
 
+      {/* Controls */}
       <View style={styles.controls}>
+        {/* Shuffle Button */}
+        {showShuffle && (
+          <TouchableOpacity
+            onPress={(e) => { e?.stopPropagation(); engine.setShuffleMode(engine.shuffleMode === 'off' ? 'on' : 'off'); }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            activeOpacity={0.7}
+            style={styles.controlButton}
+          >
+            <Feather
+              name="shuffle"
+              size={moderateScale(16)}
+              color={engine.shuffleMode === 'off' ? colors.textMuted : colors.gold}
+            />
+          </TouchableOpacity>
+        )}
+
+        {/* Previous Button */}
         <TouchableOpacity
-          onPress={handlePlayPause}
+          onPress={handleSkipPrevious}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           activeOpacity={0.7}
+          style={styles.controlButton}
         >
           <Ionicons
-            name={showPlayingState ? 'pause' : 'play'}
-            size={moderateScale(26)}
+            name="play-skip-back"
+            size={moderateScale(22)}
             color={colors.text}
           />
         </TouchableOpacity>
 
+        {/* Play/Pause Button */}
+        <TouchableOpacity
+          onPress={handlePlayPause}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          activeOpacity={0.7}
+          style={styles.playButton}
+        >
+          <Ionicons
+            name={showPlayingState ? 'pause' : 'play'}
+            size={moderateScale(24)}
+            color={colors.textInverse}
+          />
+        </TouchableOpacity>
+
+        {/* Next Button */}
         <TouchableOpacity
           onPress={handleSkipNext}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           activeOpacity={0.7}
-          style={{ marginLeft: scale(16) }}
+          style={styles.controlButton}
         >
           <Ionicons
             name="play-skip-forward"
             size={moderateScale(22)}
-            color={colors.textSub}
+            color={colors.text}
           />
         </TouchableOpacity>
+
+        {/* Repeat Button */}
+        {showRepeat && (
+          <TouchableOpacity
+            onPress={(e) => { 
+              e?.stopPropagation(); 
+              if (engine.repeatMode === 'off') engine.setRepeatMode('all');
+              else if (engine.repeatMode === 'all') engine.setRepeatMode('one');
+              else engine.setRepeatMode('off');
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            activeOpacity={0.7}
+            style={styles.controlButton}
+          >
+            <MaterialIcons
+              name={engine.repeatMode === 'off' ? 'repeat-off' : engine.repeatMode === 'all' ? 'repeat' : 'repeat-on'}
+              size={moderateScale(18)}
+              color={engine.repeatMode === 'off' ? colors.textMuted : colors.gold}
+            />
+          </TouchableOpacity>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -270,6 +351,17 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: scale(8),
+    gap: scale(12),
+  },
+  controlButton: {
+    padding: scale(4),
+  },
+  playButton: {
+    width: scale(36),
+    height: scale(36),
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

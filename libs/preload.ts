@@ -1,39 +1,18 @@
 // libs/preload.ts
 //
-// REWRITE: Safe background preloader that never races with active playback.
+// REWRITE: Stream URL cache REMOVED — cached URLs expire and cause 403 errors.
+// Only preloads track metadata (extras) via resolveTrack. 
+// Active playback ALWAYS resolves fresh URLs to avoid expired streams.
 //
 // KEY DESIGN DECISIONS:
-//
-//   1. SERIALIZED QUEUE — resolveTrack calls are run one at a time
-//   2. SINGLE TRACK PRELOAD — only preload 1 track ahead, not 5
-//   3. PLAYBACK LOCK — preload only after current track is playing
-//   4. REGISTRATION PATTERN — avoids circular dependencies
+//   1. NO URL CACHE — resolved URLs expire too quickly to be useful
+//   2. METADATA PRELOAD ONLY — resolveTrack for video URLs, likes, views, etc.
+//   3. SERIALIZED QUEUE — resolveTrack calls run one at a time
+//   4. PLAYBACK LOCK — preload pauses during active track resolution
+//   5. REGISTRATION PATTERN — avoids circular dependencies
 
 import type { Song } from '@/types/song';
 import type { ResolvedTrack } from '@/components/MusicPlayerContext';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RESOLVED URL CACHE
-// ─────────────────────────────────────────────────────────────────────────────
-
-const resolvedUrlCache = new Map<string, string>();
-
-export function getCachedResolvedUrl(songId: string): string | null {
-  return resolvedUrlCache.get(songId) ?? null;
-}
-
-export function setCachedResolvedUrl(songId: string, url: string): void {
-  if (!songId || !url) return;
-  resolvedUrlCache.set(songId, url);
-}
-
-export function clearResolvedUrlCache(): void {
-  resolvedUrlCache.clear();
-}
-
-export function getResolvedCacheSize(): number {
-  return resolvedUrlCache.size;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RESOLVE TRACK REGISTRATION
@@ -81,7 +60,7 @@ function getStoreTrackExtras(): (trackId: string, extras: TrackExtras) => void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PLAYBACK LOCK - Prevents preload during active playback resolution
+// PLAYBACK LOCK — Prevents preload during active playback resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
 let playbackActive = false;
@@ -89,12 +68,12 @@ let playbackActiveResolvers: Array<() => void> = [];
 
 export function setPlaybackActive(): void {
   playbackActive = true;
-  console.log('[Preload] Playback lock ACQUIRED - preload paused');
+  console.log('[Preload] Playback lock ACQUIRED — preload paused');
 }
 
 export function setPlaybackInactive(): void {
   playbackActive = false;
-  console.log('[Preload] Playback lock RELEASED - preload can resume');
+  console.log('[Preload] Playback lock RELEASED — preload can resume');
   const resolvers = [...playbackActiveResolvers];
   playbackActiveResolvers = [];
   resolvers.forEach(r => r());
@@ -110,7 +89,7 @@ async function waitForPlaybackSlot(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SERIAL QUEUE - Only ONE resolveTrack at a time
+// SERIAL QUEUE — Only ONE resolveTrack at a time
 // ─────────────────────────────────────────────────────────────────────────────
 
 let queueTail: Promise<void> = Promise.resolve();
@@ -134,7 +113,8 @@ export function getActivePreloadCount(): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PRELOAD SINGLE SONG
+// METADATA PRELOAD — Resolves track to get extras (video URLs, stats, etc.)
+// DOES NOT cache the audio stream URL — those expire too quickly
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface PreloadSong {
@@ -147,26 +127,19 @@ export interface PreloadSong {
   duration: number;
 }
 
-function preloadSong(song: PreloadSong, abortSignal?: AbortSignal): void {
+function preloadSongMetadata(song: PreloadSong, abortSignal?: AbortSignal): void {
   enqueue(async () => {
     if (abortSignal?.aborted) {
       console.log(`[Preload] Aborted: "${song.title}"`);
       return;
     }
 
-    if (resolvedUrlCache.has(song.id)) {
-      console.log(`[Preload] Already cached: "${song.title}"`);
-      return;
-    }
-
-    // Check if local file
+    // Local files need no resolution
     const isLocal = song.url.startsWith('file://') ||
                     song.url.startsWith('/') ||
                     song.url.startsWith('content://');
-    
+
     if (isLocal) {
-      const normalizedUrl = song.url.startsWith('/') ? `file://${song.url}` : song.url;
-      setCachedResolvedUrl(song.id, normalizedUrl);
       const storeExtras = getStoreTrackExtras();
       storeExtras(song.id, {
         isLocal: true,
@@ -176,7 +149,7 @@ function preloadSong(song: PreloadSong, abortSignal?: AbortSignal): void {
         viewCount: -1,
         commentsCount: -1,
       });
-      console.log(`[Preload] Local track cached: "${song.title}"`);
+      console.log(`[Preload] Local track marked: "${song.title}"`);
       return;
     }
 
@@ -185,11 +158,6 @@ function preloadSong(song: PreloadSong, abortSignal?: AbortSignal): void {
 
     if (abortSignal?.aborted) {
       console.log(`[Preload] Aborted after wait: "${song.title}"`);
-      return;
-    }
-    
-    if (resolvedUrlCache.has(song.id)) {
-      console.log(`[Preload] Cached during wait: "${song.title}"`);
       return;
     }
 
@@ -204,7 +172,7 @@ function preloadSong(song: PreloadSong, abortSignal?: AbortSignal): void {
     };
 
     try {
-      console.log(`[Preload] 🔄 Resolving: "${song.title}"`);
+      console.log(`[Preload] Resolving metadata for: "${song.title}"`);
       const resolveTrack = getResolveTrack();
       const resolved = await resolveTrack(songObj);
 
@@ -213,24 +181,22 @@ function preloadSong(song: PreloadSong, abortSignal?: AbortSignal): void {
         return;
       }
 
-      if (resolved?.url) {
-        setCachedResolvedUrl(song.id, resolved.url);
-        console.log(`[Preload] ✅ Cached: "${song.title}"`);
-        
-        if (resolved.videoId) {
-          const storeExtras = getStoreTrackExtras();
-          storeExtras(song.id, {
-            videoId: resolved.videoId,
-            videoUrl: (resolved as any).videoUrl,
-            muxedVideoUrl: (resolved as any).muxedVideoUrl,
-            isLocal: resolved.isLocal,
-          });
-        }
+      if (resolved) {
+        // Store metadata extras (video URLs, stats) — these are useful for UI
+        // but we intentionally do NOT cache resolved.url (the audio stream)
+        const storeExtras = getStoreTrackExtras();
+        storeExtras(song.id, {
+          videoId: resolved.videoId,
+          videoUrl: (resolved as any).videoOnlyUrl,
+          muxedVideoUrl: (resolved as any).muxedVideoUrl,
+          isLocal: resolved.isLocal,
+        });
+        console.log(`[Preload] Metadata cached for: "${song.title}"`);
       } else {
-        console.warn(`[Preload] ❌ No URL for: "${song.title}"`);
+        console.warn(`[Preload] No metadata for: "${song.title}"`);
       }
     } catch (err) {
-      console.warn(`[Preload] ❌ Error for "${song.title}":`, err);
+      console.warn(`[Preload] Error resolving "${song.title}":`, err);
     }
   });
 }
@@ -244,15 +210,15 @@ export function preloadSearchResults(songs: PreloadSong[]): void {
     console.log('[Preload] No songs to preload');
     return;
   }
-  
-  console.log(`[Preload] 📦 Queuing ${songs.length} search results (serial, 1 at a time)...`);
+
+  console.log(`[Preload] Queuing ${songs.length} search results for metadata preload...`);
   for (const song of songs) {
-    preloadSong(song);
+    preloadSongMetadata(song);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PRELOAD NEXT TRACKS - ONLY 1 TRACK AHEAD
+// PRELOAD NEXT TRACKS — Only metadata for the next track
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function preloadNextTracks(
@@ -262,15 +228,13 @@ export function preloadNextTracks(
 ): void {
   if (!queue.length || currentIndex < 0) return;
 
-  // ONLY preload the very next track (1 ahead), not 5
   const nextTrack = queue[currentIndex + 1];
-  
   if (!nextTrack) {
     console.log('[Preload] No upcoming track to preload');
     return;
   }
 
-  console.log(`[Preload] 🎵 Preloading next track (1 ahead): "${nextTrack.title}"`);
+  console.log(`[Preload] Preloading metadata for next track: "${nextTrack.title}"`);
 
   const url = nextTrack.url || '';
   const isLocal = url.startsWith('file://') ||
@@ -280,8 +244,6 @@ export function preloadNextTracks(
                   (nextTrack as any).isDownloaded === true;
 
   if (isLocal) {
-    const normalizedUrl = url.startsWith('/') ? `file://${url}` : url;
-    setCachedResolvedUrl(nextTrack.id, normalizedUrl);
     const storeExtras = getStoreTrackExtras();
     storeExtras(nextTrack.id, {
       isLocal: true,
@@ -291,11 +253,11 @@ export function preloadNextTracks(
       viewCount: -1,
       commentsCount: -1,
     });
-    console.log(`[Preload] Local track cached: "${nextTrack.title}"`);
+    console.log(`[Preload] Local next track marked: "${nextTrack.title}"`);
     return;
   }
 
-  preloadSong(
+  preloadSongMetadata(
     {
       id: nextTrack.id,
       title: nextTrack.title,

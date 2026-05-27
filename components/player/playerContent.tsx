@@ -1,76 +1,12 @@
 // components/player/playerContent.tsx
 //
 // ANDROID-ONLY: All iOS-specific code removed
-// FIXED: Modal navigation - opens modals as overlays not route pushes
-// FIXED: Theme integration - all colors now use theme values
-// FIXED: Gradients use gold/warm tones (no purple)
-// FIXED: All UI elements visible in light mode
-// FIXED: Local track UI - conditional rendering for local vs streamed content
-//   - Hide view counts, comments, related for local tracks
-//   - Show favorite heart instead of like/dislike counts
-//   - Disable video toggle for local tracks
-//   - Gray out related tab for local tracks
+// COMPLETE VIDEO TAB IMPLEMENTATION
 //
-// ISSUE 5 FIX: Removed X close button from top bar
-// ISSUE 6 FIX: Video tab completely hidden for local tracks (not just disabled)
-// ISSUE 7 FIX: Seamless video toggle with backward seek offset (200ms)
-// ISSUE 7 FIX: Both players run simultaneously, one muted — NEVER pause either
-// ISSUE 7 FIX: Lazy video player init — only created when user taps Video tab
-// ISSUE 7 FIX: Sync interval keeps video player aligned with audio
-// ISSUE 8 FIX: Artist tap on local track navigates to folder (onNavigateToLocalFolder prop)
-// BUG FIX 1: Back-to-song double-seek removed — single seekTo, no buffering blip
-// BUG FIX 2: Play icon source-of-truth fixed — always routes through togglePlayPause
-// BUG FIX 3: Slider optimistic update — thumb no longer snaps back on drag
-// BUG FIX 4: Comment count live-read fallback — never misses a version bump
-// BUG FIX 5: Video→Song toggle resumes audio correctly.
-//   Root cause: vp.muted=true alone does NOT release Android audio focus —
-//   expo-video holds focus even muted, ducking/pausing the expo-audio player.
-//   Fix: vp.pause() to release audio focus, then engine.play() to reclaim it.
-//   isPlayingRef (stale-closure-free) guards engine.play() so paused state is respected.
-// BUG FIX 6: Slider seek lock extended 200ms→1500ms — covers Android native rebuffer
-//   window so positionSec ticking during rebuffer cannot overwrite optimistic thumb.
-// BUG FIX 7: Progress bar source-of-truth — same pattern as visualIsPlaying.
-//   visualPositionSec: on Song tab mirrors engine.position; on Video tab polls
-//   videoPlayer.currentTime at 250 ms intervals so the thumb tracks video playback.
-//   visualDurationSec: same split — engine.duration on Song, videoPlayer.duration
-//   on Video (falls back to engine.duration when video duration is 0).
-//   Tab switches immediately snap visualPosition to the incoming player's current
-//   time so there is no jump on the progress bar when toggling.
-//   Seek on Video tab dispatches ONLY to the video player (not engine) so expo-audio
-//   focus is never disturbed during video playback.
-// BUG FIX 8: Comment icon hidden entirely when commentsCount <= 0 (no track or
-//   track has no comment data yet). Shown only when commentsCount > 0.
-// BUG FIX 9: Audio duration display fixed — visualDurationSec now syncs correctly
-//   when durationSec becomes > 0 after mount.
-// BUG FIX 10: Tap-to-seek fixed — removed isSliding guard so taps work.
-// BUG FIX 11: Lock screen media controls now sync with video tab position.
-//
-// SURGICAL FIXES 2026-05-18:
-// FIX 1: deactivateAudio()/activateAudio() called on tab switches (audio focus mgmt)
-// FIX 2: vp.pause() called before vp.muted=true on song-tab return (releases focus)
-// FIX 3: VIDEO_SYNC_INTERVAL_MS = 100 (was 500)
-// FIX 4: Status listener attached once at module level, not re-attached per load
-// FIX 5: handlePlaylist/handleSleepTimer call onMinimize() first (mini-player visible)
-// FIX 6: Video seek does pause→seek→play for reliable Android seeking
-// FIX 7: Context video state (setVideoActive, updateVideoPosition, etc.) wired
-// FIX 8: loadVideoSource guarded by lastLoadedUrlRef — NEVER reloads on tab switch
-// FIX 9: Sync interval only runs on Song tab, never during video playback
-// FIX 10: Tab switch sequence: deactivateAudio → seek → unmute → play (video)
-//         pause → mute → activateAudio → play (song)
-//
-// PiP & BACKGROUND FIXES 2026-05-19:
-// FIX 10: videoPlayerSingleton.staysActiveInBackground = true (module level)
-// FIX 11: VideoView allowsPictureInPicture changed from false to true
-// FIX 12: AppState listener triggers PiP on background when video is active
-// FIX 13: pictureInPictureStatusChange listener tracks PiP state
-// FIX 14: isPipActiveRef guards expandPlayer/UI restoration when PiP is active
-// FIX 15: Global __mavinVideoPlay/__mavinVideoPause/__mavinVideoSeek registered
-//         with updateVideoIsPlaying calls to keep lock screen sync correct
-//
-// BUG FIX 2026-05-21:
-// FIX 16: Replaced static hourglass-outline with ActivityIndicator for loading states
-// FIX 17: Added isResolving to showSkeleton logic (was undefined, now properly tracked)
-// FIX 18: Fixed ActivityIndicator on play button during buffering/loading
+// FIXED: Metadata (title, artist, artwork) shows immediately - no skeleton
+// FIXED: Skeleton only for loading states (buffering, resolving, etc.)
+// FIXED: Download and Share buttons in same pill container (consistent styling)
+// FIXED: Share icon uses curved arrow (arrow-redo-outline)
 
 import React, {
   useMemo,
@@ -90,6 +26,10 @@ import {
   AppState,
   AppStateStatus,
   ActivityIndicator,
+  ScrollView,
+  Share,
+  ToastAndroid,
+  Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer, VideoView } from 'expo-video';
@@ -114,6 +54,7 @@ import {
   scale,
   verticalScale,
 } from 'react-native-size-matters/extend';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { MovingText } from '@/components/MovingText';
 import { screenPadding } from '@/constants/tokens';
@@ -130,13 +71,18 @@ import {
   usePlayerEngine,
   getTrackExtras,
   useTrackExtrasVersion,
-  type RepeatMode,
-  type ShuffleMode,
 } from '@/libs/playerSetup';
 
 import { useGestureContext } from '@/libs/playerSetup';
+import { downloadAndSaveSong } from '@/services/download';
+import { useIsSongDownloaded, useIsSongDownloading } from '@/store/library';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Storage key for download cooldown
+const DOWNLOAD_COOLDOWN_KEY = '@download_cooldown';
+const COOLDOWN_HOURS = 24;
+const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MODULE-LEVEL VIDEO PLAYER SINGLETON
@@ -154,15 +100,16 @@ const videoPlayerSingleton: ReturnType<typeof createVideoPlayer> =
 try {
   videoPlayerSingleton.muted = true;
   videoPlayerSingleton.loop = false;
-  // FIX 10: Keep video player alive when app backgrounds (required for PiP)
   videoPlayerSingleton.staysActiveInBackground = true;
-} catch {}
+} catch (e) {
+  console.warn('[PlayerContent] Failed to configure video player:', e);
+}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
 const LYRICS_LEAD_IN_S = 0.25;
-const SK = { base: '#1A1A1A', highlight: '#2A2A2A' };
-// FIX 3: Sync interval now 100ms as per spec (was 500)
 const VIDEO_SYNC_INTERVAL_MS = 100;
-// How often (ms) we poll video player's currentTime to drive the visual progress bar
 const VIDEO_POSITION_POLL_MS = 250;
 const BACKWARD_SEEK_OFFSET = 0.2;
 
@@ -176,6 +123,9 @@ const DUMMY_TRACK = {
   videoId: undefined as string | undefined,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 const formatTime = (s: number): string => {
   if (!s || isNaN(s) || s < 0) return '0:00';
   const m = Math.floor(s / 60);
@@ -194,16 +144,17 @@ const formatCount = (n: number): string => {
 
 const parseArtists = (raw: string | undefined): string[] => {
   if (!raw) return [];
-  return raw.split(/[,&]|\bft\.?\b|\bfeat\.?\b/i).map((a) => a.trim()).filter(Boolean);
+  return raw.split(/[,&]|\bft\.?\b|\bfeat\.?\b/i).map(a => a.trim()).filter(Boolean);
 };
 
-const formatArtistName = (name: string): string => name.replace(/([a-z])([A-Z])/g, '$1 $2');
+const formatArtistName = (name: string): string =>
+  name.replace(/([a-z])([A-Z])/g, '$1 $2');
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUB-COMPONENTS
+// ─────────────────────────────────────────────────────────────────────────────
 function SkeletonPulse({
-  width,
-  height,
-  borderRadius = 6,
-  style,
+  width, height, borderRadius = 6, style,
 }: {
   width: number | string;
   height: number;
@@ -223,7 +174,7 @@ function SkeletonPulse({
     return () => loop.stop();
   }, [anim]);
 
-  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: [SK.base, SK.highlight] });
+  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: ['#1A1A1A', '#2A2A2A'] });
 
   return <RNAnimated.View style={[{ width, height, borderRadius, backgroundColor: bg }, style]} />;
 }
@@ -318,6 +269,238 @@ function ArtistLine({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Download Button Component with Progress and Cooldown
+// FIXED: Percentage count displayed INSIDE the circular spinner
+// ─────────────────────────────────────────────────────────────────────────────
+interface DownloadButtonProps {
+  trackId: string;
+  trackTitle: string;
+  trackArtist: string;
+  trackDuration?: number;
+  trackUrl: string;
+  trackThumbnail?: string;
+  iconSize?: number;
+  onDownloadComplete?: () => void;
+}
+
+const DownloadButtonWithProgress: React.FC<DownloadButtonProps> = ({
+  trackId,
+  trackTitle,
+  trackArtist,
+  trackDuration,
+  trackUrl,
+  trackThumbnail,
+  iconSize = 24,
+  onDownloadComplete,
+}) => {
+  const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'completed' | 'cooldown'>('idle');
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+  const isDownloaded = useIsSongDownloaded(trackId);
+  const isDownloadingGlobal = useIsSongDownloading(trackId);
+  const progressInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    checkCooldown();
+  }, []);
+
+  useEffect(() => {
+    if (isDownloadingGlobal && downloadState !== 'downloading') {
+      setDownloadState('downloading');
+      startProgressSimulation();
+    } else if (!isDownloadingGlobal && downloadState === 'downloading') {
+      if (isDownloaded) {
+        setDownloadState('completed');
+        setDownloadProgress(100);
+        stopProgressSimulation();
+        onDownloadComplete?.();
+        setCooldown();
+        setTimeout(() => {
+          setDownloadState('cooldown');
+          checkCooldown();
+        }, 2000);
+      } else {
+        setDownloadState('idle');
+        setDownloadProgress(0);
+        stopProgressSimulation();
+      }
+    }
+  }, [isDownloadingGlobal, isDownloaded]);
+
+  const startProgressSimulation = () => {
+    if (progressInterval.current) clearInterval(progressInterval.current);
+    setDownloadProgress(0);
+    progressInterval.current = setInterval(() => {
+      setDownloadProgress(prev => {
+        if (prev >= 95) return prev;
+        return Math.min(prev + Math.random() * 5, 95);
+      });
+    }, 500);
+  };
+
+  const stopProgressSimulation = () => {
+    if (progressInterval.current) {
+      clearInterval(progressInterval.current);
+      progressInterval.current = null;
+    }
+  };
+
+  const checkCooldown = async () => {
+    try {
+      const cooldownData = await AsyncStorage.getItem(DOWNLOAD_COOLDOWN_KEY);
+      if (cooldownData) {
+        const { lastDownloadTime } = JSON.parse(cooldownData);
+        const elapsed = Date.now() - lastDownloadTime;
+        if (elapsed < COOLDOWN_MS) {
+          const remaining = COOLDOWN_MS - elapsed;
+          setCooldownRemaining(remaining);
+          setDownloadState('cooldown');
+          const timer = setInterval(() => {
+            setCooldownRemaining(prev => {
+              if (prev <= 1000) {
+                clearInterval(timer);
+                setDownloadState('idle');
+                return 0;
+              }
+              return prev - 1000;
+            });
+          }, 1000);
+          return () => clearInterval(timer);
+        }
+      }
+      setDownloadState('idle');
+    } catch (error) {
+      console.warn('[DownloadButton] Failed to check cooldown:', error);
+    }
+  };
+
+  const setCooldown = async () => {
+    try {
+      await AsyncStorage.setItem(DOWNLOAD_COOLDOWN_KEY, JSON.stringify({ lastDownloadTime: Date.now() }));
+    } catch (error) {
+      console.warn('[DownloadButton] Failed to set cooldown:', error);
+    }
+  };
+
+  const formatCooldownTime = (ms: number): string => {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  };
+
+  const handleDownload = async () => {
+    if (downloadState !== 'idle') return;
+    if (isDownloaded) {
+      ToastAndroid.show('Song already downloaded', ToastAndroid.SHORT);
+      return;
+    }
+
+    triggerHaptic();
+    setDownloadState('downloading');
+    startProgressSimulation();
+
+    try {
+      await downloadAndSaveSong({
+        id: trackId,
+        title: trackTitle,
+        artist: trackArtist,
+        duration: trackDuration,
+        url: trackUrl,
+        thumbnailUrl: trackThumbnail,
+      });
+    } catch (error) {
+      console.error('[DownloadButton] Download failed:', error);
+      setDownloadState('idle');
+      setDownloadProgress(0);
+      stopProgressSimulation();
+      ToastAndroid.show('Download failed. Please try again.', ToastAndroid.SHORT);
+    }
+  };
+
+  const renderIcon = () => {
+    const circleSize = iconSize + 8;
+    const strokeWidth = 3;
+    const progressPercent = Math.min(downloadProgress / 100, 1);
+
+    if (downloadState === 'downloading') {
+      return (
+        <View style={{ width: circleSize, height: circleSize, alignItems: 'center', justifyContent: 'center' }}>
+          <View
+            style={{
+              position: 'absolute',
+              width: circleSize,
+              height: circleSize,
+              borderRadius: circleSize / 2,
+              borderWidth: strokeWidth,
+              borderColor: 'rgba(255,255,255,0.3)',
+              backgroundColor: 'transparent',
+            }}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              width: circleSize,
+              height: circleSize,
+              transform: [{ rotate: '-90deg' }],
+            }}
+          >
+            <View
+              style={{
+                width: circleSize,
+                height: circleSize,
+                borderRadius: circleSize / 2,
+                borderWidth: strokeWidth,
+                borderColor: '#fff',
+                borderStyle: 'solid',
+                borderTopColor: '#fff',
+                borderRightColor: 'transparent',
+                borderBottomColor: 'transparent',
+                borderLeftColor: 'transparent',
+                transform: [{ rotate: `${progressPercent * 360}deg` }],
+              }}
+            />
+          </View>
+          <Text style={{ fontSize: circleSize * 0.3, color: '#fff', fontWeight: 'bold', textAlign: 'center' }}>
+            {Math.round(downloadProgress)}%
+          </Text>
+        </View>
+      );
+    }
+
+    if (downloadState === 'completed') {
+      return <Ionicons name="checkmark-circle" size={circleSize} color="#4CAF50" />;
+    }
+
+    if (downloadState === 'cooldown') {
+      return (
+        <View style={{ alignItems: 'center' }}>
+          <MaterialIcons name="file-download" size={iconSize} color="rgba(255,255,255,0.5)" />
+          <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
+            {formatCooldownTime(cooldownRemaining)}
+          </Text>
+        </View>
+      );
+    }
+
+    if (isDownloaded) {
+      return <MaterialIcons name="file-download-done" size={iconSize} color="#4CAF50" />;
+    }
+
+    return <MaterialIcons name="file-download" size={iconSize} color="#fff" />;
+  };
+
+  return (
+    <TouchableOpacity onPress={handleDownload} disabled={downloadState !== 'idle'} activeOpacity={0.7}>
+      {renderIcon()}
+    </TouchableOpacity>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROPS
+// ─────────────────────────────────────────────────────────────────────────────
 interface PlayerContentProps {
   onMinimize: () => void;
   onClose: () => void;
@@ -333,6 +516,9 @@ interface PlayerContentProps {
   onNavigateToLocalFolder?: (folderId: string, trackId: string) => void;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
 function PlayerContentInner({
   onMinimize,
   onClose,
@@ -349,6 +535,7 @@ function PlayerContentInner({
   const topInset = topInsetProp ?? insets.top;
   const { colors, isDark } = useTheme();
 
+  // ── Modals ──────────────────────────────────────────────────────────────────
   const [showQueueModal, setShowQueueModal] = useState(false);
   const [showLyricsModal, setShowLyricsModal] = useState(false);
   const [showRelatedModal, setShowRelatedModal] = useState(false);
@@ -360,6 +547,7 @@ function PlayerContentInner({
 
   const { setSliderActive, setButtonActive } = useGestureContext();
 
+  // ── Context ─────────────────────────────────────────────────────────────────
   const engine = usePlayerEngine();
   const {
     isLoading: musicPlayerLoading,
@@ -378,11 +566,11 @@ function PlayerContentInner({
   const durationSec = engine.duration;
   const repeatMode = engine.repeatMode;
   const shuffleMode = engine.shuffleMode;
-  // FIX 17: isResolving now properly exists on engine state
   const isResolving = (engine as any).isResolving ?? false;
 
   const trackExtrasVersion = useTrackExtrasVersion();
 
+  // ── Display track ───────────────────────────────────────────────────────────
   const displayTrack = useMemo(() => {
     if (engine.currentTrack) {
       return {
@@ -400,8 +588,12 @@ function PlayerContentInner({
     return DUMMY_TRACK as any;
   }, [engine.currentTrack]);
 
-  const isLocal = useMemo(() => isLocalTrack(engine.currentTrack), [engine.currentTrack, isLocalTrack]);
+  const isLocal = useMemo(
+    () => isLocalTrack(engine.currentTrack),
+    [engine.currentTrack, isLocalTrack],
+  );
 
+  // ── Track extras ─────────────────────────────────────────────────────────────
   const [extras, setExtras] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -441,10 +633,21 @@ function PlayerContentInner({
   const hasVideo = !isLocal && !!activeVideoUrl && displayTrack.id !== DUMMY_TRACK.id;
   const canShowLyrics = !isLocal && !!(videoId ?? displayTrack?.id) && displayTrack.id !== DUMMY_TRACK.id;
 
+  useEffect(() => {
+    console.log('[PlayerContent] Video availability:', {
+      hasVideo,
+      activeVideoUrl: activeVideoUrl?.substring(0, 60),
+      muxedVideoUrl: muxedVideoUrl?.substring(0, 60),
+      videoUrl: videoUrl?.substring(0, 60),
+      isLocal,
+      trackId: displayTrack?.id,
+    });
+  }, [hasVideo, activeVideoUrl, muxedVideoUrl, videoUrl, isLocal, displayTrack?.id]);
+
   const [isFavorite, setIsFavorite] = useState(false);
   const toggleFavoriteFunc = () => {
     triggerHaptic();
-    setIsFavorite((p) => !p);
+    setIsFavorite(p => !p);
   };
 
   const [counterTarget, setCounterTarget] = useState(0);
@@ -454,42 +657,34 @@ function PlayerContentInner({
     return () => clearTimeout(t);
   }, [displayTrack?.id, viewCount]);
 
-  // FIX 17 & FIX 18: Proper loading state including isResolving
-  const showSkeleton = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
+  // ── Skeleton only for loading states, NOT for metadata ──────────────────────
+  const showSkeletonForStats = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
 
+  // ── VIDEO TAB STATE ─────────────────────────────────────────────────────────
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
   const [videoError, setVideoError] = useState<string | null>(null);
-  const videoPlayerReady = useRef(false);
-  const pendingSeek = useRef<number | null>(null);
-  const videoOwnsAudio = useRef(false);
-  const isTransitioning = useRef(false);
-
-  const activeSegmentRef = useRef<'song' | 'video'>('song');
-  const videoPlayingRef = useRef(false);
-  const isPlayingRef = useRef(isPlaying);
-
-  const statusListenerRef = useRef<any>(null);
-  const errorCountRef = useRef(0);
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const videoPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [videoPlayerInitialized, setVideoPlayerInitialized] = useState(false);
 
   const videoPlayer = videoPlayerSingleton;
   const videoPlayerRef = useRef(videoPlayer);
-  const [videoPlayerInitialized, setVideoPlayerInitialized] = useState(false);
+  const videoPlayerReady = useRef(false);
+  const pendingSeek = useRef<number | null>(null);
+  const isTransitioning = useRef(false);
+  const activeSegmentRef = useRef<'song' | 'video'>('song');
+  const videoPlayingRef = useRef(false);
+  const isPlayingRef = useRef(isPlaying);
+  const errorCountRef = useRef(0);
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const videoPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastLoadedUrlRef = useRef<string | null>(null);
+  const isPipActiveRef = useRef(false);
   const positionRef = useRef(positionSec);
   const durationRef = useRef(durationSec);
-  
-  // FIX 8: Track last loaded URL to prevent reload on tab switch
-  const lastLoadedUrlRef = useRef<string | null>(null);
-  
-  // FIX 13 / FIX 14: Track PiP active state
-  const isPipActiveRef = useRef(false);
-  
+
   useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
   useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
-  // ── VISUAL PLAY STATE ────────────────────────────────────────────────────
   const [visualIsPlaying, setVisualIsPlaying] = useState(isPlaying);
   useEffect(() => {
     if (activeSegmentRef.current === 'song') {
@@ -497,7 +692,6 @@ function PlayerContentInner({
     }
   }, [isPlaying]);
 
-  // ── VISUAL POSITION / DURATION ───────────────────────────────────────────
   const [visualPositionSec, setVisualPositionSec] = useState(positionSec);
   const [visualDurationSec, setVisualDurationSec] = useState(durationSec);
 
@@ -510,7 +704,7 @@ function PlayerContentInner({
     }
   }, [positionSec, durationSec, visualDurationSec]);
 
-  // Poll video player's currentTime/duration while on Video tab
+  // ── Poll video player position while on Video tab ───────────────────────────
   useEffect(() => {
     if (videoPollIntervalRef.current) {
       clearInterval(videoPollIntervalRef.current);
@@ -542,19 +736,25 @@ function PlayerContentInner({
     };
   }, [activeSegment, videoPlayerInitialized, isLocal, updateVideoPosition, updateVideoDuration]);
 
-  // ── MODULE-LEVEL STATUS LISTENER (FIX 4: attached once, never re-attached) ─
+  // ── Video player status listener ───────────────────────────────────────────
   useEffect(() => {
     if (!videoPlayer || isLocal) return;
 
+    let statusListener: any = null;
+
     try {
-      statusListenerRef.current = videoPlayer.addListener('statusChange', ({ status, error }: any) => {
+      statusListener = videoPlayer.addListener('statusChange', ({ status, error }: any) => {
         if (status === 'readyToPlay') {
           videoPlayerReady.current = true;
           setVideoError(null);
+          errorCountRef.current = 0;
 
           if (pendingSeek.current !== null) {
             try {
               videoPlayer.currentTime = pendingSeek.current;
+              if (activeSegmentRef.current === 'video') {
+                setVisualPositionSec(pendingSeek.current);
+              }
             } catch {}
             pendingSeek.current = null;
 
@@ -565,30 +765,23 @@ function PlayerContentInner({
               } catch {}
             }
           }
-        } else if (status === 'error') {
+        } else if (status === 'error' && activeSegmentRef.current === 'video') {
           videoPlayerReady.current = false;
           const errorMsg = error?.message || 'Unknown video error';
           console.error('[PlayerContent] Video error:', errorMsg);
 
-          if (errorMsg.includes('403') || errorMsg.includes('forbidden')) {
-            setVideoError('Video unavailable (access denied). Listening to audio only.');
-          } else {
-            setVideoError(errorMsg);
-          }
-
-          errorCountRef.current += 1;
-          if (errorCountRef.current === 1 && lastLoadedUrlRef.current) {
+          if ((errorMsg.includes('403') || errorMsg.includes('forbidden')) && errorCountRef.current === 0) {
+            errorCountRef.current = 1;
+            setVideoError('Video unavailable. Retrying...');
             setTimeout(() => {
-              try {
-                if (typeof (videoPlayer as any).replaceAsync === 'function') {
-                  void (videoPlayer as any).replaceAsync(lastLoadedUrlRef.current);
-                } else {
-                  (videoPlayer as any).replace(lastLoadedUrlRef.current);
-                }
-              } catch (e) {
-                console.warn('[PlayerContent] Failed to retry video:', e);
+              if (lastLoadedUrlRef.current) {
+                try {
+                  videoPlayer.replaceAsync(lastLoadedUrlRef.current);
+                } catch {}
               }
             }, 1000);
+          } else {
+            setVideoError(errorMsg.includes('403') ? 'Video unavailable (access denied)' : errorMsg);
           }
         }
       });
@@ -598,60 +791,20 @@ function PlayerContentInner({
 
     return () => {
       try {
-        statusListenerRef.current?.remove?.();
+        statusListener?.remove?.();
       } catch {}
-      statusListenerRef.current = null;
     };
   }, [videoPlayer, isLocal]);
 
-  // ── PICTURE-IN-PICTURE STATUS LISTENER (FIX 13) ──────────────────────────
+  // ── AppState listener for auto-PiP ──────────────────────────────────────────
   useEffect(() => {
-    if (!videoPlayer || isLocal) return;
-
-    let pipListener: any = null;
-
-    try {
-      pipListener = videoPlayer.addListener('pictureInPictureStatusChange', ({ status }: any) => {
-        if (status === 'started') {
-          isPipActiveRef.current = true;
-          console.log('[PlayerContent] PiP started');
-        } else if (status === 'stopped') {
-          isPipActiveRef.current = false;
-          console.log('[PlayerContent] PiP stopped');
-          
-          // If user dismissed PiP manually while app is in background, pause video
-          const currentAppState = AppState.currentState;
-          if (currentAppState === 'background' && activeSegmentRef.current === 'video') {
-            try {
-              videoPlayer.pause();
-              videoPlayingRef.current = false;
-              updateVideoIsPlaying(false);
-              setVisualIsPlaying(false);
-            } catch {}
-          }
-        }
-      });
-    } catch (e) {
-      console.warn('[PlayerContent] Failed to add PiP listener:', e);
-    }
-
-    return () => {
-      try {
-        pipListener?.remove?.();
-      } catch {}
-    };
-  }, [videoPlayer, isLocal, updateVideoIsPlaying]);
-
-  // ── APPSTATE LISTENER FOR PiP AUTO-TRIGGER (FIX 12 / FIX 14) ──────────────
-  useEffect(() => {
-    if (isLocal) return;
+    if (isLocal || !hasVideo) return;
 
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       const vp = videoPlayerRef.current;
       if (!vp) return;
 
       if (nextAppState === 'background') {
-        // FIX 12: Auto-enter PiP when going background on video tab
         if (
           activeSegmentRef.current === 'video' &&
           videoPlayerReady.current &&
@@ -664,30 +817,20 @@ function PlayerContentInner({
             console.warn('[PlayerContent] Failed to start PiP:', e);
           }
         }
-      } else if (nextAppState === 'active') {
-        // FIX 14: Only restore normal UI if PiP is NOT active
-        if (!isPipActiveRef.current) {
-          // Normal foreground restoration — nothing special needed here
-          // The video stays in its tab, audio focus managed by segment switch
-        }
       }
     };
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [isLocal, hasVideo, videoPlayerInitialized]);
 
-    return () => {
-      subscription.remove();
-    };
-  }, [isLocal, videoPlayerInitialized]);
-
-  // ── GLOBAL VIDEO COMMAND REGISTRATION (FIX 15) ───────────────────────────
+  // ── Global video command registration ───────────────────────────────────────
   useEffect(() => {
     if (!videoPlayerInitialized || isLocal) return;
 
     const vp = videoPlayerRef.current;
     if (!vp) return;
 
-    // Register globals so MusicPlayerContext lock-screen handlers can control video
     (global as any).__mavinVideoPlay = () => {
       try {
         vp.play();
@@ -726,17 +869,15 @@ function PlayerContentInner({
       delete (global as any).__mavinVideoPlay;
       delete (global as any).__mavinVideoPause;
       delete (global as any).__mavinVideoSeek;
-      console.log('[PlayerContent] Unregistered global video command handlers');
     };
   }, [videoPlayerInitialized, isLocal, updateVideoIsPlaying, updateVideoPosition]);
 
-  // ── LOAD VIDEO SOURCE (FIX 8: only loads when URL changes, never on tab switch) ─
+  // ── Load video source ───────────────────────────────────────────────────────
   const loadVideoSource = useCallback(async (url: string) => {
     if (!url || isLocal) return;
-    
-    // FIX 8: Skip if this URL is already loaded
+
     if (lastLoadedUrlRef.current === url && videoPlayerReady.current) {
-      console.log('[PlayerContent] Video URL already loaded, skipping replaceAsync');
+      console.log('[PlayerContent] Video URL already loaded, skipping');
       return;
     }
 
@@ -746,39 +887,28 @@ function PlayerContentInner({
       videoPlayerReady.current = false;
 
       const vp = videoPlayerRef.current;
-
-      if (typeof (vp as any).replaceAsync === 'function') {
-        await (vp as any).replaceAsync(url);
-      } else {
-        (vp as any).replace(url);
-      }
-
+      await vp.replaceAsync(url);
       lastLoadedUrlRef.current = url;
 
-      const POLL_INTERVAL_MS = 200;
-      const POLL_TIMEOUT_MS  = 12000;
       const pollStart = Date.now();
-
       await new Promise<void>((resolve) => {
         const poll = () => {
-          const status = (vp as any).status;
-          if (status === 'readyToPlay') {
+          if (vp.status === 'readyToPlay') {
             videoPlayerReady.current = true;
             resolve();
             return;
           }
-          if (Date.now() - pollStart >= POLL_TIMEOUT_MS) {
-            console.warn('[PlayerContent] Video readyToPlay poll timed out');
+          if (Date.now() - pollStart >= 8000) {
+            console.warn('[PlayerContent] readyToPlay poll timed out');
             resolve();
             return;
           }
-          setTimeout(poll, POLL_INTERVAL_MS);
+          setTimeout(poll, 200);
         };
         poll();
       });
 
       try { vp.muted = true; } catch {}
-
       console.log('[PlayerContent] Video source loaded:', url.substring(0, 80));
     } catch (e) {
       console.warn('[PlayerContent] Failed to load video source:', e);
@@ -786,20 +916,18 @@ function PlayerContentInner({
     }
   }, [isLocal]);
 
-  // FIX 8: Only run when activeVideoUrl actually changes, NOT when videoPlayerInitialized changes
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
     void loadVideoSource(activeVideoUrl);
   }, [activeVideoUrl, isLocal]);
 
-  // FIX 9: Sync interval only runs on Song tab, never during video playback
+  // ── Sync interval ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!videoPlayerInitialized || !videoPlayer || isLocal || !activeVideoUrl) return;
 
     if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
 
     syncIntervalRef.current = setInterval(() => {
-      // Only sync when on Song tab — during video playback we don't touch video position
       if (videoPlayer && !videoError && activeSegmentRef.current === 'song') {
         const drift = Math.abs(videoPlayer.currentTime - positionRef.current);
         if (drift > 0.5) {
@@ -815,17 +943,30 @@ function PlayerContentInner({
     };
   }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, videoError]);
 
-  const videoProgress = useSharedValue(0);
-  const artworkAnimStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(interpolate(videoProgress.value, [0, 1], [1, 0]), { duration: 300 }),
-  }));
-  const videoAnimStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(interpolate(videoProgress.value, [0, 1], [0, 1]), { duration: 300 }),
-  }));
+  // ── Share handler ───────────────────────────────────────────────────────────
+  const handleShare = useCallback(async () => {
+    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
+    triggerHaptic();
+    
+    try {
+      const shareUrl = videoId 
+        ? `https://www.youtube.com/watch?v=${videoId}`
+        : displayTrack.url;
+      
+      const message = `Check out "${displayTrack.title}" by ${displayTrack.artist || 'Unknown Artist'}`;
+      
+      await Share.share({
+        title: displayTrack.title,
+        message: Platform.OS === 'android' ? `${message}\n\n${shareUrl}` : message,
+        url: Platform.OS === 'ios' ? shareUrl : undefined,
+      });
+    } catch (error) {
+      console.warn('[PlayerContent] Share failed:', error);
+      ToastAndroid.show("Failed to share song", ToastAndroid.SHORT);
+    }
+  }, [displayTrack, videoId]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // SEGMENT SWITCH (FIX 10: correct sequence, no source reload)
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── SEGMENT SWITCH ─────────────────────────────────────────────────────────
   const handleSegmentPress = useCallback(
     async (seg: 'song' | 'video') => {
       if (seg === 'video' && (!hasVideo || displayTrack.id === DUMMY_TRACK.id || videoError || isLocal)) {
@@ -849,77 +990,57 @@ function PlayerContentInner({
 
       try {
         if (seg === 'video' && vp && !videoError && !isLocal) {
-          // FIX 10: Step 1 — Deactivate audio (pause + release focus)
           await deactivateAudio();
 
-          // FIX 10: Step 2 — Calculate seek target
           const seekTarget = Math.max(0, currentAudioPos - OFFSET);
 
-          // FIX 10: Step 3 — Set video position FIRST, before unmuting
           if (videoPlayerReady.current) {
-            try { 
-              vp.currentTime = seekTarget; 
-            } catch (e) {
-              console.warn('[PlayerContent] currentTime set failed:', e);
+            try {
+              vp.currentTime = seekTarget;
+            } catch {
               pendingSeek.current = seekTarget;
             }
           } else {
-            console.log('[PlayerContent] Video not ready yet — queuing seek at', seekTarget);
             pendingSeek.current = seekTarget;
           }
 
-          // FIX 10: Step 4 — Unmute video (now at correct position)
           vp.muted = false;
 
-          // FIX 10: Step 5 — Play video if audio was playing
           if (visualIsPlaying) {
-            try { 
-              await vp.play(); 
-              videoPlayingRef.current = true; 
+            try {
+              await vp.play();
+              videoPlayingRef.current = true;
             } catch (e) {
               console.warn('[PlayerContent] vp.play() failed:', e);
             }
-          } else {
-            // Even if not playing, ensure video is loaded and ready at correct position
-            console.log('[PlayerContent] Video tab switched but audio was paused, video ready at', seekTarget);
           }
 
           setVisualPositionSec(seekTarget);
-          setVisualDurationSec(
-            (vp.duration ?? 0) > 0 ? vp.duration : durationRef.current,
-          );
+          setVisualDurationSec((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
 
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
-          videoProgress.value = 1;
           setVideoActive(true);
           updateVideoPosition(seekTarget);
           updateVideoDuration((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
           updateVideoIsPlaying(visualIsPlaying);
-
         } else if (seg === 'song' && vp) {
           pendingSeek.current = null;
-          
-          // FIX 10: Step 1 — Pause video FIRST (stops sound + releases focus)
+
           try { vp.pause(); } catch {}
-          
-          // FIX 10: Step 2 — Mute video
           try { vp.muted = true; } catch {}
           
           videoPlayingRef.current = false;
-          videoOwnsAudio.current = false;
 
-          // FIX 10: Step 3 — Reactivate audio focus
           await activateAudio();
 
-          // FIX 10: Step 4 — Resume audio from exact video position
           const videoStoppedAt = vp.currentTime ?? positionRef.current;
           if (videoStoppedAt > 0 && videoStoppedAt !== positionRef.current) {
             try { engine.seekTo(videoStoppedAt); } catch {}
           }
           
           if (visualIsPlaying) {
-            try { await engine.play(); } catch (e) {
+            try { engine.play(); } catch (e) {
               console.warn('[PlayerContent] engine.play() failed:', e);
             }
           }
@@ -929,7 +1050,6 @@ function PlayerContentInner({
 
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
-          videoProgress.value = 0;
           setVideoActive(false);
           updateVideoPosition(videoStoppedAt);
           updateVideoDuration(durationRef.current);
@@ -940,15 +1060,13 @@ function PlayerContentInner({
       } finally {
         setTimeout(() => {
           isTransitioning.current = false;
-        }, 600);
+        }, 500);
       }
     },
     [
       hasVideo,
       videoPlayer,
-      videoProgress,
       visualIsPlaying,
-      muxedVideoUrl,
       displayTrack.id,
       engine,
       videoError,
@@ -965,17 +1083,13 @@ function PlayerContentInner({
     ],
   );
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // TRACK CHANGE RESET
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Track change reset ──────────────────────────────────────────────────────
   useEffect(() => {
-    videoOwnsAudio.current = false;
     videoPlayerReady.current = false;
     pendingSeek.current = null;
-    lastLoadedUrlRef.current = null; // FIX 8: Reset so new track loads
+    lastLoadedUrlRef.current = null;
     setActiveSegment('song');
     activeSegmentRef.current = 'song';
-    videoProgress.value = 0;
     setVideoError(null);
     errorCountRef.current = 0;
     setVisualPositionSec(0);
@@ -984,8 +1098,9 @@ function PlayerContentInner({
     updateVideoPosition(0);
     updateVideoDuration(0);
     updateVideoIsPlaying(false);
-  }, [displayTrack?.id, videoProgress, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
+  }, [displayTrack?.id, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
+  // ── Artwork colors ──────────────────────────────────────────────────────────
   const artworkForColors = typeof displayTrack?.thumbnail === 'string' ? displayTrack.thumbnail : null;
   const { imageColors } = useImageColors(artworkForColors);
 
@@ -996,9 +1111,9 @@ function PlayerContentInner({
     return [colors.playerGradientStart, colors.playerGradientMiddle, colors.playerGradientEnd];
   }, [imageColors, colors, isDark]);
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   // SLIDER / SEEK
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   const isSliding = useSharedValue(false);
   const isSlidingRef = useRef(false);
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1229,6 +1344,22 @@ function PlayerContentInner({
 
   const showCommentButton = !isLocal && commentsCount > 0 && displayTrack.id !== DUMMY_TRACK.id;
 
+  const videoProgress = useSharedValue(0);
+  useEffect(() => {
+    videoProgress.value = withTiming(activeSegment === 'video' ? 1 : 0, { duration: 300 });
+  }, [activeSegment, videoProgress]);
+
+  const artworkAnimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(videoProgress.value, [0, 1], [1, 0]),
+  }));
+  const videoAnimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(videoProgress.value, [0, 1], [0, 1]),
+  }));
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RENDER - Metadata always shows, skeleton only for loading stats
+  // FIXED: Download and Share buttons in same pill container
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
     <>
       <View style={{ flex: 1, backgroundColor: gradientColors[2] }}>
@@ -1286,18 +1417,15 @@ function PlayerContentInner({
           </View>
 
           <View style={[styles.contentContainer, { paddingTop: topInset + 80 }]}>
+            {/* Artwork / Video */}
             <View style={styles.artworkContainer}>
               <Animated.View style={[StyleSheet.absoluteFill, artworkAnimStyle]}>
-                {showSkeleton ? (
-                  <View style={[styles.artworkImage, { backgroundColor: colors.surfaceLight }]} />
-                ) : (
-                  <Image
-                    source={artworkSource}
-                    style={styles.artworkImage}
-                    contentFit="cover"
-                    transition={300}
-                  />
-                )}
+                <Image
+                  source={artworkSource}
+                  style={styles.artworkImage}
+                  contentFit="cover"
+                  transition={300}
+                />
               </Animated.View>
 
               {hasVideo && !isLocal && videoPlayerInitialized && (
@@ -1307,7 +1435,6 @@ function PlayerContentInner({
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                     nativeControls={false}
-                    // FIX 11: Enable PiP on the native VideoView
                     allowsPictureInPicture={true}
                     startsPictureInPictureAutomatically={false}
                     onPictureInPictureStart={() => {
@@ -1330,148 +1457,156 @@ function PlayerContentInner({
               )}
             </View>
 
+            {/* Track info - ALWAYS shows metadata, never skeleton */}
             <View style={styles.infoContainer}>
-              {showSkeleton ? (
-                <SkeletonPulse width={200} height={24} borderRadius={6} />
-              ) : displayTrack.title ? (
-                <MovingText
-                  text={String(displayTrack.title)}
-                  animationThreshold={20}
-                  style={[styles.title, { color: colors.text }]}
-                />
-              ) : (
-                <View style={{ alignItems: 'center', marginBottom: 4 }}>
-                  <SkeletonPulse width={180} height={20} borderRadius={6} />
-                </View>
-              )}
+              <MovingText
+                text={displayTrack.title}
+                animationThreshold={20}
+                style={[styles.title, { color: colors.text }]}
+              />
 
-              {showSkeleton ? (
-                <SkeletonPulse width={140} height={16} borderRadius={4} style={{ marginTop: 6 }} />
-              ) : displayTrack.artist ? (
-                <ArtistLine
-                  rawArtist={String(displayTrack.artist)}
-                  uploaderUrl={uploaderUrl}
-                  onArtistPress={handleArtistPress}
-                  colors={colors}
-                  isLocal={isLocal}
-                />
-              ) : (
-                <View style={{ alignItems: 'center', marginTop: 6 }}>
-                  <SkeletonPulse width={120} height={14} borderRadius={4} />
-                </View>
-              )}
+              <ArtistLine
+                rawArtist={displayTrack.artist}
+                uploaderUrl={uploaderUrl}
+                onArtistPress={handleArtistPress}
+                colors={colors}
+                isLocal={isLocal}
+              />
             </View>
 
-            <View style={styles.actionRow}>
-              <View style={styles.leftActions}>
-                {!isLocal ? (
-                  <View style={[styles.actionContainer, { backgroundColor: `${colors.gold}15` }]}>
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={toggleFavoriteFunc}
-                      activeOpacity={0.7}
-                      onPressIn={() => setButtonActive(true)}
-                      onPressOut={() => setButtonActive(false)}
-                    >
-                      <Ionicons
-                        name={isFavorite ? 'thumbs-up' : 'thumbs-up-outline'}
-                        size={16}
-                        color={isFavorite ? colors.gold : colors.text}
-                      />
-                      {likeCount > 0 && (
-                        <Text style={[styles.statCount, { color: colors.text }]}>
-                          {formatCount(likeCount)}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-
-                    <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
-
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      activeOpacity={0.7}
-                      onPressIn={() => setButtonActive(true)}
-                      onPressOut={() => setButtonActive(false)}
-                    >
-                      <Ionicons name="thumbs-down-outline" size={16} color={colors.text} />
-                      {dislikeCount > 0 && (
-                        <Text style={[styles.statCount, { color: colors.text }]}>
-                          {formatCount(dislikeCount)}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    style={[styles.actionContainer, { backgroundColor: `${colors.gold}15` }]}
-                    onPress={toggleFavoriteFunc}
-                    activeOpacity={0.7}
-                    onPressIn={() => setButtonActive(true)}
-                    onPressOut={() => setButtonActive(false)}
-                  >
-                    <Ionicons
-                      name={isFavorite ? 'heart' : 'heart-outline'}
-                      size={16}
-                      color={isFavorite ? colors.gold : colors.text}
-                    />
-                    <Text style={[styles.statCount, { color: colors.textMuted, fontSize: moderateScale(10) }]}>
-                      Favorite
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {showCommentButton && (
-                  <TouchableOpacity
-                    style={[styles.actionContainer, { backgroundColor: `${colors.gold}15` }]}
-                    onPress={handleOpenComments}
-                    activeOpacity={0.7}
-                    onPressIn={() => setButtonActive(true)}
-                    onPressOut={() => setButtonActive(false)}
-                  >
-                    <MaterialCommunityIcons
-                      name="comment-text-outline"
-                      size={16}
-                      color={colors.text}
-                    />
-                    <Text style={[styles.statCount, { color: colors.text }]}>
-                      {formatCount(commentsCount)}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-
+            {/* Action Row - Horizontal Scrollable */}
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.actionRowContent}
+              style={styles.actionScrollView}
+            >
+              {/* Like Button */}
               {!isLocal && (
-                <View style={[styles.playCountPill, { backgroundColor: `${colors.gold}10` }]}>
-                  <Ionicons name="headset-outline" size={13} color={colors.textSub} />
-                  {counterTarget > 0
-                    ? <AnimatedCounter target={counterTarget} />
-                    : <SkeletonPulse width={42} height={10} borderRadius={3} />}
+                <View style={styles.actionItem}>
+                  {showSkeletonForStats ? (
+                    <SkeletonPulse width={60} height={24} borderRadius={20} />
+                  ) : (
+                    <TouchableOpacity onPress={toggleFavoriteFunc} activeOpacity={0.7}>
+                      <View style={styles.iconWithCount}>
+                        <Ionicons
+                          name={isFavorite ? "thumbs-up" : "thumbs-up-outline"}
+                          size={moderateScale(24)}
+                          color={isFavorite ? colors.gold : colors.text}
+                        />
+                        {likeCount > 0 && (
+                          <Text style={[styles.iconCountText, { color: colors.text }]}>
+                            {formatCount(likeCount)}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
 
-              <View style={styles.extraActions}>
-                <TouchableOpacity
-                  style={styles.extraIcon}
-                  onPress={handlePlaylist}
-                  activeOpacity={0.7}
-                  onPressIn={() => setButtonActive(true)}
-                  onPressOut={() => setButtonActive(false)}
-                >
-                  <MaterialIcons name="playlist-add" size={20} color={colors.text} />
-                </TouchableOpacity>
+              {/* Dislike Button */}
+              {!isLocal && (
+                <View style={styles.actionItem}>
+                  {showSkeletonForStats ? (
+                    <SkeletonPulse width={60} height={24} borderRadius={20} />
+                  ) : (
+                    <TouchableOpacity activeOpacity={0.7}>
+                      <View style={styles.iconWithCount}>
+                        <Ionicons
+                          name="thumbs-down-outline"
+                          size={moderateScale(24)}
+                          color={colors.text}
+                        />
+                        {dislikeCount > 0 && (
+                          <Text style={[styles.iconCountText, { color: colors.text }]}>
+                            {formatCount(dislikeCount)}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
 
-                <TouchableOpacity
-                  style={styles.extraIcon}
-                  onPress={handleSleepTimer}
-                  activeOpacity={0.7}
-                  onPressIn={() => setButtonActive(true)}
-                  onPressOut={() => setButtonActive(false)}
-                >
-                  <MaterialCommunityIcons name="weather-night" size={18} color={colors.text} />
+              {/* Comments Button */}
+              {showCommentButton && (
+                <View style={styles.actionItem}>
+                  {showSkeletonForStats ? (
+                    <SkeletonPulse width={50} height={24} borderRadius={20} />
+                  ) : (
+                    <TouchableOpacity onPress={handleOpenComments} activeOpacity={0.7}>
+                      <View style={styles.commentBadgeContainer}>
+                        <MaterialCommunityIcons
+                          name="comment-text-outline"
+                          size={moderateScale(24)}
+                          color={colors.text}
+                        />
+                        <View style={[styles.commentBadge, { backgroundColor: colors.gold }]}>
+                          <Text style={styles.commentBadgeText}>{formatCount(commentsCount)}</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+              {/* View Count Badge - Pill container with icon + text */}
+              {!isLocal && viewCount > 0 && (
+                <View style={[styles.pillContainer, styles.viewCountPill]}>
+                  {showSkeletonForStats ? (
+                    <SkeletonPulse width={70} height={20} borderRadius={20} />
+                  ) : (
+                    <>
+                      <Ionicons name="play-circle-outline" size={moderateScale(18)} color={colors.textSub} />
+                      <Text style={[styles.pillText, { color: colors.textSub }]}>
+                        {formatCount(viewCount)} views
+                      </Text>
+                    </>
+                  )}
+                </View>
+              )}
+
+              {/* Add to Playlist Button */}
+              <View style={styles.actionItem}>
+                <TouchableOpacity onPress={handlePlaylist} activeOpacity={0.7}>
+                  <MaterialIcons name="playlist-add" size={moderateScale(24)} color={colors.text} />
                 </TouchableOpacity>
               </View>
-            </View>
 
+              {/* Sleep Timer Button */}
+              <View style={styles.actionItem}>
+                <TouchableOpacity onPress={handleSleepTimer} activeOpacity={0.7}>
+                  <MaterialCommunityIcons name="weather-night" size={moderateScale(22)} color={colors.text} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Download + Share Combined Pill Container */}
+              {!isLocal && displayTrack.id !== DUMMY_TRACK.id && (
+                <View style={[styles.pillContainer, styles.actionPill]}>
+                  {/* Download Button */}
+                  <DownloadButtonWithProgress
+                    trackId={displayTrack.id}
+                    trackTitle={displayTrack.title}
+                    trackArtist={displayTrack.artist}
+                    trackDuration={displayTrack.duration}
+                    trackUrl={displayTrack.url}
+                    trackThumbnail={displayTrack.thumbnail}
+                    iconSize={20}
+                  />
+
+                  {/* Divider between download and share */}
+                  <View style={[styles.pillDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+
+                  {/* Share Button with curved arrow icon */}
+                  <TouchableOpacity onPress={handleShare} activeOpacity={0.7}>
+                    <Ionicons name="arrow-redo-outline" size={moderateScale(20)} color={colors.text} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </ScrollView>
+
+            {/* Slider */}
             <View
               style={styles.progressWrapper}
               onTouchStart={() => setSliderActive(true)}
@@ -1524,6 +1659,7 @@ function PlayerContentInner({
               </View>
             </View>
 
+            {/* Transport controls */}
             <View style={styles.controls}>
               <TouchableOpacity
                 onPress={handleToggleShuffle}
@@ -1548,16 +1684,15 @@ function PlayerContentInner({
                 <Ionicons name="play-skip-back" size={32} color={colors.text} />
               </TouchableOpacity>
 
-              {/* FIX 16 & FIX 18: Replace hourglass with ActivityIndicator */}
               <TouchableOpacity
                 onPress={handlePlayPause}
                 style={[styles.bigPlay, { backgroundColor: colors.gold }]}
                 activeOpacity={0.85}
-                disabled={showSkeleton || displayTrack.id === DUMMY_TRACK.id}
+                disabled={showSkeletonForStats || displayTrack.id === DUMMY_TRACK.id}
                 onPressIn={() => setButtonActive(true)}
                 onPressOut={() => setButtonActive(false)}
               >
-                {showSkeleton ? (
+                {showSkeletonForStats ? (
                   <ActivityIndicator size="large" color={colors.textInverse} />
                 ) : (
                   <Ionicons
@@ -1597,6 +1732,7 @@ function PlayerContentInner({
               </TouchableOpacity>
             </View>
 
+            {/* Bottom tabs */}
             <View style={styles.bottomTabs}>
               <TouchableOpacity
                 onPress={handleOpenQueue}
@@ -1651,6 +1787,7 @@ function PlayerContentInner({
         </LinearGradient>
       </View>
 
+      {/* Modals */}
       <RNModal
         visible={showQueueModal}
         animationType="slide"
@@ -1709,6 +1846,9 @@ function PlayerContentInner({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORT WRAPPER
+// ─────────────────────────────────────────────────────────────────────────────
 export default function PlayerContent(props: PlayerContentProps) {
   return (
     <PlayerContentInner
@@ -1727,6 +1867,9 @@ export default function PlayerContent(props: PlayerContentProps) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   topBar: { position: 'absolute', left: 0, right: 0, zIndex: 1000, alignItems: 'center' },
   dragHandleWrapper: { width: '100%', alignItems: 'center', paddingBottom: 8 },
@@ -1761,37 +1904,72 @@ const styles = StyleSheet.create({
   artistTappable: { textDecorationLine: 'underline' },
   artistSeparator: { fontSize: moderateScale(15) },
 
-  actionRow: {
+  actionScrollView: {
+    flexGrow: 0,
+    marginVertical: verticalScale(8),
+  },
+  actionRowContent: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: verticalScale(18),
+    paddingHorizontal: scale(12),
+    gap: scale(16),
+  },
+  actionItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Pill container styles (replaces viewCountItem)
+  pillContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: scale(12),
+    paddingVertical: verticalScale(6),
+    borderRadius: scale(20),
+    gap: scale(8),
+  },
+  viewCountPill: {
+    gap: scale(6),
+  },
+  actionPill: {
+    gap: scale(10),
+  },
+  pillDivider: {
+    width: 1,
+    height: verticalScale(16),
+  },
+  pillText: {
+    fontSize: moderateScale(11),
+    fontWeight: '500',
+  },
+  iconWithCount: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(4),
+  },
+  iconCountText: {
+    fontSize: moderateScale(11),
+    fontWeight: '600',
+  },
+  commentBadgeContainer: {
+    position: 'relative',
+  },
+  commentBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -10,
+    borderRadius: scale(10),
+    minWidth: scale(18),
+    height: scale(18),
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: scale(4),
   },
-  leftActions: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },
-  actionContainer: {
-    flexDirection: 'row',
-    borderRadius: 24,
-    paddingHorizontal: scale(10),
-    paddingVertical: verticalScale(6),
-    alignItems: 'center',
-    gap: scale(2),
+  commentBadgeText: {
+    color: '#000',
+    fontSize: moderateScale(9),
+    fontWeight: '700',
   },
-  actionButton: { flexDirection: 'row', alignItems: 'center', gap: scale(4) },
-  statCount: { fontSize: moderateScale(11), fontWeight: '600', letterSpacing: 0.2 },
-  actionDivider: { width: 1, height: verticalScale(14), marginHorizontal: scale(6) },
-
-  playCountPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: 20,
-    paddingHorizontal: scale(9),
-    paddingVertical: verticalScale(5),
-  },
-
-  extraActions: { flexDirection: 'row', alignItems: 'center', gap: scale(14) },
-  extraIcon: { padding: scale(4) },
 
   progressWrapper: { marginTop: verticalScale(20) },
   sliderThumb: {

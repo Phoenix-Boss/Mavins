@@ -1,4 +1,4 @@
-// app/(player)/search/index.tsx
+// app/search/index.tsx
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
@@ -263,7 +263,7 @@ function TrendingConveyorBelt({
   const scrollX = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  const doubled = [...history, ...history];
+  const doubled = [...history].reverse().concat([...history].reverse());
   const totalWidth = history.length * TRENDING_ITEM_FULL;
 
   useEffect(() => {
@@ -293,7 +293,7 @@ function TrendingConveyorBelt({
 
   return (
     <View style={conveyorStyles.wrapper}>
-      <Text style={[conveyorStyles.heading, { color: colors.text }]}>🔥 Trending</Text>
+      <Text style={[conveyorStyles.heading, { color: colors.text }]}>🔥 Trending Searches</Text>
       <View style={conveyorStyles.track}>
         <Animated.View style={[conveyorStyles.belt, { transform: [{ translateX: scrollX }] }]}>
           {doubled.map((item, index) => {
@@ -1071,6 +1071,7 @@ export default function SearchScreen() {
       
       if (streamUrl) {
         setPendingTrack({ title: item.query, artist: item.artist_name, artwork: item.thumbnail_url });
+        // Play in miniplayer (no expandPlayerFn provided)
         await playAudio({
           id: item.track_uuid,
           title: item.query,
@@ -1107,6 +1108,7 @@ export default function SearchScreen() {
     const queue = (results?.songs ?? []).map(s => ({
       id: s.id, title: s.title, artist: s.artist, thumbnail: s.thumbnail, url: s.url, videoId: s.videoId,
     }));
+    // Play in miniplayer (no expandPlayerFn provided)
     await playAudio({
       id: song.id, title: song.title, artist: song.artist, thumbnail: song.thumbnail, url: song.url, videoId: song.videoId,
     }, queue);
@@ -1114,17 +1116,17 @@ export default function SearchScreen() {
 
   const handleAlbumPress = (a: AlbumResult) => {
     triggerHaptic();
-    router.push({ pathname: "/(player)/search/album", params: { id: encodeURIComponent(a.url), artist: a.artist } });
+    router.push({ pathname: "./search/album", params: { id: encodeURIComponent(a.url), artist: a.artist } });
   };
 
   const handleArtistPress = (a: ArtistResult) => {
     triggerHaptic();
-    router.push({ pathname: "/(player)/search/artist", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } });
+    router.push({ pathname: "./search/artist", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } });
   };
 
   const handlePlaylistPress = (p: PlaylistResult) => {
     triggerHaptic();
-    router.push({ pathname: "/(player)/search/playlist", params: { id: encodeURIComponent(p.url) } });
+    router.push({ pathname: "./search/playlist", params: { id: encodeURIComponent(p.url) } });
   };
 
   const handleMenuPress = (s: SongResult) => {
@@ -1135,17 +1137,39 @@ export default function SearchScreen() {
     });
   };
 
-  const handleDiscoveryPress = (item: DiscoveryItem) => {
-    triggerHaptic();
-    if ((item.type === "song" || item.type === "beat") && item.data) {
-      const s: SongResult = {
-        type: "song", id: item.id, title: item.title, artist: item.subtitle, thumbnail: item.thumbnail, url: item.url, videoId: item.id, duration: 0, viewCount: 0,
-      };
-      handleSongPress(s);
-    } else if (item.type === "playlist" && item.url) {
-      router.push({ pathname: "/(player)/search/playlist", params: { id: encodeURIComponent(item.url) } });
-    }
-  };
+const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
+  triggerHaptic();
+  
+  // Handle songs and beats (both play audio)
+  if ((item.type === "song" || item.type === "beat") && item.data) {
+    const s: SongResult = {
+      type: "song", 
+      id: item.id, 
+      title: item.title, 
+      artist: item.subtitle, 
+      thumbnail: item.thumbnail, 
+      url: item.url, 
+      videoId: item.id, 
+      duration: 0, 
+      viewCount: 0,
+    };
+    // Play in miniplayer - no expandPlayerFn provided
+    // This will use expo-audio and automatically deactivate any active video player session
+    handleSongPress(s);
+  } 
+  // Handle playlists
+  else if (item.type === "playlist" && item.url) {
+    router.push({ pathname: "./search/playlist", params: { id: encodeURIComponent(item.url) } });
+  }
+  // Handle albums
+  else if (item.type === "album" && item.url) {
+    router.push({ pathname: "./search/album", params: { id: encodeURIComponent(item.url), artist: item.subtitle } });
+  }
+  // Handle artists
+  else if (item.type === "artist" && item.url) {
+    router.push({ pathname: "./search/artist", params: { id: encodeURIComponent(item.url), subtitle: item.subtitle } });
+  }
+}, [handleSongPress, router]);
 
   const showDiscovery = !results && !error;
   const showResults = !!results;

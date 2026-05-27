@@ -28,8 +28,6 @@ let MediaLibrary: any = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AsyncStorage adapter for Zustand persist middleware
-// (react-native-mmkv v4 native module not linked in this build;
-//  swap back to MMKV once the native module is properly linked)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const mmkvStorage: StateStorage = {
@@ -374,7 +372,7 @@ function buildMostPlayed(songs: Record<string, Song>): string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Store  (plain Zustand v5 — no immer dependency)
+// Store (plain Zustand v5 — no immer dependency)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const useLibraryStore = create<LibraryState & LibraryActions>()(
@@ -702,23 +700,62 @@ export const useLibraryStore = create<LibraryState & LibraryActions>()(
         };
       }),
 
-      // ── Downloads ──────────────────────────────────────────────────────────
+      // ── Downloads (FIXED: Creates song if it doesn't exist) ─────────────────
       addDownload: (songId, metadata) => set((s) => {
         const nextIds = s.downloadedSongIds.includes(songId)
           ? s.downloadedSongIds
           : [songId, ...s.downloadedSongIds];
-        const nextSongs = s.songs[songId]
-          ? {
-              ...s.songs,
-              [songId]: {
-                ...s.songs[songId],
-                isDownloaded: true,
-                source: 'downloaded' as const,
-                ...metadata,
-              },
-            }
-          : s.songs;
-        return { downloadedSongIds: nextIds, songs: nextSongs };
+        
+        let nextSongs = { ...s.songs };
+        
+        if (s.songs[songId]) {
+          // Update existing song
+          nextSongs[songId] = {
+            ...s.songs[songId],
+            isDownloaded: true,
+            source: 'downloaded' as const,
+            ...metadata,
+          };
+        } else {
+          // CREATE NEW SONG ENTRY (FIX: This was missing)
+          const now = new Date().toISOString();
+          nextSongs[songId] = {
+            id: songId,
+            title: (metadata as any).title || 'Unknown Title',
+            artist: (metadata as any).artist || 'Unknown Artist',
+            url: (metadata as any).url || (metadata as any).localTrackUri || '',
+            duration: (metadata as any).duration || 0,
+            thumbnail: (metadata as any).thumbnail || (metadata as any).localArtworkUri,
+            isDownloaded: true,
+            isFavorite: false,
+            playCount: 0,
+            skipCount: 0,
+            dateAdded: now,
+            dateModified: now,
+            source: 'downloaded',
+            localTrackUri: (metadata as any).localTrackUri,
+            localArtworkUri: (metadata as any).localArtworkUri,
+            fileSize: (metadata as any).fileSize,
+            bitrate: (metadata as any).bitrate,
+            sampleRate: (metadata as any).sampleRate,
+            container: (metadata as any).container,
+            codec: (metadata as any).codec,
+            downloadDate: (metadata as any).downloadDate || now,
+            downloadQuality: (metadata as any).downloadQuality || 'high',
+            offlineAvailable: true,
+          };
+        }
+        
+        // Also ensure songId is in songIds array
+        const nextSongIds = s.songIds.includes(songId) 
+          ? s.songIds 
+          : [...s.songIds, songId];
+        
+        return { 
+          downloadedSongIds: nextIds, 
+          songs: nextSongs,
+          songIds: nextSongIds,
+        };
       }),
 
       removeDownload: (songId) => set((s) => {
@@ -1011,6 +1048,25 @@ export const useDownloadedPlaylists = () =>
 export const useActiveDownloads = () =>
   useLibraryStore(useShallow((s) => Object.values(s.activeDownloads)));
 
+// ── Individual download status ────────────────────────────────────────────────
+export const useIsSongDownloaded = (songId: string) =>
+  useLibraryStore((s) => s.downloadedSongIds.includes(songId));
+
+export const useIsSongDownloading = (songId: string) =>
+  useLibraryStore((s) => {
+    const downloads = Object.values(s.activeDownloads);
+    return downloads.some((d) => d.songId === songId && d.status !== 'completed');
+  });
+
+export const useSongDownloadProgress = (songId: string) =>
+  useLibraryStore((s) => {
+    const download = Object.values(s.activeDownloads).find((d) => d.songId === songId);
+    return download?.progress ?? 0;
+  });
+
+export const useActiveDownloadCount = () =>
+  useLibraryStore((s) => Object.values(s.activeDownloads).filter((d) => d.status === 'downloading').length);
+
 // ── History ───────────────────────────────────────────────────────────────────
 export const usePlayHistory = () => useLibraryStore(useShallow((s) => s.playHistory));
 export const useRecentlyPlayed = (limit?: number) =>
@@ -1165,9 +1221,7 @@ export async function scanLocalLibrary(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// initializeLibrary — called from _layout.tsx after TrackPlayer.setupPlayer().
-// MMKV rehydrates synchronously on the JS thread so the store already has
-// persisted state by the time any component mounts.
+// initializeLibrary — called from _layout.tsx
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function initializeLibrary(): Promise<void> {
