@@ -1,4 +1,4 @@
-// app/(player)/index.tsx - Home Screen (NO FALLBACKS, NO TRY-CATCH)
+// app/(player)/index.tsx - Home Screen
 import React, { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import {
   View,
@@ -18,7 +18,7 @@ import { useRouter } from "expo-router";
 
 import { triggerHaptic } from "@/helpers/haptics";
 import ScrollControllerWrapper from "@/components/ScrollControllerWrapper";
-import { useHomeStore, Song } from "@/store/home";
+import { useHomeStore, Song, CampaignCard } from "@/store/home";
 import { useMusicPlayer } from "@/libs/playerSetup";
 import { usePlayerOverlay } from "@/libs/playerOverlay";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -63,7 +63,7 @@ class SectionErrorBoundary extends React.Component<
   render() { if (this.state.hasError) return null; return this.props.children; }
 }
 
-// ─── Quick Actions Grid ───────────────────────────────────────────────────────
+// ─── Quick Actions - SINGLE CARD ONLY (No slideshow, no pagination) ───────────
 
 interface QuickActionsGridProps {
   recentSongs: Song[];
@@ -73,34 +73,12 @@ interface QuickActionsGridProps {
 function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
   const router = useRouter();
   const { colors } = useTheme();
-  const [currentPage, setCurrentPage] = useState(0);
-  const flatListRef = useRef<FlatList>(null);
 
-  const shuffledSongs = useMemo(() => {
-    if (recentSongs.length === 0) return [];
-    return shuffleArray(recentSongs);
-  }, [recentSongs]);
+  // Take ONLY the FIRST song - NO slideshow, NO multiple cards
+  const firstSong = recentSongs.length > 0 ? recentSongs[0] : null;
 
-  const pages = useMemo(() => {
-    const itemsPerPage = 6;
-    const result: Song[][] = [];
-    for (let i = 0; i < shuffledSongs.length; i += itemsPerPage) {
-      result.push(shuffledSongs.slice(i, i + itemsPerPage));
-    }
-    return result;
-  }, [shuffledSongs]);
-
-  useEffect(() => {
-    if (pages.length <= 1) return;
-    const interval = setInterval(() => {
-      const nextPage = (currentPage + 1) % pages.length;
-      setCurrentPage(nextPage);
-      flatListRef.current?.scrollToIndex({ index: nextPage, animated: true });
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [currentPage, pages.length]);
-
-  if (recentSongs.length === 0) return null;
+  // Don't show section if no recent songs
+  if (!firstSong) return null;
 
   const handleClearAll = () => {
     triggerHaptic();
@@ -111,46 +89,6 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
     triggerHaptic();
     router.push("/(player)/library/recent");
   };
-
-  const renderGridItem = ({ item }: { item: Song }) => (
-    <TouchableOpacity
-      style={styles.gridItem}
-      onPress={() => onSongPress(item)}
-      activeOpacity={0.7}
-    >
-      <Image
-        source={{ uri: item.thumbnail }}
-        style={[styles.gridImage, { backgroundColor: colors.surface }]}
-        contentFit="cover"
-        transition={150}
-      />
-      <Text style={[styles.gridTitle, { color: colors.text }]} numberOfLines={1}>
-        {item.title}
-      </Text>
-      <Text style={[styles.gridArtist, { color: colors.textSub }]} numberOfLines={1}>
-        {item.artist}
-      </Text>
-    </TouchableOpacity>
-  );
-
-  const renderPage = ({ item: pageItems }: { item: Song[] }) => (
-    <View style={styles.gridPage}>
-      <View style={styles.gridRow}>
-        {pageItems.slice(0, 3).map((song) => (
-          <View key={`grid-${song.id}-top`} style={styles.gridCell}>
-            {renderGridItem({ item: song })}
-          </View>
-        ))}
-      </View>
-      <View style={styles.gridRow}>
-        {pageItems.slice(3, 6).map((song) => (
-          <View key={`grid-${song.id}-bot`} style={styles.gridCell}>
-            {renderGridItem({ item: song })}
-          </View>
-        ))}
-      </View>
-    </View>
-  );
 
   return (
     <View style={styles.quickActionsContainer}>
@@ -169,34 +107,28 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
         </View>
       </View>
 
-      <FlatList
-        ref={flatListRef}
-        data={pages}
-        renderItem={renderPage}
-        keyExtractor={(_, index) => `page-${index}`}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={(e) => {
-          const newPage = Math.round(e.nativeEvent.contentOffset.x / width);
-          setCurrentPage(newPage);
-        }}
-      />
-
-      {pages.length > 1 && (
-        <View style={styles.pageIndicators}>
-          {pages.map((_, index) => (
-            <View
-              key={`indicator-${index}`}
-              style={[
-                styles.pageIndicator,
-                { backgroundColor: colors.textMuted },
-                currentPage === index && { width: 20, backgroundColor: colors.gold },
-              ]}
-            />
-          ))}
+      {/* SINGLE CARD - No FlatList, No horizontal scroll, No pagination */}
+      <TouchableOpacity
+        style={[styles.singleQuickActionCard, { backgroundColor: colors.surfaceRaised }]}
+        onPress={() => onSongPress(firstSong)}
+        activeOpacity={0.7}
+      >
+        <Image
+          source={{ uri: firstSong.thumbnail }}
+          style={[styles.singleQuickActionImage, { backgroundColor: colors.surface }]}
+          contentFit="cover"
+          transition={150}
+        />
+        <View style={styles.singleQuickActionInfo}>
+          <Text style={[styles.singleQuickActionTitle, { color: colors.text }]} numberOfLines={1}>
+            {firstSong.title}
+          </Text>
+          <Text style={[styles.singleQuickActionArtist, { color: colors.textSub }]} numberOfLines={1}>
+            {firstSong.artist}
+          </Text>
         </View>
-      )}
+        <Ionicons name="play-circle" size={32} color={colors.gold} style={styles.singleQuickActionPlay} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -262,11 +194,6 @@ function NewReleasesWrapper({ data }: { data: Song[] }) {
   return <NewReleasesSection data={data} />;
 }
 
-function QuickPicksWrapper({ data, onSongPress }: { data: Song[]; onSongPress: (song: Song) => void }) {
-  if (!data.length) return null;
-  return <QuickPicksSection results={data} onItemClick={onSongPress} />;
-}
-
 // ─── HOME SCREEN ──────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
@@ -276,13 +203,10 @@ export default function HomeScreen() {
   const router = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
 
-  // Direct hook usage - NO TRY-CATCH, NO FALLBACKS
-  // These hooks will only work because MusicPlayerProvider is properly mounted
   const { expandPlayer } = usePlayerOverlay();
   const { playAudio } = useMusicPlayer();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
 
-  // Wait for theme to be ready
   useEffect(() => {
     if (colors && colors.background) {
       setIsThemeReady(true);
@@ -290,26 +214,27 @@ export default function HomeScreen() {
   }, [colors]);
 
   // Store selectors
-  const trending            = useHomeStore((s) => s.trending);
-  const biggestHits         = useHomeStore((s) => s.biggestHits);
-  const peoplesChoice       = useHomeStore((s) => s.peoplesChoice);
-  const top10Month          = useHomeStore((s) => s.top10Month);
-  const mavinsBest          = useHomeStore((s) => s.mavinsBest);
-  const newReleases         = useHomeStore((s) => s.newReleases);
-  const throwbacks          = useHomeStore((s) => s.throwbacks);
-  const mixes               = useHomeStore((s) => s.mixes);
-  const channels            = useHomeStore((s) => s.channels);
-  const podcasts            = useHomeStore((s) => s.podcasts);
-  const radioStations       = useHomeStore((s) => s.radioStations);
-  const recentSongs         = useHomeStore((s) => s.recentSongs);
+  const trending = useHomeStore((s) => s.trending);
+  const biggestHits = useHomeStore((s) => s.biggestHits);
+  const peoplesChoice = useHomeStore((s) => s.peoplesChoice);
+  const top10Month = useHomeStore((s) => s.top10Month);
+  const mavinsBest = useHomeStore((s) => s.mavinsBest);
+  const newReleases = useHomeStore((s) => s.newReleases);
+  const throwbacks = useHomeStore((s) => s.throwbacks);
+  const mixes = useHomeStore((s) => s.mixes);
+  const channels = useHomeStore((s) => s.channels);
+  const podcasts = useHomeStore((s) => s.podcasts);
+  const radioStations = useHomeStore((s) => s.radioStations);
+  const recentSongs = useHomeStore((s) => s.recentSongs);
+  const quickPicks = useHomeStore((s) => s.quickPicks);
   const getExcludedIdsForTop10 = useHomeStore((s) => s.getExcludedIdsForTop10);
-  const top10ExcludedIds    = getExcludedIdsForTop10();
+  const top10ExcludedIds = getExcludedIdsForTop10();
 
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
         Animated.timing(watermarkPulse, { toValue: 1.06, duration: 3000, useNativeDriver: true }),
-        Animated.timing(watermarkPulse, { toValue: 1,    duration: 3000, useNativeDriver: true }),
+        Animated.timing(watermarkPulse, { toValue: 1, duration: 3000, useNativeDriver: true }),
       ])
     ).start();
   }, [watermarkPulse]);
@@ -326,16 +251,15 @@ export default function HomeScreen() {
       triggerHaptic();
       useHomeStore.getState().addRecentSong(song);
       
-      // Direct play - no checks needed because player is guaranteed to be ready
       playAudio(
-        { 
-          id: song.id, 
-          title: song.title, 
+        {
+          id: song.id,
+          title: song.title,
           artist: song.artist,
-          thumbnail: song.thumbnail, 
+          thumbnail: song.thumbnail,
           url: song.url || "",
-          duration: song.duration, 
-          videoId: song.videoId 
+          duration: song.duration,
+          videoId: song.videoId
         },
         undefined,
         expandPlayer,
@@ -344,31 +268,60 @@ export default function HomeScreen() {
     [playAudio, expandPlayer],
   );
 
-  const handleSearchPress = useCallback(() => { 
-    triggerHaptic(); 
-    router.push("/search"); 
-  }, [router]);
-  
-  const handleNotificationsPress = useCallback(() => { 
-    triggerHaptic(); 
-    router.push("/(modals)/notifications"); 
+  const handleCampaignCardPress = useCallback(
+    (card: CampaignCard) => {
+      triggerHaptic();
+      // Campaign cards are treated as songs
+      if (card.songId || card.id) {
+        const songToPlay = trending.find(s => s.id === card.songId || s.id === card.id) ||
+          biggestHits.find(s => s.id === card.songId || s.id === card.id) ||
+          newReleases.find(s => s.id === card.songId || s.id === card.id) ||
+          peoplesChoice.find(s => s.id === card.songId || s.id === card.id);
+        
+        if (songToPlay) {
+          handleSongPress(songToPlay);
+          return;
+        }
+        
+        // Fallback: create basic song object
+        handleSongPress({
+          id: card.songId || card.id,
+          title: card.title,
+          artist: card.description || 'Various Artists',
+          thumbnail: card.thumbnail,
+          url: '',
+          videoId: '',
+          duration: 0,
+        });
+      }
+    },
+    [trending, biggestHits, newReleases, peoplesChoice, handleSongPress],
+  );
+
+  const handleSearchPress = useCallback(() => {
+    triggerHaptic();
+    router.push("/search");
   }, [router]);
 
-  // Memoized header component with theme colors
+  const handleNotificationsPress = useCallback(() => {
+    triggerHaptic();
+    router.push("/(modals)/notifications");
+  }, [router]);
+
   const CombinedHeader = useMemo(
     () => (
       <View style={{ backgroundColor: colors.background }}>
         <View style={[styles.header, { paddingTop: top + 10, backgroundColor: colors.background }]}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.searchContainer, 
-              { 
-                backgroundColor: colors.surfaceRaised, 
+              styles.searchContainer,
+              {
+                backgroundColor: colors.surfaceRaised,
                 borderColor: `${colors.gold}40`,
                 borderWidth: 1,
               }
-            ]} 
-            onPress={handleSearchPress} 
+            ]}
+            onPress={handleSearchPress}
             activeOpacity={0.7}
           >
             <Ionicons name="search" size={20} color={colors.gold} style={styles.searchIcon} />
@@ -377,8 +330,8 @@ export default function HomeScreen() {
             </Text>
           </TouchableOpacity>
           <View style={styles.headerRight}>
-            <TouchableOpacity 
-              onPress={handleNotificationsPress} 
+            <TouchableOpacity
+              onPress={handleNotificationsPress}
               style={styles.iconButton}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
@@ -391,7 +344,6 @@ export default function HomeScreen() {
     [colors, top, handleSearchPress, handleNotificationsPress],
   );
 
-  // Don't render until theme is ready
   if (!isThemeReady) {
     return (
       <View style={[styles.container, { backgroundColor: colors?.background || '#000000' }]}>
@@ -408,9 +360,9 @@ export default function HomeScreen() {
         <Animated.Image
           source={require("@/assets/images/mavins.png")}
           style={[
-            styles.watermark, 
-            { 
-              transform: [{ scale: watermarkPulse }], 
+            styles.watermark,
+            {
+              transform: [{ scale: watermarkPulse }],
               opacity: colors.watermarkOpacity,
             }
           ]}
@@ -437,7 +389,7 @@ export default function HomeScreen() {
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Quick Picks">
-          <QuickPicksWrapper data={recentSongs} onSongPress={handleSongPress} />
+          <QuickPicksSection data={quickPicks} onCardPress={handleCampaignCardPress} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Trending Now">
@@ -520,6 +472,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16 },
   bottomSpacing: { height: 140 },
 
+  // ── Quick Actions Section (Single Card - NO slideshow) ──
   quickActionsContainer: { marginVertical: 16 },
   sectionHeader: {
     flexDirection: "row",
@@ -534,6 +487,37 @@ const styles = StyleSheet.create({
   headerButton: { paddingHorizontal: 12, paddingVertical: 4 },
   headerButtonText: { fontSize: 13, fontWeight: "500" },
   seeAllText: { fontSize: 13, fontWeight: "600" },
+
+  // SINGLE CARD STYLES (No grid, no FlatList, no pagination)
+  singleQuickActionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 4,
+  },
+  singleQuickActionImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+  },
+  singleQuickActionInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  singleQuickActionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  singleQuickActionArtist: {
+    fontSize: 13,
+  },
+  singleQuickActionPlay: {
+    marginLeft: 8,
+  },
+
+  // Legacy styles (kept for other sections that may use them)
   gridPage: { width: width - 32 },
   gridRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   gridCell: { width: GRID_SIZE },

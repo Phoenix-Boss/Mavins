@@ -260,18 +260,6 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
     () => router.push('/(modals)/comments'),
     [router],
   );
-  const onNavigateToEqualizer = useCallback(
-    () => router.push('/(modals)/equalizer'),
-    [router],
-  );
-  const onNavigateToCast = useCallback(
-    () => router.push('/(modals)/cast'),
-    [router],
-  );
-  const onNavigateToSleepTimer = useCallback(
-    () => router.push('/(modals)/sleepTimer'),
-    [router],
-  );
 
   const onNavigateToArtist = useCallback(
     (params?: { id: string; subtitle: string }) => {
@@ -311,9 +299,6 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
           onNavigateToQueue={onNavigateToQueue}
           onNavigateToPlaylist={onNavigateToPlaylist}
           onNavigateToComments={onNavigateToComments}
-          onNavigateToEqualizer={onNavigateToEqualizer}
-          onNavigateToCast={onNavigateToCast}
-          onNavigateToSleepTimer={onNavigateToSleepTimer}
           onNavigateToLocalFolder={onNavigateToLocalFolder}
         />
       </ReAnimated.View>

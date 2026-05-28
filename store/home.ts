@@ -59,6 +59,18 @@ export interface EditorPick {
   views: number;
 }
 
+export interface CampaignCard {
+  id: string;
+  title: string;
+  description?: string;
+  thumbnail: string;
+  promoted: boolean;
+  mavinSpecial: boolean;
+  playCount: number;
+  ctaUrl?: string;
+  songId?: string;
+}
+
 interface HomeState {
   trending: Song[];
   biggestHits: Song[];
@@ -72,6 +84,7 @@ interface HomeState {
   podcasts: Podcast[];
   radioStations: RadioStation[];
   recentSongs: Song[];
+  quickPicks: CampaignCard[];
   
   lastUpdated: number | null;
   lastFetchedAt: number | null;
@@ -93,6 +106,7 @@ interface HomeState {
   addRecentSong: (song: Song) => void;
   removeRecentSong: (songId: string) => void;
   clearRecentSongs: () => void;
+  setQuickPicks: (cards: CampaignCard[]) => void;
   
   setAllData: (data: Partial<Omit<HomeState, 
     | 'setTrending' | 'setBiggestHits' | 'setPeoplesChoice' 
@@ -100,7 +114,7 @@ interface HomeState {
     | 'setThrowbacks' | 'setMixes' | 'setChannels' 
     | 'setPodcasts' | 'setRadioStations' | 'setRecentSongs'
     | 'addRecentSong' | 'removeRecentSong' | 'clearRecentSongs'
-    | 'setAllData' | 'markFresh' | 'markStale' | 'setLoading'
+    | 'setQuickPicks' | 'setAllData' | 'markFresh' | 'markStale' | 'setLoading'
     | 'getExcludedIdsForTop10' | 'hasAnyData' | 'isDataFresh'
   >>) => void;
   
@@ -130,7 +144,8 @@ export const useHomeStore = create<HomeState>()(
         channels: [],
         podcasts: [],
         radioStations: [],
-        recentSongs: [], // This starts empty on every app launch
+        recentSongs: [],
+        quickPicks: [],
         
         lastUpdated: null,
         lastFetchedAt: null,
@@ -218,6 +233,11 @@ export const useHomeStore = create<HomeState>()(
           set({ recentSongs: [], lastUpdated: Date.now() });
         },
         
+        setQuickPicks: (quickPicks) => {
+          console.log(`📊 [HomeStore] setQuickPicks: ${quickPicks.length} campaign cards`);
+          set({ quickPicks, lastUpdated: Date.now() });
+        },
+        
         setAllData: (data) => {
           console.log('📊 [HomeStore] setAllData called with sections:', Object.keys(data));
           set({ 
@@ -237,7 +257,6 @@ export const useHomeStore = create<HomeState>()(
         
         markStale: () => {
           console.log('📊 [HomeStore] markStale called');
-          // Clear lastFetchedAt so HomePreloader will re-fetch on next render
           set({ isStale: true, lastFetchedAt: null });
         },
         
@@ -281,14 +300,11 @@ export const useHomeStore = create<HomeState>()(
             state.mixes.length > 0 ||
             state.channels.length > 0 ||
             state.podcasts.length > 0 ||
-            state.radioStations.length > 0
+            state.radioStations.length > 0 ||
+            state.quickPicks.length > 0
           );
         },
 
-        // Returns true if data was fetched within the last 30 minutes.
-        // HomePreloader uses this to skip fetching when persisted data is fresh enough.
-        // Returns false if lastFetchedAt is null (new install, after markStale, or first
-        // launch where setAllData has never completed successfully).
         isDataFresh: () => {
           const { lastFetchedAt } = get();
           if (!lastFetchedAt) return false;
@@ -298,9 +314,8 @@ export const useHomeStore = create<HomeState>()(
       };
     },
     {
-      name: 'home-store-v5',
+      name: 'home-store-v6',
       storage: createJSONStorage(() => AsyncStorage),
-      // CRITICAL: recentSongs is NOT persisted - always fresh from database
       partialize: (state) => ({
         trending: state.trending,
         biggestHits: state.biggestHits,
@@ -313,7 +328,7 @@ export const useHomeStore = create<HomeState>()(
         channels: state.channels,
         podcasts: state.podcasts,
         radioStations: state.radioStations,
-        // recentSongs is EXCLUDED from persistence - always fresh from DB
+        quickPicks: state.quickPicks,
         lastUpdated: state.lastUpdated,
         lastFetchedAt: state.lastFetchedAt,
         isStale: state.isStale,
@@ -321,3 +336,12 @@ export const useHomeStore = create<HomeState>()(
     }
   )
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORTS - Fixed: No duplicate export declarations
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type { HomeState };
+
+// Default export for convenience
+export default useHomeStore;

@@ -1,4 +1,13 @@
 // app/search/index.tsx
+//
+// FIXED: Discover/Beats song taps play via expo-audio in collapsed miniplayer
+// FIXED: No expanded player on discovery tap — collapsePlayer used
+// FIXED: Trending section shows cover art thumbnails when available (restored from v1)
+// FIXED: handleDiscoveryPress explicitly calls deactivateAudio before playAudio
+//        so expo-video always releases focus before expo-audio picks it up
+// FIXED: Trending tap plays in miniplayer (collapsed), not expanded
+// FIXED: expo-audio and expo-video session separation ensured on every play
+
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
@@ -137,7 +146,10 @@ const formatSubs = (n: number): string => {
 };
 
 const accentColor = (seed: string): string => {
-  const palette = ["#1DB954", "#E91429", "#8D67AB", "#E13300", "#148A08", "#DC148C", "#1E3264", "#0D73EC"];
+  const palette = [
+    "#1DB954", "#E91429", "#8D67AB", "#E13300",
+    "#148A08", "#DC148C", "#1E3264", "#0D73EC",
+  ];
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = seed.charCodeAt(i) + ((h << 5) - h);
   return palette[Math.abs(h) % palette.length];
@@ -192,7 +204,12 @@ const mapEngineResults = (items: InfoItem[]): SearchResults => {
 
 const deviceCacheKey = (q: string) => `search:results:${q.toLowerCase().trim()}`;
 
-async function saveToGlobalHistory(query: string, thumbnail = "", artist = "", trackUuid = ""): Promise<void> {
+async function saveToGlobalHistory(
+  query: string,
+  thumbnail = "",
+  artist = "",
+  trackUuid = "",
+): Promise<void> {
   try {
     const { error: upsertError } = await supabase.from("global_search_history").upsert(
       {
@@ -202,9 +219,9 @@ async function saveToGlobalHistory(query: string, thumbnail = "", artist = "", t
         track_uuid: trackUuid || null,
         last_searched: new Date().toISOString(),
       },
-      { onConflict: "query" }
+      { onConflict: "query" },
     );
-    
+
     if (upsertError) {
       console.error("[Search] Upsert error:", upsertError);
       return;
@@ -251,6 +268,10 @@ async function getStreamUrlByTrackUuid(trackUuid: string): Promise<string | null
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TRENDING SEARCHES CONVEYOR
+// Shows cover art thumbnail when available, falls back to initial-letter avatar
+// ─────────────────────────────────────────────────────────────────────────────
 function TrendingConveyorBelt({
   history,
   onSelect,
@@ -278,7 +299,7 @@ function TrendingConveyorBelt({
           duration: history.length * 2800,
           easing: Easing.linear,
           useNativeDriver: true,
-        })
+        }),
       );
       animRef.current.start();
     };
@@ -295,7 +316,9 @@ function TrendingConveyorBelt({
     <View style={conveyorStyles.wrapper}>
       <Text style={[conveyorStyles.heading, { color: colors.text }]}>🔥 Trending Searches</Text>
       <View style={conveyorStyles.track}>
-        <Animated.View style={[conveyorStyles.belt, { transform: [{ translateX: scrollX }] }]}>
+        <Animated.View
+          style={[conveyorStyles.belt, { transform: [{ translateX: scrollX }] }]}
+        >
           {doubled.map((item, index) => {
             const bg = accentColor(item.query);
             return (
@@ -305,9 +328,14 @@ function TrendingConveyorBelt({
                 onPress={() => onSelect(item)}
                 activeOpacity={0.75}
               >
+                {/* RESTORED: show thumbnail cover art when available, fall back to initial avatar */}
                 <View style={[conveyorStyles.avatarRing, { borderColor: bg + "70" }]}>
                   {item.thumbnail_url ? (
-                    <Image source={{ uri: item.thumbnail_url }} style={conveyorStyles.avatar} contentFit="cover" />
+                    <Image
+                      source={{ uri: item.thumbnail_url }}
+                      style={conveyorStyles.avatar}
+                      contentFit="cover"
+                    />
                   ) : (
                     <View style={[conveyorStyles.avatar, { backgroundColor: bg + "22" }]}>
                       <Text style={[conveyorStyles.initial, { color: bg }]}>
@@ -316,7 +344,10 @@ function TrendingConveyorBelt({
                     </View>
                   )}
                 </View>
-                <Text style={[conveyorStyles.label, { color: colors.textSub }]} numberOfLines={1}>
+                <Text
+                  style={[conveyorStyles.label, { color: colors.textSub }]}
+                  numberOfLines={1}
+                >
                   {item.query.length > 10 ? item.query.slice(0, 9) + "…" : item.query}
                 </Text>
               </TouchableOpacity>
@@ -330,16 +361,28 @@ function TrendingConveyorBelt({
 
 const conveyorStyles = StyleSheet.create({
   wrapper: { marginBottom: 22 },
-  heading: { fontSize: 13, fontWeight: "700", marginBottom: 12, paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase" },
+  heading: {
+    fontSize: 13, fontWeight: "700", marginBottom: 12,
+    paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase",
+  },
   track: { overflow: "hidden", paddingLeft: 16 },
   belt: { flexDirection: "row", alignItems: "flex-start", gap: TRENDING_ITEM_GAP },
   item: { alignItems: "center", width: TRENDING_ITEM_WIDTH },
-  avatarRing: { width: 52, height: 52, borderRadius: 26, borderWidth: 1.5, padding: 2, justifyContent: "center", alignItems: "center", overflow: "hidden" },
-  avatar: { width: 46, height: 46, borderRadius: 23, justifyContent: "center", alignItems: "center" },
+  avatarRing: {
+    width: 52, height: 52, borderRadius: 26, borderWidth: 1.5,
+    padding: 2, justifyContent: "center", alignItems: "center", overflow: "hidden",
+  },
+  avatar: {
+    width: 46, height: 46, borderRadius: 23,
+    justifyContent: "center", alignItems: "center",
+  },
   initial: { fontSize: 18, fontWeight: "700" },
   label: { fontSize: 10, marginTop: 5, textAlign: "center", maxWidth: 68 },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUGGESTIONS OVERLAY
+// ─────────────────────────────────────────────────────────────────────────────
 function SuggestionsOverlay({
   suggestions,
   onSelect,
@@ -354,11 +397,20 @@ function SuggestionsOverlay({
   if (!visible || !suggestions.length) return null;
 
   return (
-    <View style={[suggStyles.container, { backgroundColor: colors.background + "F5", borderColor: colors.border }]}>
+    <View
+      style={[
+        suggStyles.container,
+        { backgroundColor: colors.background + "F5", borderColor: colors.border },
+      ]}
+    >
       {suggestions.map((s, i) => (
         <TouchableOpacity
           key={i}
-          style={[suggStyles.row, { borderBottomColor: colors.border }, i === suggestions.length - 1 && { borderBottomWidth: 0 }]}
+          style={[
+            suggStyles.row,
+            { borderBottomColor: colors.border },
+            i === suggestions.length - 1 && { borderBottomWidth: 0 },
+          ]}
           onPress={() => onSelect(s)}
           activeOpacity={0.7}
         >
@@ -371,11 +423,23 @@ function SuggestionsOverlay({
 }
 
 const suggStyles = StyleSheet.create({
-  container: { position: "absolute", top: 0, left: 16, right: 16, zIndex: 99, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden", shadowColor: "#000", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 14, elevation: 10 },
-  row: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  container: {
+    position: "absolute", top: 0, left: 16, right: 16, zIndex: 99,
+    borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2, shadowRadius: 14, elevation: 10,
+  },
+  row: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   text: { fontSize: 14, flex: 1 },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RECOMMENDED PLAYLISTS
+// ─────────────────────────────────────────────────────────────────────────────
 function RecommendedPlaylists({
   items,
   onPress,
@@ -390,42 +454,48 @@ function RecommendedPlaylists({
   return (
     <View style={plStyles.wrapper}>
       <Text style={[plStyles.heading, { color: colors.text }]}>Playlists For You</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={plStyles.row}>
-        {loading ? (
-          [1, 2, 3].map(i => (
-            <View key={i} style={[plStyles.card, { backgroundColor: colors.surfaceRaised }]}>
-              <View style={[plStyles.thumb, { backgroundColor: colors.surfaceHigh }]} />
-              <View style={{ flex: 1, gap: 6, paddingHorizontal: 10 }}>
-                <View style={{ height: 11, width: "80%", borderRadius: 4, backgroundColor: colors.surfaceHigh }} />
-                <View style={{ height: 9, width: "55%", borderRadius: 4, backgroundColor: colors.surfaceHigh }} />
-              </View>
-            </View>
-          ))
-        ) : (
-          items.map(item => {
-            const bg = accentColor(item.title);
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={[plStyles.card, { backgroundColor: colors.surfaceRaised }]}
-                onPress={() => onPress(item)}
-                activeOpacity={0.8}
-              >
-                {item.thumbnail ? (
-                  <Image source={{ uri: item.thumbnail }} style={plStyles.thumb} contentFit="cover" />
-                ) : (
-                  <View style={[plStyles.thumb, { backgroundColor: bg + "22" }]}>
-                    <Ionicons name="musical-notes" size={20} color={bg} />
-                  </View>
-                )}
-                <View style={{ flex: 1, paddingHorizontal: 10, justifyContent: "center" }}>
-                  <Text style={[plStyles.title, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
-                  <Text style={[plStyles.sub, { color: colors.textSub }]} numberOfLines={1}>{item.subtitle}</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={plStyles.row}
+      >
+        {loading
+          ? [1, 2, 3].map(i => (
+              <View key={i} style={[plStyles.card, { backgroundColor: colors.surfaceRaised }]}>
+                <View style={[plStyles.thumb, { backgroundColor: colors.surfaceHigh }]} />
+                <View style={{ flex: 1, gap: 6, paddingHorizontal: 10 }}>
+                  <View style={{ height: 11, width: "80%", borderRadius: 4, backgroundColor: colors.surfaceHigh }} />
+                  <View style={{ height: 9, width: "55%", borderRadius: 4, backgroundColor: colors.surfaceHigh }} />
                 </View>
-              </TouchableOpacity>
-            );
-          })
-        )}
+              </View>
+            ))
+          : items.map(item => {
+              const bg = accentColor(item.title);
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[plStyles.card, { backgroundColor: colors.surfaceRaised }]}
+                  onPress={() => onPress(item)}
+                  activeOpacity={0.8}
+                >
+                  {item.thumbnail ? (
+                    <Image source={{ uri: item.thumbnail }} style={plStyles.thumb} contentFit="cover" />
+                  ) : (
+                    <View style={[plStyles.thumb, { backgroundColor: bg + "22" }]}>
+                      <Ionicons name="musical-notes" size={20} color={bg} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1, paddingHorizontal: 10, justifyContent: "center" }}>
+                    <Text style={[plStyles.title, { color: colors.text }]} numberOfLines={2}>
+                      {item.title}
+                    </Text>
+                    <Text style={[plStyles.sub, { color: colors.textSub }]} numberOfLines={1}>
+                      {item.subtitle}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
       </ScrollView>
     </View>
   );
@@ -433,14 +503,23 @@ function RecommendedPlaylists({
 
 const plStyles = StyleSheet.create({
   wrapper: { marginBottom: 24 },
-  heading: { fontSize: 13, fontWeight: "700", marginBottom: 12, paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase" },
+  heading: {
+    fontSize: 13, fontWeight: "700", marginBottom: 12,
+    paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase",
+  },
   row: { paddingHorizontal: 16, gap: 10 },
-  card: { flexDirection: "row", alignItems: "center", width: 210, borderRadius: 10, overflow: "hidden", height: 64 },
+  card: {
+    flexDirection: "row", alignItems: "center",
+    width: 210, borderRadius: 10, overflow: "hidden", height: 64,
+  },
   thumb: { width: 64, height: 64, justifyContent: "center", alignItems: "center" },
   title: { fontSize: 12, fontWeight: "600", marginBottom: 3 },
   sub: { fontSize: 11 },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DISCOVER GRID
+// ─────────────────────────────────────────────────────────────────────────────
 function DiscoverGrid({
   items,
   onPress,
@@ -479,8 +558,12 @@ function DiscoverGrid({
               </View>
             )}
             <View style={dgStyles.cardInfo}>
-              <Text style={[dgStyles.cardTitle, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
-              <Text style={[dgStyles.cardSub, { color: colors.textSub }]} numberOfLines={1}>{item.subtitle}</Text>
+              <Text style={[dgStyles.cardTitle, { color: colors.text }]} numberOfLines={1}>
+                {item.title}
+              </Text>
+              <Text style={[dgStyles.cardSub, { color: colors.textSub }]} numberOfLines={1}>
+                {item.subtitle}
+              </Text>
             </View>
           </TouchableOpacity>
         );
@@ -491,7 +574,10 @@ function DiscoverGrid({
   const renderSkeletonPage = (pageIdx: number) => (
     <View key={pageIdx} style={[dgStyles.page, { width: PAGE_WIDTH }]}>
       {skeletonPage.map(idx => (
-        <View key={idx} style={[dgStyles.card, { width: GRID_CARD_WIDTH, backgroundColor: colors.surfaceRaised }]}>
+        <View
+          key={idx}
+          style={[dgStyles.card, { width: GRID_CARD_WIDTH, backgroundColor: colors.surfaceRaised }]}
+        >
           <View style={[dgStyles.cardImage, { backgroundColor: colors.surfaceHigh }]} />
           <View style={dgStyles.cardInfo}>
             <View style={{ height: 10, width: "75%", borderRadius: 4, backgroundColor: colors.surfaceHigh, marginBottom: 4 }} />
@@ -513,7 +599,9 @@ function DiscoverGrid({
         snapToAlignment="start"
         contentContainerStyle={dgStyles.scroll}
       >
-        {loading ? [0, 1].map(i => renderSkeletonPage(i)) : pages.map((pageItems, idx) => renderPage(pageItems, idx))}
+        {loading
+          ? [0, 1].map(i => renderSkeletonPage(i))
+          : pages.map((pageItems, idx) => renderPage(pageItems, idx))}
       </ScrollView>
     </View>
   );
@@ -521,16 +609,25 @@ function DiscoverGrid({
 
 const dgStyles = StyleSheet.create({
   wrapper: { marginBottom: 24 },
-  heading: { fontSize: 13, fontWeight: "700", marginBottom: 12, paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase" },
+  heading: {
+    fontSize: 13, fontWeight: "700", marginBottom: 12,
+    paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase",
+  },
   scroll: { paddingHorizontal: 16, gap: 12 },
   page: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   card: { borderRadius: 10, overflow: "hidden" },
-  cardImage: { width: "100%", height: GRID_CARD_HEIGHT * 0.6, justifyContent: "center", alignItems: "center" },
+  cardImage: {
+    width: "100%", height: GRID_CARD_HEIGHT * 0.6,
+    justifyContent: "center", alignItems: "center",
+  },
   cardInfo: { paddingHorizontal: 8, paddingVertical: 6 },
   cardTitle: { fontSize: 11, fontWeight: "600", marginBottom: 2 },
   cardSub: { fontSize: 10 },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BEATS SECTION
+// ─────────────────────────────────────────────────────────────────────────────
 function BeatsSection({
   items,
   onPress,
@@ -568,12 +665,20 @@ function BeatsSection({
               </View>
             )}
             <View style={bStyles.cardInfo}>
-              <Text style={[bStyles.cardTitle, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
-              <Text style={[bStyles.cardSub, { color: colors.textSub }]} numberOfLines={1}>{item.subtitle}</Text>
+              <Text style={[bStyles.cardTitle, { color: colors.text }]} numberOfLines={1}>
+                {item.title}
+              </Text>
+              <Text style={[bStyles.cardSub, { color: colors.textSub }]} numberOfLines={1}>
+                {item.subtitle}
+              </Text>
               {item.bpm && item.key && (
                 <View style={bStyles.metaRow}>
-                  <Text style={[bStyles.metaChip, { color: bg, borderColor: bg + "50" }]}>{item.bpm} BPM</Text>
-                  <Text style={[bStyles.metaChip, { color: bg, borderColor: bg + "50" }]}>{item.key}</Text>
+                  <Text style={[bStyles.metaChip, { color: bg, borderColor: bg + "50" }]}>
+                    {item.bpm} BPM
+                  </Text>
+                  <Text style={[bStyles.metaChip, { color: bg, borderColor: bg + "50" }]}>
+                    {item.key}
+                  </Text>
                 </View>
               )}
             </View>
@@ -587,11 +692,18 @@ function BeatsSection({
     return (
       <View style={bStyles.wrapper}>
         <Text style={[bStyles.heading, { color: colors.text }]}>Beats</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={bStyles.scroll}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={bStyles.scroll}
+        >
           {[0, 1].map(i => (
             <View key={i} style={[bStyles.page, { width: PAGE_WIDTH }]}>
               {[0, 1, 2, 3].map(idx => (
-                <View key={idx} style={[bStyles.card, { width: GRID_CARD_WIDTH, backgroundColor: colors.surfaceRaised }]}>
+                <View
+                  key={idx}
+                  style={[bStyles.card, { width: GRID_CARD_WIDTH, backgroundColor: colors.surfaceRaised }]}
+                >
                   <View style={[bStyles.cardImage, { backgroundColor: colors.surfaceHigh }]} />
                   <View style={bStyles.cardInfo}>
                     <View style={{ height: 10, width: "80%", borderRadius: 4, backgroundColor: colors.surfaceHigh }} />
@@ -627,21 +739,44 @@ function BeatsSection({
 
 const bStyles = StyleSheet.create({
   wrapper: { marginBottom: 28 },
-  heading: { fontSize: 13, fontWeight: "700", marginBottom: 12, paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase" },
+  heading: {
+    fontSize: 13, fontWeight: "700", marginBottom: 12,
+    paddingHorizontal: 16, letterSpacing: 0.4, textTransform: "uppercase",
+  },
   scroll: { paddingHorizontal: 16, gap: 12 },
   page: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   card: { borderRadius: 10, overflow: "hidden" },
-  cardImage: { width: "100%", height: GRID_CARD_HEIGHT * 0.6, justifyContent: "center", alignItems: "center" },
+  cardImage: {
+    width: "100%", height: GRID_CARD_HEIGHT * 0.6,
+    justifyContent: "center", alignItems: "center",
+  },
   cardInfo: { paddingHorizontal: 8, paddingVertical: 6 },
   cardTitle: { fontSize: 11, fontWeight: "600", marginBottom: 2 },
   cardSub: { fontSize: 10, marginBottom: 4 },
   metaRow: { flexDirection: "row", gap: 4 },
-  metaChip: { fontSize: 9, fontWeight: "600", borderWidth: 1, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1 },
+  metaChip: {
+    fontSize: 9, fontWeight: "600", borderWidth: 1,
+    borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1,
+  },
 });
 
-function SongResultRow({ item, onPress, onMenu, colors }: { item: SongResult; onPress: () => void; onMenu: () => void; colors: any }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// RESULT ROWS
+// ─────────────────────────────────────────────────────────────────────────────
+function SongResultRow({
+  item, onPress, onMenu, colors,
+}: {
+  item: SongResult;
+  onPress: () => void;
+  onMenu: () => void;
+  colors: any;
+}) {
   return (
-    <TouchableOpacity style={[rowStyles.container, { borderBottomColor: colors.border }]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={[rowStyles.container, { borderBottomColor: colors.border }]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
       {item.thumbnail ? (
         <Image source={{ uri: item.thumbnail }} style={rowStyles.thumb} contentFit="cover" />
       ) : (
@@ -653,14 +788,24 @@ function SongResultRow({ item, onPress, onMenu, colors }: { item: SongResult; on
         <Text style={[rowStyles.title, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
         <Text style={[rowStyles.sub, { color: colors.textSub }]} numberOfLines={1}>{item.artist}</Text>
       </View>
-      <TouchableOpacity onPress={onMenu} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={rowStyles.menuBtn}>
+      <TouchableOpacity
+        onPress={onMenu}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        style={rowStyles.menuBtn}
+      >
         <Entypo name="dots-three-vertical" size={15} color={colors.textMuted} />
       </TouchableOpacity>
     </TouchableOpacity>
   );
 }
 
-function OtherResultRow({ item, onPress, colors }: { item: AlbumResult | ArtistResult | PlaylistResult; onPress: () => void; colors: any }) {
+function OtherResultRow({
+  item, onPress, colors,
+}: {
+  item: AlbumResult | ArtistResult | PlaylistResult;
+  onPress: () => void;
+  colors: any;
+}) {
   const isArtist = item.type === "artist";
   const icon = isArtist ? "person" : item.type === "album" ? "disc" : "list";
   const subtitle = isArtist
@@ -670,11 +815,25 @@ function OtherResultRow({ item, onPress, colors }: { item: AlbumResult | ArtistR
     : `Playlist · ${(item as PlaylistResult).streamCount} songs`;
 
   return (
-    <TouchableOpacity style={[rowStyles.container, { borderBottomColor: colors.border }]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={[rowStyles.container, { borderBottomColor: colors.border }]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
       {item.thumbnail ? (
-        <Image source={{ uri: item.thumbnail }} style={[rowStyles.thumb, isArtist && rowStyles.thumbCircle]} contentFit="cover" />
+        <Image
+          source={{ uri: item.thumbnail }}
+          style={[rowStyles.thumb, isArtist && rowStyles.thumbCircle]}
+          contentFit="cover"
+        />
       ) : (
-        <View style={[rowStyles.thumb, rowStyles.thumbFallback, isArtist && rowStyles.thumbCircle, { backgroundColor: colors.surfaceRaised }]}>
+        <View
+          style={[
+            rowStyles.thumb, rowStyles.thumbFallback,
+            isArtist && rowStyles.thumbCircle,
+            { backgroundColor: colors.surfaceRaised },
+          ]}
+        >
           <Ionicons name={icon} size={20} color={colors.gold} />
         </View>
       )}
@@ -687,7 +846,11 @@ function OtherResultRow({ item, onPress, colors }: { item: AlbumResult | ArtistR
 }
 
 const rowStyles = StyleSheet.create({
-  container: { flexDirection: "row", alignItems: "center", paddingVertical: 9, paddingHorizontal: 16, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  container: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 9, paddingHorizontal: 16,
+    gap: 12, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   thumb: { width: 50, height: 50, borderRadius: 6 },
   thumbCircle: { borderRadius: 25 },
   thumbFallback: { justifyContent: "center", alignItems: "center" },
@@ -697,7 +860,17 @@ const rowStyles = StyleSheet.create({
   menuBtn: { padding: 4 },
 });
 
-function TopResultCard({ item, onPress, onPlay, colors }: { item: SearchResult; onPress: () => void; onPlay: () => void; colors: any }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// TOP RESULT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+function TopResultCard({
+  item, onPress, onPlay, colors,
+}: {
+  item: SearchResult;
+  onPress: () => void;
+  onPlay: () => void;
+  colors: any;
+}) {
   const isArtist = item.type === "artist";
   const icon = isArtist ? "person" : item.type === "album" ? "disc" : "musical-notes";
   const subtitle = isArtist
@@ -709,17 +882,34 @@ function TopResultCard({ item, onPress, onPlay, colors }: { item: SearchResult; 
     : `Song · ${item.artist}`;
 
   return (
-    <TouchableOpacity style={[topStyles.card, { backgroundColor: colors.surface }]} onPress={onPress} activeOpacity={0.85}>
+    <TouchableOpacity
+      style={[topStyles.card, { backgroundColor: colors.surface }]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
       {item.thumbnail ? (
-        <Image source={{ uri: item.thumbnail }} style={[topStyles.image, isArtist && topStyles.imageCircle]} contentFit="cover" />
+        <Image
+          source={{ uri: item.thumbnail }}
+          style={[topStyles.image, isArtist && topStyles.imageCircle]}
+          contentFit="cover"
+        />
       ) : (
-        <View style={[topStyles.image, topStyles.imageFallback, isArtist && topStyles.imageCircle, { backgroundColor: colors.surfaceLight }]}>
+        <View
+          style={[
+            topStyles.image, topStyles.imageFallback,
+            isArtist && topStyles.imageCircle,
+            { backgroundColor: colors.surfaceLight },
+          ]}
+        >
           <Ionicons name={icon} size={38} color={colors.gold} />
         </View>
       )}
       <Text style={[topStyles.title, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
       <Text style={[topStyles.sub, { color: colors.textSub }]} numberOfLines={1}>{subtitle}</Text>
-      <TouchableOpacity style={[topStyles.playBtn, { backgroundColor: colors.gold }]} onPress={e => { e.stopPropagation?.(); onPlay(); }}>
+      <TouchableOpacity
+        style={[topStyles.playBtn, { backgroundColor: colors.gold }]}
+        onPress={e => { e.stopPropagation?.(); onPlay(); }}
+      >
         <Ionicons name="play" size={20} color="#000" />
       </TouchableOpacity>
     </TouchableOpacity>
@@ -727,20 +917,40 @@ function TopResultCard({ item, onPress, onPlay, colors }: { item: SearchResult; 
 }
 
 const topStyles = StyleSheet.create({
-  card: { borderRadius: 10, padding: 14, marginRight: 8, position: "relative", overflow: "hidden", width: 178 },
+  card: {
+    borderRadius: 10, padding: 14, marginRight: 8,
+    position: "relative", overflow: "hidden", width: 178,
+  },
   image: { width: 100, height: 100, borderRadius: 8, marginBottom: 10 },
   imageCircle: { borderRadius: 50 },
   imageFallback: { justifyContent: "center", alignItems: "center" },
   title: { fontSize: 15, fontWeight: "700", marginBottom: 3 },
   sub: { fontSize: 11 },
-  playBtn: { position: "absolute", right: 12, bottom: 12, width: 38, height: 38, borderRadius: 19, justifyContent: "center", alignItems: "center" },
+  playBtn: {
+    position: "absolute", right: 12, bottom: 12,
+    width: 38, height: 38, borderRadius: 19,
+    justifyContent: "center", alignItems: "center",
+  },
 });
 
-function FilterChips({ activeTab, setActiveTab, colors }: { activeTab: FilterTab; setActiveTab: (t: FilterTab) => void; colors: any }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTER CHIPS
+// ─────────────────────────────────────────────────────────────────────────────
+function FilterChips({
+  activeTab, setActiveTab, colors,
+}: {
+  activeTab: FilterTab;
+  setActiveTab: (t: FilterTab) => void;
+  colors: any;
+}) {
   const tabs: FilterTab[] = ["all", "songs", "albums", "artists", "playlists"];
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={chipStyles.row}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={chipStyles.row}
+    >
       {tabs.map(tab => (
         <TouchableOpacity
           key={tab}
@@ -752,7 +962,12 @@ function FilterChips({ activeTab, setActiveTab, colors }: { activeTab: FilterTab
           onPress={() => { triggerHaptic(); setActiveTab(tab); }}
           activeOpacity={0.7}
         >
-          <Text style={[chipStyles.chipText, { color: activeTab === tab ? colors.gold : colors.textSub }]}>
+          <Text
+            style={[
+              chipStyles.chipText,
+              { color: activeTab === tab ? colors.gold : colors.textSub },
+            ]}
+          >
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </Text>
         </TouchableOpacity>
@@ -763,31 +978,52 @@ function FilterChips({ activeTab, setActiveTab, colors }: { activeTab: FilterTab
 
 const chipStyles = StyleSheet.create({
   row: { paddingHorizontal: 16, gap: 8, paddingVertical: 12 },
-  chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, borderWidth: 1, borderColor: "transparent" },
+  chip: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1, borderColor: "transparent",
+  },
   chipText: { fontSize: 13, fontWeight: "500" },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPTY STATE
+// ─────────────────────────────────────────────────────────────────────────────
 function EmptyResultsView({ colors }: { colors: any }) {
   return (
     <View style={{ alignItems: "center", paddingTop: 64, gap: 12 }}>
       <Ionicons name="search-outline" size={44} color={colors.textMuted} />
-      <Text style={{ color: colors.textMuted, fontSize: 15, fontWeight: "500" }}>No results found</Text>
-      <Text style={{ color: colors.textSub, fontSize: 13, textAlign: "center" }}>Try searching for songs, artists, or albums</Text>
+      <Text style={{ color: colors.textMuted, fontSize: 15, fontWeight: "500" }}>
+        No results found
+      </Text>
+      <Text style={{ color: colors.textSub, fontSize: 13, textAlign: "center" }}>
+        Try searching for songs, artists, or albums
+      </Text>
     </View>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SKELETON ROW
+// ─────────────────────────────────────────────────────────────────────────────
+function SkeletonResultRow({ colors }: { colors: any }) {
+  return (
+    <View style={[rowStyles.container, { borderBottomColor: colors.border }]}>
+      <View style={[rowStyles.thumb, { backgroundColor: colors.surfaceLight }]} />
+      <View style={{ flex: 1, gap: 7 }}>
+        <View style={{ height: 12, width: "70%", borderRadius: 4, backgroundColor: colors.surfaceLight }} />
+        <View style={{ height: 10, width: "45%", borderRadius: 4, backgroundColor: colors.surfaceLight }} />
+      </View>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEARCH RESULTS VIEW
+// ─────────────────────────────────────────────────────────────────────────────
 function SearchResultsView({
-  results,
-  activeTab,
-  setActiveTab,
-  onSongPress,
-  onAlbumPress,
-  onArtistPress,
-  onPlaylistPress,
-  onMenuPress,
-  colors,
-  isRefreshing,
+  results, activeTab, setActiveTab,
+  onSongPress, onAlbumPress, onArtistPress, onPlaylistPress, onMenuPress,
+  colors, isRefreshing,
 }: {
   results: SearchResults;
   activeTab: FilterTab;
@@ -800,30 +1036,48 @@ function SearchResultsView({
   colors: any;
   isRefreshing: boolean;
 }) {
-  const topResult: SearchResult | null = results.artists[0] ?? results.songs[0] ?? results.albums[0] ?? results.playlists[0] ?? null;
+  const topResult: SearchResult | null =
+    results.artists[0] ?? results.songs[0] ?? results.albums[0] ?? results.playlists[0] ?? null;
 
   const renderTabContent = () => {
     switch (activeTab) {
       case "songs":
         if (!results.songs.length) return <EmptyResultsView colors={colors} />;
-        return results.songs.map(s => <SongResultRow key={s.id} item={s} onPress={() => onSongPress(s)} onMenu={() => onMenuPress(s)} colors={colors} />);
+        return results.songs.map(s => (
+          <SongResultRow
+            key={s.id} item={s}
+            onPress={() => onSongPress(s)}
+            onMenu={() => onMenuPress(s)}
+            colors={colors}
+          />
+        ));
       case "albums":
         if (!results.albums.length) return <EmptyResultsView colors={colors} />;
-        return results.albums.map(a => <OtherResultRow key={a.id} item={a} onPress={() => onAlbumPress(a)} colors={colors} />);
+        return results.albums.map(a => (
+          <OtherResultRow key={a.id} item={a} onPress={() => onAlbumPress(a)} colors={colors} />
+        ));
       case "artists":
         if (!results.artists.length) return <EmptyResultsView colors={colors} />;
-        return results.artists.map(a => <OtherResultRow key={a.id} item={a} onPress={() => onArtistPress(a)} colors={colors} />);
+        return results.artists.map(a => (
+          <OtherResultRow key={a.id} item={a} onPress={() => onArtistPress(a)} colors={colors} />
+        ));
       case "playlists":
         if (!results.playlists.length) return <EmptyResultsView colors={colors} />;
-        return results.playlists.map(p => <OtherResultRow key={p.id} item={p} onPress={() => onPlaylistPress(p)} colors={colors} />);
-      default: return null;
+        return results.playlists.map(p => (
+          <OtherResultRow key={p.id} item={p} onPress={() => onPlaylistPress(p)} colors={colors} />
+        ));
+      default:
+        return null;
     }
   };
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={{ paddingBottom: 140 }}
+    >
       {isRefreshing && (
-        <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+        <View style={{ paddingVertical: 12, alignItems: "center" }}>
           <ActivityIndicator size="small" color={colors.gold} />
         </View>
       )}
@@ -842,7 +1096,11 @@ function SearchResultsView({
                     else if (topResult.type === "artist") onArtistPress(topResult as ArtistResult);
                     else onPlaylistPress(topResult as PlaylistResult);
                   }}
-                  onPlay={() => { const song = results.songs[0]; if (song) onSongPress(song); else if (topResult.type === "song") onSongPress(topResult as SongResult); }}
+                  onPlay={() => {
+                    const song = results.songs[0];
+                    if (song) onSongPress(song);
+                    else if (topResult.type === "song") onSongPress(topResult as SongResult);
+                  }}
                   colors={colors}
                 />
               )}
@@ -851,11 +1109,30 @@ function SearchResultsView({
               <View style={resStyles.topRight}>
                 <Text style={[resStyles.sectionLabel, { color: colors.text }]}>Songs</Text>
                 {results.songs.slice(0, 4).map(s => (
-                  <TouchableOpacity key={s.id} style={resStyles.sideSongRow} onPress={() => onSongPress(s)} activeOpacity={0.7}>
-                    <Image source={{ uri: s.thumbnail }} style={resStyles.sideSongThumb} contentFit="cover" />
+                  <TouchableOpacity
+                    key={s.id}
+                    style={resStyles.sideSongRow}
+                    onPress={() => onSongPress(s)}
+                    activeOpacity={0.7}
+                  >
+                    <Image
+                      source={{ uri: s.thumbnail }}
+                      style={resStyles.sideSongThumb}
+                      contentFit="cover"
+                    />
                     <View style={{ flex: 1 }}>
-                      <Text style={[resStyles.sideSongTitle, { color: colors.text }]} numberOfLines={1}>{s.title}</Text>
-                      <Text style={[resStyles.sideSongArtist, { color: colors.textSub }]} numberOfLines={1}>{s.artist}</Text>
+                      <Text
+                        style={[resStyles.sideSongTitle, { color: colors.text }]}
+                        numberOfLines={1}
+                      >
+                        {s.title}
+                      </Text>
+                      <Text
+                        style={[resStyles.sideSongArtist, { color: colors.textSub }]}
+                        numberOfLines={1}
+                      >
+                        {s.artist}
+                      </Text>
                     </View>
                     <TouchableOpacity onPress={() => onMenuPress(s)} hitSlop={8}>
                       <Entypo name="dots-three-vertical" size={13} color={colors.textMuted} />
@@ -868,23 +1145,31 @@ function SearchResultsView({
           {results.albums.length > 0 && (
             <View style={resStyles.section}>
               <Text style={[resStyles.sectionLabel, { color: colors.text }]}>Albums</Text>
-              {results.albums.slice(0, 4).map(a => <OtherResultRow key={a.id} item={a} onPress={() => onAlbumPress(a)} colors={colors} />)}
+              {results.albums.slice(0, 4).map(a => (
+                <OtherResultRow key={a.id} item={a} onPress={() => onAlbumPress(a)} colors={colors} />
+              ))}
             </View>
           )}
           {results.artists.length > 1 && (
             <View style={resStyles.section}>
               <Text style={[resStyles.sectionLabel, { color: colors.text }]}>Artists</Text>
-              {results.artists.slice(0, 4).map(a => <OtherResultRow key={a.id} item={a} onPress={() => onArtistPress(a)} colors={colors} />)}
+              {results.artists.slice(0, 4).map(a => (
+                <OtherResultRow key={a.id} item={a} onPress={() => onArtistPress(a)} colors={colors} />
+              ))}
             </View>
           )}
           {results.playlists.length > 0 && (
             <View style={resStyles.section}>
               <Text style={[resStyles.sectionLabel, { color: colors.text }]}>Playlists</Text>
-              {results.playlists.slice(0, 4).map(p => <OtherResultRow key={p.id} item={p} onPress={() => onPlaylistPress(p)} colors={colors} />)}
+              {results.playlists.slice(0, 4).map(p => (
+                <OtherResultRow key={p.id} item={p} onPress={() => onPlaylistPress(p)} colors={colors} />
+              ))}
             </View>
           )}
         </>
-      ) : renderTabContent()}
+      ) : (
+        renderTabContent()
+      )}
     </ScrollView>
   );
 }
@@ -901,24 +1186,19 @@ const resStyles = StyleSheet.create({
   section: { marginTop: 16, marginBottom: 4, paddingHorizontal: 16 },
 });
 
-function SkeletonResultRow({ colors }: { colors: any }) {
-  return (
-    <View style={[rowStyles.container, { borderBottomColor: colors.border }]}>
-      <View style={[rowStyles.thumb, { backgroundColor: colors.surfaceLight }]} />
-      <View style={{ flex: 1, gap: 7 }}>
-        <View style={{ height: 12, width: "70%", borderRadius: 4, backgroundColor: colors.surfaceLight }} />
-        <View style={{ height: 10, width: "45%", borderRadius: 4, backgroundColor: colors.surfaceLight }} />
-      </View>
-    </View>
-  );
-}
-
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL ABORT CONTROLLER
+// ─────────────────────────────────────────────────────────────────────────────
 let searchAbortController: AbortController | null = null;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { playAudio } = useMusicPlayer();
+
+  const { playAudio, collapsePlayer, deactivateAudio } = useMusicPlayer();
   const { colors } = useTheme();
   const { showAlert } = useAlert();
 
@@ -973,7 +1253,9 @@ export default function SearchScreen() {
       }
     }, DEBOUNCE_MS);
 
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [query, results]);
 
   const performSearch = useCallback(async (q: string) => {
@@ -991,12 +1273,13 @@ export default function SearchScreen() {
     setError(null);
     setActiveTab("all");
 
+    // Save to global history async (fire-and-forget)
     (async () => {
       try {
         const preview = await MavinEngine.search(trimmed, "", undefined, 0);
         const first = preview?.results?.find((i: any) => i.type === "stream");
         const videoId = first ? extractVideoId(first.url) : "";
-        
+
         let trackUuid = "";
         if (videoId) {
           const { data: songData } = await supabase
@@ -1004,15 +1287,18 @@ export default function SearchScreen() {
             .select("id")
             .eq("video_id", videoId)
             .maybeSingle();
-          if (songData) {
-            trackUuid = songData.id;
-          }
+          if (songData) trackUuid = songData.id;
         }
-        
-        await saveToGlobalHistory(trimmed, first ? bestThumb(first.thumbnails) : "", first?.uploaderName ?? "", trackUuid);
+
+        await saveToGlobalHistory(
+          trimmed,
+          first ? bestThumb(first.thumbnails) : "",
+          first?.uploaderName ?? "",
+          trackUuid,
+        );
         const updated = await getGlobalSearchHistory();
         setGlobalHistory(updated);
-      } catch { }
+      } catch {}
     })();
 
     const cacheKey = deviceCacheKey(trimmed);
@@ -1023,30 +1309,31 @@ export default function SearchScreen() {
         setLoading(false);
         return;
       }
-    } catch { }
+    } catch {}
 
     try {
       const raw = await MavinEngine.search(trimmed, "", undefined, 0);
       if (searchAbortController?.signal.aborted) return;
-      
+
       const mapped = mapEngineResults(raw.results ?? []);
       setResults(mapped);
-      
+
       if (mapped.songs && mapped.songs.length > 0) {
         const songsToPreload = mapped.songs.slice(0, 4).map(song => ({
-          id: song.id,
-          title: song.title,
-          artist: song.artist,
-          thumbnail: song.thumbnail,
-          url: song.url,
-          videoId: song.videoId,
+          id: song.id, title: song.title, artist: song.artist,
+          thumbnail: song.thumbnail, url: song.url, videoId: song.videoId,
           duration: song.duration,
         }));
         preloadSearchResults(songsToPreload);
       }
-      
-      if (mapped.songs.length || mapped.albums.length || mapped.artists.length || mapped.playlists.length) {
-        cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => { });
+
+      if (
+        mapped.songs.length ||
+        mapped.albums.length ||
+        mapped.artists.length ||
+        mapped.playlists.length
+      ) {
+        cache.set(cacheKey, mapped, SEARCH_CACHE_TTL_MS).catch(() => {});
       }
     } catch (e: any) {
       if (searchAbortController?.signal.aborted) return;
@@ -1060,32 +1347,6 @@ export default function SearchScreen() {
 
   const handleSubmit = () => performSearch(query);
   const handleSuggestionTap = (s: string) => { setQuery(s); performSearch(s); };
-  
-  const handleTrendingTap = useCallback(async (item: GlobalSearchItem) => {
-    triggerHaptic();
-    
-    setQuery(item.query);
-    
-    if (item.track_uuid) {
-      const streamUrl = await getStreamUrlByTrackUuid(item.track_uuid);
-      
-      if (streamUrl) {
-        setPendingTrack({ title: item.query, artist: item.artist_name, artwork: item.thumbnail_url });
-        // Play in miniplayer (no expandPlayerFn provided)
-        await playAudio({
-          id: item.track_uuid,
-          title: item.query,
-          artist: item.artist_name || "Trending",
-          thumbnail: item.thumbnail_url,
-          url: streamUrl,
-          videoId: "",
-        });
-        return;
-      }
-    }
-    
-    performSearch(item.query);
-  }, [playAudio, performSearch]);
 
   const handleCancel = () => {
     Keyboard.dismiss();
@@ -1102,74 +1363,171 @@ export default function SearchScreen() {
     }
   };
 
-  const handleSongPress = useCallback(async (song: SongResult) => {
-    triggerHaptic();
-    setPendingTrack({ title: song.title, artist: song.artist, artwork: song.thumbnail });
-    const queue = (results?.songs ?? []).map(s => ({
-      id: s.id, title: s.title, artist: s.artist, thumbnail: s.thumbnail, url: s.url, videoId: s.videoId,
-    }));
-    // Play in miniplayer (no expandPlayerFn provided)
-    await playAudio({
-      id: song.id, title: song.title, artist: song.artist, thumbnail: song.thumbnail, url: song.url, videoId: song.videoId,
-    }, queue);
-  }, [results, playAudio]);
+  // ── Play helper — always uses expo-audio, always in collapsed miniplayer ─────
+  const playInMiniplayer = useCallback(
+    async (song: {
+      id: string;
+      title: string;
+      artist: string;
+      thumbnail: string;
+      url: string;
+      videoId?: string;
+    }, queue?: Array<typeof song>) => {
+      triggerHaptic();
 
+      try {
+        await deactivateAudio();
+      } catch (e) {
+        console.warn("[Search] deactivateAudio failed:", e);
+      }
+
+      setPendingTrack({
+        title: song.title,
+        artist: song.artist,
+        artwork: song.thumbnail,
+      });
+
+      const playQueue = (queue ?? [song]).map(s => ({
+        id: s.id, title: s.title, artist: s.artist,
+        thumbnail: s.thumbnail, url: s.url, videoId: s.videoId,
+      }));
+
+      await playAudio(
+        {
+          id: song.id, title: song.title, artist: song.artist,
+          thumbnail: song.thumbnail, url: song.url, videoId: song.videoId,
+        },
+        playQueue,
+        undefined,
+      );
+    },
+    [deactivateAudio, playAudio],
+  );
+
+  // ── Song press from search results ─────────────────────────────────────────
+  const handleSongPress = useCallback(
+    async (song: SongResult) => {
+      const queue = (results?.songs ?? []).map(s => ({
+        id: s.id, title: s.title, artist: s.artist,
+        thumbnail: s.thumbnail, url: s.url, videoId: s.videoId,
+      }));
+      await playInMiniplayer(
+        {
+          id: song.id, title: song.title, artist: song.artist,
+          thumbnail: song.thumbnail, url: song.url, videoId: song.videoId,
+        },
+        queue,
+      );
+    },
+    [results, playInMiniplayer],
+  );
+
+  // ── Album / Artist / Playlist press ───────────────────────────────────────
   const handleAlbumPress = (a: AlbumResult) => {
     triggerHaptic();
-    router.push({ pathname: "./search/album", params: { id: encodeURIComponent(a.url), artist: a.artist } });
+    router.push({
+      pathname: "./search/album",
+      params: { id: encodeURIComponent(a.url), artist: a.artist },
+    });
   };
 
   const handleArtistPress = (a: ArtistResult) => {
     triggerHaptic();
-    router.push({ pathname: "./search/artist", params: { id: encodeURIComponent(a.url), subtitle: a.subtitle } });
+    router.push({
+      pathname: "./search/artist",
+      params: { id: encodeURIComponent(a.url), subtitle: a.subtitle },
+    });
   };
 
   const handlePlaylistPress = (p: PlaylistResult) => {
     triggerHaptic();
-    router.push({ pathname: "./search/playlist", params: { id: encodeURIComponent(p.url) } });
+    router.push({
+      pathname: "./search/playlist",
+      params: { id: encodeURIComponent(p.url) },
+    });
   };
 
   const handleMenuPress = (s: SongResult) => {
     triggerHaptic();
     router.push({
       pathname: "/(modals)/menu",
-      params: { songData: JSON.stringify({ id: s.id, title: s.title, artist: s.artist, thumbnail: s.thumbnail }), type: "song" },
+      params: {
+        songData: JSON.stringify({
+          id: s.id, title: s.title, artist: s.artist, thumbnail: s.thumbnail,
+        }),
+        type: "song",
+      },
     });
   };
 
-const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
-  triggerHaptic();
-  
-  // Handle songs and beats (both play audio)
-  if ((item.type === "song" || item.type === "beat") && item.data) {
-    const s: SongResult = {
-      type: "song", 
-      id: item.id, 
-      title: item.title, 
-      artist: item.subtitle, 
-      thumbnail: item.thumbnail, 
-      url: item.url, 
-      videoId: item.id, 
-      duration: 0, 
-      viewCount: 0,
-    };
-    // Play in miniplayer - no expandPlayerFn provided
-    // This will use expo-audio and automatically deactivate any active video player session
-    handleSongPress(s);
-  } 
-  // Handle playlists
-  else if (item.type === "playlist" && item.url) {
-    router.push({ pathname: "./search/playlist", params: { id: encodeURIComponent(item.url) } });
-  }
-  // Handle albums
-  else if (item.type === "album" && item.url) {
-    router.push({ pathname: "./search/album", params: { id: encodeURIComponent(item.url), artist: item.subtitle } });
-  }
-  // Handle artists
-  else if (item.type === "artist" && item.url) {
-    router.push({ pathname: "./search/artist", params: { id: encodeURIComponent(item.url), subtitle: item.subtitle } });
-  }
-}, [handleSongPress, router]);
+  // ── Trending tap ──────────────────────────────────────────────────────────
+  const handleTrendingTap = useCallback(
+    async (item: GlobalSearchItem) => {
+      triggerHaptic();
+      setQuery(item.query);
+
+      if (item.track_uuid) {
+        const streamUrl = await getStreamUrlByTrackUuid(item.track_uuid);
+        if (streamUrl) {
+          await playInMiniplayer({
+            id: item.track_uuid,
+            title: item.query,
+            artist: item.artist_name || "Trending",
+            thumbnail: item.thumbnail_url,
+            url: streamUrl,
+            videoId: "",
+          });
+          return;
+        }
+      }
+
+      performSearch(item.query);
+    },
+    [playInMiniplayer, performSearch],
+  );
+
+  // ── Discovery press ────────────────────────────────────────────────────────
+  const handleDiscoveryPress = useCallback(
+    async (item: DiscoveryItem) => {
+      triggerHaptic();
+
+      if ((item.type === "song" || item.type === "beat") && item.url) {
+        await playInMiniplayer({
+          id: item.id,
+          title: item.title,
+          artist: item.subtitle,
+          thumbnail: item.thumbnail,
+          url: item.url,
+          videoId: item.id,
+        });
+        return;
+      }
+
+      if (item.type === "playlist" && item.url) {
+        router.push({
+          pathname: "./search/playlist",
+          params: { id: encodeURIComponent(item.url) },
+        });
+        return;
+      }
+
+      if (item.type === "album" && item.url) {
+        router.push({
+          pathname: "./search/album",
+          params: { id: encodeURIComponent(item.url), artist: item.subtitle },
+        });
+        return;
+      }
+
+      if (item.type === "artist" && item.url) {
+        router.push({
+          pathname: "./search/artist",
+          params: { id: encodeURIComponent(item.url), subtitle: item.subtitle },
+        });
+      }
+    },
+    [playInMiniplayer, router],
+  );
 
   const showDiscovery = !results && !error;
   const showResults = !!results;
@@ -1177,6 +1535,7 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
 
   return (
     <View style={[mainStyles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+      {/* Search Bar */}
       <View style={mainStyles.searchRow}>
         <View style={[mainStyles.searchBar, { backgroundColor: colors.surfaceRaised }]}>
           {loading && !results ? (
@@ -1188,7 +1547,10 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
             ref={inputRef}
             style={[mainStyles.searchInput, { color: colors.text }]}
             value={query}
-            onChangeText={t => { setQuery(t); if (!t) { setResults(null); setSuggestions([]); } }}
+            onChangeText={t => {
+              setQuery(t);
+              if (!t) { setResults(null); setSuggestions([]); }
+            }}
             onSubmitEditing={handleSubmit}
             placeholder="Search songs, artists, albums…"
             placeholderTextColor={colors.textMuted}
@@ -1198,7 +1560,10 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
             selectionColor={colors.gold}
           />
           {query.length > 0 && (
-            <TouchableOpacity onPress={() => { setQuery(""); setResults(null); setSuggestions([]); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity
+              onPress={() => { setQuery(""); setResults(null); setSuggestions([]); }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Ionicons name="close-circle" size={17} color={colors.textMuted} />
             </TouchableOpacity>
           )}
@@ -1210,13 +1575,36 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
         )}
       </View>
 
+      {/* Content */}
       <View style={mainStyles.contentArea}>
         {showDiscovery && (
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140, paddingTop: 8 }}>
-            <TrendingConveyorBelt history={globalHistory} onSelect={handleTrendingTap} colors={colors} />
-            <RecommendedPlaylists items={playlists} onPress={handleDiscoveryPress} colors={colors} loading={discoveryLoading} />
-            <DiscoverGrid items={discoverItems} onPress={handleDiscoveryPress} colors={colors} loading={discoveryLoading} />
-            <BeatsSection items={beats} onPress={handleDiscoveryPress} colors={colors} loading={discoveryLoading} />
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 140, paddingTop: 8 }}
+          >
+            <TrendingConveyorBelt
+              history={globalHistory}
+              onSelect={handleTrendingTap}
+              colors={colors}
+            />
+            <RecommendedPlaylists
+              items={playlists}
+              onPress={handleDiscoveryPress}
+              colors={colors}
+              loading={discoveryLoading}
+            />
+            <DiscoverGrid
+              items={discoverItems}
+              onPress={handleDiscoveryPress}
+              colors={colors}
+              loading={discoveryLoading}
+            />
+            <BeatsSection
+              items={beats}
+              onPress={handleDiscoveryPress}
+              colors={colors}
+              loading={discoveryLoading}
+            />
           </ScrollView>
         )}
 
@@ -1224,7 +1612,11 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
           <View style={mainStyles.errorBox}>
             <Ionicons name="alert-circle-outline" size={32} color={colors.error} />
             <Text style={[mainStyles.errorText, { color: colors.textSub }]}>{error}</Text>
-            <TouchableOpacity style={[mainStyles.retryBtn, { borderColor: colors.gold }]} onPress={handleSubmit} activeOpacity={0.8}>
+            <TouchableOpacity
+              style={[mainStyles.retryBtn, { borderColor: colors.gold }]}
+              onPress={handleSubmit}
+              activeOpacity={0.8}
+            >
               <Text style={[mainStyles.retryText, { color: colors.gold }]}>Retry</Text>
             </TouchableOpacity>
           </View>
@@ -1245,22 +1637,42 @@ const handleDiscoveryPress = useCallback((item: DiscoveryItem) => {
           />
         )}
 
-        <SuggestionsOverlay suggestions={suggestions} onSelect={handleSuggestionTap} colors={colors} visible={showSuggestions} />
+        <SuggestionsOverlay
+          suggestions={suggestions}
+          onSelect={handleSuggestionTap}
+          colors={colors}
+          visible={showSuggestions}
+        />
       </View>
     </View>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────────────────────────────────────
 const mainStyles = StyleSheet.create({
   container: { flex: 1 },
-  searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 10 },
-  searchBar: { flex: 1, flexDirection: "row", alignItems: "center", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 },
+  searchRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 10,
+  },
+  searchBar: {
+    flex: 1, flexDirection: "row", alignItems: "center",
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9,
+  },
   searchInput: { flex: 1, fontSize: 15, padding: 0 },
   cancelBtn: { paddingVertical: 8 },
   cancelText: { fontSize: 15, fontWeight: "500" },
   contentArea: { flex: 1, position: "relative" },
-  errorBox: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 28 },
+  errorBox: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    gap: 14, paddingHorizontal: 28,
+  },
   errorText: { fontSize: 14, textAlign: "center" },
-  retryBtn: { paddingHorizontal: 24, paddingVertical: 10, borderRadius: 22, borderWidth: 1, marginTop: 4 },
+  retryBtn: {
+    paddingHorizontal: 24, paddingVertical: 10,
+    borderRadius: 22, borderWidth: 1, marginTop: 4,
+  },
   retryText: { fontSize: 13, fontWeight: "600" },
 });

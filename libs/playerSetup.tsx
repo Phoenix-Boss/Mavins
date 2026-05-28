@@ -3,7 +3,7 @@
 // SINGLE SOURCE OF TRUTH for consumers.
 // All player types, hooks, and contexts are re-exported from here.
 //
-// ARCHITECTURE: SINGLE-PLAYER (expo-video only)
+// MASTER-SLAVE ARCHITECTURE:
 //   - MusicPlayerContext.tsx  ← owns all logic, defines contexts, exports hooks
 //   - playerSetup.tsx         ← re-exports everything + adds GestureContext
 //   - preload.ts              ← owns ALL preload logic (search + queue)
@@ -35,6 +35,7 @@ import {
   getTrackExtras,
   storeTrackExtras,
   MusicPlayerProvider,
+  setMasterPlayer,
   // SSL fast-path reset utility
   resetSSLFastPath,
   // Video state updaters (for components that need them)
@@ -55,6 +56,14 @@ import {
   clearResolvedUrlCache,
   type PreloadSong,
 } from '@/libs/preload';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Import from trackMetadataCache
+// getCachedTrackExtrasSync is the synchronous in-memory read used by UI
+// components that need instant metadata without waiting for async disk reads.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { getCachedTrackExtrasSync } from '@/services/trackMetadataCache';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // URI NORMALIZER — Shared utility for local file URIs
@@ -99,8 +108,10 @@ export {
   useMusicPlayer,
   useTrackExtrasVersion,
   getTrackExtras,
+  getCachedTrackExtrasSync,
   storeTrackExtras,
   MusicPlayerProvider,
+  setMasterPlayer,
   resetSSLFastPath,
 };
 
@@ -286,4 +297,274 @@ export function extractVideoId(url: string): string | null {
 
 export function toWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Get master player state (for components that need direct access)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MasterPlayerState {
+  isPlaying: boolean;
+  position: number;
+  duration: number;
+  isBuffering: boolean;
+  volume: number;
+  playbackRate: number;
+  isMuted: boolean;
+}
+
+/**
+ * Get the current state of the master player.
+ * Returns null if master player is not registered yet.
+ */
+export function getMasterPlayerState(): MasterPlayerState | null {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (!master) return null;
+    
+    return {
+      isPlaying: master.playing ?? false,
+      position: master.currentTime ?? 0,
+      duration: master.duration ?? 0,
+      isBuffering: master.isBuffering ?? false,
+      volume: master.volume ?? 1.0,
+      playbackRate: master.playbackRate ?? 1.0,
+      isMuted: master.muted ?? false,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Get the current state of the slave player.
+ * Returns null if slave player is not registered yet.
+ */
+export function getSlavePlayerState(): MasterPlayerState | null {
+  try {
+    const slave = (global as any).__MavinSlavePlayer__;
+    if (!slave) return null;
+    
+    return {
+      isPlaying: slave.playing ?? false,
+      position: slave.currentTime ?? 0,
+      duration: slave.duration ?? 0,
+      isBuffering: slave.isBuffering ?? false,
+      volume: slave.volume ?? 0,
+      playbackRate: slave.playbackRate ?? 1.0,
+      isMuted: slave.muted ?? true,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Control master player directly (for advanced use cases)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Play the master player.
+ * Returns true if successful, false otherwise.
+ */
+export function playMaster(): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (master) {
+      master.play();
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] playMaster failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Pause the master player.
+ * Returns true if successful, false otherwise.
+ */
+export function pauseMaster(): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (master) {
+      master.pause();
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] pauseMaster failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Seek the master player to a specific position.
+ * Returns true if successful, false otherwise.
+ */
+export function seekMaster(positionSec: number): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (master) {
+      master.currentTime = positionSec;
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] seekMaster failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Set volume on the master player.
+ * Returns true if successful, false otherwise.
+ */
+export function setMasterVolume(volume: number): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (master) {
+      master.volume = Math.min(Math.max(volume, 0), 1);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] setMasterVolume failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Set playback rate on the master player.
+ * Returns true if successful, false otherwise.
+ */
+export function setMasterPlaybackRate(rate: number): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (master) {
+      master.playbackRate = Math.min(Math.max(rate, 0.5), 16);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] setMasterPlaybackRate failed:', e);
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Control slave player directly (for advanced use cases)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Show the slave player (make it visible and sync to master).
+ * Returns true if successful, false otherwise.
+ */
+export function showSlave(): boolean {
+  try {
+    const slave = (global as any).__MavinSlavePlayer__;
+    const master = (global as any).__MavinMasterPlayer__;
+    if (slave && master) {
+      slave.currentTime = master.currentTime ?? 0;
+      slave.muted = true;
+      if (master.playing) {
+        slave.play();
+      }
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] showSlave failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Hide the slave player (pause it).
+ * Returns true if successful, false otherwise.
+ */
+export function hideSlave(): boolean {
+  try {
+    const slave = (global as any).__MavinSlavePlayer__;
+    if (slave) {
+      slave.pause();
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] hideSlave failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Sync slave player position to master player.
+ * Returns true if successful, false otherwise.
+ */
+export function syncSlaveToMaster(): boolean {
+  try {
+    const slave = (global as any).__MavinSlavePlayer__;
+    const master = (global as any).__MavinMasterPlayer__;
+    if (slave && master) {
+      const masterPos = master.currentTime ?? 0;
+      const diff = Math.abs((slave.currentTime ?? 0) - masterPos);
+      if (diff > 0.3) {
+        slave.currentTime = masterPos;
+      }
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[PlayerSetup] syncSlaveToMaster failed:', e);
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Reset SSL fast path (for network error recovery)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reset the SSL fast path cache.
+ * Call this when you encounter SSL-related playback errors.
+ */
+export function resetSSLFastPathAndReload(): void {
+  resetSSLFastPath();
+  console.log('[PlayerSetup] SSL fast path reset');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Debug logging for player state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Log the current state of both master and slave players for debugging.
+ */
+export function debugPlayerState(): void {
+  const masterState = getMasterPlayerState();
+  const slaveState = getSlavePlayerState();
+  
+  console.log('[PlayerSetup] ========== PLAYER STATE DEBUG ==========');
+  console.log('[PlayerSetup] MASTER:', masterState);
+  console.log('[PlayerSetup] SLAVE:', slaveState);
+  console.log('[PlayerSetup] =========================================');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Check if audio is actually playing (for diagnostics)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if the master player is actually producing audio.
+ * Returns true if playing and volume > 0.
+ */
+export function isAudioPlaying(): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (!master) return false;
+    return (master.playing === true && master.volume > 0 && master.muted === false);
+  } catch (e) {
+    return false;
+  }
 }

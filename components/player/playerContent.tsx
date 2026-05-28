@@ -1,12 +1,12 @@
 // components/player/playerContent.tsx
 //
 // ANDROID-ONLY: All iOS-specific code removed
-// COMPLETE VIDEO TAB IMPLEMENTATION
+// MASTER-SLAVE ARCHITECTURE - Module-level initialization, no re-renders
 //
-// FIXED: Metadata (title, artist, artwork) shows immediately - no skeleton
-// FIXED: Skeleton only for loading states (buffering, resolving, etc.)
-// FIXED: Download and Share buttons in same pill container (consistent styling)
-// FIXED: Share icon uses curved arrow (arrow-redo-outline)
+// ARCHITECTURE:
+//   MASTER PLAYER (Hidden): ALWAYS plays audio - NEVER muted
+//   SLAVE PLAYER (Visible): ALWAYS muted - provides ONLY video frames
+//   ALL initialization happens at MODULE LEVEL - no useEffect re-runs
 
 import React, {
   useMemo,
@@ -70,7 +70,9 @@ import {
   useMusicPlayer,
   usePlayerEngine,
   getTrackExtras,
+  getCachedTrackExtrasSync,
   useTrackExtrasVersion,
+  setMasterPlayer,
 } from '@/libs/playerSetup';
 
 import { useGestureContext } from '@/libs/playerSetup';
@@ -85,33 +87,255 @@ const COOLDOWN_HOURS = 24;
 const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL VIDEO PLAYER SINGLETON
+// MODULE-LEVEL MASTER AUDIO PLAYER SINGLETON (expo-video, hidden)
+// ALWAYS plays audio - NEVER muted - source of truth for ALL playback
 // ─────────────────────────────────────────────────────────────────────────────
-const VIDEO_PLAYER_GLOBAL_KEY = '__MavinVideoPlayer__';
+const MASTER_PLAYER_GLOBAL_KEY = '__MavinAudioMasterPlayer__';
 
-if (!(global as any)[VIDEO_PLAYER_GLOBAL_KEY]) {
-  (global as any)[VIDEO_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
-  console.log('[PlayerContent] Created persistent video player singleton');
+if (!(global as any)[MASTER_PLAYER_GLOBAL_KEY]) {
+  (global as any)[MASTER_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
+  console.log('[PlayerContent] Created MASTER audio player singleton');
 }
 
-const videoPlayerSingleton: ReturnType<typeof createVideoPlayer> =
-  (global as any)[VIDEO_PLAYER_GLOBAL_KEY];
+const masterPlayer: ReturnType<typeof createVideoPlayer> =
+  (global as any)[MASTER_PLAYER_GLOBAL_KEY];
 
 try {
-  videoPlayerSingleton.muted = true;
-  videoPlayerSingleton.loop = false;
-  videoPlayerSingleton.staysActiveInBackground = true;
+  masterPlayer.muted = false;
+  masterPlayer.loop = false;
+  masterPlayer.staysActiveInBackground = true;
+  masterPlayer.volume = 1.0;
+  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0');
 } catch (e) {
-  console.warn('[PlayerContent] Failed to configure video player:', e);
+  console.warn('[PlayerContent] Failed to configure MASTER player:', e);
+}
+
+// Register master player with context at module level
+setMasterPlayer(masterPlayer);
+(global as any).__MavinMasterPlayer__ = masterPlayer;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL SLAVE VIDEO PLAYER SINGLETON (expo-video, visible)
+// ALWAYS MUTED - provides ONLY video frames, NO audio output
+// ─────────────────────────────────────────────────────────────────────────────
+const SLAVE_PLAYER_GLOBAL_KEY = '__MavinVideoSlavePlayer__';
+
+if (!(global as any)[SLAVE_PLAYER_GLOBAL_KEY]) {
+  (global as any)[SLAVE_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
+  console.log('[PlayerContent] Created SLAVE video player singleton');
+}
+
+const slavePlayer: ReturnType<typeof createVideoPlayer> =
+  (global as any)[SLAVE_PLAYER_GLOBAL_KEY];
+
+try {
+  slavePlayer.muted = true;
+  slavePlayer.loop = false;
+  slavePlayer.staysActiveInBackground = false;
+  slavePlayer.volume = 0.0;
+  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0');
+} catch (e) {
+  console.warn('[PlayerContent] Failed to configure SLAVE player:', e);
+}
+
+(global as any).__MavinSlavePlayer__ = slavePlayer;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL GLOBAL COMMANDS (registered once)
+// ─────────────────────────────────────────────────────────────────────────────
+if (!(global as any).__mavinCommandsRegistered) {
+  (global as any).__mavinMasterPlay = () => {
+    try { masterPlayer.play(); } catch (e) { console.warn('[Global] Master play failed:', e); }
+  };
+  (global as any).__mavinMasterPause = () => {
+    try { masterPlayer.pause(); } catch (e) { console.warn('[Global] Master pause failed:', e); }
+  };
+  (global as any).__mavinMasterSeek = (position: number) => {
+    try { masterPlayer.currentTime = position; } catch (e) { console.warn('[Global] Master seek failed:', e); }
+  };
+  (global as any).__mavinMasterGetState = () => {
+    try {
+      return {
+        isPlaying: masterPlayer.playing ?? false,
+        position: masterPlayer.currentTime ?? 0,
+        duration: masterPlayer.duration ?? 0,
+      };
+    } catch (e) {
+      return { isPlaying: false, position: 0, duration: 0 };
+    }
+  };
+  (global as any).__mavinCommandsRegistered = true;
+  console.log('[PlayerContent] Global commands registered');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL STREAM LOADING (happens once, not on every render)
+// ─────────────────────────────────────────────────────────────────────────────
+let currentTrackId: string | null = null;
+let isLoadingStream = false;
+let loadPromise: Promise<void> | null = null;
+let masterReady = false;
+let slaveReady = false;
+let pendingMasterSeek: number | null = null;
+let pendingSlaveSeek: number | null = null;
+
+async function loadStreams(url: string, trackId: string): Promise<void> {
+  // Prevent duplicate loads for the same track
+  if (currentTrackId === trackId && masterReady) {
+    console.log('[PlayerContent] Streams already loaded for this track');
+    return;
+  }
+  
+  // Prevent concurrent loads
+  if (isLoadingStream) {
+    console.log('[PlayerContent] Streams already loading, waiting...');
+    return loadPromise;
+  }
+  
+  isLoadingStream = true;
+  currentTrackId = trackId;
+  
+  console.log('[PlayerContent] Loading streams for track:', trackId);
+  
+  loadPromise = (async () => {
+    try {
+      // Load master
+      masterReady = false;
+      await masterPlayer.replaceAsync(url);
+      
+      const masterPollStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if (masterPlayer.status === 'readyToPlay') {
+            masterReady = true;
+            console.log('[PlayerContent] Master stream loaded');
+            resolve();
+            return;
+          }
+          if (Date.now() - masterPollStart >= 8000) {
+            console.warn('[PlayerContent] Master load timeout');
+            resolve();
+            return;
+          }
+          setTimeout(poll, 200);
+        };
+        poll();
+      });
+      
+      // Load slave (pre-load for video tab)
+      slaveReady = false;
+      await slavePlayer.replaceAsync(url);
+      slavePlayer.muted = true;
+      
+      const slavePollStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if (slavePlayer.status === 'readyToPlay') {
+            slaveReady = true;
+            console.log('[PlayerContent] Slave stream loaded');
+            resolve();
+            return;
+          }
+          if (Date.now() - slavePollStart >= 8000) {
+            console.warn('[PlayerContent] Slave load timeout');
+            resolve();
+            return;
+          }
+          setTimeout(poll, 200);
+        };
+        poll();
+      });
+    } catch (e) {
+      console.error('[PlayerContent] Stream load failed:', e);
+    } finally {
+      isLoadingStream = false;
+    }
+  })();
+  
+  return loadPromise;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL RETRY FUNCTION FOR 403 ERRORS
+// ─────────────────────────────────────────────────────────────────────────────
+let retryCount = 0;
+const MAX_RETRY_COUNT = 2;
+const RETRY_DELAY_MS = 1000;
+
+async function retryMasterLoad(url: string): Promise<boolean> {
+  if (retryCount >= MAX_RETRY_COUNT) {
+    console.error('[PlayerContent] Master load failed after max retries');
+    return false;
+  }
+  
+  retryCount++;
+  console.log(`[PlayerContent] Retrying master load (attempt ${retryCount}/${MAX_RETRY_COUNT})`);
+  await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+  
+  try {
+    await masterPlayer.replaceAsync(url);
+    const pollStart = Date.now();
+    await new Promise<void>((resolve) => {
+      const poll = () => {
+        if (masterPlayer.status === 'readyToPlay') {
+          masterReady = true;
+          resolve();
+          return;
+        }
+        if (Date.now() - pollStart >= 8000) {
+          resolve();
+          return;
+        }
+        setTimeout(poll, 200);
+      };
+      poll();
+    });
+    retryCount = 0;
+    return true;
+  } catch (e) {
+    return retryMasterLoad(url);
+  }
+}
+
+// Set up master player status listener at module level
+if (!(global as any).__masterListenerRegistered) {
+  masterPlayer.addListener('statusChange', ({ status, error }: any) => {
+    if (status === 'readyToPlay') {
+      masterReady = true;
+      if (pendingMasterSeek !== null) {
+        try {
+          masterPlayer.currentTime = pendingMasterSeek;
+          pendingMasterSeek = null;
+        } catch {}
+      }
+    } else if (status === 'error') {
+      console.error('[PlayerContent] MASTER player error:', error?.message);
+      if (error?.message?.includes('403') && retryCount < MAX_RETRY_COUNT && currentTrackId) {
+        retryMasterLoad(masterPlayer.src);
+      }
+    }
+  });
+  
+  slavePlayer.addListener('statusChange', ({ status }: any) => {
+    if (status === 'readyToPlay') {
+      slaveReady = true;
+      if (pendingSlaveSeek !== null) {
+        try {
+          slavePlayer.currentTime = pendingSlaveSeek;
+          pendingSlaveSeek = null;
+        } catch {}
+      }
+    }
+  });
+  
+  (global as any).__masterListenerRegistered = true;
+  console.log('[PlayerContent] Module-level listeners registered');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 const LYRICS_LEAD_IN_S = 0.25;
-const VIDEO_SYNC_INTERVAL_MS = 100;
-const VIDEO_POSITION_POLL_MS = 250;
-const BACKWARD_SEEK_OFFSET = 0.2;
 
 const DUMMY_TRACK = {
   id: 'dummy-track-id',
@@ -270,8 +494,7 @@ function ArtistLine({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Download Button Component with Progress and Cooldown
-// FIXED: Percentage count displayed INSIDE the circular spinner
+// Download Button Component
 // ─────────────────────────────────────────────────────────────────────────────
 interface DownloadButtonProps {
   trackId: string;
@@ -553,8 +776,6 @@ function PlayerContentInner({
     isLoading: musicPlayerLoading,
     togglePlayPause,
     isLocalTrack,
-    deactivateAudio,
-    activateAudio,
     setVideoActive,
     updateVideoPosition,
     updateVideoDuration,
@@ -594,7 +815,11 @@ function PlayerContentInner({
   );
 
   // ── Track extras ─────────────────────────────────────────────────────────────
-  const [extras, setExtras] = useState<Record<string, any>>({});
+  const [extras, setExtras] = useState<Record<string, any>>(() => {
+    const id = engine.currentTrack?.id;
+    if (!id || id === DUMMY_TRACK.id) return {};
+    return getCachedTrackExtrasSync(id) ?? getTrackExtras(id) ?? {};
+  });
 
   useEffect(() => {
     const id = displayTrack?.id;
@@ -602,11 +827,12 @@ function PlayerContentInner({
       setExtras({});
       return;
     }
-    setExtras(getTrackExtras(id) ?? {});
+    const synced = getCachedTrackExtrasSync(id) ?? getTrackExtras(id) ?? {};
+    setExtras(synced);
   }, [displayTrack?.id, trackExtrasVersion]);
 
   const liveExtras = (displayTrack?.id && displayTrack.id !== DUMMY_TRACK.id)
-    ? (getTrackExtras(displayTrack.id) ?? extras)
+    ? (getTrackExtras(displayTrack.id) ?? getCachedTrackExtrasSync(displayTrack.id) ?? extras)
     : extras;
 
   const likeCount = liveExtras?.likeCount ?? -1;
@@ -633,17 +859,6 @@ function PlayerContentInner({
   const hasVideo = !isLocal && !!activeVideoUrl && displayTrack.id !== DUMMY_TRACK.id;
   const canShowLyrics = !isLocal && !!(videoId ?? displayTrack?.id) && displayTrack.id !== DUMMY_TRACK.id;
 
-  useEffect(() => {
-    console.log('[PlayerContent] Video availability:', {
-      hasVideo,
-      activeVideoUrl: activeVideoUrl?.substring(0, 60),
-      muxedVideoUrl: muxedVideoUrl?.substring(0, 60),
-      videoUrl: videoUrl?.substring(0, 60),
-      isLocal,
-      trackId: displayTrack?.id,
-    });
-  }, [hasVideo, activeVideoUrl, muxedVideoUrl, videoUrl, isLocal, displayTrack?.id]);
-
   const [isFavorite, setIsFavorite] = useState(false);
   const toggleFavoriteFunc = () => {
     triggerHaptic();
@@ -657,321 +872,116 @@ function PlayerContentInner({
     return () => clearTimeout(t);
   }, [displayTrack?.id, viewCount]);
 
-  // ── Skeleton only for loading states, NOT for metadata ──────────────────────
   const showSkeletonForStats = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
 
-  // ── VIDEO TAB STATE ─────────────────────────────────────────────────────────
+  // ── TAB STATE ───────────────────────────────────────────────────────────────
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
   const [videoError, setVideoError] = useState<string | null>(null);
-  const [videoPlayerInitialized, setVideoPlayerInitialized] = useState(false);
-
-  const videoPlayer = videoPlayerSingleton;
-  const videoPlayerRef = useRef(videoPlayer);
-  const videoPlayerReady = useRef(false);
-  const pendingSeek = useRef<number | null>(null);
+  
   const isTransitioning = useRef(false);
   const activeSegmentRef = useRef<'song' | 'video'>('song');
-  const videoPlayingRef = useRef(false);
-  const isPlayingRef = useRef(isPlaying);
-  const errorCountRef = useRef(0);
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const videoPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastLoadedUrlRef = useRef<string | null>(null);
-  const isPipActiveRef = useRef(false);
   const positionRef = useRef(positionSec);
   const durationRef = useRef(durationSec);
+  
+  // Track play states
+  const masterPlayingRef = useRef(false);
+  const slavePlayingRef = useRef(false);
 
   useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
   useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   const [visualIsPlaying, setVisualIsPlaying] = useState(isPlaying);
-  useEffect(() => {
-    if (activeSegmentRef.current === 'song') {
-      setVisualIsPlaying(isPlaying);
-    }
-  }, [isPlaying]);
-
   const [visualPositionSec, setVisualPositionSec] = useState(positionSec);
   const [visualDurationSec, setVisualDurationSec] = useState(durationSec);
 
   useEffect(() => {
-    if (activeSegmentRef.current === 'song') {
-      setVisualPositionSec(positionSec);
-      if (durationSec > 0 && visualDurationSec !== durationSec) {
-        setVisualDurationSec(durationSec);
-      }
-    }
-  }, [positionSec, durationSec, visualDurationSec]);
+    setVisualIsPlaying(isPlaying);
+  }, [isPlaying]);
 
-  // ── Poll video player position while on Video tab ───────────────────────────
   useEffect(() => {
-    if (videoPollIntervalRef.current) {
-      clearInterval(videoPollIntervalRef.current);
-      videoPollIntervalRef.current = null;
+    setVisualPositionSec(positionSec);
+    if (durationSec > 0 && visualDurationSec !== durationSec) {
+      setVisualDurationSec(durationSec);
     }
+  }, [positionSec, durationSec]);
 
-    if (activeSegment !== 'video' || !videoPlayerInitialized || isLocal) return;
-
-    videoPollIntervalRef.current = setInterval(() => {
-      const vp = videoPlayerRef.current;
-      if (!vp) return;
-      try {
-        const ct = vp.currentTime ?? 0;
-        const dur = vp.duration ?? 0;
-        if (!isSlidingRef.current) {
-          setVisualPositionSec(ct);
-        }
-        setVisualDurationSec(dur > 0 ? dur : durationRef.current);
-        updateVideoPosition(ct);
-        updateVideoDuration(dur > 0 ? dur : durationRef.current);
-      } catch {}
-    }, VIDEO_POSITION_POLL_MS);
-
-    return () => {
-      if (videoPollIntervalRef.current) {
-        clearInterval(videoPollIntervalRef.current);
-        videoPollIntervalRef.current = null;
-      }
-    };
-  }, [activeSegment, videoPlayerInitialized, isLocal, updateVideoPosition, updateVideoDuration]);
-
-  // ── Video player status listener ───────────────────────────────────────────
+  // ── MASTER PLAYBACK STATE TRACKING (module-level refs) ──────────────────────
   useEffect(() => {
-    if (!videoPlayer || isLocal) return;
+    if (!masterPlayer) return;
 
-    let statusListener: any = null;
+    let playingListener: any = null;
 
     try {
-      statusListener = videoPlayer.addListener('statusChange', ({ status, error }: any) => {
-        if (status === 'readyToPlay') {
-          videoPlayerReady.current = true;
-          setVideoError(null);
-          errorCountRef.current = 0;
-
-          if (pendingSeek.current !== null) {
-            try {
-              videoPlayer.currentTime = pendingSeek.current;
-              if (activeSegmentRef.current === 'video') {
-                setVisualPositionSec(pendingSeek.current);
-              }
-            } catch {}
-            pendingSeek.current = null;
-
-            if (activeSegmentRef.current === 'video' && isPlayingRef.current) {
-              try {
-                videoPlayer.play();
-                videoPlayingRef.current = true;
-              } catch {}
-            }
-          }
-        } else if (status === 'error' && activeSegmentRef.current === 'video') {
-          videoPlayerReady.current = false;
-          const errorMsg = error?.message || 'Unknown video error';
-          console.error('[PlayerContent] Video error:', errorMsg);
-
-          if ((errorMsg.includes('403') || errorMsg.includes('forbidden')) && errorCountRef.current === 0) {
-            errorCountRef.current = 1;
-            setVideoError('Video unavailable. Retrying...');
-            setTimeout(() => {
-              if (lastLoadedUrlRef.current) {
-                try {
-                  videoPlayer.replaceAsync(lastLoadedUrlRef.current);
-                } catch {}
-              }
-            }, 1000);
+      playingListener = masterPlayer.addListener('playingChange', ({ isPlaying: mPlaying }: any) => {
+        masterPlayingRef.current = mPlaying;
+        
+        setVisualIsPlaying(mPlaying);
+        
+        // Sync slave's play state to match master
+        if (slaveReady && slavePlayingRef.current !== mPlaying) {
+          if (mPlaying) {
+            slavePlayer.play();
+            slavePlayingRef.current = true;
           } else {
-            setVideoError(errorMsg.includes('403') ? 'Video unavailable (access denied)' : errorMsg);
+            slavePlayer.pause();
+            slavePlayingRef.current = false;
           }
+        }
+        
+        if (!mPlaying && masterPlayer.currentTime >= (masterPlayer.duration - 1)) {
+          console.log('[PlayerContent] Master reached end, skipping to next');
+          engine.skipToNext();
         }
       });
     } catch (e) {
-      console.error('[PlayerContent] Failed to add video listener:', e);
+      console.error('[PlayerContent] Failed to add master playingChange listener:', e);
     }
 
     return () => {
       try {
-        statusListener?.remove?.();
+        playingListener?.remove?.();
       } catch {}
     };
-  }, [videoPlayer, isLocal]);
+  }, [engine]);
 
-  // ── AppState listener for auto-PiP ──────────────────────────────────────────
-  useEffect(() => {
-    if (isLocal || !hasVideo) return;
-
-    const handleAppStateChange = (nextAppState: AppStateStatus) => {
-      const vp = videoPlayerRef.current;
-      if (!vp) return;
-
-      if (nextAppState === 'background') {
-        if (
-          activeSegmentRef.current === 'video' &&
-          videoPlayerReady.current &&
-          videoPlayerInitialized &&
-          !isPipActiveRef.current
-        ) {
-          try {
-            vp.startPictureInPicture();
-          } catch (e) {
-            console.warn('[PlayerContent] Failed to start PiP:', e);
-          }
-        }
-      }
-    };
-
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription.remove();
-  }, [isLocal, hasVideo, videoPlayerInitialized]);
-
-  // ── Global video command registration ───────────────────────────────────────
-  useEffect(() => {
-    if (!videoPlayerInitialized || isLocal) return;
-
-    const vp = videoPlayerRef.current;
-    if (!vp) return;
-
-    (global as any).__mavinVideoPlay = () => {
-      try {
-        vp.play();
-        videoPlayingRef.current = true;
-        updateVideoIsPlaying(true);
-        setVisualIsPlaying(true);
-      } catch (e) {
-        console.warn('[PlayerContent] Global play failed:', e);
-      }
-    };
-
-    (global as any).__mavinVideoPause = () => {
-      try {
-        vp.pause();
-        videoPlayingRef.current = false;
-        updateVideoIsPlaying(false);
-        setVisualIsPlaying(false);
-      } catch (e) {
-        console.warn('[PlayerContent] Global pause failed:', e);
-      }
-    };
-
-    (global as any).__mavinVideoSeek = (position: number) => {
-      try {
-        vp.currentTime = position;
-        updateVideoPosition(position);
-        setVisualPositionSec(position);
-      } catch (e) {
-        console.warn('[PlayerContent] Global seek failed:', e);
-      }
-    };
-
-    console.log('[PlayerContent] Registered global video command handlers');
-
-    return () => {
-      delete (global as any).__mavinVideoPlay;
-      delete (global as any).__mavinVideoPause;
-      delete (global as any).__mavinVideoSeek;
-    };
-  }, [videoPlayerInitialized, isLocal, updateVideoIsPlaying, updateVideoPosition]);
-
-  // ── Load video source ───────────────────────────────────────────────────────
-  const loadVideoSource = useCallback(async (url: string) => {
-    if (!url || isLocal) return;
-
-    if (lastLoadedUrlRef.current === url && videoPlayerReady.current) {
-      console.log('[PlayerContent] Video URL already loaded, skipping');
-      return;
-    }
-
-    try {
-      setVideoError(null);
-      errorCountRef.current = 0;
-      videoPlayerReady.current = false;
-
-      const vp = videoPlayerRef.current;
-      await vp.replaceAsync(url);
-      lastLoadedUrlRef.current = url;
-
-      const pollStart = Date.now();
-      await new Promise<void>((resolve) => {
-        const poll = () => {
-          if (vp.status === 'readyToPlay') {
-            videoPlayerReady.current = true;
-            resolve();
-            return;
-          }
-          if (Date.now() - pollStart >= 8000) {
-            console.warn('[PlayerContent] readyToPlay poll timed out');
-            resolve();
-            return;
-          }
-          setTimeout(poll, 200);
-        };
-        poll();
-      });
-
-      try { vp.muted = true; } catch {}
-      console.log('[PlayerContent] Video source loaded:', url.substring(0, 80));
-    } catch (e) {
-      console.warn('[PlayerContent] Failed to load video source:', e);
-      setVideoError('Video unavailable. Listening to audio only.');
-    }
-  }, [isLocal]);
-
+  // ── LOAD STREAMS WHEN TRACK CHANGES ─────────────────────────────────────────
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
-    void loadVideoSource(activeVideoUrl);
-  }, [activeVideoUrl, isLocal]);
-
-  // ── Sync interval ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!videoPlayerInitialized || !videoPlayer || isLocal || !activeVideoUrl) return;
-
-    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-
-    syncIntervalRef.current = setInterval(() => {
-      if (videoPlayer && !videoError && activeSegmentRef.current === 'song') {
-        const drift = Math.abs(videoPlayer.currentTime - positionRef.current);
-        if (drift > 0.5) {
-          try {
-            videoPlayer.currentTime = positionRef.current;
-          } catch {}
-        }
-      }
-    }, VIDEO_SYNC_INTERVAL_MS);
-
-    return () => {
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-    };
-  }, [videoPlayerInitialized, videoPlayer, isLocal, activeVideoUrl, videoError]);
-
-  // ── Share handler ───────────────────────────────────────────────────────────
-  const handleShare = useCallback(async () => {
-    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
-    triggerHaptic();
+    if (displayTrack?.id === DUMMY_TRACK.id) return;
     
-    try {
-      const shareUrl = videoId 
-        ? `https://www.youtube.com/watch?v=${videoId}`
-        : displayTrack.url;
-      
-      const message = `Check out "${displayTrack.title}" by ${displayTrack.artist || 'Unknown Artist'}`;
-      
-      await Share.share({
-        title: displayTrack.title,
-        message: Platform.OS === 'android' ? `${message}\n\n${shareUrl}` : message,
-        url: Platform.OS === 'ios' ? shareUrl : undefined,
-      });
-    } catch (error) {
-      console.warn('[PlayerContent] Share failed:', error);
-      ToastAndroid.show("Failed to share song", ToastAndroid.SHORT);
-    }
-  }, [displayTrack, videoId]);
+    // Module-level loading - doesn't cause re-renders
+    loadStreams(activeVideoUrl, displayTrack.id);
+  }, [activeVideoUrl, isLocal, displayTrack?.id]);
 
-  // ── SEGMENT SWITCH ─────────────────────────────────────────────────────────
+  // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows ──────────────────
+  const handlePlayPause = useCallback(async () => {
+    triggerHaptic();
+    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
+
+    const willPlay = !visualIsPlaying;
+    setVisualIsPlaying(willPlay);
+
+    if (willPlay) {
+      await masterPlayer.play();
+      masterPlayingRef.current = true;
+    } else {
+      await masterPlayer.pause();
+      masterPlayingRef.current = false;
+    }
+    
+    if (willPlay) {
+      engine.play();
+    } else {
+      engine.pause();
+    }
+  }, [displayTrack, visualIsPlaying, engine]);
+
+  // ── SEGMENT SWITCH - Master continues playing, Slave visibility toggles ──────
   const handleSegmentPress = useCallback(
     async (seg: 'song' | 'video') => {
       if (seg === 'video' && (!hasVideo || displayTrack.id === DUMMY_TRACK.id || videoError || isLocal)) {
         if (videoError) {
-          console.log('[PlayerContent] Video unavailable due to error:', videoError);
+          console.log('[PlayerContent] Video unavailable:', videoError);
         }
         return;
       }
@@ -980,80 +990,43 @@ function PlayerContentInner({
       isTransitioning.current = true;
       triggerHaptic();
 
-      if (seg === 'video' && !videoPlayerInitialized) {
-        setVideoPlayerInitialized(true);
-      }
-
-      const vp = videoPlayerRef.current;
-      const currentAudioPos = positionRef.current;
-      const OFFSET = BACKWARD_SEEK_OFFSET;
+      console.log(`[PlayerContent] Switching to "${seg}" tab`);
 
       try {
-        if (seg === 'video' && vp && !videoError && !isLocal) {
-          await deactivateAudio();
-
-          const seekTarget = Math.max(0, currentAudioPos - OFFSET);
-
-          if (videoPlayerReady.current) {
-            try {
-              vp.currentTime = seekTarget;
-            } catch {
-              pendingSeek.current = seekTarget;
-            }
-          } else {
-            pendingSeek.current = seekTarget;
-          }
-
-          vp.muted = false;
-
-          if (visualIsPlaying) {
-            try {
-              await vp.play();
-              videoPlayingRef.current = true;
-            } catch (e) {
-              console.warn('[PlayerContent] vp.play() failed:', e);
+        if (seg === 'video') {
+          // ── SWITCHING TO VIDEO TAB ─────────────────────────────────────────────
+          console.log('[PlayerContent] → VIDEO tab');
+          
+          const currentPosition = masterPlayer.currentTime ?? positionRef.current;
+          const wasPlaying = masterPlayingRef.current;
+          
+          // Ensure slave is ready (module-level var)
+          if (slaveReady && currentTrackId === displayTrack.id) {
+            slavePlayer.currentTime = currentPosition;
+            
+            if (wasPlaying) {
+              await slavePlayer.play();
+              slavePlayingRef.current = true;
             }
           }
-
-          setVisualPositionSec(seekTarget);
-          setVisualDurationSec((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
-
+          
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           setVideoActive(true);
-          updateVideoPosition(seekTarget);
-          updateVideoDuration((vp.duration ?? 0) > 0 ? vp.duration : durationRef.current);
-          updateVideoIsPlaying(visualIsPlaying);
-        } else if (seg === 'song' && vp) {
-          pendingSeek.current = null;
-
-          try { vp.pause(); } catch {}
-          try { vp.muted = true; } catch {}
+          setVideoError(null);
           
-          videoPlayingRef.current = false;
-
-          await activateAudio();
-
-          const videoStoppedAt = vp.currentTime ?? positionRef.current;
-          if (videoStoppedAt > 0 && videoStoppedAt !== positionRef.current) {
-            try { engine.seekTo(videoStoppedAt); } catch {}
+        } else {
+          // ── SWITCHING TO SONG TAB ─────────────────────────────────────────────
+          console.log('[PlayerContent] → SONG tab');
+          
+          if (slaveReady) {
+            await slavePlayer.pause();
+            slavePlayingRef.current = false;
           }
           
-          if (visualIsPlaying) {
-            try { engine.play(); } catch (e) {
-              console.warn('[PlayerContent] engine.play() failed:', e);
-            }
-          }
-
-          setVisualPositionSec(videoStoppedAt);
-          setVisualDurationSec(durationRef.current);
-
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           setVideoActive(false);
-          updateVideoPosition(videoStoppedAt);
-          updateVideoDuration(durationRef.current);
-          updateVideoIsPlaying(false);
         }
       } catch (err) {
         console.error('[PlayerContent] Segment switch error:', err);
@@ -1063,41 +1036,23 @@ function PlayerContentInner({
         }, 500);
       }
     },
-    [
-      hasVideo,
-      videoPlayer,
-      visualIsPlaying,
-      displayTrack.id,
-      engine,
-      videoError,
-      isLocal,
-      videoPlayerInitialized,
-      setVisualPositionSec,
-      setVisualDurationSec,
-      deactivateAudio,
-      activateAudio,
-      setVideoActive,
-      updateVideoPosition,
-      updateVideoDuration,
-      updateVideoIsPlaying,
-    ],
+    [hasVideo, displayTrack.id, videoError, isLocal],
   );
 
-  // ── Track change reset ──────────────────────────────────────────────────────
+  // ── TRACK CHANGE RESET ──────────────────────────────────────────────────────
   useEffect(() => {
-    videoPlayerReady.current = false;
-    pendingSeek.current = null;
-    lastLoadedUrlRef.current = null;
+    masterPlayingRef.current = false;
+    slavePlayingRef.current = false;
     setActiveSegment('song');
     activeSegmentRef.current = 'song';
     setVideoError(null);
-    errorCountRef.current = 0;
     setVisualPositionSec(0);
     setVisualDurationSec(0);
     setVideoActive(false);
     updateVideoPosition(0);
     updateVideoDuration(0);
     updateVideoIsPlaying(false);
+    setVisualIsPlaying(false);
   }, [displayTrack?.id, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
   // ── Artwork colors ──────────────────────────────────────────────────────────
@@ -1132,40 +1087,25 @@ function PlayerContentInner({
 
   const handleSeek = useCallback(
     (fraction: number) => {
-      const activeDuration =
-        activeSegmentRef.current === 'video'
-          ? ((videoPlayerRef.current?.duration ?? 0) > 0
-              ? videoPlayerRef.current!.duration
-              : durationRef.current)
-          : durationRef.current;
-
-      if (activeDuration <= 0) return;
-      const t = fraction * activeDuration;
+      if (durationSec <= 0) return;
+      const t = fraction * durationSec;
 
       if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
       seekDebounceRef.current = setTimeout(() => {
         isSlidingRef.current = false;
       }, 1500);
 
-      if (activeSegmentRef.current === 'video') {
-        const vp = videoPlayerRef.current;
-        if (vp && videoPlayerReady.current && !videoError && !isLocal) {
-          try {
-            const wasPlaying = visualIsPlaying;
-            vp.pause();
-            vp.currentTime = t;
-            if (wasPlaying) {
-              vp.play();
-            }
-          } catch {}
+      try {
+        masterPlayer.currentTime = t;
+        if (slaveReady) {
+          slavePlayer.currentTime = t;
         }
-        setVisualPositionSec(t);
-        updateVideoPosition(t);
-      } else {
-        engine.seekTo(t);
-      }
+      } catch {}
+      
+      setVisualPositionSec(t);
+      engine.seekTo(t);
     },
-    [engine, videoError, isLocal, visualIsPlaying, updateVideoPosition],
+    [engine, durationSec],
   );
 
   const handleSkipBack = useCallback(async () => {
@@ -1177,30 +1117,6 @@ function PlayerContentInner({
     triggerHaptic();
     await engine.skipToNext();
   }, [engine]);
-
-  const handlePlayPause = useCallback(async () => {
-    triggerHaptic();
-    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
-
-    const willPlay = !visualIsPlaying;
-    setVisualIsPlaying(willPlay);
-
-    if (activeSegmentRef.current === 'video' && videoPlayer && videoPlayerReady.current && !videoError && !isLocal) {
-      try {
-        if (willPlay) {
-          await videoPlayer.play();
-        } else {
-          await videoPlayer.pause();
-        }
-        videoPlayingRef.current = willPlay;
-        updateVideoIsPlaying(willPlay);
-      } catch (e) {
-        console.warn('[PlayerContent] Video play/pause failed:', e);
-      }
-    } else {
-      togglePlayPause();
-    }
-  }, [displayTrack, visualIsPlaying, togglePlayPause, videoPlayer, videoError, isLocal, updateVideoIsPlaying]);
 
   const handleOpenQueue = () => {
     triggerHaptic();
@@ -1326,6 +1242,28 @@ function PlayerContentInner({
     onMinimize();
   }, [onMinimize]);
 
+  const handleShare = useCallback(async () => {
+    if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
+    triggerHaptic();
+
+    try {
+      const shareUrl = videoId
+        ? `https://www.youtube.com/watch?v=${videoId}`
+        : displayTrack.url;
+
+      const message = `Check out "${displayTrack.title}" by ${displayTrack.artist || 'Unknown Artist'}`;
+
+      await Share.share({
+        title: displayTrack.title,
+        message: Platform.OS === 'android' ? `${message}\n\n${shareUrl}` : message,
+        url: Platform.OS === 'ios' ? shareUrl : undefined,
+      });
+    } catch (error) {
+      console.warn('[PlayerContent] Share failed:', error);
+      ToastAndroid.show("Failed to share song", ToastAndroid.SHORT);
+    }
+  }, [displayTrack, videoId]);
+
   const artworkSource =
     typeof displayTrack?.thumbnail === 'string' && displayTrack.thumbnail
       ? { uri: displayTrack.thumbnail }
@@ -1356,9 +1294,33 @@ function PlayerContentInner({
     opacity: interpolate(videoProgress.value, [0, 1], [0, 1]),
   }));
 
+  const showSlavePlayer = hasVideo && !isLocal && activeSegment === 'video' && slaveReady;
+
+  // Update visual position from master (polling for smooth UI)
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    
+    if (masterReady) {
+      interval = setInterval(() => {
+        try {
+          const pos = masterPlayer.currentTime ?? 0;
+          const dur = masterPlayer.duration ?? 0;
+          setVisualPositionSec(pos);
+          if (dur > 0) setVisualDurationSec(dur);
+          updateVideoPosition(pos);
+          updateVideoDuration(dur);
+          setVisualIsPlaying(masterPlayingRef.current);
+        } catch {}
+      }, 250);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [masterReady, updateVideoPosition, updateVideoDuration]);
+
   // ─────────────────────────────────────────────────────────────────────────────
-  // RENDER - Metadata always shows, skeleton only for loading stats
-  // FIXED: Download and Share buttons in same pill container
+  // RENDER
   // ─────────────────────────────────────────────────────────────────────────────
   return (
     <>
@@ -1428,22 +1390,24 @@ function PlayerContentInner({
                 />
               </Animated.View>
 
-              {hasVideo && !isLocal && videoPlayerInitialized && (
+              {showSlavePlayer && (
                 <Animated.View style={[StyleSheet.absoluteFill, videoAnimStyle]}>
                   <VideoView
-                    player={videoPlayer}
+                    player={slavePlayer}
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                     nativeControls={false}
                     allowsPictureInPicture={true}
                     startsPictureInPictureAutomatically={false}
                     onPictureInPictureStart={() => {
-                      isPipActiveRef.current = true;
-                      console.log('[PlayerContent] VideoView PiP started');
+                      console.log('[PlayerContent] PiP started');
                     }}
                     onPictureInPictureStop={() => {
-                      isPipActiveRef.current = false;
-                      console.log('[PlayerContent] VideoView PiP stopped');
+                      console.log('[PlayerContent] PiP stopped');
+                      if (masterPlayingRef.current && slaveReady) {
+                        slavePlayer.currentTime = masterPlayer.currentTime ?? 0;
+                        slavePlayer.play();
+                      }
                     }}
                   />
                   {videoError && activeSegment === 'video' && (
@@ -1457,7 +1421,7 @@ function PlayerContentInner({
               )}
             </View>
 
-            {/* Track info - ALWAYS shows metadata, never skeleton */}
+            {/* Track info */}
             <View style={styles.infoContainer}>
               <MovingText
                 text={displayTrack.title}
@@ -1474,14 +1438,13 @@ function PlayerContentInner({
               />
             </View>
 
-            {/* Action Row - Horizontal Scrollable */}
-            <ScrollView 
-              horizontal 
+            {/* Action Row */}
+            <ScrollView
+              horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.actionRowContent}
               style={styles.actionScrollView}
             >
-              {/* Like Button */}
               {!isLocal && (
                 <View style={styles.actionItem}>
                   {showSkeletonForStats ? (
@@ -1505,7 +1468,6 @@ function PlayerContentInner({
                 </View>
               )}
 
-              {/* Dislike Button */}
               {!isLocal && (
                 <View style={styles.actionItem}>
                   {showSkeletonForStats ? (
@@ -1529,7 +1491,6 @@ function PlayerContentInner({
                 </View>
               )}
 
-              {/* Comments Button */}
               {showCommentButton && (
                 <View style={styles.actionItem}>
                   {showSkeletonForStats ? (
@@ -1551,7 +1512,6 @@ function PlayerContentInner({
                 </View>
               )}
 
-              {/* View Count Badge - Pill container with icon + text */}
               {!isLocal && viewCount > 0 && (
                 <View style={[styles.pillContainer, styles.viewCountPill]}>
                   {showSkeletonForStats ? (
@@ -1567,24 +1527,20 @@ function PlayerContentInner({
                 </View>
               )}
 
-              {/* Add to Playlist Button */}
               <View style={styles.actionItem}>
                 <TouchableOpacity onPress={handlePlaylist} activeOpacity={0.7}>
                   <MaterialIcons name="playlist-add" size={moderateScale(24)} color={colors.text} />
                 </TouchableOpacity>
               </View>
 
-              {/* Sleep Timer Button */}
               <View style={styles.actionItem}>
                 <TouchableOpacity onPress={handleSleepTimer} activeOpacity={0.7}>
                   <MaterialCommunityIcons name="weather-night" size={moderateScale(22)} color={colors.text} />
                 </TouchableOpacity>
               </View>
 
-              {/* Download + Share Combined Pill Container */}
               {!isLocal && displayTrack.id !== DUMMY_TRACK.id && (
                 <View style={[styles.pillContainer, styles.actionPill]}>
-                  {/* Download Button */}
                   <DownloadButtonWithProgress
                     trackId={displayTrack.id}
                     trackTitle={displayTrack.title}
@@ -1594,11 +1550,7 @@ function PlayerContentInner({
                     trackThumbnail={displayTrack.thumbnail}
                     iconSize={20}
                   />
-
-                  {/* Divider between download and share */}
                   <View style={[styles.pillDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-
-                  {/* Share Button with curved arrow icon */}
                   <TouchableOpacity onPress={handleShare} activeOpacity={0.7}>
                     <Ionicons name="arrow-redo-outline" size={moderateScale(20)} color={colors.text} />
                   </TouchableOpacity>
@@ -1904,21 +1856,14 @@ const styles = StyleSheet.create({
   artistTappable: { textDecorationLine: 'underline' },
   artistSeparator: { fontSize: moderateScale(15) },
 
-  actionScrollView: {
-    flexGrow: 0,
-    marginVertical: verticalScale(8),
-  },
+  actionScrollView: { flexGrow: 0, marginVertical: verticalScale(8) },
   actionRowContent: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: scale(12),
     gap: scale(16),
   },
-  actionItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Pill container styles (replaces viewCountItem)
+  actionItem: { alignItems: 'center', justifyContent: 'center' },
   pillContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1928,32 +1873,13 @@ const styles = StyleSheet.create({
     borderRadius: scale(20),
     gap: scale(8),
   },
-  viewCountPill: {
-    gap: scale(6),
-  },
-  actionPill: {
-    gap: scale(10),
-  },
-  pillDivider: {
-    width: 1,
-    height: verticalScale(16),
-  },
-  pillText: {
-    fontSize: moderateScale(11),
-    fontWeight: '500',
-  },
-  iconWithCount: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(4),
-  },
-  iconCountText: {
-    fontSize: moderateScale(11),
-    fontWeight: '600',
-  },
-  commentBadgeContainer: {
-    position: 'relative',
-  },
+  viewCountPill: { gap: scale(6) },
+  actionPill: { gap: scale(10) },
+  pillDivider: { width: 1, height: verticalScale(16) },
+  pillText: { fontSize: moderateScale(11), fontWeight: '500' },
+  iconWithCount: { flexDirection: 'row', alignItems: 'center', gap: scale(4) },
+  iconCountText: { fontSize: moderateScale(11), fontWeight: '600' },
+  commentBadgeContainer: { position: 'relative' },
   commentBadge: {
     position: 'absolute',
     top: -6,
@@ -1965,18 +1891,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: scale(4),
   },
-  commentBadgeText: {
-    color: '#000',
-    fontSize: moderateScale(9),
-    fontWeight: '700',
-  },
+  commentBadgeText: { color: '#000', fontSize: moderateScale(9), fontWeight: '700' },
 
   progressWrapper: { marginTop: verticalScale(20) },
-  sliderThumb: {
-    width: moderateScale(15),
-    height: moderateScale(15),
-    borderRadius: moderateScale(15) / 2,
-  },
+  sliderThumb: { width: moderateScale(15), height: moderateScale(15), borderRadius: moderateScale(15) / 2 },
   bubbleContainer: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   bubbleText: { fontSize: moderateScale(11), fontWeight: '600' },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: verticalScale(6) },
@@ -1990,13 +1908,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: scale(8),
   },
   shuffleWrapper: { alignItems: 'center', gap: verticalScale(4) },
-  bigPlay: {
-    width: scale(65),
-    height: scale(65),
-    borderRadius: 32.5,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  bigPlay: { width: scale(65), height: scale(65), borderRadius: 32.5, justifyContent: 'center', alignItems: 'center' },
   repeatWrapper: { alignItems: 'center', position: 'relative' },
   repeatOneBadge: {
     position: 'absolute',
@@ -2031,16 +1943,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 16,
   },
-  videoErrorText: {
-    fontSize: moderateScale(14),
-    fontWeight: '600',
-    marginTop: verticalScale(8),
-    textAlign: 'center',
-    paddingHorizontal: scale(16),
-  },
-  videoErrorSubtext: {
-    fontSize: moderateScale(12),
-    marginTop: verticalScale(4),
-    textAlign: 'center',
-  },
+  videoErrorText: { fontSize: moderateScale(14), fontWeight: '600', marginTop: verticalScale(8), textAlign: 'center', paddingHorizontal: scale(16) },
+  videoErrorSubtext: { fontSize: moderateScale(12), marginTop: verticalScale(4), textAlign: 'center' },
 });

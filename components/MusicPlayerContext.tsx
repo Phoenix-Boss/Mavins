@@ -1,19 +1,20 @@
 // components/MusicPlayerContext.tsx
 //
-// CANONICAL PLAYER ENGINE — stream resolution + expo-audio playback.
+// CANONICAL PLAYER ENGINE — stream resolution + master-slave playback.
 // COMPLETE QUEUE, REPEAT, SHUFFLE IMPLEMENTATION
 // ANDROID-ONLY: All iOS-specific code removed
 //
-// FIXED: seekTo uses currentTime property, not seekTo method
-// FIXED: All player operations are synchronous (no await)
-// FIXED: Proper expo-audio API usage
-// FIXED: 403 error handling — REMOVED stale URL cache, always resolve fresh URLs
-// FIXED: Dual-mode architecture (audio: expo-audio, video: expo-video)
-// FIXED: Legacy expo-file-system API import for downloads
-// FIXED: Video-only tracks play audio from video URL
-// FIXED: Audio-only tracks properly hide video tab
-// FIXED: Queue auto-advance only when track actually finishes
-// FIXED: Proper error messages using AlertContext
+// MASTER-SLAVE ARCHITECTURE (Industry standard workaround for Expo limitations):
+//   MASTER PLAYER: expo-video instance that plays audio (hidden, never muted)
+//   SLAVE PLAYER: expo-video instance for video rendering (muted, visible only on video tab)
+//
+// This file manages ONLY the MASTER player. The SLAVE player is controlled by playerContent.tsx.
+// All playback state comes from the MASTER player. No expo-audio is used.
+//
+// FIXED: Removed all expo-audio dependencies - using expo-video for everything
+// FIXED: Single source of truth (Master player) for position, duration, playing state
+// FIXED: No AudioFocus handoff - Master owns focus permanently
+// FIXED: Queue, repeat, shuffle fully implemented
 
 import React, {
   createContext,
@@ -26,12 +27,6 @@ import React, {
 } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  createAudioPlayer,
-  useAudioPlayerStatus,
-  setAudioModeAsync,
-  type AudioPlayer,
-} from 'expo-audio';
 // Use legacy API to avoid deprecation warnings
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
@@ -64,6 +59,13 @@ import {
   cancelAllPreloads,
   getPreloadAbortSignal,
 } from '@/libs/preload';
+
+import {
+  getCachedTrackExtras,
+  getCachedTrackExtrasSync,
+  setCachedTrackExtras,
+  extractPersistentMetadata,
+} from '@/services/trackMetadataCache';
 
 export type { Song };
 
@@ -147,16 +149,21 @@ interface PlaybackSession {
   originalIndex: number;
   wasPlayingBeforeInterruption: boolean;
   didHandleFinish: boolean;
-  videoActive: boolean;
-  videoPosition: number;
-  videoDuration: number;
-  videoIsPlaying: boolean;
   bgAbortController: AbortController | null;
   lastError: string | null;
   // Track type flags for UI
   hasVideoStream: boolean;
   isAudioOnlyTrack: boolean;
   isVideoOnlyTrack: boolean;
+  // playback rate / volume / pitch stored in session
+  playbackRate: number;
+  preservePitch: boolean;
+  volume: number;
+  // Video-specific state (for UI)
+  videoActive: boolean;
+  videoPosition: number;
+  videoDuration: number;
+  videoIsPlaying: boolean;
 }
 
 const session: PlaybackSession = {
@@ -174,15 +181,18 @@ const session: PlaybackSession = {
   originalIndex: -1,
   wasPlayingBeforeInterruption: false,
   didHandleFinish: false,
-  videoActive: false,
-  videoPosition: 0,
-  videoDuration: 0,
-  videoIsPlaying: false,
   bgAbortController: null,
   lastError: null,
   hasVideoStream: false,
   isAudioOnlyTrack: false,
   isVideoOnlyTrack: false,
+  playbackRate: 1.0,
+  preservePitch: true,
+  volume: 1.0,
+  videoActive: false,
+  videoPosition: 0,
+  videoDuration: 0,
+  videoIsPlaying: false,
 };
 
 const sessionListeners = new Set<() => void>();
@@ -234,7 +244,7 @@ const RESTORE_GLOBALS = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOCAL FILE CACHE - Using legacy expo-file-system API to avoid deprecation warnings
+// LOCAL FILE CACHE
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function cacheLocalFileForPlayback(contentUri: string, trackId: string): Promise<string | null> {
@@ -438,17 +448,13 @@ async function sha1(data: Uint8Array): Promise<Uint8Array> {
     let [a, b, c, d, e] = H;
     for (let t = 0; t < 80; t++) {
       const rot = ((a << 5) | (a >>> 27)) >>> 0;
-      const f =
-        t < 20
-          ? (b & c) | ((~b >>> 0) & d)
-          : t < 40
-            ? b ^ c ^ d
-            : t < 60
-              ? (b & c) | (b & d) | (c & d)
-              : b ^ c ^ d;
-      const k = t < 20 ? 0x5A827999 : t < 40 ? 0x6ED9EBA1 : t < 60 ? 0x8F1BBCDC : 0xCA62C1D6;
-      const tmp = (rot + f + e + k + W[t]) >>> 0;
-      e = d; d = c; c = ((b << 30) | (b >>> 2)) >>> 0; b = a; a = tmp;
+      let f: number, k: number;
+      if (t < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+      else if (t < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+      else if (t < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      const temp = (rot + f + e + k + W[t]) >>> 0;
+      e = d; d = c; c = ((b << 30) | (b >>> 2)) >>> 0; b = a; a = temp;
     }
     H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
     H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0; H[4] = (H[4] + e) >>> 0;
@@ -481,6 +487,8 @@ async function videoIdToUuid(videoId: string): Promise<string> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRACK EXTRAS STORE
+// In-memory store for fast synchronous access. Disk persistence via
+// trackMetadataCache (persistent metadata only — no stream URLs).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const trackExtrasStore = new Map<string, TrackExtras>();
@@ -499,11 +507,33 @@ export function storeTrackExtras(trackId: string, extras: TrackExtras): void {
   }
   trackExtrasStore.set(trackId, extras);
   notifyTrackExtrasChange();
+
+  if (trackId && extras) {
+    const persistent = extractPersistentMetadata(extras);
+    const hasMeaningfulData =
+      (persistent.likeCount !== undefined && persistent.likeCount !== -1) ||
+      (persistent.viewCount !== undefined && persistent.viewCount !== -1) ||
+      (persistent.commentsCount !== undefined && persistent.commentsCount !== -1) ||
+      persistent.uploaderUrl ||
+      persistent.videoId;
+
+    if (hasMeaningfulData) {
+      setCachedTrackExtras(trackId, persistent).catch(() => {});
+    }
+  }
 }
 
 export function getTrackExtras(trackId: string | undefined | null): TrackExtras | null {
   if (!trackId) return null;
-  return trackExtrasStore.get(trackId) ?? null;
+  const memoryResult = trackExtrasStore.get(trackId);
+  if (memoryResult) return memoryResult;
+  const persistedResult = getCachedTrackExtrasSync(trackId);
+  if (persistedResult) {
+    trackExtrasStore.set(trackId, persistedResult);
+    notifyTrackExtrasChange();
+    return persistedResult;
+  }
+  return null;
 }
 
 export function useTrackExtrasVersion(): number {
@@ -579,11 +609,9 @@ async function invalidateStreamCache(trackId: string, streamType?: 'audio' | 'vi
       .from('streams')
       .update({ is_active: false })
       .eq('track_id', uuid);
-    
     if (streamType) {
       query = query.eq('stream_type', streamType);
     }
-    
     const { error } = await query;
     if (error) console.warn('[MusicPlayer] invalidateStreamCache error:', error?.message);
   } catch (e) {
@@ -602,7 +630,7 @@ async function cacheStreamsToSupabase(
     const uuid = await videoIdToUuid(trackId);
     const expiry = new Date(Date.now() + CONFIG.STREAM_TTL_MS).toISOString();
     const now = new Date().toISOString();
-    
+
     const rows = [
       {
         track_id: uuid, source: 'youtube', stream_url: audioUrl, stream_type: 'audio',
@@ -610,7 +638,7 @@ async function cacheStreamsToSupabase(
         is_active: true, health_score: 100, last_accessed: now, access_count: 1,
       },
     ];
-    
+
     const bestVideoUrl = muxedVideoUrl || videoUrl;
     if (bestVideoUrl) {
       rows.push({
@@ -619,7 +647,7 @@ async function cacheStreamsToSupabase(
         is_active: true, health_score: 100, last_accessed: now, access_count: 1,
       });
     }
-    
+
     const { error } = await (supabase as any).from('streams').upsert(rows, {
       onConflict: 'track_id,stream_type',
     });
@@ -649,7 +677,7 @@ function buildExtras(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RESOLVE TRACK - WITH FULL MITIGATION FOR AUDIO/VIDEO-ONLY TRACKS
+// RESOLVE TRACK
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.now()): Promise<ResolvedTrack | null> {
@@ -682,7 +710,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     url.startsWith('file://') || url.startsWith('/') || url.startsWith('content://') ||
     (song as any).isLocal === true || (song as any).isDownloaded === true;
 
-  // Handle local files
   if (isLocal) {
     const enrichedSong = enrichLocalTrackMetadata(song, url);
     let finalUrl = enrichedSong.url!;
@@ -718,7 +745,17 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     };
   }
 
-  // Try cache first (only if not bypassing)
+  if (song.id && !bypassCache) {
+    const diskCached = await getCachedTrackExtras(song.id);
+    if (diskCached) {
+      const existing = trackExtrasStore.get(song.id);
+      if (!existing) {
+        trackExtrasStore.set(song.id, diskCached);
+        notifyTrackExtrasChange();
+      }
+    }
+  }
+
   if (!bypassCache) {
     try {
       const [cachedAudio, cachedVideo] = await Promise.all([
@@ -726,7 +763,7 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
         getCachedVideoStream(song.id),
       ]);
       if (cachedAudio) {
-        let extras: TrackExtras = { 
+        let extras: TrackExtras = {
           videoId: song.videoId,
           hasAudio: true,
           hasVideo: !!cachedVideo,
@@ -785,46 +822,28 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     let hasAudio = false;
     let hasVideo = false;
 
-    // Handle audio stream
-    if (bestAudio?.url) {
-      audioUrl = bestAudio.url;
-      hasAudio = true;
-    }
+    if (bestAudio?.url) { audioUrl = bestAudio.url; hasAudio = true; }
+    if (bestVideo?.url) { videoUrl = bestVideo.url; hasVideo = true; }
+    if (bestMuxed?.url) { muxedVideoUrl = bestMuxed.url; hasVideo = true; }
 
-    // Handle video streams
-    if (bestVideo?.url) {
-      videoUrl = bestVideo.url;
-      hasVideo = true;
-    }
-    if (bestMuxed?.url) {
-      muxedVideoUrl = bestMuxed.url;
-      hasVideo = true;
-    }
-
-    // MITIGATION: Video-only track (no audio stream, but has video)
     if (!audioUrl && (videoUrl || muxedVideoUrl)) {
-      console.log(`[MusicPlayer] Video-only track detected for "${song.title}" - using video URL as audio source`);
+      console.log(`[MusicPlayer] Video-only track detected for "${song.title}"`);
       audioUrl = muxedVideoUrl || videoUrl;
       hasAudio = true;
       isVideoOnly = true;
     }
 
-    // MITIGATION: Audio-only track (no video stream)
     if (audioUrl && !videoUrl && !muxedVideoUrl) {
       console.log(`[MusicPlayer] Audio-only track detected for "${song.title}"`);
       isAudioOnly = true;
       hasVideo = false;
     }
 
-    // MITIGATION: Both audio and video available
     if (audioUrl && (videoUrl || muxedVideoUrl)) {
-      hasAudio = true;
-      hasVideo = true;
-      isAudioOnly = false;
-      isVideoOnly = false;
+      hasAudio = true; hasVideo = true;
+      isAudioOnly = false; isVideoOnly = false;
     }
 
-    // If no audio URL after all mitigation attempts, try lower quality fallback
     if (!audioUrl) {
       const lowerQualityAudio = pickBestAudio(info.audioStreams?.filter(s => s.bitrate && s.bitrate < 128) ?? []);
       if (lowerQualityAudio?.url) {
@@ -834,29 +853,15 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       }
     }
 
-    // If still no audio URL, track is completely unavailable
     if (!audioUrl) {
-      console.error(`[MusicPlayer] No playable stream for "${song.title}"`);
+      console.warn(`[MusicPlayer] No audio stream found for "${song.title}"`);
       return null;
     }
 
     const duration = info.duration ?? 0;
-    let commentsCount = -1;
-    if (song.videoId) {
-      const cached = await safeGetTrackStats(song.videoId);
-      if (cached != null && (cached.commentsCount ?? -1) > 0) {
-        commentsCount = cached.commentsCount!;
-      }
-    }
-
+    const commentsCount = typeof info.commentsCount === 'number' ? info.commentsCount : -1;
     const extras = buildExtras(song, info, videoUrl, muxedVideoUrl, commentsCount);
-    storeTrackExtras(song.id, {
-      ...extras,
-      hasAudio,
-      hasVideo,
-      isAudioOnly,
-      isVideoOnly,
-    });
+    storeTrackExtras(song.id, { ...extras, hasAudio, hasVideo, isAudioOnly, isVideoOnly });
     cacheStreamsToSupabase(song.id, audioUrl, videoUrl, muxedVideoUrl, duration).catch(() => {});
     if (song.videoId) {
       safeSaveTrackStats({
@@ -866,30 +871,15 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       });
     }
 
-    console.log(`[MusicPlayer] Resolved track "${song.title}":`, {
-      hasAudio,
-      hasVideo,
-      isAudioOnly,
-      isVideoOnly,
-      duration,
-    });
+    console.log(`[MusicPlayer] Resolved track "${song.title}":`, { hasAudio, hasVideo, isAudioOnly, isVideoOnly, duration });
 
     return {
-      id: song.id,
-      url: audioUrl,
-      title: info.title ?? song.title,
-      artist: song.artist,
-      thumbnail: song.thumbnail,
-      duration: duration > 0 ? duration : undefined,
-      videoId: song.videoId,
-      isDownloaded: false,
-      isLocal: false,
+      id: song.id, url: audioUrl, title: info.title ?? song.title, artist: song.artist,
+      thumbnail: song.thumbnail, duration: duration > 0 ? duration : undefined,
+      videoId: song.videoId, isDownloaded: false, isLocal: false,
       videoOnlyUrl: videoUrl ?? undefined,
       muxedVideoUrl: muxedVideoUrl ?? undefined,
-      hasAudio,
-      hasVideo,
-      isAudioOnly,
-      isVideoOnly,
+      hasAudio, hasVideo, isAudioOnly, isVideoOnly,
     };
   } catch (primaryErr) {
     console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, primaryErr);
@@ -925,65 +915,26 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       let hasAudio = false;
       let hasVideo = false;
 
-      if (bestAudio?.url) {
-        audioUrl = bestAudio.url;
-        hasAudio = true;
-      }
-      if (bestVideo?.url) {
-        videoUrl = bestVideo.url;
-        hasVideo = true;
-      }
-      if (bestMuxed?.url) {
-        muxedVideoUrl = bestMuxed.url;
-        hasVideo = true;
-      }
+      if (bestAudio?.url) { audioUrl = bestAudio.url; hasAudio = true; }
+      if (bestVideo?.url) { videoUrl = bestVideo.url; hasVideo = true; }
+      if (bestMuxed?.url) { muxedVideoUrl = bestMuxed.url; hasVideo = true; }
 
-      // Mitigation for video-only
-      if (!audioUrl && (videoUrl || muxedVideoUrl)) {
-        audioUrl = muxedVideoUrl || videoUrl;
-        hasAudio = true;
-        isVideoOnly = true;
-      }
-
-      if (audioUrl && !videoUrl && !muxedVideoUrl) {
-        isAudioOnly = true;
-        hasVideo = false;
-      }
-
-      if (audioUrl && (videoUrl || muxedVideoUrl)) {
-        hasAudio = true;
-        hasVideo = true;
-      }
-
+      if (!audioUrl && (videoUrl || muxedVideoUrl)) { audioUrl = muxedVideoUrl || videoUrl; hasAudio = true; isVideoOnly = true; }
+      if (audioUrl && !videoUrl && !muxedVideoUrl) { isAudioOnly = true; hasVideo = false; }
+      if (audioUrl && (videoUrl || muxedVideoUrl)) { hasAudio = true; hasVideo = true; }
       if (!audioUrl) continue;
 
       const duration = info.duration ?? 0;
       const extras = buildExtras(song, info, videoUrl, muxedVideoUrl, -1);
-      storeTrackExtras(song.id, {
-        ...extras,
-        hasAudio,
-        hasVideo,
-        isAudioOnly,
-        isVideoOnly,
-      });
+      storeTrackExtras(song.id, { ...extras, hasAudio, hasVideo, isAudioOnly, isVideoOnly });
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, muxedVideoUrl, duration).catch(() => {});
 
       return {
-        id: song.id,
-        url: audioUrl,
-        title: info.title ?? song.title,
-        artist: song.artist,
-        thumbnail: song.thumbnail,
-        duration: duration > 0 ? duration : undefined,
-        videoId: song.videoId,
-        isDownloaded: false,
-        isLocal: false,
-        videoOnlyUrl: videoUrl ?? undefined,
-        muxedVideoUrl: muxedVideoUrl ?? undefined,
-        hasAudio,
-        hasVideo,
-        isAudioOnly,
-        isVideoOnly,
+        id: song.id, url: audioUrl, title: info.title ?? song.title, artist: song.artist,
+        thumbnail: song.thumbnail, duration: duration > 0 ? duration : undefined,
+        videoId: song.videoId, isDownloaded: false, isLocal: false,
+        videoOnlyUrl: videoUrl ?? undefined, muxedVideoUrl: muxedVideoUrl ?? undefined,
+        hasAudio, hasVideo, isAudioOnly, isVideoOnly,
       };
     } catch (searchErr) {
       console.warn('[MusicPlayer] search strategy failed:', searchErr);
@@ -1221,6 +1172,7 @@ export interface MusicPlayerContextType {
   collapsePlayer: () => void;
   setPlayerOverlayRefs: (expand: () => void, collapse: () => void) => void;
   isLocalTrack: (track?: Song | null) => boolean;
+  // Video state (for UI sync)
   isVideoActive: boolean;
   videoPosition: number;
   videoDuration: number;
@@ -1229,11 +1181,11 @@ export interface MusicPlayerContextType {
   updateVideoPosition: (position: number) => void;
   updateVideoDuration: (duration: number) => void;
   updateVideoIsPlaying: (isPlaying: boolean) => void;
-  deactivateAudio: () => Promise<void>;
-  activateAudio: () => Promise<void>;
+  // No deactivateAudio/activateAudio - master player owns focus permanently
   setPlaybackRate: (rate: number) => Promise<void>;
   setVolume: (volume: number) => Promise<void>;
   setPreservePitch: (preserve: boolean) => Promise<void>;
+  notifyVideoTrackFinished: () => Promise<void>;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -1245,58 +1197,21 @@ export const useMusicPlayer = () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL AUDIO PLAYER SINGLETON
+// MASTER PLAYER REFERENCE (set by playerContent.tsx)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PLAYER_GLOBAL_KEY = '__MavinAudioPlayer__';
-const AUDIO_MODE_INIT_KEY = '__MavinAudioModeInit__';
+let masterPlayerRef: any = null;
 
-if (!(global as any)[AUDIO_MODE_INIT_KEY]) {
-  (global as any)[AUDIO_MODE_INIT_KEY] = true;
-  setAudioModeAsync({
-    playsInSilentMode: true,
-    shouldPlayInBackground: true,
-    interruptionMode: 'duckOthers',
-  }).catch(e => console.warn('[MusicPlayer] setAudioModeAsync failed:', e));
-}
+export const setMasterPlayer = (player: any) => {
+  masterPlayerRef = player;
+  console.log('[MusicPlayer] Master player registered');
+};
 
-if (!(global as any)[PLAYER_GLOBAL_KEY]) {
-  (global as any)[PLAYER_GLOBAL_KEY] = createAudioPlayer(null);
-  console.log('[MusicPlayerProvider] Created persistent audio player instance');
-}
-
-const player: AudioPlayer = (global as any)[PLAYER_GLOBAL_KEY];
-
-try {
-  (player as any).staysActiveInBackground = true;
-} catch (e) {
-  console.warn('[MusicPlayer] Failed to set staysActiveInBackground:', e);
-}
-
-const expandPlayerRef: { current: (() => void) | null } = { current: null };
-const collapsePlayerRef: { current: (() => void) | null } = { current: null };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYBACK LOCK
-// ─────────────────────────────────────────────────────────────────────────────
-
-let playbackLockTimeout: ReturnType<typeof setTimeout> | null = null;
-
-function acquirePlaybackLockWithTimeout(): void {
-  setPlaybackActive();
-  if (playbackLockTimeout) clearTimeout(playbackLockTimeout);
-  playbackLockTimeout = setTimeout(() => {
-    console.warn('[MusicPlayer] Playback lock auto-released after timeout');
-    setPlaybackInactive();
-  }, CONFIG.PLAYBACK_LOCK_TIMEOUT_MS);
-}
-
-function releasePlaybackLock(): void {
-  if (playbackLockTimeout) {
-    clearTimeout(playbackLockTimeout);
-    playbackLockTimeout = null;
+function getMasterPlayer(): any {
+  if (!masterPlayerRef) {
+    throw new Error('Master player not registered');
   }
-  setPlaybackInactive();
+  return masterPlayerRef;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1307,15 +1222,17 @@ let appStateSubscription: any = null;
 
 function initAppStateHandler() {
   if (appStateSubscription) return;
-  
+
   appStateSubscription = AppState.addEventListener('change', nextAppState => {
     if (nextAppState === 'background') {
       console.log('[MusicPlayer] App backgrounding - saving state');
-      saveLastPlayingState(session.currentTrack, (player as any).currentTime ?? 0);
+      saveLastPlayingState(session.currentTrack, session.videoPosition);
       saveLastActiveTab(session.videoActive ? 'video' : 'song');
       if (session.videoActive) {
         saveLastVideoPosition(session.videoPosition);
       }
+    } else if (nextAppState === 'active') {
+      console.log('[MusicPlayer] App foregrounded');
     }
   });
 }
@@ -1346,21 +1263,27 @@ initAppStateHandler();
     const savedPreservePitch = await restorePreservePitch();
 
     if (savedPlaybackRate !== 1.0) {
-      try { (player as any).playbackRate = savedPlaybackRate; } catch {}
       setSession('playbackRate', savedPlaybackRate);
     }
     if (savedVolume !== CONFIG.DEFAULT_VOLUME) {
-      try { (player as any).volume = savedVolume; } catch {}
       setSession('volume', savedVolume);
     }
     if (!savedPreservePitch) {
-      try { (player as any).preservesPitch = savedPreservePitch; } catch {}
       setSession('preservePitch', savedPreservePitch);
     }
 
     if (!track?.url) {
       console.log('[MusicPlayer] Module-level restore: no saved track');
       return;
+    }
+
+    if (track.id) {
+      const diskCached = await getCachedTrackExtras(track.id);
+      if (diskCached) {
+        trackExtrasStore.set(track.id, diskCached);
+        notifyTrackExtrasChange();
+        console.log('[MusicPlayer] Pre-loaded disk-cached metadata for restored track');
+      }
     }
 
     console.log('[MusicPlayer] Module-level restore starting:', track.title);
@@ -1382,37 +1305,26 @@ initAppStateHandler();
 
     g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = resolved.url;
 
-    try {
-      await player.replace({ uri: resolved.url });
+    // Wait for master player to be registered
+    let attempts = 0;
+    while (!masterPlayerRef && attempts < 50) {
+      await delay(100);
+      attempts++;
+    }
 
-      const pollStart = Date.now();
-      await new Promise<void>((resolve) => {
-        const poll = () => {
-          if ((player as any).isLoaded === true) {
-            resolve();
-            return;
-          }
-          if (Date.now() - pollStart >= 15000) {
-            console.warn('[MusicPlayer] Module-level restore: isLoaded poll timed out');
-            resolve();
-            return;
-          }
-          setTimeout(poll, 200);
-        };
-        poll();
-      });
-
-      if (savedPos > 5 && savedPos < (resolved.duration ?? Infinity)) {
-        try { (player as any).currentTime = savedPos; } catch {}
+    if (masterPlayerRef) {
+      try {
+        await masterPlayerRef.replaceAsync(resolved.url);
+        if (savedPos > 5 && savedPos < (resolved.duration ?? Infinity)) {
+          masterPlayerRef.currentTime = savedPos;
+        }
+        g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
+        console.log('[MusicPlayer] Module-level restore complete:', track.title);
+      } catch (playerErr) {
+        console.warn('[MusicPlayer] Module-level restore: player load failed:', playerErr);
       }
-
-      try { await player.pause(); } catch {}
-      g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
-
-      console.log('[MusicPlayer] Module-level restore complete:', track.title);
-    } catch (playerErr) {
-      console.warn('[MusicPlayer] Module-level restore: player load failed:', playerErr);
-      g[RESTORE_GLOBALS.PLAYER_READY_KEY] = false;
+    } else {
+      console.warn('[MusicPlayer] Module-level restore: master player not registered');
     }
   } catch (err) {
     console.warn('[MusicPlayer] Module-level restore failed:', err);
@@ -1439,16 +1351,15 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
   }
 
   console.log(`[MusicPlayer] Module-level loading: "${song.title || 'Unknown'}"`);
-  setSessionPartial({ 
-    currentTrack: song, 
+  setSessionPartial({
+    currentTrack: song,
     currentSongId: song.id,
-    isLoading: true, 
+    isLoading: true,
     isResolving: true,
-    lastError: null 
+    lastError: null,
   });
-  
-  saveLastPlayingState(song, 0);
 
+  saveLastPlayingState(song, 0);
   acquirePlaybackLockWithTimeout();
 
   try {
@@ -1457,39 +1368,48 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
     if (isLocalTrack(song)) {
       finalUrl = normalizeLocalUri(finalUrl);
       console.log(`[MusicPlayer] [Local] Direct playback: ${finalUrl.substring(0, 100)}...`);
-      await player.replace({ uri: finalUrl });
+      
+      const master = getMasterPlayer();
+      await master.replaceAsync(finalUrl);
+      
       releasePlaybackLock();
-      await player.play();
+      await master.play();
+      
       setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
       return true;
     }
 
-    // Always resolve fresh URL — cached stream URLs expire and cause 403
+    if (song.id) {
+      const diskCached = await getCachedTrackExtras(song.id);
+      if (diskCached && !trackExtrasStore.has(song.id)) {
+        trackExtrasStore.set(song.id, diskCached);
+        notifyTrackExtrasChange();
+      }
+    }
+
     let resolved: ResolvedTrack | null = null;
-    
     resolved = await resolveTrackWithRetry(song);
     releasePlaybackLock();
-    
+
     if (!resolved || !resolved.url) {
       console.error(`[MusicPlayer] Failed to resolve track: "${song.title}"`);
-      setSessionPartial({ 
-        isLoading: false, 
-        isResolving: false, 
-        lastError: 'Failed to resolve stream' 
-      });
+      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to resolve stream' });
       return false;
     }
     finalUrl = resolved.url;
 
-    // Update track type flags for UI
     setSessionPartial({
       hasVideoStream: resolved.hasVideo,
       isAudioOnlyTrack: resolved.isAudioOnly,
       isVideoOnlyTrack: resolved.isVideoOnly,
     });
 
+    const master = getMasterPlayer();
+    
+    console.log('[MusicPlayer] Loading audio URL into master player...');
     try {
-      await player.replace({ uri: finalUrl });
+      await master.replaceAsync(finalUrl);
+      console.log('[MusicPlayer] Master player.replace() done');
     } catch (playError: any) {
       if (!isRetry && playError?.message?.includes('403')) {
         console.log('[MusicPlayer] 403 on first play, retrying with cache bypass');
@@ -1498,19 +1418,18 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       }
       throw playError;
     }
+
+    console.log('[MusicPlayer] Calling master.play() — master owns AudioFocus');
+    await master.play();
+    console.log('[MusicPlayer] ✅ master.play() called — audio should be playing');
     
-    await player.play();
     setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
     return true;
 
   } catch (error: any) {
     releasePlaybackLock();
     console.error(`[MusicPlayer] Error loading track: ${error?.message || error}`);
-    setSessionPartial({ 
-      isLoading: false, 
-      isResolving: false, 
-      lastError: error?.message || 'Unknown error' 
-    });
+    setSessionPartial({ isLoading: false, isResolving: false, lastError: error?.message || 'Unknown error' });
     return false;
   }
 }
@@ -1522,8 +1441,9 @@ async function moduleLevelSkipToNext(): Promise<void> {
 
   if (repeatMode === 'one' && session.currentTrack) {
     try {
-      (player as any).currentTime = 0;
-      player.play();
+      const master = getMasterPlayer();
+      master.currentTime = 0;
+      master.play();
       setSession('optimisticPlaying', true);
     } catch (error) {
       console.warn('[MusicPlayer] Failed to repeat track:', error);
@@ -1536,26 +1456,25 @@ async function moduleLevelSkipToNext(): Promise<void> {
     const nextSong = currentQueue[nextIndex];
     setSessionPartial({ queueIndex: nextIndex });
     const success = await moduleLevelLoadAndPlay(nextSong, session.playGeneration);
-    if (success) {
-      preloadNextTracks(currentQueue, nextIndex, session.bgAbortController?.signal);
-    }
+    if (success) preloadNextTracks(currentQueue, nextIndex, session.bgAbortController?.signal);
   } else if (repeatMode === 'all' && currentQueue.length > 0) {
     const firstSong = currentQueue[0];
     setSessionPartial({ queueIndex: 0 });
     const success = await moduleLevelLoadAndPlay(firstSong, session.playGeneration);
-    if (success) {
-      preloadNextTracks(currentQueue, 0, session.bgAbortController?.signal);
-    }
+    if (success) preloadNextTracks(currentQueue, 0, session.bgAbortController?.signal);
   } else {
     console.log('[MusicPlayer] Queue exhausted, playback stopped');
   }
 }
 
 async function moduleLevelSkipToPrevious(): Promise<void> {
-  const currentPosition = (player as any).currentTime ?? 0;
-  
+  const master = getMasterPlayer();
+  const currentPosition = master.currentTime ?? 0;
+
   if (currentPosition > 3) {
-    try { (player as any).currentTime = 0; } catch {}
+    try {
+      master.currentTime = 0;
+    } catch {}
     return;
   }
 
@@ -1563,13 +1482,97 @@ async function moduleLevelSkipToPrevious(): Promise<void> {
   if (prevIndex >= 0) {
     const prevSong = session.queue[prevIndex];
     setSessionPartial({ queueIndex: prevIndex });
-    const success = await moduleLevelLoadAndPlay(prevSong, ++session.playGeneration);
-    if (success) {
-      preloadNextTracks(session.queue, prevIndex, session.bgAbortController?.signal);
-    }
+    const success = await moduleLevelLoadAndPlay(prevSong, session.playGeneration);
+    if (success) preloadNextTracks(session.queue, prevIndex, session.bgAbortController?.signal);
+  } else if (session.repeatMode === 'all' && session.queue.length > 0) {
+    const lastIndex = session.queue.length - 1;
+    const lastSong = session.queue[lastIndex];
+    setSessionPartial({ queueIndex: lastIndex });
+    const success = await moduleLevelLoadAndPlay(lastSong, session.playGeneration);
+    if (success) preloadNextTracks(session.queue, lastIndex, session.bgAbortController?.signal);
   } else {
-    try { (player as any).currentTime = 0; } catch {}
+    try {
+      master.currentTime = 0;
+    } catch {}
   }
+}
+
+async function moduleLevelSkipToIndex(index: number): Promise<void> {
+  if (index < 0 || index >= session.queue.length) return;
+
+  const targetSong = session.queue[index];
+  setSessionPartial({ queueIndex: index });
+  const success = await moduleLevelLoadAndPlay(targetSong, session.playGeneration);
+  if (success) preloadNextTracks(session.queue, index, session.bgAbortController?.signal);
+}
+
+function moduleLevelAddToQueue(songs: Song[]): void {
+  updateQueue(prev => [...prev, ...songs]);
+}
+
+function moduleLevelRemoveFromQueue(index: number): void {
+  if (index < 0 || index >= session.queue.length) return;
+  updateQueue(prev => {
+    const newQueue = [...prev];
+    newQueue.splice(index, 1);
+    if (session.queueIndex > index) {
+      setSession('queueIndex', session.queueIndex - 1);
+    } else if (session.queueIndex === index && session.currentTrack) {
+      const nextIndex = session.queueIndex;
+      if (nextIndex < newQueue.length) {
+        moduleLevelSkipToIndex(nextIndex);
+      } else {
+        setSession('queueIndex', -1);
+        setSession('currentTrack', null);
+      }
+    }
+    return newQueue;
+  });
+}
+
+function moduleLevelMoveQueueItem(fromIndex: number, toIndex: number): void {
+  if (fromIndex === toIndex) return;
+  updateQueue(prev => {
+    const newQueue = [...prev];
+    const [movedItem] = newQueue.splice(fromIndex, 1);
+    newQueue.splice(toIndex, 0, movedItem);
+    if (session.queueIndex === fromIndex) {
+      setSession('queueIndex', toIndex);
+    } else if (session.queueIndex > fromIndex && session.queueIndex <= toIndex) {
+      setSession('queueIndex', session.queueIndex - 1);
+    } else if (session.queueIndex < fromIndex && session.queueIndex >= toIndex) {
+      setSession('queueIndex', session.queueIndex + 1);
+    }
+    return newQueue;
+  });
+}
+
+function moduleLevelClearQueue(): void {
+  updateQueue(() => []);
+  setSession('queueIndex', -1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK LOCK
+// ─────────────────────────────────────────────────────────────────────────────
+
+let playbackLockTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function acquirePlaybackLockWithTimeout(): void {
+  setPlaybackActive();
+  if (playbackLockTimeout) clearTimeout(playbackLockTimeout);
+  playbackLockTimeout = setTimeout(() => {
+    console.warn('[MusicPlayer] Playback lock auto-released after timeout');
+    setPlaybackInactive();
+  }, CONFIG.PLAYBACK_LOCK_TIMEOUT_MS);
+}
+
+function releasePlaybackLock(): void {
+  if (playbackLockTimeout) {
+    clearTimeout(playbackLockTimeout);
+    playbackLockTimeout = null;
+  }
+  setPlaybackInactive();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1647,16 +1650,9 @@ function SystemMediaControlsBridge({
     onSeek: isVideoActive ? onVideoSeek : onSeek,
     onSetRepeatMode,
     onExpandPlayer,
-    isVideoActive,
-    videoPosition,
-    videoDuration,
-    videoIsPlaying,
-    onVideoPlay,
-    onVideoPause,
-    onVideoSeek,
     onAppBackground,
     onAppForeground,
-  } satisfies SystemMediaControlsProps);
+  } as SystemMediaControlsProps);
 
   return null;
 }
@@ -1665,16 +1661,54 @@ function SystemMediaControlsBridge({
 // REACT PROVIDER
 // ─────────────────────────────────────────────────────────────────────────────
 
+const expandPlayerRef: { current: (() => void) | null } = { current: null };
+const collapsePlayerRef: { current: (() => void) | null } = { current: null };
+
 export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const status = useAudioPlayerStatus(player);
   const { showAlert } = useAlert();
 
   const [, forceUpdate] = useState(0);
-  
+  const [masterState, setMasterState] = useState({
+    isPlaying: false,
+    position: 0,
+    duration: 0,
+    isBuffering: false,
+  });
+
   useEffect(() => {
     const listener = () => forceUpdate(v => v + 1);
     sessionListeners.add(listener);
     return () => { sessionListeners.delete(listener); };
+  }, []);
+
+  // Poll master player state
+  useEffect(() => {
+    const interval = setInterval(() => {
+      try {
+        const master = getMasterPlayer();
+        if (master) {
+          const newState = {
+            isPlaying: master.playing ?? false,
+            position: master.currentTime ?? 0,
+            duration: master.duration ?? 0,
+            isBuffering: master.isBuffering ?? false,
+          };
+          setMasterState(newState);
+          
+          // Update session for other components
+          if (newState.duration > 0 && session.videoDuration !== newState.duration) {
+            setSession('videoDuration', newState.duration);
+          }
+          if (newState.position !== session.videoPosition) {
+            setSession('videoPosition', newState.position);
+          }
+        }
+      } catch (e) {
+        // Master not ready yet
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
   }, []);
 
   const currentTrack = session.currentTrack;
@@ -1685,29 +1719,28 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const isLoading = session.isLoading;
   const isResolving = session.isResolving;
   const optimisticPlaying = session.optimisticPlaying;
-  const isVideoActive = session.videoActive;
-  const videoPosition = session.videoPosition;
-  const videoDuration = session.videoDuration;
-  const videoIsPlaying = session.videoIsPlaying;
   const playbackRate = session.playbackRate;
   const preservePitch = session.preservePitch;
   const volume = session.volume;
   const hasVideoStream = session.hasVideoStream;
   const isAudioOnlyTrack = session.isAudioOnlyTrack;
   const isVideoOnlyTrack = session.isVideoOnlyTrack;
+  const isVideoActive = session.videoActive;
+  const videoPosition = session.videoPosition;
+  const videoDuration = session.videoDuration;
+  const videoIsPlaying = session.videoIsPlaying;
 
-  const nativeIsPlaying = status?.playing ?? false;
-  const isPlaying = optimisticPlaying !== null ? optimisticPlaying : nativeIsPlaying;
-  const isBuffering = status?.isBuffering ?? false;
-  const position = status?.currentTime ?? 0;
-  const duration = status?.duration ?? 0;
+  const isPlaying = optimisticPlaying !== null ? optimisticPlaying : masterState.isPlaying;
+  const isBuffering = masterState.isBuffering;
+  const position = masterState.position;
+  const duration = masterState.duration;
 
   useEffect(() => {
     if (optimisticPlaying === null) return;
-    if (optimisticPlaying === nativeIsPlaying) {
+    if (optimisticPlaying === masterState.isPlaying) {
       setSession('optimisticPlaying', null);
     }
-  }, [nativeIsPlaying, optimisticPlaying]);
+  }, [masterState.isPlaying, optimisticPlaying]);
 
   useEffect(() => {
     if (currentTrack && currentTrack.url) {
@@ -1758,10 +1791,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
 
     if (restoredTab === 'video') {
-      setSessionPartial({
-        videoActive: true,
-        videoPosition: restoredVideoPos,
-      });
+      setSessionPartial({ videoActive: true, videoPosition: restoredVideoPos });
     }
 
     delete g[RESTORE_GLOBALS.TRACK_KEY];
@@ -1770,68 +1800,56 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     delete g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY];
   }, []);
 
-  // didJustFinish handler - FIXED: Only advance if track actually played
+  // Track end detection via position polling
   useEffect(() => {
-    if (!status?.didJustFinish) {
-      session.didHandleFinish = false;
-      return;
+    if (!masterState.isPlaying && masterState.duration > 0 && 
+        masterState.position >= masterState.duration - 1 && !session.didHandleFinish) {
+      setSession('didHandleFinish', true);
+      console.log('[MusicPlayer] Track reached end, advancing queue');
+      moduleLevelSkipToNext();
+    } else if (masterState.isPlaying && masterState.position < masterState.duration - 1) {
+      setSession('didHandleFinish', false);
     }
-
-    if (session.didHandleFinish) return;
-    
-    const currentPos = status?.currentTime ?? 0;
-    const trackDuration = status?.duration ?? 0;
-    const hasPlayedToEnd = trackDuration > 0 && currentPos >= trackDuration - 1;
-    
-    if (!hasPlayedToEnd) {
-      console.log('[MusicPlayer] didJustFinish fired but track not at end - skipping queue advance');
-      session.didHandleFinish = false;
-      return;
-    }
-    
-    session.didHandleFinish = true;
-
-    if (!session.currentTrack) return;
-
-    console.log('[MusicPlayer] Track finished, handling repeat/queue advance');
-    moduleLevelSkipToNext();
-  }, [status?.didJustFinish, status?.currentTime, status?.duration]);
+  }, [masterState.isPlaying, masterState.position, masterState.duration]);
 
   const checkIsLocalTrack = useCallback((track?: Song | null): boolean => {
     return isLocalTrack(track);
   }, []);
 
-  // ── Audio focus management ──────────────────────────────────────────────────
-  const deactivateAudio = useCallback(async () => {
-    try {
-      if (isPlaying) {
-        await player.pause();
-      }
-      if (typeof (player as any).setActiveAsync === 'function') {
-        await (player as any).setActiveAsync(false);
-        console.log('[MusicPlayer] Audio focus deactivated for video playback');
-      }
-    } catch (error) {
-      console.warn('[MusicPlayer] Failed to deactivate audio:', error);
-    }
-  }, [isPlaying]);
-
-  const activateAudio = useCallback(async () => {
-    try {
-      if (typeof (player as any).setActiveAsync === 'function') {
-        await (player as any).setActiveAsync(true);
-        console.log('[MusicPlayer] Audio focus reactivated');
-      }
-    } catch (error) {
-      console.warn('[MusicPlayer] Failed to activate audio:', error);
+  // ── Video state management (for UI sync) ────────────────────────────────────
+  const setVideoActive = useCallback((active: boolean) => {
+    setSession('videoActive', active);
+    if (!active) {
+      // When switching away from video, just update state - no audio focus handoff needed
+      console.log('[MusicPlayer] Video tab deactivated');
     }
   }, []);
 
-  // ── Settings ────────────────────────────────────────────────────────────────
+  const updateVideoPosition = useCallback((position: number) => {
+    setSession('videoPosition', position);
+  }, []);
+
+  const updateVideoDuration = useCallback((duration: number) => {
+    setSession('videoDuration', duration);
+  }, []);
+
+  const updateVideoIsPlaying = useCallback((isPlaying: boolean) => {
+    setSession('videoIsPlaying', isPlaying);
+  }, []);
+
+  const notifyVideoTrackFinished = useCallback(async () => {
+    if (!session.videoActive) return;
+    console.log('[MusicPlayer] Video track finished on video tab — advancing queue');
+    session.didHandleFinish = true;
+    await moduleLevelSkipToNext();
+  }, []);
+
+  // ── Settings ───────────────────────────────────────────────────────────────
   const setPlaybackRate = useCallback(async (rate: number) => {
     const clamped = Math.min(Math.max(rate, 0.5), 16.0);
     try {
-      (player as any).playbackRate = clamped;
+      const master = getMasterPlayer();
+      master.playbackRate = clamped;
       setSession('playbackRate', clamped);
       await savePlaybackRate(clamped);
     } catch (e) { console.warn('[MusicPlayer] setPlaybackRate error:', e); }
@@ -1840,7 +1858,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const setVolume = useCallback(async (newVolume: number) => {
     const clamped = Math.min(Math.max(newVolume, 0.0), 1.0);
     try {
-      (player as any).volume = clamped;
+      const master = getMasterPlayer();
+      master.volume = clamped;
       setSession('volume', clamped);
       await saveVolume(clamped);
     } catch (e) { console.warn('[MusicPlayer] setVolume error:', e); }
@@ -1848,13 +1867,14 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const setPreservePitch = useCallback(async (preserve: boolean) => {
     try {
-      (player as any).preservesPitch = preserve;
+      const master = getMasterPlayer();
+      master.preservesPitch = preserve;
       setSession('preservePitch', preserve);
       await savePreservePitch(preserve);
     } catch (e) { console.warn('[MusicPlayer] setPreservePitch error:', e); }
   }, []);
 
-  // ── playAudio ────────────────────────────────────────────────────────────────
+  // ── playAudio ─────────────────────────────────────────────────────────────
   const playAudio = useCallback(
     async (songToPlay: Song, playlist?: Song[], expandPlayerFn?: () => void) => {
       if (!songToPlay.url) {
@@ -1875,7 +1895,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       session.bgAbortController?.abort();
       const newAbortController = new AbortController();
       setSession('bgAbortController', newAbortController);
-      
+
       const generation = ++session.playGeneration;
 
       try {
@@ -1924,8 +1944,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           if (!checkIsLocalTrack(songToPlay) && songToPlay.url && newQueue.length <= 1) {
             fetchRelatedSongs(songToPlay.url)
               .then(related => {
-                if (!newAbortController.signal.aborted && 
-                    session.currentSongId === songToPlay.id && 
+                if (!newAbortController.signal.aborted &&
+                    session.currentSongId === songToPlay.id &&
                     related.length > 0) {
                   const currentQueue = session.queue;
                   const existingIds = new Set(currentQueue.map(s => s.id));
@@ -2031,18 +2051,12 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
         storeTrackExtras(queueSongs[0].id, {
           isLocal: true,
-          likeCount: -1,
-          dislikeCount: -1,
-          viewCount: -1,
-          commentsCount: -1,
-          hasAudio: true,
-          hasVideo: false,
-          isAudioOnly: true,
-          isVideoOnly: false,
+          likeCount: -1, dislikeCount: -1, viewCount: -1, commentsCount: -1,
+          hasAudio: true, hasVideo: false, isAudioOnly: true, isVideoOnly: false,
         });
 
         const success = await moduleLevelLoadAndPlay(queueSongs[0], ++session.playGeneration);
-        
+
         if (!success) {
           showAlert('Playback Error', `Failed to play "${songToPlay.title}"`);
         }
@@ -2072,36 +2086,28 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       return;
     }
 
-    const willBePlaying = !isPlaying;
-    setSession('optimisticPlaying', willBePlaying);
+    try {
+      const master = getMasterPlayer();
+      const willBePlaying = !masterState.isPlaying;
+      setSession('optimisticPlaying', willBePlaying);
 
-    if (isPlaying) {
-      try { player.pause(); } catch (e) {}
-      console.log('[MusicPlayer] Paused');
-    } else {
-      const g = global as any;
-      const playerReady = g[RESTORE_GLOBALS.PLAYER_READY_KEY] === true;
-      const resolvedUrl: string | undefined = g[RESTORE_GLOBALS.RESOLVED_URL_KEY];
-
-      if (playerReady) {
-        g[RESTORE_GLOBALS.PLAYER_READY_KEY] = false;
-        g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = undefined;
-        try { player.play(); } catch (e) {}
-        console.log('[MusicPlayer] Playing (restored player)');
-      } else if (resolvedUrl) {
-        g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = undefined;
-        console.log('[MusicPlayer] Re-loading from previously resolved restore URL');
-        moduleLevelLoadAndPlay(session.currentTrack, ++session.playGeneration);
-      } else {
-        try { player.play(); } catch (e) {}
+      if (willBePlaying) {
+        master.play();
         console.log('[MusicPlayer] Playing');
+      } else {
+        master.pause();
+        console.log('[MusicPlayer] Paused');
       }
+    } catch (e) {
+      console.warn('[MusicPlayer] togglePlayPause error:', e);
     }
-  }, [isPlaying, showAlert]);
+  }, [masterState.isPlaying, showAlert]);
 
   const seekTo = useCallback((positionSec: number) => {
     try {
-      (player as any).currentTime = positionSec;
+      const master = getMasterPlayer();
+      master.currentTime = positionSec;
+      setSession('videoPosition', positionSec);
     } catch (e: any) {
       console.warn(`[MusicPlayer] seekTo error: ${e?.message || e}`);
     }
@@ -2180,7 +2186,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const removeFromQueue = useCallback((index: number) => {
     const currentQueue = session.queue;
     if (index < 0 || index >= currentQueue.length) return;
-    
+
     const newQueue = [...currentQueue];
     newQueue.splice(index, 1);
 
@@ -2203,7 +2209,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (fromIndex === toIndex) return;
     const currentQueue = session.queue;
     if (fromIndex >= currentQueue.length || toIndex >= currentQueue.length) return;
-    
+
     const newQueue = [...currentQueue];
     const [moved] = newQueue.splice(fromIndex, 1);
     newQueue.splice(toIndex, 0, moved);
@@ -2234,44 +2240,28 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const expandPlayer = useCallback(() => expandPlayerRef.current?.(), []);
   const collapsePlayer = useCallback(() => collapsePlayerRef.current?.(), []);
 
-  const setVideoActive = useCallback((active: boolean) => {
-    setSession('videoActive', active);
-  }, []);
-
-  const updateVideoPosition = useCallback((position: number) => {
-    setSession('videoPosition', position);
-  }, []);
-
-  const updateVideoDuration = useCallback((duration: number) => {
-    setSession('videoDuration', duration);
-  }, []);
-
-  const updateVideoIsPlaying = useCallback((isPlaying: boolean) => {
-    setSession('videoIsPlaying', isPlaying);
-  }, []);
-
   const onVideoPlay = useCallback(() => {
-    const videoPlayFn = (global as any).__mavinVideoPlay;
+    const videoPlayFn = (global as any).__mavinMasterPlay;
     if (videoPlayFn && typeof videoPlayFn === 'function') { videoPlayFn(); }
   }, []);
 
   const onVideoPause = useCallback(() => {
-    const videoPauseFn = (global as any).__mavinVideoPause;
+    const videoPauseFn = (global as any).__mavinMasterPause;
     if (videoPauseFn && typeof videoPauseFn === 'function') { videoPauseFn(); }
   }, []);
 
   const onVideoSeek = useCallback((pos: number) => {
-    const videoSeekFn = (global as any).__mavinVideoSeek;
+    const videoSeekFn = (global as any).__mavinMasterSeek;
     if (videoSeekFn && typeof videoSeekFn === 'function') { videoSeekFn(pos); }
   }, []);
 
   const handleAppBackground = useCallback(() => {
-    saveLastPlayingState(session.currentTrack, (player as any).currentTime ?? 0);
+    saveLastPlayingState(session.currentTrack, masterState.position);
     saveLastActiveTab(session.videoActive ? 'video' : 'song');
     if (session.videoActive) {
       saveLastVideoPosition(session.videoPosition);
     }
-  }, []);
+  }, [masterState.position]);
 
   const handleAppForeground = useCallback(() => {}, []);
 
@@ -2292,8 +2282,20 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     hasVideoStream,
     isAudioOnlyTrack,
     isVideoOnlyTrack,
-    play: () => { setSession('optimisticPlaying', true); try { player.play(); } catch (e) {} },
-    pause: () => { setSession('optimisticPlaying', false); try { player.pause(); } catch (e) {} },
+    play: () => { 
+      setSession('optimisticPlaying', true); 
+      try { 
+        const master = getMasterPlayer();
+        master.play(); 
+      } catch (e) {} 
+    },
+    pause: () => { 
+      setSession('optimisticPlaying', false); 
+      try { 
+        const master = getMasterPlayer();
+        master.pause(); 
+      } catch (e) {} 
+    },
     seekTo,
     skipToNext,
     skipToPrevious,
@@ -2355,11 +2357,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     updateVideoPosition,
     updateVideoDuration,
     updateVideoIsPlaying,
-    deactivateAudio,
-    activateAudio,
     setPlaybackRate,
     setVolume,
     setPreservePitch,
+    notifyVideoTrackFinished,
   };
 
   return (
@@ -2372,8 +2373,20 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           position={position}
           duration={duration}
           repeatMode={repeatMode}
-          onPlay={() => { setSession('optimisticPlaying', true); try { player.play(); } catch (e) {} }}
-          onPause={() => { setSession('optimisticPlaying', false); try { player.pause(); } catch (e) {} }}
+          onPlay={() => { 
+            setSession('optimisticPlaying', true); 
+            try { 
+              const master = getMasterPlayer();
+              master.play(); 
+            } catch (e) {} 
+          }}
+          onPause={() => { 
+            setSession('optimisticPlaying', false); 
+            try { 
+              const master = getMasterPlayer();
+              master.pause(); 
+            } catch (e) {} 
+          }}
           onSkipNext={skipToNext}
           onSkipPrevious={skipToPrevious}
           onSeek={seekTo}
