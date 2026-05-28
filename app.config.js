@@ -11,7 +11,7 @@ const withIconXml = require("./plugins/withIconXml");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "wicemi9031_1",
+  owner: "wicemi90311",
   slug: "wicemi9031",
   version: packageJson.version,
   extra: {
