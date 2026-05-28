@@ -1,12 +1,32 @@
 // components/player/playerContent.tsx
 //
 // ANDROID-ONLY: All iOS-specific code removed
-// MASTER-SLAVE ARCHITECTURE - Module-level initialization, no re-renders
+// MASTER-SLAVE ARCHITECTURE - Master always plays audio, Slave only provides muted video
 //
 // ARCHITECTURE:
-//   MASTER PLAYER (Hidden): ALWAYS plays audio - NEVER muted
-//   SLAVE PLAYER (Visible): ALWAYS muted - provides ONLY video frames
-//   ALL initialization happens at MODULE LEVEL - no useEffect re-runs
+//   MASTER PLAYER (Hidden): expo-video instance that ALWAYS plays audio
+//   - Never paused (unless user explicitly pauses)
+//   - Never muted
+//   - Source of truth for all audio
+//   - Active regardless of which tab is visible
+//
+//   SLAVE PLAYER (Visible): Second expo-video instance for video rendering ONLY
+//   - ALWAYS MUTED - provides only video frames
+//   - Visible only on video tab
+//   - Seeks to master position on tab switch
+//   - Play/pause follows master's state
+//   - Never outputs audio
+//
+//   TAB SWITCHING:
+//   - Song → Video: Slave seeks to master position, becomes visible, follows master's play state
+//   - Video → Song: Slave becomes hidden, master continues playing
+//   - Master NEVER pauses during tab switches - audio is continuous
+//
+//   WHY THIS WORKS:
+//   - Only one player (master) ever requests AudioFocus
+//   - Slave is always muted, so no AudioFocus competition
+//   - Video tab has sound because master is playing, not slave
+//   - Perfect sync because both players seek to same position at switch time
 
 import React, {
   useMemo,
@@ -101,7 +121,7 @@ const masterPlayer: ReturnType<typeof createVideoPlayer> =
   (global as any)[MASTER_PLAYER_GLOBAL_KEY];
 
 try {
-  masterPlayer.muted = false;
+  masterPlayer.muted = false;  // MASTER NEVER MUTED - always provides audio
   masterPlayer.loop = false;
   masterPlayer.staysActiveInBackground = true;
   masterPlayer.volume = 1.0;
@@ -129,10 +149,10 @@ const slavePlayer: ReturnType<typeof createVideoPlayer> =
   (global as any)[SLAVE_PLAYER_GLOBAL_KEY];
 
 try {
-  slavePlayer.muted = true;
+  slavePlayer.muted = true;   // SLAVE ALWAYS MUTED - only for video frames
   slavePlayer.loop = false;
   slavePlayer.staysActiveInBackground = false;
-  slavePlayer.volume = 0.0;
+  slavePlayer.volume = 0.0;   // Zero volume ensures no audio
   console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0');
 } catch (e) {
   console.warn('[PlayerContent] Failed to configure SLAVE player:', e);
@@ -169,173 +189,12 @@ if (!(global as any).__mavinCommandsRegistered) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL STREAM LOADING (happens once, not on every render)
-// ─────────────────────────────────────────────────────────────────────────────
-let currentTrackId: string | null = null;
-let isLoadingStream = false;
-let loadPromise: Promise<void> | null = null;
-let masterReady = false;
-let slaveReady = false;
-let pendingMasterSeek: number | null = null;
-let pendingSlaveSeek: number | null = null;
-
-async function loadStreams(url: string, trackId: string): Promise<void> {
-  // Prevent duplicate loads for the same track
-  if (currentTrackId === trackId && masterReady) {
-    console.log('[PlayerContent] Streams already loaded for this track');
-    return;
-  }
-  
-  // Prevent concurrent loads
-  if (isLoadingStream) {
-    console.log('[PlayerContent] Streams already loading, waiting...');
-    return loadPromise;
-  }
-  
-  isLoadingStream = true;
-  currentTrackId = trackId;
-  
-  console.log('[PlayerContent] Loading streams for track:', trackId);
-  
-  loadPromise = (async () => {
-    try {
-      // Load master
-      masterReady = false;
-      await masterPlayer.replaceAsync(url);
-      
-      const masterPollStart = Date.now();
-      await new Promise<void>((resolve) => {
-        const poll = () => {
-          if (masterPlayer.status === 'readyToPlay') {
-            masterReady = true;
-            console.log('[PlayerContent] Master stream loaded');
-            resolve();
-            return;
-          }
-          if (Date.now() - masterPollStart >= 8000) {
-            console.warn('[PlayerContent] Master load timeout');
-            resolve();
-            return;
-          }
-          setTimeout(poll, 200);
-        };
-        poll();
-      });
-      
-      // Load slave (pre-load for video tab)
-      slaveReady = false;
-      await slavePlayer.replaceAsync(url);
-      slavePlayer.muted = true;
-      
-      const slavePollStart = Date.now();
-      await new Promise<void>((resolve) => {
-        const poll = () => {
-          if (slavePlayer.status === 'readyToPlay') {
-            slaveReady = true;
-            console.log('[PlayerContent] Slave stream loaded');
-            resolve();
-            return;
-          }
-          if (Date.now() - slavePollStart >= 8000) {
-            console.warn('[PlayerContent] Slave load timeout');
-            resolve();
-            return;
-          }
-          setTimeout(poll, 200);
-        };
-        poll();
-      });
-    } catch (e) {
-      console.error('[PlayerContent] Stream load failed:', e);
-    } finally {
-      isLoadingStream = false;
-    }
-  })();
-  
-  return loadPromise;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL RETRY FUNCTION FOR 403 ERRORS
-// ─────────────────────────────────────────────────────────────────────────────
-let retryCount = 0;
-const MAX_RETRY_COUNT = 2;
-const RETRY_DELAY_MS = 1000;
-
-async function retryMasterLoad(url: string): Promise<boolean> {
-  if (retryCount >= MAX_RETRY_COUNT) {
-    console.error('[PlayerContent] Master load failed after max retries');
-    return false;
-  }
-  
-  retryCount++;
-  console.log(`[PlayerContent] Retrying master load (attempt ${retryCount}/${MAX_RETRY_COUNT})`);
-  await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-  
-  try {
-    await masterPlayer.replaceAsync(url);
-    const pollStart = Date.now();
-    await new Promise<void>((resolve) => {
-      const poll = () => {
-        if (masterPlayer.status === 'readyToPlay') {
-          masterReady = true;
-          resolve();
-          return;
-        }
-        if (Date.now() - pollStart >= 8000) {
-          resolve();
-          return;
-        }
-        setTimeout(poll, 200);
-      };
-      poll();
-    });
-    retryCount = 0;
-    return true;
-  } catch (e) {
-    return retryMasterLoad(url);
-  }
-}
-
-// Set up master player status listener at module level
-if (!(global as any).__masterListenerRegistered) {
-  masterPlayer.addListener('statusChange', ({ status, error }: any) => {
-    if (status === 'readyToPlay') {
-      masterReady = true;
-      if (pendingMasterSeek !== null) {
-        try {
-          masterPlayer.currentTime = pendingMasterSeek;
-          pendingMasterSeek = null;
-        } catch {}
-      }
-    } else if (status === 'error') {
-      console.error('[PlayerContent] MASTER player error:', error?.message);
-      if (error?.message?.includes('403') && retryCount < MAX_RETRY_COUNT && currentTrackId) {
-        retryMasterLoad(masterPlayer.src);
-      }
-    }
-  });
-  
-  slavePlayer.addListener('statusChange', ({ status }: any) => {
-    if (status === 'readyToPlay') {
-      slaveReady = true;
-      if (pendingSlaveSeek !== null) {
-        try {
-          slavePlayer.currentTime = pendingSlaveSeek;
-          pendingSlaveSeek = null;
-        } catch {}
-      }
-    }
-  });
-  
-  (global as any).__masterListenerRegistered = true;
-  console.log('[PlayerContent] Module-level listeners registered');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 const LYRICS_LEAD_IN_S = 0.25;
+const BACKWARD_SEEK_OFFSET = 0.2;
+const MAX_RETRY_COUNT = 2;
+const RETRY_DELAY_MS = 1000;
 
 const DUMMY_TRACK = {
   id: 'dummy-track-id',
@@ -877,6 +736,10 @@ function PlayerContentInner({
   // ── TAB STATE ───────────────────────────────────────────────────────────────
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [masterReady, setMasterReady] = useState(false);
+  const [slaveReady, setSlaveReady] = useState(false);
+  const [masterRetryCount, setMasterRetryCount] = useState(0);
+  const [slaveRetryCount, setSlaveRetryCount] = useState(0);
   
   const isTransitioning = useRef(false);
   const activeSegmentRef = useRef<'song' | 'video'>('song');
@@ -905,7 +768,147 @@ function PlayerContentInner({
     }
   }, [positionSec, durationSec]);
 
-  // ── MASTER PLAYBACK STATE TRACKING (module-level refs) ──────────────────────
+  // ── RETRY FUNCTION FOR 403 ERRORS ───────────────────────────────────────────
+  const retryMasterLoad = useCallback(async (url: string, retryCount: number) => {
+    if (retryCount >= MAX_RETRY_COUNT) {
+      console.error('[PlayerContent] Master load failed after max retries');
+      setVideoError('Failed to load stream after multiple attempts');
+      return false;
+    }
+    
+    console.log(`[PlayerContent] Retrying master load (attempt ${retryCount + 1}/${MAX_RETRY_COUNT})`);
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    
+    try {
+      await masterPlayer.replaceAsync(url);
+      const pollStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if (masterPlayer.status === 'readyToPlay') {
+            setMasterReady(true);
+            resolve();
+            return;
+          }
+          if (Date.now() - pollStart >= 8000) {
+            resolve();
+            return;
+          }
+          setTimeout(poll, 200);
+        };
+        poll();
+      });
+      setMasterRetryCount(0);
+      setVideoError(null);
+      return true;
+    } catch (e) {
+      return retryMasterLoad(url, retryCount + 1);
+    }
+  }, []);
+
+  const retrySlaveLoad = useCallback(async (url: string, retryCount: number) => {
+    if (retryCount >= MAX_RETRY_COUNT) {
+      console.error('[PlayerContent] Slave load failed after max retries');
+      return false;
+    }
+    
+    console.log(`[PlayerContent] Retrying slave load (attempt ${retryCount + 1}/${MAX_RETRY_COUNT})`);
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    
+    try {
+      await slavePlayer.replaceAsync(url);
+      slavePlayer.muted = true;
+      const pollStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if (slavePlayer.status === 'readyToPlay') {
+            setSlaveReady(true);
+            resolve();
+            return;
+          }
+          if (Date.now() - pollStart >= 8000) {
+            resolve();
+            return;
+          }
+          setTimeout(poll, 200);
+        };
+        poll();
+      });
+      setSlaveRetryCount(0);
+      return true;
+    } catch (e) {
+      return retrySlaveLoad(url, retryCount + 1);
+    }
+  }, []);
+
+  // ── MASTER PLAYER STATUS LISTENER ───────────────────────────────────────────
+  useEffect(() => {
+    if (!masterPlayer) return;
+
+    let statusListener: any = null;
+
+    try {
+      statusListener = masterPlayer.addListener('statusChange', ({ status, error }: any) => {
+        if (status === 'readyToPlay') {
+          setMasterReady(true);
+          setVideoError(null);
+          setMasterRetryCount(0);
+        } else if (status === 'error') {
+          console.error('[PlayerContent] MASTER player error:', error?.message);
+          setVideoError(error?.message || 'Playback error');
+          
+          if (error?.message?.includes('403') && masterRetryCount < MAX_RETRY_COUNT && activeVideoUrl) {
+            console.log('[PlayerContent] 403 error detected, retrying master load');
+            retryMasterLoad(activeVideoUrl, masterRetryCount);
+            setMasterRetryCount(prev => prev + 1);
+          }
+        }
+      });
+    } catch (e) {
+      console.error('[PlayerContent] Failed to add MASTER listener:', e);
+    }
+
+    return () => {
+      try {
+        statusListener?.remove?.();
+      } catch {}
+    };
+  }, [masterPlayer, activeVideoUrl, masterRetryCount, retryMasterLoad]);
+
+  // ── SLAVE PLAYER STATUS LISTENER ────────────────────────────────────────────
+  useEffect(() => {
+    if (!slavePlayer) return;
+
+    let statusListener: any = null;
+
+    try {
+      statusListener = slavePlayer.addListener('statusChange', ({ status, error }: any) => {
+        if (status === 'readyToPlay') {
+          setSlaveReady(true);
+          try { slavePlayer.muted = true; } catch {}
+          setSlaveRetryCount(0);
+        } else if (status === 'error' && activeSegmentRef.current === 'video') {
+          console.error('[PlayerContent] SLAVE player error:', error?.message);
+          setVideoError(error?.message || 'Video unavailable');
+          
+          if (error?.message?.includes('403') && slaveRetryCount < MAX_RETRY_COUNT && activeVideoUrl) {
+            console.log('[PlayerContent] 403 error detected, retrying slave load');
+            retrySlaveLoad(activeVideoUrl, slaveRetryCount);
+            setSlaveRetryCount(prev => prev + 1);
+          }
+        }
+      });
+    } catch (e) {
+      console.error('[PlayerContent] Failed to add SLAVE listener:', e);
+    }
+
+    return () => {
+      try {
+        statusListener?.remove?.();
+      } catch {}
+    };
+  }, [slavePlayer, activeVideoUrl, slaveRetryCount, retrySlaveLoad]);
+
+  // ── MASTER PLAYBACK STATE TRACKING ───────────────────────────────────────────
   useEffect(() => {
     if (!masterPlayer) return;
 
@@ -915,9 +918,10 @@ function PlayerContentInner({
       playingListener = masterPlayer.addListener('playingChange', ({ isPlaying: mPlaying }: any) => {
         masterPlayingRef.current = mPlaying;
         
+        // Update visual playing state
         setVisualIsPlaying(mPlaying);
         
-        // Sync slave's play state to match master
+        // Sync slave's play state to match master (if slave is ready)
         if (slaveReady && slavePlayingRef.current !== mPlaying) {
           if (mPlaying) {
             slavePlayer.play();
@@ -942,16 +946,79 @@ function PlayerContentInner({
         playingListener?.remove?.();
       } catch {}
     };
-  }, [engine]);
+  }, [masterPlayer, engine, slaveReady]);
 
   // ── LOAD STREAMS WHEN TRACK CHANGES ─────────────────────────────────────────
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
-    if (displayTrack?.id === DUMMY_TRACK.id) return;
     
-    // Module-level loading - doesn't cause re-renders
-    loadStreams(activeVideoUrl, displayTrack.id);
-  }, [activeVideoUrl, isLocal, displayTrack?.id]);
+    const loadStreams = async () => {
+      console.log('[PlayerContent] Loading streams for track');
+      
+      try {
+        setMasterReady(false);
+        await masterPlayer.replaceAsync(activeVideoUrl);
+        
+        const pollStart = Date.now();
+        await new Promise<void>((resolve) => {
+          const poll = () => {
+            if (masterPlayer.status === 'readyToPlay') {
+              setMasterReady(true);
+              resolve();
+              return;
+            }
+            if (Date.now() - pollStart >= 8000) {
+              resolve();
+              return;
+            }
+            setTimeout(poll, 200);
+          };
+          poll();
+        });
+        console.log('[PlayerContent] Master stream loaded');
+      } catch (e: any) {
+        console.error('[PlayerContent] Master load failed:', e?.message);
+        if (e?.message?.includes('403') && masterRetryCount < MAX_RETRY_COUNT) {
+          retryMasterLoad(activeVideoUrl, masterRetryCount);
+          setMasterRetryCount(prev => prev + 1);
+        } else {
+          setVideoError('Failed to load stream');
+        }
+      }
+      
+      try {
+        setSlaveReady(false);
+        await slavePlayer.replaceAsync(activeVideoUrl);
+        slavePlayer.muted = true;
+        
+        const pollStart = Date.now();
+        await new Promise<void>((resolve) => {
+          const poll = () => {
+            if (slavePlayer.status === 'readyToPlay') {
+              setSlaveReady(true);
+              resolve();
+              return;
+            }
+            if (Date.now() - pollStart >= 8000) {
+              resolve();
+              return;
+            }
+            setTimeout(poll, 200);
+          };
+          poll();
+        });
+        console.log('[PlayerContent] Slave stream pre-loaded');
+      } catch (e: any) {
+        console.warn('[PlayerContent] Slave pre-load failed (non-fatal):', e?.message);
+        if (e?.message?.includes('403') && slaveRetryCount < MAX_RETRY_COUNT) {
+          retrySlaveLoad(activeVideoUrl, slaveRetryCount);
+          setSlaveRetryCount(prev => prev + 1);
+        }
+      }
+    };
+    
+    loadStreams();
+  }, [activeVideoUrl, isLocal, masterRetryCount, slaveRetryCount, retryMasterLoad, retrySlaveLoad]);
 
   // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows ──────────────────
   const handlePlayPause = useCallback(async () => {
@@ -964,9 +1031,11 @@ function PlayerContentInner({
     if (willPlay) {
       await masterPlayer.play();
       masterPlayingRef.current = true;
+      // Slave will auto-play via the playingChange listener
     } else {
       await masterPlayer.pause();
       masterPlayingRef.current = false;
+      // Slave will auto-pause via the playingChange listener
     }
     
     if (willPlay) {
@@ -997,16 +1066,35 @@ function PlayerContentInner({
           // ── SWITCHING TO VIDEO TAB ─────────────────────────────────────────────
           console.log('[PlayerContent] → VIDEO tab');
           
+          // Master continues playing - DO NOT PAUSE
           const currentPosition = masterPlayer.currentTime ?? positionRef.current;
           const wasPlaying = masterPlayingRef.current;
+          console.log(`[PlayerContent] Current position: ${currentPosition.toFixed(2)}s, master playing: ${wasPlaying}`);
           
-          // Ensure slave is ready (module-level var)
-          if (slaveReady && currentTrackId === displayTrack.id) {
+          // Ensure slave is ready
+          if (!slaveReady && activeVideoUrl) {
+            console.log('[PlayerContent] Loading slave stream...');
+            try {
+              await slavePlayer.replaceAsync(activeVideoUrl);
+              slavePlayer.muted = true;
+              setSlaveReady(true);
+              await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (e) {
+              console.warn('[PlayerContent] Slave load on switch failed:', e);
+            }
+          }
+          
+          // Seek slave to master's current position
+          if (slaveReady) {
             slavePlayer.currentTime = currentPosition;
             
+            // Start slave playing if master is playing (to show video frames)
             if (wasPlaying) {
               await slavePlayer.play();
               slavePlayingRef.current = true;
+            } else {
+              await slavePlayer.pause();
+              slavePlayingRef.current = false;
             }
           }
           
@@ -1015,10 +1103,14 @@ function PlayerContentInner({
           setVideoActive(true);
           setVideoError(null);
           
+          console.log(`[PlayerContent] Video tab active, position: ${currentPosition.toFixed(2)}s`);
+          
         } else {
           // ── SWITCHING TO SONG TAB ─────────────────────────────────────────────
           console.log('[PlayerContent] → SONG tab');
           
+          // Master continues playing - DO NOT PAUSE
+          // Just hide the slave player (can pause it to save resources)
           if (slaveReady) {
             await slavePlayer.pause();
             slavePlayingRef.current = false;
@@ -1027,6 +1119,8 @@ function PlayerContentInner({
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           setVideoActive(false);
+          
+          console.log('[PlayerContent] Song tab active, master continues playing');
         }
       } catch (err) {
         console.error('[PlayerContent] Segment switch error:', err);
@@ -1036,11 +1130,13 @@ function PlayerContentInner({
         }, 500);
       }
     },
-    [hasVideo, displayTrack.id, videoError, isLocal],
+    [hasVideo, displayTrack.id, videoError, isLocal, activeVideoUrl, slaveReady],
   );
 
   // ── TRACK CHANGE RESET ──────────────────────────────────────────────────────
   useEffect(() => {
+    setMasterReady(false);
+    setSlaveReady(false);
     masterPlayingRef.current = false;
     slavePlayingRef.current = false;
     setActiveSegment('song');
@@ -1053,6 +1149,8 @@ function PlayerContentInner({
     updateVideoDuration(0);
     updateVideoIsPlaying(false);
     setVisualIsPlaying(false);
+    setMasterRetryCount(0);
+    setSlaveRetryCount(0);
   }, [displayTrack?.id, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
   // ── Artwork colors ──────────────────────────────────────────────────────────
@@ -1095,8 +1193,10 @@ function PlayerContentInner({
         isSlidingRef.current = false;
       }, 1500);
 
+      // Seek master (source of truth)
       try {
         masterPlayer.currentTime = t;
+        // Also seek slave if it's ready to keep video in sync
         if (slaveReady) {
           slavePlayer.currentTime = t;
         }
@@ -1105,7 +1205,7 @@ function PlayerContentInner({
       setVisualPositionSec(t);
       engine.seekTo(t);
     },
-    [engine, durationSec],
+    [engine, durationSec, slaveReady],
   );
 
   const handleSkipBack = useCallback(async () => {
@@ -1404,6 +1504,7 @@ function PlayerContentInner({
                     }}
                     onPictureInPictureStop={() => {
                       console.log('[PlayerContent] PiP stopped');
+                      // Re-sync and resume if master is playing
                       if (masterPlayingRef.current && slaveReady) {
                         slavePlayer.currentTime = masterPlayer.currentTime ?? 0;
                         slavePlayer.play();
