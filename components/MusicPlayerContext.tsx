@@ -15,6 +15,9 @@
 // FIXED: Single source of truth (Master player) for position, duration, playing state
 // FIXED: No AudioFocus handoff - Master owns focus permanently
 // FIXED: Queue, repeat, shuffle fully implemented
+// UPDATED: Enhanced retry logic for NewPipeExtractor v0.26.2
+// UPDATED: Improved parsing error handling and visitor data management
+// UPDATED: Better search fallback strategies with YouTube Music support
 
 import React, {
   createContext,
@@ -110,7 +113,7 @@ const CONFIG = {
   STREAM_TTL_MS: 6 * 60 * 60 * 1000,
   MAX_EXTRAS_CACHE: 50,
   TEMP_PLAYBACK_CACHE_TTL_MS: 3600000,
-  RESOLVE_RETRY_MAX_ATTEMPTS: 2,
+  RESOLVE_RETRY_MAX_ATTEMPTS: 3,
   RESOLVE_RETRY_BASE_DELAY_MS: 500,
   PLAYBACK_LOCK_TIMEOUT_MS: 30000,
   TIME_UPDATE_EVENT_INTERVAL_SECONDS: 0.25,
@@ -151,15 +154,12 @@ interface PlaybackSession {
   didHandleFinish: boolean;
   bgAbortController: AbortController | null;
   lastError: string | null;
-  // Track type flags for UI
   hasVideoStream: boolean;
   isAudioOnlyTrack: boolean;
   isVideoOnlyTrack: boolean;
-  // playback rate / volume / pitch stored in session
   playbackRate: number;
   preservePitch: boolean;
   volume: number;
-  // Video-specific state (for UI)
   videoActive: boolean;
   videoPosition: number;
   videoDuration: number;
@@ -487,8 +487,6 @@ async function videoIdToUuid(videoId: string): Promise<string> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRACK EXTRAS STORE
-// In-memory store for fast synchronous access. Disk persistence via
-// trackMetadataCache (persistent metadata only — no stream URLs).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const trackExtrasStore = new Map<string, TrackExtras>();
@@ -677,26 +675,133 @@ function buildExtras(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RESOLVE TRACK
+// ENHANCED RESOLVE TRACK WITH RETRY (Updated for NewPipeExtractor v0.26.2)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.now()): Promise<ResolvedTrack | null> {
   try {
     return await resolveTrack(song);
   } catch (error: any) {
-    const isSslError =
-      error?.message?.includes('SSLHandshakeException') ||
-      error?.message?.includes('SSL') ||
-      error?.message?.includes('connection closed');
-    const elapsed = Date.now() - startTime;
-    if (isSslError && attempt < CONFIG.RESOLVE_RETRY_MAX_ATTEMPTS && elapsed < 80000) {
+    const errorMessage = error?.message || '';
+    
+    const isParsingError = 
+      errorMessage.includes('ParsingException') || 
+      errorMessage.includes('null object reference') ||
+      errorMessage.includes('Could not get') ||
+      errorMessage.includes('Embedded info did not provide') ||
+      errorMessage.includes('lockupViewModel') ||
+      errorMessage.includes('duration') ||
+      errorMessage.includes('fetching duration');
+    
+    const isSslError = 
+      errorMessage.includes('SSLHandshakeException') ||
+      errorMessage.includes('SSL') ||
+      errorMessage.includes('connection closed') ||
+      errorMessage.includes('CertificateException');
+    
+    const isNetworkError =
+      errorMessage.includes('SocketTimeoutException') ||
+      errorMessage.includes('ConnectException') ||
+      errorMessage.includes('UnknownHostException') ||
+      errorMessage.includes('timeout');
+    
+    const isAccountTerminated = errorMessage.includes('ACCOUNT_TERMINATED');
+    const isSignInRequired = errorMessage.includes('Sign in to confirm');
+    
+    if (isAccountTerminated) {
+      console.error(`[MusicPlayer] Account terminated for "${song.title}"`);
+      setSessionPartial({ lastError: 'YouTube account terminated. Please check your connection.' });
+      return null;
+    }
+    
+    const isRetryable = (isParsingError || isSslError || isNetworkError) && 
+                        attempt < CONFIG.RESOLVE_RETRY_MAX_ATTEMPTS &&
+                        (Date.now() - startTime) < 80000;
+    
+    if (isRetryable) {
+      if (isParsingError) {
+        await invalidateStreamCache(song.id);
+        try {
+          await MavinEngine.refreshVisitorData();
+          console.log('[MusicPlayer] Refreshed visitor data for retry');
+        } catch (e) {}
+        console.warn(`[MusicPlayer] Parsing error on attempt ${attempt}, clearing cache and retrying`);
+      } else if (isSslError) {
+        console.warn(`[MusicPlayer] SSL error on attempt ${attempt}, retrying`);
+      } else if (isNetworkError) {
+        console.warn(`[MusicPlayer] Network error on attempt ${attempt}, retrying`);
+      }
+      
       const delayMs = CONFIG.RESOLVE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      console.warn(`[MusicPlayer] SSL error on attempt ${attempt}, retrying in ${delayMs}ms`);
       await delay(delayMs);
       return resolveTrackWithRetry(song, attempt + 1, startTime);
     }
+    
+    if (isSignInRequired) {
+      console.warn(`[MusicPlayer] Sign-in required for "${song.title}" - this video may be age-restricted`);
+    }
+    
     throw error;
   }
+}
+
+async function getStreamInfoWithFallback(url: string, videoId?: string, songTitle?: string): Promise<any> {
+  const errors: string[] = [];
+  
+  if (videoId) {
+    try {
+      console.log(`[MusicPlayer] Trying getStreamInfoById with videoId: ${videoId}`);
+      const info = await MavinEngine.getStreamInfoById(videoId, 0);
+      if (info.success) {
+        console.log(`[MusicPlayer] ✓ getStreamInfoById succeeded`);
+        return info;
+      }
+      errors.push(`getStreamInfoById: ${info.message || 'no success'}`);
+    } catch (err: any) {
+      errors.push(`getStreamInfoById: ${err?.message || err}`);
+      console.warn(`[MusicPlayer] getStreamInfoById failed:`, err?.message);
+    }
+  }
+  
+  try {
+    console.log(`[MusicPlayer] Trying getStreamInfo with URL`);
+    const info = await MavinEngine.getStreamInfo(url, 0);
+    if (info.success) {
+      console.log(`[MusicPlayer] ✓ getStreamInfo succeeded`);
+      return info;
+    }
+    errors.push(`getStreamInfo: ${info.message || 'no success'}`);
+  } catch (err: any) {
+    errors.push(`getStreamInfo: ${err?.message || err}`);
+    console.warn(`[MusicPlayer] getStreamInfo failed:`, err?.message);
+  }
+  
+  try {
+    console.log(`[MusicPlayer] Trying getStreamInfo with serviceId 0 (explicit)`);
+    const info = await MavinEngine.getStreamInfo(url, 0);
+    if (info.success) {
+      console.log(`[MusicPlayer] ✓ getStreamInfo with explicit serviceId succeeded`);
+      return info;
+    }
+  } catch (err: any) {
+    errors.push(`getStreamInfo(serviceId=0): ${err?.message || err}`);
+  }
+  
+  if (videoId) {
+    try {
+      console.log(`[MusicPlayer] Trying getStreamInfoById with fresh visitor data`);
+      await MavinEngine.refreshVisitorData();
+      const info = await MavinEngine.getStreamInfoById(videoId, 0);
+      if (info.success) {
+        console.log(`[MusicPlayer] ✓ getStreamInfoById with fresh visitor data succeeded`);
+        return info;
+      }
+    } catch (err: any) {
+      errors.push(`getStreamInfoById (fresh visitor data): ${err?.message || err}`);
+    }
+  }
+  
+  throw new Error(`All stream info methods failed: ${errors.join('; ')}`);
 }
 
 export const resolveTrack = async (song: Song, bypassCache = false): Promise<ResolvedTrack | null> => {
@@ -806,9 +911,37 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     }
   }
 
+  // PRIMARY EXTRACTION with enhanced fallback
   try {
-    const info = await MavinEngine.getStreamInfo(song.url, 0);
-    if (!info.success) throw new Error('extraction returned success=false');
+    let videoId = song.videoId;
+    if (!videoId && song.url) {
+      if (song.url.includes('v=')) {
+        videoId = song.url.split('v=')[1]?.split('&')[0];
+      } else if (song.url.includes('youtu.be/')) {
+        videoId = song.url.split('youtu.be/')[1]?.split('?')[0];
+      }
+    }
+    
+    try {
+      const visitorStatus = await MavinEngine.getVisitorDataStatus();
+      if (!visitorStatus.isValid) {
+        console.log('[MusicPlayer] Visitor data invalid, refreshing before extraction');
+        await MavinEngine.refreshVisitorData();
+      }
+    } catch (e) {
+      console.warn('[MusicPlayer] Could not check visitor data status:', e);
+    }
+    
+    const info = await getStreamInfoWithFallback(song.url, videoId, song.title);
+    
+    if (!info.success) {
+      if (info.error === 'ACCOUNT_TERMINATED') {
+        console.warn(`[MusicPlayer] Account terminated for "${song.title}"`);
+        setSessionPartial({ lastError: 'Account terminated. Please check your connection.' });
+        return null;
+      }
+      throw new Error(`extraction returned success=false: ${info.message || 'unknown error'}`);
+    }
 
     const bestAudio = pickBestAudio(info.audioStreams ?? []);
     const bestVideo = pickBestVideo(info.videoOnlyStreams ?? []) ?? pickBestVideo(info.videoStreams ?? []);
@@ -881,27 +1014,72 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       muxedVideoUrl: muxedVideoUrl ?? undefined,
       hasAudio, hasVideo, isAudioOnly, isVideoOnly,
     };
-  } catch (primaryErr) {
-    console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, primaryErr);
+  } catch (primaryErr: any) {
+    const errorMsg = primaryErr?.message || String(primaryErr);
+    console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, errorMsg);
+    
+    if (errorMsg === 'ACCOUNT_TERMINATED') {
+      return null;
+    }
   }
 
-  // Search fallback strategies
+  // SEARCH FALLBACK STRATEGIES - Enhanced for v0.26.2
   const searchStrategies = [
-    { query: `${song.title} ${song.artist} official audio`, filter: 'videos' as const },
-    { query: `${song.title} ${song.artist}`, filter: '' as const },
-    { query: `${song.title} official audio`, filter: 'videos' as const },
+    { query: `${song.title} ${song.artist}`, filter: 'music_songs' as const, priority: 1 },
+    { query: `${song.title} ${song.artist} official audio`, filter: 'videos' as const, priority: 2 },
+    { query: `${song.title.replace(/[\(\[].*?[\)\]]/g, '').trim()} ${song.artist}`, filter: 'music_songs' as const, priority: 3 },
+    { query: `${song.title}`, filter: 'music_songs' as const, priority: 4 },
+    { query: `${song.title} ${song.artist}`, filter: 'videos' as const, priority: 5 },
+    { query: `${song.title} ${song.artist} song`, filter: 'videos' as const, priority: 6 },
   ];
+
+  searchStrategies.sort((a, b) => a.priority - b.priority);
 
   for (const strategy of searchStrategies) {
     try {
+      console.log(`[MusicPlayer] Search attempt: "${strategy.query}" (filter: ${strategy.filter})`);
       const searchResult = await MavinEngine.search(strategy.query, strategy.filter, undefined, 0);
-      const firstStream = searchResult?.results?.find(
-        (i): i is StreamInfoItem => i.type === 'stream' && !i.isLive && !i.isShortFormContent,
-      );
-      if (!firstStream?.url) continue;
+      
+      if (!searchResult.success || !searchResult.results?.length) {
+        console.log(`[MusicPlayer] Search returned no results`);
+        continue;
+      }
 
-      const info = await MavinEngine.getStreamInfo(firstStream.url, 0);
-      if (!info.success) continue;
+      let firstStream = searchResult.results.find(
+        (i): i is StreamInfoItem => i.type === 'stream' && !i.isLive && !i.isShortFormContent
+      );
+      
+      if (!firstStream && strategy.filter === 'music_songs') {
+        const anyResult = searchResult.results[0];
+        if (anyResult && anyResult.type === 'stream') {
+          firstStream = anyResult as StreamInfoItem;
+        }
+      }
+      
+      if (!firstStream?.url) {
+        console.log(`[MusicPlayer] No valid stream URL found`);
+        continue;
+      }
+
+      console.log(`[MusicPlayer] Found match: "${firstStream.name}" by ${firstStream.uploaderName}`);
+
+      let foundVideoId = firstStream.url.includes('v=') 
+        ? firstStream.url.split('v=')[1]?.split('&')[0]
+        : firstStream.url.includes('youtu.be/')
+          ? firstStream.url.split('youtu.be/')[1]?.split('?')[0]
+          : null;
+
+      let info;
+      if (foundVideoId) {
+        info = await MavinEngine.getStreamInfoById(foundVideoId, 0);
+      } else {
+        info = await MavinEngine.getStreamInfo(firstStream.url, 0);
+      }
+      
+      if (!info.success) {
+        console.log(`[MusicPlayer] Stream info extraction failed for found URL`);
+        continue;
+      }
 
       const bestAudio = pickBestAudio(info.audioStreams ?? []);
       const bestVideo = pickBestVideo(info.videoOnlyStreams ?? []) ?? pickBestVideo(info.videoStreams ?? []);
@@ -919,15 +1097,27 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       if (bestVideo?.url) { videoUrl = bestVideo.url; hasVideo = true; }
       if (bestMuxed?.url) { muxedVideoUrl = bestMuxed.url; hasVideo = true; }
 
-      if (!audioUrl && (videoUrl || muxedVideoUrl)) { audioUrl = muxedVideoUrl || videoUrl; hasAudio = true; isVideoOnly = true; }
-      if (audioUrl && !videoUrl && !muxedVideoUrl) { isAudioOnly = true; hasVideo = false; }
-      if (audioUrl && (videoUrl || muxedVideoUrl)) { hasAudio = true; hasVideo = true; }
+      if (!audioUrl && (videoUrl || muxedVideoUrl)) { 
+        audioUrl = muxedVideoUrl || videoUrl; 
+        hasAudio = true; 
+        isVideoOnly = true; 
+      }
+      if (audioUrl && !videoUrl && !muxedVideoUrl) { 
+        isAudioOnly = true; 
+        hasVideo = false; 
+      }
+      if (audioUrl && (videoUrl || muxedVideoUrl)) { 
+        hasAudio = true; 
+        hasVideo = true; 
+      }
       if (!audioUrl) continue;
 
       const duration = info.duration ?? 0;
       const extras = buildExtras(song, info, videoUrl, muxedVideoUrl, -1);
       storeTrackExtras(song.id, { ...extras, hasAudio, hasVideo, isAudioOnly, isVideoOnly });
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, muxedVideoUrl, duration).catch(() => {});
+
+      console.log(`[MusicPlayer] ✓ Search fallback succeeded for "${song.title}"`);
 
       return {
         id: song.id, url: audioUrl, title: info.title ?? song.title, artist: song.artist,
@@ -936,12 +1126,12 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
         videoOnlyUrl: videoUrl ?? undefined, muxedVideoUrl: muxedVideoUrl ?? undefined,
         hasAudio, hasVideo, isAudioOnly, isVideoOnly,
       };
-    } catch (searchErr) {
-      console.warn('[MusicPlayer] search strategy failed:', searchErr);
+    } catch (searchErr: any) {
+      console.warn(`[MusicPlayer] Search strategy failed for "${strategy.query}":`, searchErr?.message || searchErr);
     }
   }
 
-  console.warn(`[MusicPlayer] all strategies exhausted for "${song.title}"`);
+  console.warn(`[MusicPlayer] All strategies exhausted for "${song.title}"`);
   return null;
 };
 
@@ -1172,7 +1362,6 @@ export interface MusicPlayerContextType {
   collapsePlayer: () => void;
   setPlayerOverlayRefs: (expand: () => void, collapse: () => void) => void;
   isLocalTrack: (track?: Song | null) => boolean;
-  // Video state (for UI sync)
   isVideoActive: boolean;
   videoPosition: number;
   videoDuration: number;
@@ -1181,7 +1370,6 @@ export interface MusicPlayerContextType {
   updateVideoPosition: (position: number) => void;
   updateVideoDuration: (duration: number) => void;
   updateVideoIsPlaying: (isPlaying: boolean) => void;
-  // No deactivateAudio/activateAudio - master player owns focus permanently
   setPlaybackRate: (rate: number) => Promise<void>;
   setVolume: (volume: number) => Promise<void>;
   setPreservePitch: (preserve: boolean) => Promise<void>;
@@ -1305,7 +1493,6 @@ initAppStateHandler();
 
     g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = resolved.url;
 
-    // Wait for master player to be registered
     let attempts = 0;
     while (!masterPlayerRef && attempts < 50) {
       await delay(100);
@@ -1333,6 +1520,33 @@ initAppStateHandler();
     (global as any)[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAVIN ENGINE INITIALIZATION (v0.26.2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function initializeMavinEngine() {
+  try {
+    console.log('[MavinEngine] Initializing with v0.26.2 features');
+    
+    const visitorResult = await MavinEngine.refreshVisitorData();
+    console.log('[MavinEngine] Visitor data refresh:', visitorResult);
+    
+    const keyStatus = await MavinEngine.getApiKeyStatus();
+    console.log('[MavinEngine] API Key status:', keyStatus);
+    
+    const visitorStatus = await MavinEngine.getVisitorDataStatus();
+    console.log('[MavinEngine] Visitor data status:', visitorStatus);
+    
+    const config = await MavinEngine.getInnerTubeConfig();
+    console.log('[MavinEngine] InnerTube client version:', config.clientVersion);
+    
+  } catch (err) {
+    console.warn('[MavinEngine] Initialization warning:', err);
+  }
+}
+
+initializeMavinEngine();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MODULE-LEVEL PLAYBACK ORCHESTRATION
@@ -1681,7 +1895,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return () => { sessionListeners.delete(listener); };
   }, []);
 
-  // Poll master player state
   useEffect(() => {
     const interval = setInterval(() => {
       try {
@@ -1695,7 +1908,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           };
           setMasterState(newState);
           
-          // Update session for other components
           if (newState.duration > 0 && session.videoDuration !== newState.duration) {
             setSession('videoDuration', newState.duration);
           }
@@ -1800,7 +2012,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     delete g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY];
   }, []);
 
-  // Track end detection via position polling
   useEffect(() => {
     if (!masterState.isPlaying && masterState.duration > 0 && 
         masterState.position >= masterState.duration - 1 && !session.didHandleFinish) {
@@ -1816,11 +2027,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return isLocalTrack(track);
   }, []);
 
-  // ── Video state management (for UI sync) ────────────────────────────────────
   const setVideoActive = useCallback((active: boolean) => {
     setSession('videoActive', active);
     if (!active) {
-      // When switching away from video, just update state - no audio focus handoff needed
       console.log('[MusicPlayer] Video tab deactivated');
     }
   }, []);
@@ -1844,7 +2053,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     await moduleLevelSkipToNext();
   }, []);
 
-  // ── Settings ───────────────────────────────────────────────────────────────
   const setPlaybackRate = useCallback(async (rate: number) => {
     const clamped = Math.min(Math.max(rate, 0.5), 16.0);
     try {
@@ -1874,7 +2082,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     } catch (e) { console.warn('[MusicPlayer] setPreservePitch error:', e); }
   }, []);
 
-  // ── playAudio ─────────────────────────────────────────────────────────────
   const playAudio = useCallback(
     async (songToPlay: Song, playlist?: Song[], expandPlayerFn?: () => void) => {
       if (!songToPlay.url) {
