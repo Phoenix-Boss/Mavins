@@ -8,26 +8,24 @@
 // BACKGROUND PLAYBACK: Handled entirely by expo-video (supportsBackgroundPlayback: true)
 // + expo-media-control for the lock screen notification. No expo-audio needed.
 //
-// FIXES APPLIED:
-//   1. Removed expo-audio plugin — conflicts with expo-video AudioFocus ownership
-//   2. expo-video: supportsBackgroundPlayback + supportsPictureInPicture retained
-//   3. expo-media-control: lock screen controls + notification channel configured
-//   4. foregroundServiceTypes includes mediaPlayback (required for background audio on Android 14+)
-//   5. WAKE_LOCK permission retained — prevents CPU sleep during background playback
-//   6. Removed duplicate/redundant FOREGROUND_SERVICE_SPECIAL_USE + FOREGROUND_SERVICE_DATA_SYNC
-//      (dataSync foreground service type is for file sync, not media — kept only mediaPlayback)
-//   7. extraProguardRules cleaned up — pawns + firebase entries retained, added expo-video keep rule
-//   8. newArchEnabled: true retained — required for expo-video's Fabric VideoView
-//   9. withExcludeDependencies plugin excludes com.google.firebase:protolite-well-known-types —
-//      conflicts with protobuf-javalite:4.33.5 (duplicate com.google.protobuf.DescriptorProtos).
-//      NOTE: expo-build-properties does NOT support an "excludes" field — a custom plugin is
-//      required to inject `configurations.all { exclude ... }` into app/build.gradle.
+// FIREBASE: Intentionally removed. Will be re-integrated once the website is live
+// so that a single Firebase project controls push notifications for both the web
+// app and this Android app from one place. Removing it now also eliminates the
+// protobuf duplicate-class build error (protobuf-javalite vs protolite-well-known-types)
+// and the runtime LatLng ClassNotFoundException that came from excluding that artifact.
+//
+// TO RE-ADD FIREBASE LATER:
+//   1. Add back @react-native-firebase/app and @react-native-firebase/firestore to package.json
+//   2. Drop google-services.json / google-services-dev.json back into the project root
+//   3. Restore the "@react-native-firebase/app" plugin entry at the bottom of plugins[]
+//   4. Restore withExcludeDependencies with forceVersions: { "com.google.protobuf": "3.25.5" }
+//   5. Restore googleServicesFile under android: {}
+//   6. Replace any firestore() calls in the codebase with the modular Firebase v9+ API
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
-const withExcludeDependencies = require("./plugins/withExcludeDependencies");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
@@ -81,9 +79,7 @@ module.exports = {
     backgroundColor: "#000",
     edgeToEdgeEnabled: true,
     versionCode: 1,
-    googleServicesFile: IS_DEV
-      ? "./google-services-dev.json"
-      : "./google-services.json",
+    // googleServicesFile intentionally removed — Firebase not active
     intentFilters: [
       {
         action: "android.intent.action.MAIN",
@@ -111,21 +107,6 @@ module.exports = {
     // ── Custom build plugins ────────────────────────────────────────────────
     withAbiSplit,
     withIconXml,
-
-    // ── Dependency conflict resolution ──────────────────────────────────────
-    // protolite-well-known-types:18.0.1 (pulled in by react-native-firebase)
-    // duplicates classes already in protobuf-javalite:4.33.5, causing:
-    //   "Duplicate class com.google.protobuf.DescriptorProtos found in
-    //    protobuf-javalite-4.33.5 and protolite-well-known-types-18.0.1"
-    // The fix injects `configurations.all { exclude ... }` into app/build.gradle.
-    [
-      withExcludeDependencies,
-      {
-        excludes: [
-          { group: "com.google.firebase", module: "protolite-well-known-types" },
-        ],
-      },
-    ],
 
     // ── Core Expo plugins ───────────────────────────────────────────────────
     "expo-router",
@@ -193,9 +174,6 @@ module.exports = {
             // Pawns SDK — bundled as local AAR in modules/pawns/android/libs/
             "-keep class com.pawns.sdk.** { *; }\n" +
             "-dontwarn com.pawns.sdk.**\n" +
-            // Firebase
-            "-keep class com.google.firebase.** { *; }\n" +
-            "-keep class com.google.android.gms.** { *; }\n" +
             // ExoPlayer / expo-video — prevent R8 from stripping media3 internals
             "-keep class androidx.media3.** { *; }\n" +
             "-dontwarn androidx.media3.**\n",
@@ -210,8 +188,9 @@ module.exports = {
     ],
 
     // ── Firebase ────────────────────────────────────────────────────────────
-    // Auto-configures from google-services.json / google-services-dev.json
-    "@react-native-firebase/app",
+    // REMOVED — will be re-added once the website is live.
+    // Both web and Android will share one Firebase project for unified
+    // push notification management. See re-add checklist at top of file.
   ],
 
   experiments: {

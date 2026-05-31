@@ -63,13 +63,9 @@ import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AlertProvider } from '@/contexts/AlertContext';
 import { UpdateModal } from '@/components/UpdateModal';
-// MessageModal imports @react-native-firebase/firestore at module level.
-// Lazy-loading it prevents a Firebase native-module crash from killing the
-// entire _layout.tsx default export (which would show the "missing default
-// export" Expo Router warning and break the whole navigation tree).
-const MessageModal = React.lazy(() =>
-  import('@/components/MessageModal').then((m) => ({ default: m.MessageModal }))
-);
+// MessageModal: Firebase removed — component now renders null.
+// Plain static import is safe; no lazy loading needed without a native module.
+import { MessageModal } from '@/components/MessageModal';
 import PremiumBanner from '@/components/ads/banner/premium';
 import { HomePreloader } from '@/components/HomePreloader';
 import { SearchPreloader } from '@/components/SearchPreloader';
@@ -575,9 +571,9 @@ function AppShell({
 
       <LyricsFetcher />
       <UpdateModal />
-      <React.Suspense fallback={null}>
-        <MessageModal />
-      </React.Suspense>
+      {/* MessageModal renders null until Firebase is re-integrated.
+          No Suspense wrapper needed — it is no longer lazy loaded. */}
+      <MessageModal />
     </View>
   );
 }

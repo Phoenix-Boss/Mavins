@@ -63,7 +63,7 @@ class SectionErrorBoundary extends React.Component<
   render() { if (this.state.hasError) return null; return this.props.children; }
 }
 
-// ─── Quick Actions - SINGLE CARD ONLY (No slideshow, no pagination) ───────────
+// ─── Quick Actions - SINGLE CARD ONLY (No slideshow, no pagination) ──────────
 
 interface QuickActionsGridProps {
   recentSongs: Song[];
@@ -196,22 +196,45 @@ function NewReleasesWrapper({ data }: { data: Song[] }) {
 
 // ─── HOME SCREEN ──────────────────────────────────────────────────────────────
 
+// Fallback colors used before the theme context resolves, so that useMemo and
+// inline styles never receive undefined and crash on first render.
+const FALLBACK_COLORS = {
+  background: "#000000",
+  surface: "#111111",
+  surfaceRaised: "#1A1A1A",
+  text: "#FFFFFF",
+  textMuted: "#888888",
+  watermarkOpacity: 0.04,
+  metallicBrown: {
+    primary: "#D4AF37",
+  },
+} as const;
+
 export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
-  const [isThemeReady, setIsThemeReady] = useState(false);
   const { top } = useSafeAreaInsets();
   const router = useRouter();
   const watermarkPulse = useRef(new Animated.Value(1)).current;
 
   const { expandPlayer } = usePlayerOverlay();
   const { playAudio } = useMusicPlayer();
-  const { colors } = useTheme();
 
-  useEffect(() => {
-    if (colors && colors.background) {
-      setIsThemeReady(true);
+  // useTheme() may return an object whose nested properties are undefined on
+  // the very first render if the provider hasn't finished resolving the theme.
+  // We merge with FALLBACK_COLORS so downstream code always has valid values.
+  const rawTheme = useTheme();
+  const colors = useMemo(() => {
+    if (
+      rawTheme?.colors?.metallicBrown?.primary &&
+      rawTheme?.colors?.background
+    ) {
+      return rawTheme.colors;
     }
-  }, [colors]);
+    return FALLBACK_COLORS;
+  }, [rawTheme?.colors]);
+
+  // Consider the theme "ready" only once real colors are available.
+  const isThemeReady = colors !== FALLBACK_COLORS;
 
   // Store selectors
   const trending = useHomeStore((s) => s.trending);
@@ -250,7 +273,6 @@ export default function HomeScreen() {
     (song: Song) => {
       triggerHaptic();
       useHomeStore.getState().addRecentSong(song);
-      
       playAudio(
         {
           id: song.id,
@@ -259,7 +281,7 @@ export default function HomeScreen() {
           thumbnail: song.thumbnail,
           url: song.url || "",
           duration: song.duration,
-          videoId: song.videoId
+          videoId: song.videoId,
         },
         undefined,
         expandPlayer,
@@ -271,26 +293,26 @@ export default function HomeScreen() {
   const handleCampaignCardPress = useCallback(
     (card: CampaignCard) => {
       triggerHaptic();
-      // Campaign cards are treated as songs
       if (card.songId || card.id) {
-        const songToPlay = trending.find(s => s.id === card.songId || s.id === card.id) ||
-          biggestHits.find(s => s.id === card.songId || s.id === card.id) ||
-          newReleases.find(s => s.id === card.songId || s.id === card.id) ||
-          peoplesChoice.find(s => s.id === card.songId || s.id === card.id);
-        
+        const songToPlay =
+          trending.find((s) => s.id === card.songId || s.id === card.id) ||
+          biggestHits.find((s) => s.id === card.songId || s.id === card.id) ||
+          newReleases.find((s) => s.id === card.songId || s.id === card.id) ||
+          peoplesChoice.find((s) => s.id === card.songId || s.id === card.id);
+
         if (songToPlay) {
           handleSongPress(songToPlay);
           return;
         }
-        
-        // Fallback: create basic song object
+
+        // Fallback: construct a minimal song object from the card
         handleSongPress({
           id: card.songId || card.id,
           title: card.title,
-          artist: card.description || 'Various Artists',
+          artist: card.description || "Various Artists",
           thumbnail: card.thumbnail,
-          url: '',
-          videoId: '',
+          url: "",
+          videoId: "",
           duration: 0,
         });
       }
@@ -308,10 +330,18 @@ export default function HomeScreen() {
     router.push("/(modals)/notifications");
   }, [router]);
 
+  // Safe to reference colors here because we always have a resolved object
+  // (either real theme or FALLBACK_COLORS) — metallicBrown.primary is never
+  // undefined regardless of when the theme provider resolves.
   const CombinedHeader = useMemo(
     () => (
       <View style={{ backgroundColor: colors.background }}>
-        <View style={[styles.header, { paddingTop: top + 10, backgroundColor: colors.background }]}>
+        <View
+          style={[
+            styles.header,
+            { paddingTop: top + 10, backgroundColor: colors.background },
+          ]}
+        >
           <TouchableOpacity
             style={[
               styles.searchContainer,
@@ -319,12 +349,17 @@ export default function HomeScreen() {
                 backgroundColor: colors.surfaceRaised,
                 borderColor: `${colors.metallicBrown.primary}40`,
                 borderWidth: 1,
-              }
+              },
             ]}
             onPress={handleSearchPress}
             activeOpacity={0.7}
           >
-            <Ionicons name="search" size={20} color={colors.metallicBrown.primary} style={styles.searchIcon} />
+            <Ionicons
+              name="search"
+              size={20}
+              color={colors.metallicBrown.primary}
+              style={styles.searchIcon}
+            />
             <Text style={[styles.searchPlaceholderText, { color: colors.textMuted }]}>
               Search music, artists, albums...
             </Text>
@@ -335,7 +370,11 @@ export default function HomeScreen() {
               style={styles.iconButton}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="notifications-outline" size={24} color={colors.metallicBrown.primary} />
+              <Ionicons
+                name="notifications-outline"
+                size={24}
+                color={colors.metallicBrown.primary}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -344,11 +383,13 @@ export default function HomeScreen() {
     [colors, top, handleSearchPress, handleNotificationsPress],
   );
 
+  // Show a loading screen until the real theme is available so the rest of the
+  // UI never renders with partially-resolved color values.
   if (!isThemeReady) {
     return (
-      <View style={[styles.container, { backgroundColor: colors?.background || '#000000' }]}>
+      <View style={[styles.container, { backgroundColor: FALLBACK_COLORS.background }]}>
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors?.metallicBrown?.primary || '#D4AF37'} />
+          <ActivityIndicator size="large" color={FALLBACK_COLORS.metallicBrown.primary} />
         </View>
       </View>
     );
@@ -364,7 +405,7 @@ export default function HomeScreen() {
             {
               transform: [{ scale: watermarkPulse }],
               opacity: colors.watermarkOpacity,
-            }
+            },
           ]}
           resizeMode="contain"
         />
@@ -446,8 +487,13 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  watermarkWrapper: { ...StyleSheet.absoluteFillObject, justifyContent: "center", alignItems: "center", zIndex: 0 },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center" },
+  watermarkWrapper: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 0,
+  },
   watermark: { width: 300, height: 300 },
   header: {
     flexDirection: "row",
@@ -490,8 +536,8 @@ const styles = StyleSheet.create({
 
   // SINGLE CARD STYLES (No grid, no FlatList, no pagination)
   singleQuickActionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     borderRadius: 12,
     padding: 12,
     marginHorizontal: 4,
@@ -507,7 +553,7 @@ const styles = StyleSheet.create({
   },
   singleQuickActionTitle: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 4,
   },
   singleQuickActionArtist: {
@@ -517,7 +563,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
 
-  // Legacy styles (kept for other sections that may use them)
+  // Legacy styles (kept for other sections that may reference them)
   gridPage: { width: width - 32 },
   gridRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   gridCell: { width: GRID_SIZE },
