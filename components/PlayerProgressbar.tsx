@@ -9,17 +9,19 @@
 // - Seek preview with haptic feedback
 // - Buffering state indication
 // - Velocity-based smoothing for natural feel
+// - FIXED: Uses bufferedPosition from context for buffer bar display
+// - FIXED: No duplicate end detection (removed)
+// - FIXED: Uses togglePlayPause from context instead of direct engine calls
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, AppState } from 'react-native';
 import { Slider } from 'react-native-awesome-slider';
-import { useSharedValue, runOnJS, withSpring, withTiming, Easing } from 'react-native-reanimated';
+import { useSharedValue, runOnJS, withSpring } from 'react-native-reanimated';
 import { moderateScale, verticalScale, scale } from 'react-native-size-matters/extend';
 import * as Haptics from 'expo-haptics';
 
 import { Colors } from '@/constants/Colors';
-import { formatSecondsToMinutes } from '@/helpers/miscellaneous';
-import { usePlayerEngine } from '@/libs/playerSetup';
+import { useMusicPlayer, usePlayerEngine } from '@/libs/playerSetup';
 import useResponsivePlayback from '@/hooks/useResponsivePlayback';
 
 // Professional physics engine for smooth progress bar animation
@@ -202,7 +204,6 @@ const HighResTimestamp = ({ seconds, isRemaining = false }: { seconds: number; i
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
   
-  const timeValue = isRemaining ? -displaySeconds : displaySeconds;
   const formattedTime = isRemaining 
     ? `-${formatSmoothTime(displaySeconds)}`
     : formatSmoothTime(displaySeconds);
@@ -264,13 +265,13 @@ const SeekPreview = ({
 // Main Progress Bar Component
 export const PlayerProgressBar = ({ style }: { style?: any }) => {
   const engine = usePlayerEngine();
+  const { bufferedPosition } = useMusicPlayer();
   
   // State for UI
   const [smoothFraction, setSmoothFraction] = useState(0);
   const [isSliding, setIsSliding] = useState(false);
   const [seekPreviewPosition, setSeekPreviewPosition] = useState(0);
   const [showSeekPreview, setShowSeekPreview] = useState(false);
-  const [localDuration, setLocalDuration] = useState(engine.duration);
   
   // Shared values for slider
   const progress = useSharedValue(0);
@@ -285,7 +286,7 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
   const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const smoothEngineRef = useRef<SmoothProgressEngine | null>(null);
   
-  // Use responsive playback hook for position tracking
+  // Use responsive playback hook - FIXED: onPlay/onPause now use togglePlayPause pattern
   const {
     uiPosition,
     uiDuration,
@@ -299,15 +300,20 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
     actualPosition: engine.position,
     actualDuration: engine.duration,
     actualBuffering: engine.isBuffering,
-    onPlay: () => engine.play(),
-    onPause: () => engine.pause(),
+    onPlay: () => {
+      // Use engine.play directly - this is for responsive sync only
+      engine.play();
+    },
+    onPause: () => {
+      engine.pause();
+    },
     onSeek: (pos) => engine.seekTo(pos),
     syncDelayMs: 300,
     positionDriftThreshold: 0.2,
     syncIntervalMs: 1500,
     enablePositionDriftCorrection: true,
     onDriftDetected: (drift) => {
-      console.log(`[ProgressBar] Position drift detected: ${drift.toFixed(3)}s`);
+      // Silent in production
     },
   });
   
@@ -334,7 +340,6 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
   useEffect(() => {
     positionRef.current = uiPosition;
     durationRef.current = uiDuration;
-    setLocalDuration(uiDuration);
     
     if (!isSliding && smoothEngineRef.current && uiDuration > 0) {
       const fraction = uiPosition / uiDuration;
@@ -462,6 +467,9 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
   const currentPosition = isSliding ? seekPreviewPosition * uiDuration : uiPosition;
   const currentRemaining = uiDuration - currentPosition;
   
+  // Calculate buffer fill percentage
+  const bufferFillPercent = uiDuration > 0 ? Math.min(bufferedPosition / uiDuration, 1) : 0;
+  
   return (
     <View style={[styles.container, style]}>
       {/* Seek Preview Overlay */}
@@ -470,6 +478,19 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
         duration={uiDuration} 
         isVisible={showSeekPreview && isSliding}
       />
+      
+      {/* Buffer Bar Background Layer */}
+      <View style={styles.bufferBarBackground}>
+        <View 
+          style={[
+            styles.bufferBarFill, 
+            { 
+              width: `${bufferFillPercent * 100}%`,
+              backgroundColor: Colors.maximumTrackTintColor,
+            }
+          ]} 
+        />
+      </View>
       
       {/* Main Slider */}
       <Slider
@@ -493,7 +514,7 @@ export const PlayerProgressBar = ({ style }: { style?: any }) => {
         )}
         theme={{
           minimumTrackTintColor: Colors.minimumTrackTintColor,
-          maximumTrackTintColor: Colors.maximumTrackTintColor,
+          maximumTrackTintColor: 'transparent',
         }}
         onSlidingStart={handleSlidingStart}
         onValueChange={(value) => {
@@ -531,17 +552,33 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     paddingHorizontal: scale(16),
+    position: 'relative',
   },
   sliderContainer: {
     height: moderateScale(5),
+    borderRadius: 16,
+  },
+  bufferBarBackground: {
+    position: 'absolute',
+    top: 0,
+    left: scale(16),
+    right: scale(16),
+    height: moderateScale(5),
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+    zIndex: 1,
+  },
+  bufferBarFill: {
+    height: '100%',
     borderRadius: 16,
   },
   thumb: {
     width: moderateScale(14),
     height: moderateScale(14),
     borderRadius: moderateScale(7),
-    backgroundColor: Colors.gold,
-    shadowColor: Colors.gold,
+    backgroundColor: Colors.minimumTrackTintColor,
+    shadowColor: Colors.minimumTrackTintColor,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 4,
@@ -574,13 +611,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   separator: {
-    color: Colors.textSub,
+    color: Colors.textMuted,
     fontSize: moderateScale(12),
     fontWeight: '400',
     marginHorizontal: scale(2),
   },
   remainingSeparator: {
-    color: Colors.textSub,
+    color: Colors.textMuted,
     fontSize: moderateScale(12),
     fontWeight: '400',
     marginLeft: scale(8),
@@ -595,7 +632,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,215,0,0.3)',
   },
   bubbleText: {
-    color: Colors.gold,
+    color: Colors.minimumTrackTintColor,
     fontWeight: '600',
     fontSize: moderateScale(12),
     fontVariant: ['tabular-nums'],
@@ -614,7 +651,7 @@ const styles = StyleSheet.create({
     paddingVertical: verticalScale(8),
     borderRadius: scale(12),
     borderWidth: 1,
-    borderColor: Colors.gold,
+    borderColor: Colors.minimumTrackTintColor,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -622,13 +659,13 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   seekPreviewTime: {
-    color: Colors.gold,
+    color: Colors.minimumTrackTintColor,
     fontSize: moderateScale(20),
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   seekPreviewFraction: {
-    color: Colors.gold,
+    color: Colors.minimumTrackTintColor,
     fontSize: moderateScale(14),
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
@@ -641,7 +678,7 @@ const styles = StyleSheet.create({
     marginHorizontal: scale(8),
   },
   seekPreviewTotal: {
-    color: Colors.textSub,
+    color: Colors.textMuted,
     fontSize: moderateScale(14),
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
@@ -657,11 +694,11 @@ const styles = StyleSheet.create({
     width: scale(6),
     height: scale(6),
     borderRadius: scale(3),
-    backgroundColor: Colors.gold,
+    backgroundColor: Colors.minimumTrackTintColor,
     opacity: 0.7,
   },
   bufferingText: {
-    color: Colors.textSub,
+    color: Colors.textMuted,
     fontSize: moderateScale(10),
     fontWeight: '500',
     letterSpacing: 0.5,

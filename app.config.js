@@ -18,13 +18,16 @@
 //      (dataSync foreground service type is for file sync, not media — kept only mediaPlayback)
 //   7. extraProguardRules cleaned up — pawns + firebase entries retained, added expo-video keep rule
 //   8. newArchEnabled: true retained — required for expo-video's Fabric VideoView
-//   9. Excluded com.google.firebase:protolite-well-known-types — conflicts with
-//      protobuf-javalite:4.33.5 (duplicate com.google.protobuf.DescriptorProtos classes)
+//   9. withExcludeDependencies plugin excludes com.google.firebase:protolite-well-known-types —
+//      conflicts with protobuf-javalite:4.33.5 (duplicate com.google.protobuf.DescriptorProtos).
+//      NOTE: expo-build-properties does NOT support an "excludes" field — a custom plugin is
+//      required to inject `configurations.all { exclude ... }` into app/build.gradle.
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
+const withExcludeDependencies = require("./plugins/withExcludeDependencies");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
@@ -109,6 +112,21 @@ module.exports = {
     withAbiSplit,
     withIconXml,
 
+    // ── Dependency conflict resolution ──────────────────────────────────────
+    // protolite-well-known-types:18.0.1 (pulled in by react-native-firebase)
+    // duplicates classes already in protobuf-javalite:4.33.5, causing:
+    //   "Duplicate class com.google.protobuf.DescriptorProtos found in
+    //    protobuf-javalite-4.33.5 and protolite-well-known-types-18.0.1"
+    // The fix injects `configurations.all { exclude ... }` into app/build.gradle.
+    [
+      withExcludeDependencies,
+      {
+        excludes: [
+          { group: "com.google.firebase", module: "protolite-well-known-types" },
+        ],
+      },
+    ],
+
     // ── Core Expo plugins ───────────────────────────────────────────────────
     "expo-router",
     "expo-font",
@@ -186,13 +204,6 @@ module.exports = {
           // and were removed to avoid unnecessary permission scrutiny on Play Store.
           foregroundServiceTypes: [
             "mediaPlayback",
-          ],
-          // Exclude the old Firebase protobuf bundle — it duplicates classes
-          // already provided by protobuf-javalite:4.33.5, causing a build failure:
-          //   "Duplicate class com.google.protobuf.DescriptorProtos found in
-          //    protobuf-javalite-4.33.5 and protolite-well-known-types-18.0.1"
-          excludes: [
-            "com.google.firebase:protolite-well-known-types",
           ],
         },
       },

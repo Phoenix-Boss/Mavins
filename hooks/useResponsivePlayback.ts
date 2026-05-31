@@ -8,6 +8,7 @@
 // - App foreground state recovery
 // - Debounced sync to prevent thrashing
 // - Single source of truth for UI state
+// - FIXED: No double engine calls - callbacks are passed from parent components
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
@@ -26,7 +27,9 @@ export interface ResponsivePlaybackOptions {
   actualDuration: number;
   actualBuffering: boolean;
   
-  // Callbacks to control playback
+  // Callbacks to control playback - parent component provides these
+  // These should NOT call both engine methods AND togglePlayPause
+  // They should call the appropriate single source of truth method
   onPlay: () => void;
   onPause: () => void;
   onSeek: (position: number) => void;
@@ -138,10 +141,8 @@ export function useResponsivePlayback({
     if (drift > positionDriftThreshold && actualPlaying && uiPlaying) {
       // Significant drift detected while playing
       onDriftDetected?.(drift);
-      console.log(`[ResponsivePlayback] Position drift detected: ${drift.toFixed(3)}s, auto-correcting`);
       
       // Auto-correct drift by seeking to actual position
-      // But only if the drift persists (not a momentary glitch)
       const driftCheckTimeout = setTimeout(() => {
         if (Math.abs(uiPosition - actualPosition) > positionDriftThreshold) {
           setUiPosition(actualPosition);
@@ -167,7 +168,6 @@ export function useResponsivePlayback({
       const positionMismatch = Math.abs(uiPosition - actual.position) > positionDriftThreshold;
       
       if ((playingMismatch || positionMismatch) && timeSinceLastSync > syncDelayMs * 2) {
-        console.log(`[ResponsivePlayback] Periodic sync needed - playing mismatch: ${playingMismatch}, position mismatch: ${positionMismatch}`);
         setNeedsSync(true);
         onSyncNeeded?.();
       }
@@ -202,7 +202,6 @@ export function useResponsivePlayback({
       }
       
       if (changes) {
-        console.log(`[ResponsivePlayback] Sync completed - playing: ${actual.playing}, position: ${actual.position.toFixed(2)}s`);
         setLastSyncTime(Date.now());
       }
       
@@ -211,7 +210,6 @@ export function useResponsivePlayback({
       onSyncComplete?.();
     };
     
-    // Small delay to allow any pending actions to complete
     const syncTimer = setTimeout(performSync, 50);
     return () => clearTimeout(syncTimer);
   }, [needsSync, isSyncing, uiPlaying, uiPosition, positionDriftThreshold, onSyncComplete]);
@@ -221,7 +219,6 @@ export function useResponsivePlayback({
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
         // App came to foreground - force sync with actual state
-        console.log('[ResponsivePlayback] App foregrounded, forcing sync');
         const actual = lastKnownActualRef.current;
         
         setUiPlaying(actual.playing);
@@ -272,7 +269,7 @@ export function useResponsivePlayback({
     // Store pending action
     pendingActionRef.current = { type: playing ? 'play' : 'pause' };
     
-    // Execute actual playback control
+    // Execute actual playback control - parent provides the correct single source
     if (playing) {
       onPlay();
     } else {
@@ -287,7 +284,6 @@ export function useResponsivePlayback({
       
       // Check if UI still mismatches actual state
       if (uiPlaying !== actual.playing) {
-        console.log(`[ResponsivePlayback] Play state mismatch after ${syncDelayMs}ms - correcting`);
         setUiPlaying(actual.playing);
         setNeedsSync(false);
         onSyncNeeded?.();
@@ -333,7 +329,6 @@ export function useResponsivePlayback({
       const drift = Math.abs(uiPosition - actual.position);
       
       if (drift > positionDriftThreshold) {
-        console.log(`[ResponsivePlayback] Position mismatch after ${syncDelayMs}ms - drift: ${drift.toFixed(3)}s`);
         setUiPosition(actual.position);
         setNeedsSync(false);
         onDriftDetected?.(drift);
@@ -381,7 +376,6 @@ export function useResponsivePlayback({
       const drift = Math.abs(uiPosition - actual.position);
       
       if (drift > positionDriftThreshold) {
-        console.log(`[ResponsivePlayback] Seek mismatch after ${syncDelayMs}ms - drift: ${drift.toFixed(3)}s`);
         setUiPosition(actual.position);
         setNeedsSync(false);
         onDriftDetected?.(drift);
@@ -411,7 +405,6 @@ export function useResponsivePlayback({
     
     pendingActionRef.current = null;
     
-    console.log('[ResponsivePlayback] Force sync completed');
     onSyncComplete?.();
   }, [onSyncComplete]);
   
@@ -432,8 +425,6 @@ export function useResponsivePlayback({
     const actual = lastKnownActualRef.current;
     setUiPlaying(actual.playing);
     setUiPosition(actual.position);
-    
-    console.log('[ResponsivePlayback] Sync reset');
   }, []);
   
   // Return public interface
