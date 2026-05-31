@@ -1,82 +1,66 @@
 /**
- * This file defines the `MessageModal` component, which displays a dynamic message
- * fetched from a Firebase Firestore database. The modal can be configured to show once per message ID
- * and supports clickable links within its content.
+ * MessageModal - Fetches and displays a message from Firebase Firestore.
+ * Uses @react-native-firebase for native Android offline support.
+ * Follows project conventions: useTheme, useAlert, triggerHaptic.
  */
 
-import { Colors } from "@/constants/Colors";
+import { useTheme } from "@/contexts/ThemeContext";
+import { useAlert } from "@/contexts/AlertContext";
 import { triggerHaptic } from "@/helpers/haptics";
 import { storage } from "@/storage";
-import { initializeApp } from "firebase/app";
-import { doc, getDoc, getFirestore } from "firebase/firestore";
+import firestore from "@react-native-firebase/firestore";
 import React, { useEffect, useState } from "react";
-import { Linking, Modal, Text, TouchableOpacity, View } from "react-native";
-import { ScaledSheet } from "react-native-size-matters/extend";
+import { Linking, Modal, Text, TouchableOpacity, View, StyleSheet } from "react-native";
+import { moderateScale, scale, verticalScale } from "react-native-size-matters/extend";
 
-// Firebase configuration for initializing the app.
-const firebaseConfig = {
-  apiKey: "AIzaSyDMQ-6wcbIxzO_J8rqVT_AFgGXB3DZXnUM",
-  authDomain: "audioscape-ankushsarkar.firebaseapp.com",
-  projectId: "audioscape-ankushsarkar",
-  storageBucket: "audioscape-ankushsarkar.firebasestorage.app",
-  messagingSenderId: "160278040044",
-  appId: "1:160278040044:web:9c98ba8c3b86bea94e04c9",
-  measurementId: "G-CFXR04RLEH",
-};
-
-// Initialize Firebase with the provided configuration.
-initializeApp(firebaseConfig);
-
-/**
- * `MessageModal` component.
- * Fetches and displays a message from Firestore. The message can be dismissed
- * and will not reappear if `showOnce` is true and it has been seen.
- */
 export const MessageModal = () => {
+  const { colors, isDark } = useTheme();
+  const { showAlert } = useAlert();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    /**
-     * Fetches the active message from Firestore.
-     * @returns {Promise<void>} A promise that resolves when the message is fetched.
-     */
     const fetchMessage = async () => {
-      const db = getFirestore();
-      const docRef = doc(db, "appData", "activeMessage");
-      const docSnap = await getDoc(docRef);
+      try {
+        const docSnap = await firestore()
+          .collection("appData")
+          .doc("activeMessage")
+          .get();
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        // storage.getString is now async
-        const storedMessageId = await storage.getString("lastSeenMessageId");
+        if (docSnap.exists) {
+          const data = docSnap.data();
+          const storedMessageId = await storage.getString("lastSeenMessageId");
 
-        // Check if the message is new or if it should always be shown.
-        if (storedMessageId !== data.id || !data.showOnce) {
-          setMessage(data.content);
-          setIsModalVisible(true);
-
-          // Store the ID of the message that was just shown.
-          await storage.set("lastSeenMessageId", data.id);
+          if (storedMessageId !== data?.id || !data?.showOnce) {
+            setMessage(data?.content ?? null);
+            setIsModalVisible(true);
+            await storage.set("lastSeenMessageId", data?.id ?? "");
+          }
         }
+      } catch (error: any) {
+        console.error("[MessageModal] Firestore fetch error:", error);
+        // Silently fail — don't crash the app if offline
+        // Optionally show alert for debugging:
+        // showAlert("Connection Issue", "Could not load latest message. Please check your internet connection.");
       }
     };
 
     fetchMessage();
   }, []);
 
-  /**
-   * Handles opening URLs found within the message text.
-   * @param url - The URL string to open.
-   */
   const handleLinkPress = (url: string) => {
     triggerHaptic();
-    Linking.openURL(url).catch((err) =>
-      console.error("Failed to open URL:", err),
-    );
+    Linking.openURL(url).catch((err) => {
+      console.error("Failed to open URL:", err);
+      showAlert("Error", "Could not open the link.");
+    });
   };
 
-  // If no message is loaded, render nothing.
+  const handleDismiss = () => {
+    triggerHaptic();
+    setIsModalVisible(false);
+  };
+
   if (!message) return null;
 
   return (
@@ -85,38 +69,52 @@ export const MessageModal = () => {
       transparent={true}
       animationType="fade"
       statusBarTranslucent={true}
-      onRequestClose={() => setIsModalVisible(false)}
+      onRequestClose={handleDismiss}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalText}>
-            {/* Process message content to replace \n with newlines and make URLs clickable */}
+      <View style={styles.overlay}>
+        <View
+          style={[
+            styles.modalContent,
+            {
+              backgroundColor: isDark ? colors.surface : colors.surface,
+              borderColor: colors.borderGold,
+              borderWidth: 0.5,
+            },
+          ]}
+        >
+          <View style={[styles.topAccent, { backgroundColor: colors.gold }]} />
+
+          <Text style={[styles.modalText, { color: colors.text }]}>
             {message
               .replace(/\\n/g, "\n")
-              .split(/(https?:\/\/\S+)/) // Split by URL patterns
+              .split(/(https?:\/\/\S+)/)
               .map((part, index) =>
                 /^https?:\/\//.test(part) ? (
                   <Text
                     key={index}
-                    style={styles.linkText}
+                    style={[styles.linkText, { color: colors.gold }]}
                     onPress={() => handleLinkPress(part)}
                   >
                     {part}
                   </Text>
                 ) : (
-                  <Text key={index}>{part}</Text>
+                  <Text key={index} style={{ color: colors.text }}>
+                    {part}
+                  </Text>
                 ),
               )}
           </Text>
 
+          <View style={[styles.divider, { backgroundColor: colors.borderGold }]} />
+
           <TouchableOpacity
-            style={styles.modalButton}
-            onPress={() => {
-              triggerHaptic();
-              setIsModalVisible(false);
-            }}
+            style={[styles.modalButton, { backgroundColor: colors.goldFillStrong }]}
+            onPress={handleDismiss}
+            activeOpacity={0.7}
           >
-            <Text style={styles.modalButtonText}>Dismiss</Text>
+            <Text style={[styles.modalButtonText, { color: colors.gold }]}>
+              Dismiss
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -124,48 +122,55 @@ export const MessageModal = () => {
   );
 };
 
-// Styles for the MessageModal component.
-const styles = ScaledSheet.create({
-  modalOverlay: {
+const styles = StyleSheet.create({
+  overlay: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    paddingHorizontal: moderateScale(28),
   },
   modalContent: {
-    width: "300@ms",
-    padding: "10@ms",
-    backgroundColor: Colors.background,
-    borderRadius: 10,
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: moderateScale(20),
+    overflow: "hidden",
     alignItems: "center",
-    shadowColor: "#636363",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    elevation: 24,
+  },
+  topAccent: {
+    height: verticalScale(3),
+    width: "100%",
   },
   modalText: {
-    fontSize: "16@ms",
-    color: Colors.text,
-    marginBottom: 8,
+    fontSize: moderateScale(16),
     textAlign: "center",
-    flexWrap: "wrap",
+    lineHeight: moderateScale(24),
+    paddingHorizontal: moderateScale(20),
+    paddingTop: verticalScale(22),
+    paddingBottom: verticalScale(14),
   },
   linkText: {
-    color: "#0252c2",
-    textAlign: "center",
+    textDecorationLine: "underline",
+    fontWeight: "600",
+  },
+  divider: {
+    height: 0.5,
+    width: "100%",
   },
   modalButton: {
-    backgroundColor: "white",
-    paddingVertical: "8@ms",
-    paddingHorizontal: "16@ms",
-    borderRadius: 50,
-    marginHorizontal: 5,
+    width: "100%",
+    paddingVertical: verticalScale(16),
+    alignItems: "center",
+    justifyContent: "center",
   },
   modalButtonText: {
-    color: "black",
-    fontSize: "15@ms",
-    fontWeight: "bold",
-    textAlign: "center",
+    fontSize: moderateScale(15),
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
 });

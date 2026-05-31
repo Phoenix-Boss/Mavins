@@ -1,8 +1,23 @@
 // app.config.js
 //
-// FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
-// FIX 2: Added expo-audio plugin with enableBackgroundAudio
-// FIX 3: Removed extraMavenRepos jitpack — pawns SDK now bundled as local AAR in modules/pawns/android/libs/
+// ARCHITECTURE: Android-only, master-slave video/audio playback via expo-video.
+// expo-audio is intentionally EXCLUDED — the master player (expo-video, never muted)
+// owns all audio output. Including expo-audio alongside expo-video causes AudioFocus
+// conflicts that interrupt playback (the "start → stop → start" loop).
+//
+// BACKGROUND PLAYBACK: Handled entirely by expo-video (supportsBackgroundPlayback: true)
+// + expo-media-control for the lock screen notification. No expo-audio needed.
+//
+// FIXES APPLIED:
+//   1. Removed expo-audio plugin — conflicts with expo-video AudioFocus ownership
+//   2. expo-video: supportsBackgroundPlayback + supportsPictureInPicture retained
+//   3. expo-media-control: lock screen controls + notification channel configured
+//   4. foregroundServiceTypes includes mediaPlayback (required for background audio on Android 14+)
+//   5. WAKE_LOCK permission retained — prevents CPU sleep during background playback
+//   6. Removed duplicate/redundant FOREGROUND_SERVICE_SPECIAL_USE + FOREGROUND_SERVICE_DATA_SYNC
+//      (dataSync foreground service type is for file sync, not media — kept only mediaPlayback)
+//   7. extraProguardRules cleaned up — pawns + firebase entries retained, added expo-video keep rule
+//   8. newArchEnabled: true retained — required for expo-video's Fabric VideoView
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
@@ -19,29 +34,35 @@ module.exports = {
       projectId: "e053d760-bfb2-464f-b169-7a76ebfa3247",
     },
   },
+
+  // Android-only — no iOS targets
   platforms: ["android"],
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
   userInterfaceStyle: "automatic",
 
+  // New Architecture required for expo-video Fabric VideoView
   newArchEnabled: true,
 
   android: {
     softwareKeyboardLayoutMode: "pan",
     permissions: [
+      // Storage — local music library
       "android.permission.READ_EXTERNAL_STORAGE",
       "android.permission.WRITE_EXTERNAL_STORAGE",
       "android.permission.MANAGE_EXTERNAL_STORAGE",
+      // Network
       "android.permission.INTERNET",
       "android.permission.ACCESS_NETWORK_STATE",
       "android.permission.ACCESS_WIFI_STATE",
+      // Playback — background audio requires WAKE_LOCK + FOREGROUND_SERVICE_MEDIA_PLAYBACK
       "android.permission.WAKE_LOCK",
-      "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
       "android.permission.FOREGROUND_SERVICE",
-      "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
-      "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+      // Boot — restore last track on device restart
       "android.permission.RECEIVE_BOOT_COMPLETED",
+      // Audio routing
       "android.permission.MODIFY_AUDIO_SETTINGS",
     ],
     usesCleartextTraffic: true,
@@ -55,6 +76,9 @@ module.exports = {
     backgroundColor: "#000",
     edgeToEdgeEnabled: true,
     versionCode: 1,
+    googleServicesFile: IS_DEV
+      ? "./google-services-dev.json"
+      : "./google-services.json",
     intentFilters: [
       {
         action: "android.intent.action.MAIN",
@@ -79,11 +103,15 @@ module.exports = {
   },
 
   plugins: [
+    // ── Custom build plugins ────────────────────────────────────────────────
     withAbiSplit,
     withIconXml,
+
+    // ── Core Expo plugins ───────────────────────────────────────────────────
     "expo-router",
     "expo-font",
 
+    // ── Notifications ───────────────────────────────────────────────────────
     [
       "expo-notifications",
       {
@@ -92,6 +120,9 @@ module.exports = {
       },
     ],
 
+    // ── Lock screen / notification media controls ───────────────────────────
+    // expo-media-control provides the Android media notification and lock screen
+    // buttons. It does NOT play audio — expo-video owns all playback.
     [
       "expo-media-control",
       {
@@ -99,12 +130,18 @@ module.exports = {
         audioSessionCategory: "playback",
         android: {
           notificationChannelName: "Mavins Player Playback",
-          notificationChannelDescription: "Shows current track and playback controls",
+          notificationChannelDescription:
+            "Shows current track and playback controls",
           notificationColor: "#D4AF37",
         },
       },
     ],
 
+    // ── Video playback (master + slave players) ─────────────────────────────
+    // This is the ONLY audio/video engine. expo-audio is intentionally omitted.
+    // supportsBackgroundPlayback: true → keeps the ExoPlayer foreground service
+    //   alive when the app is backgrounded (required for Android 8+).
+    // supportsPictureInPicture: true → enables PiP for the slave (video) player.
     [
       "expo-video",
       {
@@ -113,15 +150,10 @@ module.exports = {
       },
     ],
 
-    [
-      "expo-audio",
-      {
-        enableBackgroundAudio: true,
-      },
-    ],
-
+    // ── Edge-to-edge display ────────────────────────────────────────────────
     "react-native-edge-to-edge",
 
+    // ── Splash screen ───────────────────────────────────────────────────────
     [
       "expo-splash-screen",
       {
@@ -132,27 +164,41 @@ module.exports = {
       },
     ],
 
+    // ── Build properties ────────────────────────────────────────────────────
     [
       "expo-build-properties",
       {
         android: {
           extraProguardRules:
+            // Pawns SDK — bundled as local AAR in modules/pawns/android/libs/
             "-keep class com.pawns.sdk.** { *; }\n" +
-            "-dontwarn com.pawns.sdk.**\n",
+            "-dontwarn com.pawns.sdk.**\n" +
+            // Firebase
+            "-keep class com.google.firebase.** { *; }\n" +
+            "-keep class com.google.android.gms.** { *; }\n" +
+            // ExoPlayer / expo-video — prevent R8 from stripping media3 internals
+            "-keep class androidx.media3.** { *; }\n" +
+            "-dontwarn androidx.media3.**\n",
+          // mediaPlayback is the correct foreground service type for audio/video
+          // streaming. dataSync and specialUse are unrelated to media playback
+          // and were removed to avoid unnecessary permission scrutiny on Play Store.
           foregroundServiceTypes: [
-            "dataSync",
             "mediaPlayback",
-            "specialUse",
           ],
         },
       },
     ],
+
+    // ── Firebase ────────────────────────────────────────────────────────────
+    // Auto-configures from google-services.json / google-services-dev.json
+    "@react-native-firebase/app",
   ],
 
   experiments: {
     typedRoutes: true,
   },
 
+  // Local native modules (mavin-engine, pawns, etc.)
   autolinking: {
     modulesPaths: ["./modules"],
   },

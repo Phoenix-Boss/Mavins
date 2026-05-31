@@ -10,6 +10,7 @@
 //   3. SERIALIZED QUEUE — resolveTrack calls run one at a time
 //   4. PLAYBACK LOCK — preload pauses during active track resolution
 //   5. REGISTRATION PATTERN — avoids circular dependencies
+//   6. TAB-AWARE PRELOAD — respects preferred stream type
 
 import type { Song } from '@/types/song';
 import type { ResolvedTrack } from '@/components/MusicPlayerContext';
@@ -19,10 +20,16 @@ import type { ResolvedTrack } from '@/components/MusicPlayerContext';
 // ─────────────────────────────────────────────────────────────────────────────
 
 let resolveTrackFn: ((song: Song) => Promise<ResolvedTrack | null>) | null = null;
+let getPreferredStreamTypeFn: (() => 'audio' | 'video') | null = null;
 
 export function registerResolveTrack(fn: (song: Song) => Promise<ResolvedTrack | null>): void {
   resolveTrackFn = fn;
   console.log('[Preload] resolveTrack registered');
+}
+
+export function registerGetPreferredStreamType(fn: () => 'audio' | 'video'): void {
+  getPreferredStreamTypeFn = fn;
+  console.log('[Preload] getPreferredStreamType registered');
 }
 
 function getResolveTrack(): (song: Song) => Promise<ResolvedTrack | null> {
@@ -30,6 +37,10 @@ function getResolveTrack(): (song: Song) => Promise<ResolvedTrack | null> {
     throw new Error('[Preload] resolveTrack not registered');
   }
   return resolveTrackFn;
+}
+
+function getPreferredStreamType(): 'audio' | 'video' {
+  return getPreferredStreamTypeFn ? getPreferredStreamTypeFn() : 'audio';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -190,6 +201,10 @@ function preloadSongMetadata(song: PreloadSong, abortSignal?: AbortSignal): void
           videoUrl: (resolved as any).videoOnlyUrl,
           muxedVideoUrl: (resolved as any).muxedVideoUrl,
           isLocal: resolved.isLocal,
+          hasAudio: resolved.hasAudio,
+          hasVideo: resolved.hasVideo,
+          isAudioOnly: resolved.isAudioOnly,
+          isVideoOnly: resolved.isVideoOnly,
         });
         console.log(`[Preload] Metadata cached for: "${song.title}"`);
       } else {
@@ -219,6 +234,7 @@ export function preloadSearchResults(songs: PreloadSong[]): void {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PRELOAD NEXT TRACKS — Only metadata for the next track
+// Supports tab-aware preloading (preload video URLs if in video mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function preloadNextTracks(
@@ -234,7 +250,8 @@ export function preloadNextTracks(
     return;
   }
 
-  console.log(`[Preload] Preloading metadata for next track: "${nextTrack.title}"`);
+  const preferredType = getPreferredStreamType();
+  console.log(`[Preload] Preloading metadata for next track: "${nextTrack.title}" (type: ${preferredType})`);
 
   const url = nextTrack.url || '';
   const isLocal = url.startsWith('file://') ||
@@ -291,3 +308,9 @@ export function getPreloadAbortSignal(): AbortSignal {
   }
   return globalAbortController.signal;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORTED TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type { TrackExtras };

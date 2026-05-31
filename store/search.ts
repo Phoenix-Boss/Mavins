@@ -58,6 +58,7 @@ interface SearchActions {
   setLastFetchedAt: (timestamp: number) => void;
   hasAnyData: () => boolean;
   isDataFresh: () => boolean;
+  clearAllData: () => void;
   reset: () => void;
 }
 
@@ -140,7 +141,50 @@ export const useSearchStore = create<SearchStore>()(
         return Date.now() - lastFetchedAt < FRESHNESS_TTL_MS;
       },
 
-      reset: () => set(initialState),
+      clearAllData: () => {
+        console.log('🗑️ [SearchStore] Clearing all search data');
+        set({
+          data: {
+            trending: [],
+            discoverSongs: [],
+            playlists: [],
+            beats: [],
+            lastFetchedAt: null,
+          },
+          loading: false,
+          error: null,
+          lastFetchedAt: null,
+        });
+        
+        // Also clear the persisted storage
+        const clearStorage = async () => {
+          try {
+            await AsyncStorage.removeItem('search-storage');
+            console.log('🗑️ [SearchStore] Cleared persisted storage');
+          } catch (error) {
+            console.error('Failed to clear persisted storage:', error);
+          }
+        };
+        
+        clearStorage();
+      },
+
+      reset: () => {
+        console.log('🔄 [SearchStore] Resetting store to initial state');
+        set(initialState);
+        
+        // Also clear the persisted storage
+        const clearStorage = async () => {
+          try {
+            await AsyncStorage.removeItem('search-storage');
+            console.log('🗑️ [SearchStore] Cleared persisted storage on reset');
+          } catch (error) {
+            console.error('Failed to clear persisted storage:', error);
+          }
+        };
+        
+        clearStorage();
+      },
     }),
     {
       name: 'search-storage',

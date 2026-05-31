@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "151714568217",
+    "project_id": "mavins-player",
+    "storage_bucket": "mavins-player.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:151714568217:android:f22d004a80c8416f73b288",
+        "android_client_info": {
+          "package_name": "com.mavins.player"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwxURSVMQvMvwiqVisKff033CoFaG5P_g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -7,7 +7,8 @@
 //   - No audio/video duality - the master player owns all playback state
 //   - Lock screen controls reflect the master player's state at all times
 //
-// FIXED: Removed isVideoActive duality - simplified to single player state
+// FIXED: Removed module-level singleton that persisted across provider remounts
+// FIXED: Each hook instance manages its own state and cleanup
 // FIXED: Skip metadata updates when duration is 0 to prevent showing "0:00" on lock screen
 // FIXED: Wait for valid duration before pushing metadata to native
 // FIXED: Single source of truth from master player
@@ -21,7 +22,6 @@ import {
   type MediaControlEvent,
 } from 'expo-media-control';
 
-import type { RepeatMode } from '@/libs/playerSetup';
 
 // Import fallback image for local tracks without artwork
 const FALLBACK_ICON = require('@/assets/images/icon.png');
@@ -42,16 +42,16 @@ export interface SystemMediaControlsProps {
   isBuffering: boolean;
   position: number;
   duration: number;
-  repeatMode: RepeatMode;
-
   // Control callbacks
   onPlay: () => void;
   onPause: () => void;
   onSkipNext: () => Promise<void>;
   onSkipPrevious: () => Promise<void>;
   onSeek: (positionSec: number) => void;
-  onSetRepeatMode: (mode: RepeatMode) => void;
   onExpandPlayer: () => void;
+  // repeatMode and onSetRepeatMode intentionally removed: Android lock screen controls
+  // do not support a repeat button via expo-media-control. The 'repeat-off' string
+  // was being passed as a Material icon name, causing "not a valid icon name" warnings.
 
   // App lifecycle callbacks
   onAppBackground: () => void;
@@ -79,31 +79,16 @@ const MEDIA_CAPABILITY_KEYS = [
 const COMPACT_CAPABILITY_KEYS = ['PREVIOUS_TRACK', 'PLAY', 'NEXT_TRACK'] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL SINGLETON STATE
-// Prevents multiple initializations and duplicate listeners
+// HELPER FUNCTIONS (pure, no side effects)
 // ─────────────────────────────────────────────────────────────────────────────
-let cachedFallbackUri: string | null = null;
-let isInitialized = false;
-let initializationPromise: Promise<void> | null = null;
-let commandListenerRemover: (() => void) | null = null;
-let progressInterval: ReturnType<typeof setInterval> | null = null;
-let currentProps: SystemMediaControlsProps | null = null;
-let lastMetadataHash: string = '';
-let lastMetadataPushTime: number = 0;
-let metadataRetryCount: number = 0;
-let metadataRetryTimeout: ReturnType<typeof setTimeout> | null = null;
-
-function getFallbackArtworkUri(): string {
-  if (!cachedFallbackUri) {
-    try {
-      const resolved = Image.resolveAssetSource(FALLBACK_ICON);
-      cachedFallbackUri = resolved?.uri || '';
-    } catch (error) {
-      console.warn('[MediaControls] Failed to resolve fallback icon:', error);
-      cachedFallbackUri = '';
-    }
+async function getFallbackArtworkUri(): Promise<string> {
+  try {
+    const resolved = Image.resolveAssetSource(FALLBACK_ICON);
+    return resolved?.uri || '';
+  } catch (error) {
+    console.warn('[MediaControls] Failed to resolve fallback icon:', error);
+    return '';
   }
-  return cachedFallbackUri || '';
 }
 
 function isMediaControlAvailable(): boolean {
@@ -111,7 +96,6 @@ function isMediaControlAvailable(): boolean {
 }
 
 function safeDuration(duration: number, trackDuration?: number): number {
-  // Return 0 only if both are invalid
   if (Number.isFinite(duration) && duration > 0) return duration;
   if (Number.isFinite(trackDuration ?? NaN) && (trackDuration ?? 0) > 0) return trackDuration ?? 0;
   return 0;
@@ -142,9 +126,7 @@ async function safeMediaCall<T>(action: () => Promise<T>, fallback?: T): Promise
   }
 }
 
-function buildArtworkUri(track?: SystemMediaControlsTrack): string | undefined {
-  const fallbackUri = getFallbackArtworkUri();
-
+function buildArtworkUri(track?: SystemMediaControlsTrack, fallbackUri?: string): string | undefined {
   if (!track) {
     return fallbackUri || undefined;
   }
@@ -175,10 +157,10 @@ function getNativeCapabilities(): {
   return { capabilities, compactCapabilities };
 }
 
-function generateMetadataHash(props: SystemMediaControlsProps): string {
+function generateMetadataHash(props: SystemMediaControlsProps, fallbackUri?: string): string {
   const activeDuration = safeDuration(props.duration, props.track?.duration);
   const activePosition = safePosition(props.position);
-  const artworkUri = buildArtworkUri(props.track);
+  const artworkUri = buildArtworkUri(props.track, fallbackUri);
   
   return JSON.stringify({
     title: props.track?.title || '',
@@ -187,96 +169,120 @@ function generateMetadataHash(props: SystemMediaControlsProps): string {
     elapsedTime: activePosition,
     isPlaying: props.isPlaying,
     artwork: artworkUri,
-    repeatMode: props.repeatMode,
+    // repeatMode intentionally excluded: expo-media-control does not support a repeat
+    // button on the Android lock screen. Including it caused 'repeat-off' to be passed
+    // as a Material icon name, producing the "not a valid icon name" warning.
   });
 }
 
-async function pushMetadataAndState(props: SystemMediaControlsProps): Promise<void> {
-  if (!isMediaControlAvailable() || !isInitialized) return;
-  if (!props.track) return;
-
-  const activeDuration = safeDuration(props.duration, props.track?.duration);
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN HOOK - Each instance manages its own state
+// ─────────────────────────────────────────────────────────────────────────────
+export function useSystemMediaControls(props: SystemMediaControlsProps): void {
+  // Instance-level state
+  const isInitializedRef = useRef(false);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const commandListenerRemoverRef = useRef<(() => void) | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const metadataRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const metadataRetryCountRef = useRef(0);
+  const lastMetadataHashRef = useRef('');
+  const lastMetadataPushTimeRef = useRef(0);
+  const fallbackUriRef = useRef<string>('');
   
-  // CRITICAL FIX: Skip metadata update if duration is 0 (not loaded yet)
-  // This prevents showing "0:00" on the lock screen
-  if (activeDuration <= 0) {
-    console.log('[MediaControls] Skipping metadata update - duration not loaded yet (duration: 0)');
+  // Store props ref for use in callbacks that might get stale closures
+  const propsRef = useRef(props);
+  propsRef.current = props;
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Push metadata to native
+  // ─────────────────────────────────────────────────────────────────────────────
+  const pushMetadataAndState = useCallback(async () => {
+    const currentProps = propsRef.current;
     
-    // Retry logic: if we have a track but duration is 0, try again later
-    if (props.track && metadataRetryCount < MAX_METADATA_RETRIES && !metadataRetryTimeout) {
-      metadataRetryCount++;
-      console.log(`[MediaControls] Will retry metadata push in ${METADATA_RETRY_DELAY_MS}ms (attempt ${metadataRetryCount}/${MAX_METADATA_RETRIES})`);
-      metadataRetryTimeout = setTimeout(() => {
-        metadataRetryTimeout = null;
-        if (currentProps === props) {
-          pushMetadataAndState(props);
-        }
-      }, METADATA_RETRY_DELAY_MS);
+    if (!isMediaControlAvailable() || !isInitializedRef.current) return;
+    if (!currentProps.track) return;
+
+    const activeDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
+    
+    // Skip metadata update if duration is 0 (not loaded yet)
+    if (activeDuration <= 0) {
+      console.log('[MediaControls] Skipping metadata update - duration not loaded yet (duration: 0)');
+      
+      // Retry logic: if we have a track but duration is 0, try again later
+      if (currentProps.track && metadataRetryCountRef.current < MAX_METADATA_RETRIES && !metadataRetryTimeoutRef.current) {
+        metadataRetryCountRef.current++;
+        console.log(`[MediaControls] Will retry metadata push in ${METADATA_RETRY_DELAY_MS}ms (attempt ${metadataRetryCountRef.current}/${MAX_METADATA_RETRIES})`);
+        metadataRetryTimeoutRef.current = setTimeout(() => {
+          metadataRetryTimeoutRef.current = null;
+          pushMetadataAndState();
+        }, METADATA_RETRY_DELAY_MS);
+      }
+      return;
     }
-    return;
-  }
-  
-  // Reset retry count on success
-  metadataRetryCount = 0;
-  if (metadataRetryTimeout) {
-    clearTimeout(metadataRetryTimeout);
-    metadataRetryTimeout = null;
-  }
+    
+    // Reset retry count on success
+    metadataRetryCountRef.current = 0;
+    if (metadataRetryTimeoutRef.current) {
+      clearTimeout(metadataRetryTimeoutRef.current);
+      metadataRetryTimeoutRef.current = null;
+    }
 
-  const elapsedTime = safePosition(props.position);
-  const activePlaying = props.isPlaying;
-  const artworkUri = buildArtworkUri(props.track);
+    const elapsedTime = safePosition(currentProps.position);
+    const activePlaying = currentProps.isPlaying;
+    const artworkUri = buildArtworkUri(currentProps.track, fallbackUriRef.current);
 
-  // Generate hash to avoid duplicate updates
-  const newHash = generateMetadataHash(props);
-  const now = Date.now();
-  
-  // Debounce: don't push more than once every 200ms unless content changed
-  if (newHash === lastMetadataHash && (now - lastMetadataPushTime) < METADATA_DEBOUNCE_MS) {
-    return;
-  }
+    // Generate hash to avoid duplicate updates
+    const newHash = generateMetadataHash(currentProps, fallbackUriRef.current);
+    const now = Date.now();
+    
+    // Debounce: don't push more than once every 200ms unless content changed
+    if (newHash === lastMetadataHashRef.current && (now - lastMetadataPushTimeRef.current) < METADATA_DEBOUNCE_MS) {
+      return;
+    }
 
-  lastMetadataHash = newHash;
-  lastMetadataPushTime = now;
+    lastMetadataHashRef.current = newHash;
+    lastMetadataPushTimeRef.current = now;
 
-  console.log('[MediaControls] Pushing metadata to native:', {
-    title: props.track?.title,
-    artist: props.track?.artist,
-    duration: activeDuration,
-    elapsedTime,
-    isPlaying: activePlaying,
-  });
-
-  await safeMediaCall(async () => {
-    await MediaControl.updateMetadata({
-      title: props.track?.title || 'Unknown Title',
-      artist: props.track?.artist || 'Unknown Artist',
+    console.log('[MediaControls] Pushing metadata to native:', {
+      title: currentProps.track?.title,
+      artist: currentProps.track?.artist,
       duration: activeDuration,
       elapsedTime,
-      ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
+      isPlaying: activePlaying,
     });
-  });
 
-  await safeMediaCall(async () => {
-    await MediaControl.updatePlaybackState(
-      playbackStateFor(activePlaying),
-      elapsedTime,
-      activePlaying ? 1.0 : 0.0,
-    );
-  });
-}
+    await safeMediaCall(async () => {
+      await MediaControl.updateMetadata({
+        title: currentProps.track?.title || 'Unknown Title',
+        artist: currentProps.track?.artist || 'Unknown Artist',
+        duration: activeDuration,
+        elapsedTime,
+        ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
+      });
+    });
 
-async function initializeMediaControls(): Promise<void> {
-  if (!isMediaControlAvailable()) {
-    console.log('[MediaControls] MediaControl not available on this device');
-    return;
-  }
-  if (isInitialized) return;
-  if (initializationPromise) return initializationPromise;
+    await safeMediaCall(async () => {
+      await MediaControl.updatePlaybackState(
+        playbackStateFor(activePlaying),
+        elapsedTime,
+        activePlaying ? 1.0 : 0.0,
+      );
+    });
+  }, []);
 
-  console.log('[MediaControls] Initializing...');
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Initialize media controls
+  // ─────────────────────────────────────────────────────────────────────────────
+  const initializeMediaControls = useCallback(async () => {
+    if (!isMediaControlAvailable()) {
+      console.log('[MediaControls] MediaControl not available on this device');
+      return;
+    }
+    if (isInitializedRef.current) return;
 
-  initializationPromise = (async () => {
+    console.log('[MediaControls] Initializing...');
+
     const { capabilities, compactCapabilities } = getNativeCapabilities();
     try {
       await MediaControl.enableMediaControls({
@@ -284,190 +290,229 @@ async function initializeMediaControls(): Promise<void> {
         compactCapabilities,
         notification: { color: '#D4AF37' },
       });
-      isInitialized = true;
+      isInitializedRef.current = true;
+      setIsInitialized(true);
       console.log('[MediaControls] Initialized successfully');
       
-      if (currentProps) {
-        await pushMetadataAndState(currentProps);
-      }
+      // Push immediately, then again after a short delay to handle the race where
+      // duration arrives before isInitializedRef is set (so the duration useEffect
+      // fired early and returned without pushing).
+      await pushMetadataAndState();
+      setTimeout(() => { void pushMetadataAndState(); }, 600);
     } catch (error: any) {
       const message = String(error?.message ?? error ?? '');
-      if (!message.includes('already') && !message.includes('enabled')) {
+      if (message.includes('already') || message.includes('enabled')) {
+        // Already enabled (e.g. provider re-mount) — still need to push current metadata
+        isInitializedRef.current = true;
+        setIsInitialized(true);
+        console.log('[MediaControls] Already enabled, pushing current metadata');
+        await pushMetadataAndState();
+        setTimeout(() => { void pushMetadataAndState(); }, 600);
+      } else {
         console.warn('[MediaControls] Init error:', message);
+        isInitializedRef.current = true;
       }
-      isInitialized = true;
     }
-  })();
+  }, [pushMetadataAndState]);
 
-  return initializationPromise;
-}
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Setup command listener
+  // ─────────────────────────────────────────────────────────────────────────────
+  const setupCommandListener = useCallback(() => {
+    if (commandListenerRemoverRef.current) return;
+    if (!isMediaControlAvailable() || typeof MediaControl.addListener !== 'function') return;
 
-function setupCommandListener(): void {
-  if (commandListenerRemover) return;
-  if (!isMediaControlAvailable() || typeof MediaControl.addListener !== 'function') return;
+    console.log('[MediaControls] Setting up command listener');
 
-  console.log('[MediaControls] Setting up command listener');
+    commandListenerRemoverRef.current = MediaControl.addListener((event: MediaControlEvent) => {
+      const currentProps = propsRef.current;
 
-  commandListenerRemover = MediaControl.addListener((event: MediaControlEvent) => {
-    if (!currentProps) return;
-    const current = currentProps;
+      switch (event.command) {
+        case Command.PLAY:
+          currentProps.onPlay();
+          break;
 
-    switch (event.command) {
-      case Command.PLAY:
-        current.onPlay();
-        break;
+        case Command.PAUSE:
+          currentProps.onPause();
+          break;
 
-      case Command.PAUSE:
-        current.onPause();
-        break;
+        case Command.NEXT_TRACK:
+          void currentProps.onSkipNext();
+          break;
 
-      case Command.NEXT_TRACK:
-        void current.onSkipNext();
-        break;
+        case Command.PREVIOUS_TRACK:
+          void currentProps.onSkipPrevious();
+          break;
 
-      case Command.PREVIOUS_TRACK:
-        void current.onSkipPrevious();
-        break;
+        case Command.SEEK: {
+          const nextPosition = event.data?.position;
+          if (typeof nextPosition === 'number' && Number.isFinite(nextPosition) && nextPosition >= 0) {
+            const maxDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
+            const clamped = maxDuration > 0 ? Math.min(nextPosition, maxDuration) : nextPosition;
 
-      case Command.SEEK: {
-        const nextPosition = event.data?.position;
-        if (typeof nextPosition === 'number' && Number.isFinite(nextPosition) && nextPosition >= 0) {
-          const maxDuration = safeDuration(current.duration, current.track?.duration);
-          const clamped = maxDuration > 0 ? Math.min(nextPosition, maxDuration) : nextPosition;
+            currentProps.onSeek(clamped);
 
-          current.onSeek(clamped);
-
-          void safeMediaCall(async () => {
-            await MediaControl.updatePlaybackState(
-              playbackStateFor(current.isPlaying),
-              clamped,
-              current.isPlaying ? 1.0 : 0.0,
-            );
-          });
+            void safeMediaCall(async () => {
+              await MediaControl.updatePlaybackState(
+                playbackStateFor(currentProps.isPlaying),
+                clamped,
+                currentProps.isPlaying ? 1.0 : 0.0,
+              );
+            });
+          }
+          break;
         }
-        break;
+
+        case Command.STOP:
+          currentProps.onPause();
+          break;
+
+        default:
+          break;
       }
+    });
+  }, []);
 
-      case Command.STOP:
-        current.onPause();
-        break;
-
-      default:
-        break;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Start/stop progress interval
+  // ─────────────────────────────────────────────────────────────────────────────
+  const startProgressInterval = useCallback(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
     }
-  });
-}
 
-function startProgressInterval(): void {
-  if (progressInterval) {
-    clearInterval(progressInterval);
-    progressInterval = null;
-  }
+    progressIntervalRef.current = setInterval(() => {
+      const currentProps = propsRef.current;
+      
+      if (!isInitializedRef.current || !currentProps.track) return;
+      
+      const activeDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
+      if (activeDuration <= 0) return;
+      
+      const elapsedTime = safePosition(currentProps.position);
+      const activePlaying = currentProps.isPlaying;
+      
+      void safeMediaCall(async () => {
+        await MediaControl.updatePlaybackState(
+          playbackStateFor(activePlaying),
+          elapsedTime,
+          activePlaying ? 1.0 : 0.0,
+        );
+      });
+    }, LOCK_SCREEN_UPDATE_INTERVAL_MS);
+  }, []);
 
-  progressInterval = setInterval(() => {
-    if (!isInitialized || !currentProps || !currentProps.track) return;
+  const stopProgressInterval = useCallback(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Cleanup function
+  // ─────────────────────────────────────────────────────────────────────────────
+  const cleanup = useCallback(() => {
+    if (commandListenerRemoverRef.current) {
+      try {
+        commandListenerRemoverRef.current();
+      } catch {}
+      commandListenerRemoverRef.current = null;
+    }
     
-    const activeDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
-    // Skip progress updates if duration is still 0
-    if (activeDuration <= 0) return;
+    stopProgressInterval();
     
-    const elapsedTime = safePosition(currentProps.position);
-    const activePlaying = currentProps.isPlaying;
+    if (metadataRetryTimeoutRef.current) {
+      clearTimeout(metadataRetryTimeoutRef.current);
+      metadataRetryTimeoutRef.current = null;
+    }
     
-    void safeMediaCall(async () => {
-      await MediaControl.updatePlaybackState(
-        playbackStateFor(activePlaying),
-        elapsedTime,
-        activePlaying ? 1.0 : 0.0,
-      );
-    });
-  }, LOCK_SCREEN_UPDATE_INTERVAL_MS);
-}
+    if (isMediaControlAvailable() && isInitializedRef.current) {
+      void safeMediaCall(async () => {
+        await MediaControl.disableMediaControls();
+      });
+    }
+    
+    isInitializedRef.current = false;
+    setIsInitialized(false);
+    lastMetadataHashRef.current = '';
+    lastMetadataPushTimeRef.current = 0;
+    metadataRetryCountRef.current = 0;
+  }, [stopProgressInterval]);
 
-function stopProgressInterval(): void {
-  if (progressInterval) {
-    clearInterval(progressInterval);
-    progressInterval = null;
-  }
-}
-
-function cleanupMediaControls(): void {
-  if (commandListenerRemover) {
-    try {
-      commandListenerRemover();
-    } catch {}
-    commandListenerRemover = null;
-  }
-  stopProgressInterval();
-  
-  if (metadataRetryTimeout) {
-    clearTimeout(metadataRetryTimeout);
-    metadataRetryTimeout = null;
-  }
-  
-  if (isMediaControlAvailable() && isInitialized) {
-    void safeMediaCall(async () => {
-      await MediaControl.disableMediaControls();
-    });
-  }
-  isInitialized = false;
-  initializationPromise = null;
-  lastMetadataHash = '';
-  lastMetadataPushTime = 0;
-  metadataRetryCount = 0;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN HOOK
-// ─────────────────────────────────────────────────────────────────────────────
-export function useSystemMediaControls(props: SystemMediaControlsProps): void {
-  // Update currentProps reference
-  currentProps = props;
-
-  // Single initialization effect - runs once
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Load fallback artwork
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    getFallbackArtworkUri();
+    getFallbackArtworkUri().then(uri => {
+      fallbackUriRef.current = uri;
+    });
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Initialize on mount, cleanup on unmount
+  // ─────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
     initializeMediaControls();
     setupCommandListener();
     startProgressInterval();
 
     return () => {
-      // Only cleanup if this is the last instance
-      cleanupMediaControls();
+      cleanup();
     };
-  }, []); // Empty dependency array - runs once
+  }, [initializeMediaControls, setupCommandListener, startProgressInterval, cleanup]);
 
-  // Reset metadata hash when track changes (so new metadata pushes through)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Reset metadata hash when track changes
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    lastMetadataHash = '';
-    lastMetadataPushTime = 0;
-    metadataRetryCount = 0;
-    if (metadataRetryTimeout) {
-      clearTimeout(metadataRetryTimeout);
-      metadataRetryTimeout = null;
+    lastMetadataHashRef.current = '';
+    lastMetadataPushTimeRef.current = 0;
+    metadataRetryCountRef.current = 0;
+    if (metadataRetryTimeoutRef.current) {
+      clearTimeout(metadataRetryTimeoutRef.current);
+      metadataRetryTimeoutRef.current = null;
     }
   }, [props.track?.title, props.track?.artist, props.track?.videoId]);
 
-  // Duration sync effect - only push when duration becomes valid (>0)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Post-init push — fires once when initialization completes, guaranteeing the
+  // lock screen shows the currently-playing track even if all other useEffects
+  // already fired before isInitializedRef was set (race condition guard).
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isInitialized || !props.track) return;
+    const durationValue = safeDuration(props.duration, props.track?.duration);
+    if (durationValue > 0) {
+      void pushMetadataAndState();
+    }
+    // Only runs when isInitialized flips to true — intentionally narrow deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInitialized]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Duration sync effect - only push when duration becomes valid (>0)
+  // ─────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isInitializedRef.current || !props.track) return;
     
     const durationValue = safeDuration(props.duration, props.track?.duration);
-    // Only push if we have a valid duration
     if (durationValue > 0) {
-      void pushMetadataAndState(props);
+      void pushMetadataAndState();
     }
-  }, [props.duration, props.track?.duration]);
+  }, [props.duration, props.track?.duration, pushMetadataAndState]);
 
+  // ─────────────────────────────────────────────────────────────────────────────
   // Full metadata push on relevant changes (only when duration is valid)
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isInitialized || !props.track) return;
+    if (!isInitializedRef.current || !props.track) return;
     
     const activeDuration = safeDuration(props.duration, props.track?.duration);
-    // Skip if duration is still 0 (not loaded yet)
     if (activeDuration <= 0) return;
     
-    void pushMetadataAndState(props);
+    void pushMetadataAndState();
   }, [
     props.track?.title,
     props.track?.artist,
@@ -475,22 +520,27 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     props.track?.videoId,
     props.duration,
     props.isPlaying,
-    props.repeatMode,
+    // props.repeatMode intentionally excluded — not pushed to lock screen
+    pushMetadataAndState,
   ]);
 
+  // ─────────────────────────────────────────────────────────────────────────────
   // App background handler
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'background') return;
-      if (!isInitialized || !props.track) return;
+      
+      const currentProps = propsRef.current;
+      
+      if (!isInitializedRef.current || !currentProps.track) return;
 
-      const activeDuration = safeDuration(props.duration, props.track?.duration);
-      // Skip if duration not loaded
+      const activeDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
       if (activeDuration <= 0) return;
 
-      const elapsedTime = safePosition(props.position);
-      const activePlaying = props.isPlaying;
-      const artworkUri = buildArtworkUri(props.track);
+      const elapsedTime = safePosition(currentProps.position);
+      const activePlaying = currentProps.isPlaying;
+      const artworkUri = buildArtworkUri(currentProps.track, fallbackUriRef.current);
 
       void safeMediaCall(async () => {
         await MediaControl.updatePlaybackState(
@@ -504,27 +554,29 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
         await MediaControl.updateMetadata({
           duration: activeDuration,
           elapsedTime,
-          title: props.track?.title || 'Unknown Title',
-          artist: props.track?.artist || 'Unknown Artist',
+          title: currentProps.track?.title || 'Unknown Title',
+          artist: currentProps.track?.artist || 'Unknown Artist',
           ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
         });
       });
 
-      props.onAppBackground();
+      currentProps.onAppBackground();
     });
 
     return () => sub.remove();
-  }, [props.onAppBackground, props.track]);
+  }, []);
 
+  // ─────────────────────────────────────────────────────────────────────────────
   // App foreground handler
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'active') return;
-      props.onAppForeground();
+      propsRef.current.onAppForeground();
     });
 
     return () => sub.remove();
-  }, [props.onAppForeground]);
+  }, []);
 }
 
 export default useSystemMediaControls;

@@ -51,17 +51,25 @@ import { Image } from 'expo-image';
 import { initializeLibrary } from '@/store/library';
 import {
   MusicPlayerProvider,
+  useMusicPlayer,
+} from '@/libs/playerSetup';
+import {
   GestureContext,
   useGestureContext,
-  useMusicPlayer,
   type GestureContextValue,
-} from '@/libs/playerSetup';
+} from '@/libs/gestureContext';
 import { LyricsProvider, LyricsFetcher } from '@/hooks/useLyricsContext';
 import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AlertProvider } from '@/contexts/AlertContext';
 import { UpdateModal } from '@/components/UpdateModal';
-import { MessageModal } from '@/components/MessageModal';
+// MessageModal imports @react-native-firebase/firestore at module level.
+// Lazy-loading it prevents a Firebase native-module crash from killing the
+// entire _layout.tsx default export (which would show the "missing default
+// export" Expo Router warning and break the whole navigation tree).
+const MessageModal = React.lazy(() =>
+  import('@/components/MessageModal').then((m) => ({ default: m.MessageModal }))
+);
 import PremiumBanner from '@/components/ads/banner/premium';
 import { HomePreloader } from '@/components/HomePreloader';
 import { SearchPreloader } from '@/components/SearchPreloader';
@@ -73,6 +81,12 @@ import {
 } from '@/components/EarningsConsentGate';
 import { triggerHaptic } from '@/helpers/haptics';
 import PlayerContent from '@/components/player/playerContent';
+// ↑ This import MUST remain here (not lazy). playerContent.tsx registers the
+//   module-level master player singleton (setMasterPlayer) at evaluation time.
+//   MusicPlayerContext's restore IIFE polls for masterPlayerRef for 5 seconds —
+//   if playerContent hasn't been evaluated by then, restore fails silently.
+//   Keeping this import at the top of _layout ensures the singleton is registered
+//   before the restore polling window expires.
 import { useImmersiveMode } from '@/hooks/useImmersiveMode';
 import FloatingPlayer from '@/components/FloatingPlayer';
 import { initLocalDatabase } from '@/db/localDatabase';
@@ -82,6 +96,7 @@ import {
   PlayerOverlayProvider,
   usePlayerOverlay,
 } from '@/libs/playerOverlay';
+import { useSystemMediaControls } from '@/hooks/useSystemMediaControls';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANDROID LOG SUPPRESSION
@@ -312,7 +327,31 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
 
 function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
   const { playerMode, expandPlayer, collapsePlayer, isPlayerVisible, showPlayer } = usePlayerOverlay();
-  const { setPlayerOverlayRefs, currentTrack } = useMusicPlayer();
+
+  // useMusicPlayer throws if rendered outside MusicPlayerProvider.
+  // This guard makes PlayerOverlayWrapper safe during error-boundary recovery
+  // or any render that precedes the provider tree being fully established.
+  let musicPlayer;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    musicPlayer = useMusicPlayer();
+  } catch {
+    // Provider not yet mounted — render children only, no overlay
+    return <>{children}</>;
+  }
+
+  const {
+    setPlayerOverlayRefs,
+    currentTrack,
+    isPlaying,
+    isBuffering,
+    position,
+    duration,
+    togglePlayPause,
+    skipToNext,
+    skipToPrevious,
+    seekTo,
+  } = musicPlayer;
 
   // Register overlay functions with MusicPlayerContext
   useEffect(() => {
@@ -321,12 +360,53 @@ function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
     }
   }, [setPlayerOverlayRefs, expandPlayer, collapsePlayer]);
 
-  // Auto-show mini-player when a track is loaded and player is hidden
+  // Auto-show mini-player when a track is loaded and player is hidden.
+  // Uses a small delay on mount so the module-level restore has time to sync
+  // React state before this effect evaluates on the first render.
+  const didMountRef = React.useRef(false);
   useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      // On first mount, wait one tick so the restore sync useEffect in
+      // MusicPlayerProvider (also a [] effect) has run and set currentTrack.
+      const t = setTimeout(() => {
+        if (currentTrack && !isPlayerVisible) showPlayer();
+      }, 0);
+      return () => clearTimeout(t);
+    }
     if (currentTrack && !isPlayerVisible) {
       showPlayer();
     }
   }, [currentTrack, isPlayerVisible, showPlayer]);
+
+  // ── Lock screen / notification media controls ──────────────────────────────
+  useSystemMediaControls({
+    track: currentTrack
+      ? {
+          title: currentTrack.title,
+          artist: currentTrack.artist ?? 'Unknown Artist',
+          artwork: currentTrack.thumbnail,
+          videoId: currentTrack.videoId,
+          duration: currentTrack.duration,
+        }
+      : undefined,
+    isPlaying,
+    isBuffering,
+    position,
+    duration,
+    onPlay: () => {
+      try { (global as any).__mavinMasterPlay?.(); } catch {}
+    },
+    onPause: () => {
+      try { (global as any).__mavinMasterPause?.(); } catch {}
+    },
+    onSkipNext: skipToNext,
+    onSkipPrevious: skipToPrevious,
+    onSeek: seekTo,
+    onExpandPlayer: expandPlayer,
+    onAppBackground: () => {},
+    onAppForeground: () => {},
+  });
 
   return (
     <>
@@ -495,7 +575,9 @@ function AppShell({
 
       <LyricsFetcher />
       <UpdateModal />
-      <MessageModal />
+      <React.Suspense fallback={null}>
+        <MessageModal />
+      </React.Suspense>
     </View>
   );
 }

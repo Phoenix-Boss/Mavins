@@ -1,10 +1,11 @@
 // components/player/PlayerControls.tsx
 //
 // INDUSTRY STANDARD DUAL-MODE ARCHITECTURE
-// - Uses PlayerEngineContext for audio playback (expo-audio)
-// - Real-time state with useAudioPlayerStatus for accurate play/pause icon
+// - Uses PlayerEngineContext for audio playback
+// - Real-time state with responsive playback hook for accurate play/pause icon
 // - Horizontal scrolling action row for unlimited icons
 // - Share functionality, Download, Comments count display
+// - Optimistic UI updates with sync verification
 
 import { Colors } from "@/constants/Colors";
 import { unknownTrackImageUri } from "@/constants/images";
@@ -12,7 +13,6 @@ import { triggerHaptic } from "@/helpers/haptics";
 import { downloadAndSaveSong } from "@/services/download";
 import { useIsSongDownloaded, useIsSongDownloading } from "@/store/library";
 import { useMusicPlayer, usePlayerEngine } from "@/libs/playerSetup";
-import { usePlayerStore } from "@/store/player";
 import { MaterialCommunityIcons, MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { ComponentProps, useCallback, useEffect, useRef, useState } from "react";
@@ -27,10 +27,12 @@ import {
   ScrollView,
   Share,
   Platform,
+  Text,
 } from "react-native";
 import { moderateScale, scale, verticalScale } from "react-native-size-matters/extend";
 import { match } from "ts-pattern";
-import { useAudioPlayerStatus } from "expo-audio";
+
+import useResponsivePlayback from "@/hooks/useResponsivePlayback";
 
 type RepeatMode = "off" | "queue" | "track";
 
@@ -81,68 +83,124 @@ export const ReducedPlayerControls = ({ style, onBeforeSkip }: PlayerControlsPro
 );
 
 // ─── PlayPauseButton ─────────────────────────────────────────────────────────
+// Enhanced with responsive playback for instant UI feedback
 
 export const PlayPauseButton = ({
   style,
   iconSize = moderateScale(65),
   isFloatingPlayer = false,
 }: PlayerButtonProps) => {
-  const { togglePlayPause } = useMusicPlayer();
+  const { togglePlayPause, isPlaying: actualPlaying, position, duration, isBuffering: contextBuffering } = useMusicPlayer();
+  const engine = usePlayerEngine();
   
-  const [audioPlayer, setAudioPlayer] = useState<any>(null);
+  // Get master player instance for direct state queries
+  const getActualState = useCallback(() => {
+    const master = (global as any).__MavinAudioPlayer__;
+    return {
+      playing: master?.playing ?? actualPlaying,
+      position: master?.currentTime ?? position,
+      duration: master?.duration ?? duration,
+      buffering: master?.isBuffering ?? contextBuffering,
+    };
+  }, [actualPlaying, position, duration, contextBuffering]);
   
+  // Use the responsive playback hook
+  const {
+    uiPlaying,
+    isSyncing,
+    needsSync,
+    setPlaying,
+    forceSync,
+    resetSync,
+  } = useResponsivePlayback({
+    actualPlaying: actualPlaying,
+    actualPosition: position,
+    actualDuration: duration,
+    actualBuffering: contextBuffering,
+    onPlay: () => {
+      engine.play();
+      togglePlayPause();
+    },
+    onPause: () => {
+      engine.pause();
+      togglePlayPause();
+    },
+    onSeek: (pos) => {
+      engine.seekTo(pos);
+    },
+    syncDelayMs: 500,
+    positionDriftThreshold: 0.3,
+    syncIntervalMs: 2000,
+    enablePositionDriftCorrection: true,
+    onSyncNeeded: () => {
+      console.log('[PlayPauseButton] Sync needed - correcting UI');
+    },
+    onSyncComplete: () => {
+      console.log('[PlayPauseButton] Sync complete');
+    },
+    onDriftDetected: (drift) => {
+      console.log(`[PlayPauseButton] Position drift detected: ${drift.toFixed(3)}s`);
+    },
+  });
+  
+  // Reset sync when track changes
   useEffect(() => {
-    const globalPlayer = (global as any).__MavinAudioPlayer__;
-    setAudioPlayer(globalPlayer);
-  }, []);
+    resetSync();
+  }, [engine.currentTrack?.id, resetSync]);
   
-  const status = useAudioPlayerStatus(audioPlayer);
-  const isActuallyPlaying = status?.playing ?? false;
+  // Force sync when app comes to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        forceSync();
+      }
+    });
+    return () => subscription.remove();
+  }, [forceSync]);
   
-  const [optimisticPlaying, setOptimisticPlaying] = useState<boolean | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  const displayPlaying = optimisticPlaying !== null ? optimisticPlaying : isActuallyPlaying;
-
+  // Handle play/pause press
   const handlePress = useCallback(() => {
     triggerHaptic();
-    setOptimisticPlaying(!displayPlaying);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      setOptimisticPlaying(null);
-    }, 500);
-    togglePlayPause();
-  }, [displayPlaying, togglePlayPause]);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
+    const newPlayingState = !uiPlaying;
+    setPlaying(newPlayingState);
+  }, [uiPlaying, setPlaying]);
+  
+  // Determine if we should show loading state
+  const showLoading = contextBuffering && !actualPlaying && duration === 0;
+  
+  // Determine icon name based on state
+  const getIconName = () => {
+    if (showLoading) return 'hourglass-empty';
+    return uiPlaying ? 'pause' : 'play-arrow';
+  };
+  
   return (
     <TouchableOpacity
       activeOpacity={0.8}
       style={[
-        isFloatingPlayer
-          ? { height: iconSize }
-          : {
-              height: iconSize,
-              width: iconSize,
-              borderRadius: displayPlaying ? iconSize * 0.35 : iconSize / 2,
-              backgroundColor: "#fff",
-              alignItems: "center",
-              justifyContent: "center",
-            },
+        !isFloatingPlayer && {
+          height: iconSize,
+          width: iconSize,
+          borderRadius: uiPlaying ? iconSize * 0.35 : iconSize / 2,
+          backgroundColor: "#fff",
+          alignItems: "center",
+          justifyContent: "center",
+        },
+        isFloatingPlayer && { height: iconSize },
         style,
       ]}
       onPress={handlePress}
+      disabled={showLoading}
     >
-      <MaterialIcons
-        name={displayPlaying ? "pause" : "play-arrow"}
-        size={isFloatingPlayer ? iconSize : iconSize * 0.65}
-        color={isFloatingPlayer ? "#fff" : "#000"}
-      />
+      {showLoading ? (
+        <ActivityIndicator size={iconSize * 0.5} color={isFloatingPlayer ? "#fff" : "#000"} />
+      ) : (
+        <MaterialIcons
+          name={getIconName() as any}
+          size={isFloatingPlayer ? iconSize : iconSize * 0.65}
+          color={isFloatingPlayer ? "#fff" : "#000"}
+        />
+      )}
     </TouchableOpacity>
   );
 };
@@ -214,26 +272,26 @@ export const AddToPlaylistButton = ({ iconSize = moderateScale(30) }) => {
   const engine = usePlayerEngine();
   const activeTrack = engine.currentTrack;
 
+  const handlePress = useCallback(async () => {
+    triggerHaptic();
+    await router.push({
+      pathname: "/(modals)/addToPlaylist",
+      params: activeTrack
+        ? {
+            track: JSON.stringify({
+              id: activeTrack.id,
+              title: activeTrack.title || "",
+              artist: activeTrack.artist || "",
+              thumbnail: activeTrack.thumbnail || unknownTrackImageUri,
+            }),
+          }
+        : undefined,
+    });
+  }, [router, activeTrack]);
+
   return (
     <View>
-      <TouchableOpacity
-        onPress={async () => {
-          triggerHaptic();
-          await router.push({
-            pathname: "/(modals)/addToPlaylist",
-            params: activeTrack
-              ? {
-                  track: JSON.stringify({
-                    id: activeTrack.id,
-                    title: activeTrack.title || "",
-                    artist: activeTrack.artist || "",
-                    thumbnail: activeTrack.thumbnail || unknownTrackImageUri,
-                  }),
-                }
-              : undefined,
-          });
-        }}
-      >
+      <TouchableOpacity onPress={handlePress}>
         <MaterialIcons name="playlist-add" size={iconSize} color={Colors.text} />
       </TouchableOpacity>
     </View>
@@ -267,6 +325,8 @@ export const DownloadSongButton = ({
       thumbnailUrl: activeTrack.thumbnail,
     });
   }, [activeTrack, downloaded, downloading]);
+
+  if (!activeTrack) return null;
 
   return (
     <View style={style}>
@@ -637,6 +697,7 @@ const styles = StyleSheet.create({
   },
   viewCountItem: {
     flexDirection: "row",
+    alignItems: "center",
     gap: scale(4),
     backgroundColor: "rgba(255,255,255,0.1)",
     paddingHorizontal: scale(10),

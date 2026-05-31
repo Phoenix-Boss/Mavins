@@ -12,7 +12,8 @@
 // IMPORTANT: All components and screens should import from this file only.
 // Do NOT import directly from MusicPlayerContext.tsx or preload.ts.
 
-import { createContext, useContext } from 'react';
+// GestureContext lives in its own file to avoid circular dependencies.
+// playerSetup re-exports it here so existing consumers don't need to change.
 import { type SharedValue } from 'react-native-reanimated';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,10 +37,10 @@ import {
   storeTrackExtras,
   MusicPlayerProvider,
   setMasterPlayer,
+  setPreferredStreamType,
   // SSL fast-path reset utility
   resetSSLFastPath,
   // Video state updaters (for components that need them)
-  type VideoPlayer,
 } from '@/components/MusicPlayerContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,8 +53,6 @@ import {
   cancelAllPreloads,
   getPreloadAbortSignal,
   getActivePreloadCount,
-  getResolvedCacheSize,
-  clearResolvedUrlCache,
   type PreloadSong,
 } from '@/libs/preload';
 
@@ -64,6 +63,11 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getCachedTrackExtrasSync } from '@/services/trackMetadataCache';
+import {
+  GestureContext,
+  useGestureContext,
+  type GestureContextValue,
+} from '@/libs/gestureContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // URI NORMALIZER — Shared utility for local file URIs
@@ -99,7 +103,6 @@ export type {
   MusicPlayerContextType,
   TrackExtras,
   ResolvedTrack,
-  VideoPlayer,
 };
 
 // Hooks and Context exports
@@ -112,6 +115,7 @@ export {
   storeTrackExtras,
   MusicPlayerProvider,
   setMasterPlayer,
+  setPreferredStreamType,
   resetSSLFastPath,
 };
 
@@ -126,30 +130,17 @@ export {
   cancelAllPreloads,
   getPreloadAbortSignal,
   getActivePreloadCount,
-  getResolvedCacheSize,
-  clearResolvedUrlCache,
   type PreloadSong,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GestureContext — lives here because it is owned by _layout.tsx,
-// not by the player engine. No circular dep risk.
+// GestureContext — re-exported from libs/gestureContext for backward compat.
+// The actual definition lives in gestureContext.tsx to prevent the circular dep:
+//   FloatingPlayer → playerSetup → MusicPlayerContext → ... → FloatingPlayer
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface GestureContextValue {
-  setSliderActive: (active: boolean) => void;
-  setButtonActive: (active: boolean) => void;
-  isGestureBlocked: () => boolean;
-  gestureBlockedSV: SharedValue<boolean>;
-}
-
-export const GestureContext = createContext<GestureContextValue | null>(null);
-
-export const useGestureContext = (): GestureContextValue => {
-  const ctx = useContext(GestureContext);
-  if (!ctx) throw new Error('useGestureContext must be used within GestureContext.Provider');
-  return ctx;
-};
+export type { GestureContextValue };
+export { GestureContext, useGestureContext };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper functions for expandPlayer registration
@@ -567,4 +558,38 @@ export function isAudioPlaying(): boolean {
   } catch (e) {
     return false;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Get current preferred stream type
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get the current preferred stream type (audio or video).
+ * This is used for tab-aware queue navigation.
+ */
+export function getPreferredStreamType(): 'audio' | 'video' {
+  try {
+    const masterState = getMasterPlayerState();
+    // This value is stored in the session within MusicPlayerContext
+    // We can access it via global or default to 'audio'
+    const globalPref = (global as any).__MavinPreferredStreamType;
+    return globalPref === 'video' ? 'video' : 'audio';
+  } catch (e) {
+    return 'audio';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Update preferred stream type with global sync
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Update the preferred stream type and sync to global.
+ * This ensures consistency across all components.
+ */
+export function updatePreferredStreamType(type: 'audio' | 'video'): void {
+  (global as any).__MavinPreferredStreamType = type;
+  setPreferredStreamType(type);
+  console.log(`[PlayerSetup] Preferred stream type updated to: ${type}`);
 }
