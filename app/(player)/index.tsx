@@ -94,15 +94,15 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
     <View style={styles.quickActionsContainer}>
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleContainer}>
-          <Ionicons name="time-outline" size={20} color={colors.gold} />
+          <Ionicons name="time-outline" size={20} color={colors.metallicBrown.primary} />
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
         </View>
         <View style={styles.sectionActions}>
           <TouchableOpacity onPress={handleClearAll} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: colors.textSub }]}>Clear</Text>
+            <Text style={[styles.headerButtonText, { color: colors.textMuted }]}>Clear</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={handleSeeAll}>
-            <Text style={[styles.seeAllText, { color: colors.gold }]}>See All</Text>
+            <Text style={[styles.seeAllText, { color: colors.metallicBrown.primary }]}>See All</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -123,11 +123,11 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
           <Text style={[styles.singleQuickActionTitle, { color: colors.text }]} numberOfLines={1}>
             {firstSong.title}
           </Text>
-          <Text style={[styles.singleQuickActionArtist, { color: colors.textSub }]} numberOfLines={1}>
+          <Text style={[styles.singleQuickActionArtist, { color: colors.textMuted }]} numberOfLines={1}>
             {firstSong.artist}
           </Text>
         </View>
-        <Ionicons name="play-circle" size={32} color={colors.gold} style={styles.singleQuickActionPlay} />
+        <Ionicons name="play-circle" size={32} color={colors.metallicBrown.primary} style={styles.singleQuickActionPlay} />
       </TouchableOpacity>
     </View>
   );
@@ -317,14 +317,14 @@ export default function HomeScreen() {
               styles.searchContainer,
               {
                 backgroundColor: colors.surfaceRaised,
-                borderColor: `${colors.gold}40`,
+                borderColor: `${colors.metallicBrown.primary}40`,
                 borderWidth: 1,
               }
             ]}
             onPress={handleSearchPress}
             activeOpacity={0.7}
           >
-            <Ionicons name="search" size={20} color={colors.gold} style={styles.searchIcon} />
+            <Ionicons name="search" size={20} color={colors.metallicBrown.primary} style={styles.searchIcon} />
             <Text style={[styles.searchPlaceholderText, { color: colors.textMuted }]}>
               Search music, artists, albums...
             </Text>
@@ -335,7 +335,7 @@ export default function HomeScreen() {
               style={styles.iconButton}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="notifications-outline" size={24} color={colors.gold} />
+              <Ionicons name="notifications-outline" size={24} color={colors.metallicBrown.primary} />
             </TouchableOpacity>
           </View>
         </View>
@@ -348,7 +348,7 @@ export default function HomeScreen() {
     return (
       <View style={[styles.container, { backgroundColor: colors?.background || '#000000' }]}>
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors?.gold || '#D4AF37'} />
+          <ActivityIndicator size="large" color={colors?.metallicBrown?.primary || '#D4AF37'} />
         </View>
       </View>
     );
@@ -378,8 +378,8 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={[colors.gold]}
-            tintColor={colors.gold}
+            colors={[colors.metallicBrown.primary]}
+            tintColor={colors.metallicBrown.primary}
           />
         }
         contentContainerStyle={styles.scrollContent}

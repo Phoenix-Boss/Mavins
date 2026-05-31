@@ -12,6 +12,7 @@
 // FIXED: Skip metadata updates when duration is 0 to prevent showing "0:00" on lock screen
 // FIXED: Wait for valid duration before pushing metadata to native
 // FIXED: Single source of truth from master player
+// FIXED: Route lock screen controls through context functions instead of global shortcuts
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus, Image } from 'react-native';
@@ -42,16 +43,14 @@ export interface SystemMediaControlsProps {
   isBuffering: boolean;
   position: number;
   duration: number;
-  // Control callbacks
+  
+  // Control callbacks - these should come from context (togglePlayPause, skipToNext, skipToPrevious)
   onPlay: () => void;
   onPause: () => void;
   onSkipNext: () => Promise<void>;
   onSkipPrevious: () => Promise<void>;
   onSeek: (positionSec: number) => void;
   onExpandPlayer: () => void;
-  // repeatMode and onSetRepeatMode intentionally removed: Android lock screen controls
-  // do not support a repeat button via expo-media-control. The 'repeat-off' string
-  // was being passed as a Material icon name, causing "not a valid icon name" warnings.
 
   // App lifecycle callbacks
   onAppBackground: () => void;
@@ -169,9 +168,6 @@ function generateMetadataHash(props: SystemMediaControlsProps, fallbackUri?: str
     elapsedTime: activePosition,
     isPlaying: props.isPlaying,
     artwork: artworkUri,
-    // repeatMode intentionally excluded: expo-media-control does not support a repeat
-    // button on the Android lock screen. Including it caused 'repeat-off' to be passed
-    // as a Material icon name, producing the "not a valid icon name" warning.
   });
 }
 
@@ -295,8 +291,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
       console.log('[MediaControls] Initialized successfully');
       
       // Push immediately, then again after a short delay to handle the race where
-      // duration arrives before isInitializedRef is set (so the duration useEffect
-      // fired early and returned without pushing).
+      // duration arrives before isInitializedRef is set
       await pushMetadataAndState();
       setTimeout(() => { void pushMetadataAndState(); }, 600);
     } catch (error: any) {
@@ -316,7 +311,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
   }, [pushMetadataAndState]);
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Setup command listener
+  // Setup command listener - Routes through context functions, not global shortcuts
   // ─────────────────────────────────────────────────────────────────────────────
   const setupCommandListener = useCallback(() => {
     if (commandListenerRemoverRef.current) return;
@@ -329,18 +324,22 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
       switch (event.command) {
         case Command.PLAY:
+          // Use context's togglePlayPause via onPlay callback
           currentProps.onPlay();
           break;
 
         case Command.PAUSE:
+          // Use context's togglePlayPause via onPause callback
           currentProps.onPause();
           break;
 
         case Command.NEXT_TRACK:
+          // Use context's skipToNext via onSkipNext callback
           void currentProps.onSkipNext();
           break;
 
         case Command.PREVIOUS_TRACK:
+          // Use context's skipToPrevious via onSkipPrevious callback
           void currentProps.onSkipPrevious();
           break;
 
@@ -350,6 +349,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
             const maxDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
             const clamped = maxDuration > 0 ? Math.min(nextPosition, maxDuration) : nextPosition;
 
+            // Use context's seekTo via onSeek callback
             currentProps.onSeek(clamped);
 
             void safeMediaCall(async () => {
@@ -364,6 +364,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
         }
 
         case Command.STOP:
+          // Use context's togglePlayPause to pause
           currentProps.onPause();
           break;
 
@@ -477,9 +478,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
   }, [props.track?.title, props.track?.artist, props.track?.videoId]);
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Post-init push — fires once when initialization completes, guaranteeing the
-  // lock screen shows the currently-playing track even if all other useEffects
-  // already fired before isInitializedRef was set (race condition guard).
+  // Post-init push — fires once when initialization completes
   // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isInitialized || !props.track) return;
@@ -487,9 +486,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     if (durationValue > 0) {
       void pushMetadataAndState();
     }
-    // Only runs when isInitialized flips to true — intentionally narrow deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isInitialized]);
+  }, [isInitialized, props.track, props.duration, pushMetadataAndState]);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Duration sync effect - only push when duration becomes valid (>0)
@@ -520,7 +517,6 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
     props.track?.videoId,
     props.duration,
     props.isPlaying,
-    // props.repeatMode intentionally excluded — not pushed to lock screen
     pushMetadataAndState,
   ]);
 

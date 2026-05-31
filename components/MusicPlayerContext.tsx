@@ -17,6 +17,13 @@
 // FIXED: Enhanced retry logic for NewPipeExtractor v0.26.2
 // FIXED: Prevent multiple simultaneous skip operations
 // FIXED: Proper track end detection with debouncing
+// FIXED: Removed secondary end detection useEffect (dual-path race condition eliminated)
+// FIXED: didHandleFinish reset in seekTo and moduleLevelLoadAndPlay
+// FIXED: optimisticPlaying cleared on all failure paths
+// FIXED: togglePlayPause stale closure resolved
+// FIXED: Abort controller cleanup in removeFromQueue
+// FIXED: fetchRelatedSongs failure fallback with cache
+// FIXED: Shuffle correctness for newly appended tracks
 
 import React, {
   createContext,
@@ -27,7 +34,7 @@ import React, {
   useEffect,
   useState,
 } from 'react';
-import { AppState } from 'react-native';
+import { AppState, ToastAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
@@ -159,6 +166,8 @@ interface PlaybackSession {
   videoDuration: number;
   videoIsPlaying: boolean;
   preferredStreamType: 'audio' | 'video';
+  bufferedPosition: number;
+  sleepTimerEndsAt: number | null;
 }
 
 const session: PlaybackSession = {
@@ -189,6 +198,8 @@ const session: PlaybackSession = {
   videoDuration: 0,
   videoIsPlaying: false,
   preferredStreamType: 'audio',
+  bufferedPosition: 0,
+  sleepTimerEndsAt: null,
 };
 
 const sessionListeners = new Set<() => void>();
@@ -1156,12 +1167,15 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
   return null;
 };
 
+// Module-level cache for related songs fallback
+let lastRelatedSongsCache: Song[] = [];
+
 const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
   if (!songUrl) return [];
   try {
     const info = await MavinEngine.getStreamInfo(songUrl, 0);
     if (!info.success) return [];
-    return info.relatedItems
+    const related = info.relatedItems
       .filter((i): i is StreamInfoItem => i.type === 'stream')
       .filter(s => !s.isLive && !s.isShortFormContent)
       .slice(0, 20)
@@ -1179,6 +1193,10 @@ const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
           url: s.url, videoId: videoId ?? undefined,
         };
       });
+    if (related.length > 0) {
+      lastRelatedSongsCache = related;
+    }
+    return related;
   } catch {
     return [];
   }
@@ -1394,6 +1412,10 @@ export interface MusicPlayerContextType {
   setPlaybackRate: (rate: number) => Promise<void>;
   setVolume: (volume: number) => Promise<void>;
   setPreservePitch: (preserve: boolean) => Promise<void>;
+  setSleepTimer: (minutes: number) => void;
+  clearSleepTimer: () => void;
+  sleepTimerEndsAt: number | null;
+  bufferedPosition: number;
   notifyVideoTrackFinished: () => Promise<void>;
   /** @deprecated No-op kept for backward compatibility with Search screen */
   deactivateAudio: () => void;
@@ -1532,7 +1554,7 @@ initAppStateHandler();
 
     if (masterPlayerRef) {
       try {
-        await masterPlayerRef.replaceAsync(resolved.url);
+        await masterPlayerRef.replaceAsync({ uri: resolved.url, useCaching: true });
         if (savedPos > 5 && savedPos < (resolved.duration ?? Infinity)) {
           masterPlayerRef.currentTime = savedPos;
         }
@@ -1589,6 +1611,9 @@ let lastSkipTime = 0;
 const SKIP_DEBOUNCE_MS = 1000;
 
 async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = false): Promise<boolean> {
+  // CRITICAL: Reset didHandleFinish at the very top of every track load
+  session.didHandleFinish = false;
+  
   if (generation !== session.playGeneration) {
     console.log('[MusicPlayer] moduleLevelLoadAndPlay skipped (stale generation)');
     return false;
@@ -1596,7 +1621,7 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
 
   if (!song || !song.id || !song.url) {
     console.error('[MusicPlayer] Invalid track in moduleLevelLoadAndPlay');
-    setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Invalid track' });
+    setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Invalid track', optimisticPlaying: null });
     return false;
   }
 
@@ -1631,7 +1656,7 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       console.log(`[MusicPlayer] [Local] Direct playback: ${finalUrl.substring(0, 100)}...`);
       
       const master = getMasterPlayer();
-      await master.replaceAsync(finalUrl);
+      await master.replaceAsync({ uri: finalUrl, useCaching: true });
       
       releasePlaybackLock();
       await master.play();
@@ -1654,7 +1679,7 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
 
     if (!resolved || !resolved.url) {
       console.error(`[MusicPlayer] Failed to resolve track: "${enrichedSong.title}"`);
-      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to resolve stream' });
+      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to resolve stream', optimisticPlaying: null });
       return false;
     }
     finalUrl = resolved.url;
@@ -1669,8 +1694,16 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
     
     console.log('[MusicPlayer] Loading audio URL into master player...');
     try {
-      await master.replaceAsync(finalUrl);
-      console.log('[MusicPlayer] Master player.replace() done');
+      // Use VideoSource object with metadata for automatic Now Playing notification
+      await master.replaceAsync({ 
+        uri: finalUrl, 
+        useCaching: true,
+        metadata: {
+          title: enrichedSong.title,
+          artist: enrichedSong.artist || 'Unknown Artist',
+        }
+      });
+      console.log('[MusicPlayer] Master player.replace() done with metadata and caching');
     } catch (playError: any) {
       if (!isRetry && playError?.message?.includes('403')) {
         console.log('[MusicPlayer] 403 on first play, retrying with cache bypass');
@@ -1690,7 +1723,7 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
   } catch (error: any) {
     releasePlaybackLock();
     console.error(`[MusicPlayer] Error loading track: ${error?.message || error}`);
-    setSessionPartial({ isLoading: false, isResolving: false, lastError: error?.message || 'Unknown error' });
+    setSessionPartial({ isLoading: false, isResolving: false, lastError: error?.message || 'Unknown error', optimisticPlaying: null });
     return false;
   }
 }
@@ -1877,6 +1910,12 @@ function moduleLevelAddToQueue(songs: Song[]): void {
 
 function moduleLevelRemoveFromQueue(index: number): void {
   if (index < 0 || index >= session.queue.length) return;
+  
+  // Abort any in-flight background preload before modifying queue
+  session.bgAbortController?.abort();
+  const newAbortController = new AbortController();
+  setSession('bgAbortController', newAbortController);
+  
   updateQueue(prev => {
     const newQueue = [...prev];
     newQueue.splice(index, 1);
@@ -1941,6 +1980,38 @@ function releasePlaybackLock(): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SLEEP TIMER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setSleepTimer(minutes: number): void {
+  const endsAt = Date.now() + minutes * 60 * 1000;
+  setSession('sleepTimerEndsAt', endsAt);
+  console.log(`[MusicPlayer] Sleep timer set for ${minutes} minutes, ends at ${new Date(endsAt).toLocaleTimeString()}`);
+}
+
+function clearSleepTimer(): void {
+  setSession('sleepTimerEndsAt', null);
+  console.log('[MusicPlayer] Sleep timer cleared');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAYBACK RATE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function setPlaybackRate(rate: number): Promise<void> {
+  const clamped = Math.min(Math.max(rate, 0.25), 3.0);
+  try {
+    const master = getMasterPlayer();
+    master.playbackRate = clamped;
+    setSession('playbackRate', clamped);
+    await savePlaybackRate(clamped);
+    console.log(`[MusicPlayer] Playback rate set to ${clamped}`);
+  } catch (e) {
+    console.warn('[MusicPlayer] setPlaybackRate error:', e);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REACT PROVIDER
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1976,7 +2047,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             isBuffering: master.isBuffering ?? false,
           };
           setMasterState(prev => {
-            // Only update if something actually changed — prevents pointless re-renders
             if (
               prev.isPlaying === newState.isPlaying &&
               prev.isBuffering === newState.isBuffering &&
@@ -1988,15 +2058,26 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             return newState;
           });
 
-          // Update session directly WITHOUT calling notifySessionChange so we don't
-          // trigger a forceUpdate inside the interval (which caused "Maximum update
-          // depth exceeded").  These fields are only consumed as refs by the video
-          // layer and saved to AsyncStorage — they do not need to trigger a React render.
+          // Read buffered position from master
+          const buffered = master.bufferedPosition ?? 0;
+          if (buffered !== session.bufferedPosition) {
+            setSession('bufferedPosition', buffered);
+          }
+          
+          // Update session fields that don't need React renders
           if (newState.duration > 0 && session.videoDuration !== newState.duration) {
             session.videoDuration = newState.duration;
           }
           if (newState.position !== session.videoPosition) {
             session.videoPosition = newState.position;
+          }
+          
+          // Sleep timer check
+          if (session.sleepTimerEndsAt !== null && Date.now() >= session.sleepTimerEndsAt) {
+            console.log('[MusicPlayer] Sleep timer expired, pausing playback');
+            master.pause();
+            setSession('optimisticPlaying', false);
+            setSession('sleepTimerEndsAt', null);
           }
         }
       } catch (e) {}
@@ -2023,6 +2104,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const videoPosition = session.videoPosition;
   const videoDuration = session.videoDuration;
   const videoIsPlaying = session.videoIsPlaying;
+  const bufferedPosition = session.bufferedPosition;
+  const sleepTimerEndsAt = session.sleepTimerEndsAt;
 
   const isPlaying = optimisticPlaying !== null ? optimisticPlaying : masterState.isPlaying;
   const isBuffering = masterState.isBuffering;
@@ -2036,12 +2119,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   }, [masterState.isPlaying, optimisticPlaying]);
 
-  // Save track identity when it changes; position is saved on app background via AppState
   useEffect(() => {
     if (currentTrack && currentTrack.url) {
       saveLastPlayingState(currentTrack, masterState.position);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack]);
 
   useEffect(() => {
@@ -2096,17 +2177,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     delete g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY];
   }, []);
 
-  // Track end detection - only when actually at end
-  useEffect(() => {
-    if (!masterState.isPlaying && masterState.duration > 0 && 
-        masterState.position >= masterState.duration - 0.8 && !session.didHandleFinish) {
-      setSession('didHandleFinish', true);
-      console.log('[MusicPlayer] Track reached end, advancing queue');
-      moduleLevelSkipToNext();
-    } else if (masterState.isPlaying && masterState.position < masterState.duration - 1) {
-      setSession('didHandleFinish', false);
-    }
-  }, [masterState.isPlaying, masterState.position, masterState.duration]);
+  // NOTE: Secondary end detection useEffect has been REMOVED entirely.
+  // End detection is now handled exclusively by playerContent's statusChange listener
+  // watching for 'idle' status transition from 'readyToPlay'.
 
   const checkIsLocalTrack = useCallback((track?: Song | null): boolean => {
     return isLocalTrack(track);
@@ -2128,8 +2201,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setSession('videoIsPlaying', isPlaying);
   }, []);
 
-  // No-op kept for backward compatibility — Search used to call this to yield AudioFocus
-  // but the master-slave architecture handles focus automatically.
   const deactivateAudio = useCallback(() => {}, []);
 
   const notifyVideoTrackFinished = useCallback(async () => {
@@ -2139,15 +2210,178 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     await moduleLevelSkipToNext();
   }, []);
 
-  const setPlaybackRate = useCallback(async (rate: number) => {
-    const clamped = Math.min(Math.max(rate, 0.5), 16.0);
+  // FIXED: togglePlayPause reads masterPlayer.playing directly to avoid stale closure
+  const togglePlayPause = useCallback(() => {
+    if (!session.currentTrack) {
+      showAlert('Nothing to Play', 'Please select a song first.');
+      return;
+    }
+
     try {
       const master = getMasterPlayer();
-      master.playbackRate = clamped;
-      setSession('playbackRate', clamped);
-      await savePlaybackRate(clamped);
-    } catch (e) { console.warn('[MusicPlayer] setPlaybackRate error:', e); }
+      const isCurrentlyPlaying = master.playing ?? false;
+      const willBePlaying = !isCurrentlyPlaying;
+      setSession('optimisticPlaying', willBePlaying);
+
+      if (willBePlaying) {
+        master.play();
+        console.log('[MusicPlayer] Playing');
+      } else {
+        master.pause();
+        console.log('[MusicPlayer] Paused');
+      }
+    } catch (e) {
+      console.warn('[MusicPlayer] togglePlayPause error:', e);
+    }
+  }, [showAlert]);
+
+  // FIXED: seekTo resets didHandleFinish at the very top
+  const seekTo = useCallback((positionSec: number) => {
+    session.didHandleFinish = false;
+    try {
+      const master = getMasterPlayer();
+      master.currentTime = positionSec;
+      setSession('videoPosition', positionSec);
+    } catch (e: any) {
+      console.warn(`[MusicPlayer] seekTo error: ${e?.message || e}`);
+    }
   }, []);
+
+  const skipToNext = useCallback(async () => { await moduleLevelSkipToNext(); }, []);
+  const skipToPrevious = useCallback(async () => { await moduleLevelSkipToPrevious(); }, []);
+
+  const skipToIndex = useCallback(async (index: number) => {
+    await moduleLevelSkipToIndex(index);
+  }, []);
+
+  const setRepeatMode = useCallback((mode: RepeatMode) => {
+    setSession('repeatMode', mode);
+    saveRepeatMode(mode);
+    console.log(`[MusicPlayer] Repeat mode: ${mode}`);
+  }, []);
+
+  const setShuffleMode = useCallback((mode: ShuffleMode) => {
+    if (mode === 'on' && shuffleMode === 'off') {
+      if (queue.length > 0 && queueIndex >= 0) {
+        session.originalQueue = [...queue];
+        session.originalIndex = queueIndex;
+
+        const current = queue[queueIndex];
+        const before = queue.slice(0, queueIndex);
+        const after = queue.slice(queueIndex + 1);
+
+        const shuffledAfter = [...after];
+        for (let i = shuffledAfter.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffledAfter[i], shuffledAfter[j]] = [shuffledAfter[j], shuffledAfter[i]];
+        }
+
+        const shuffledBefore = [...before];
+        for (let i = shuffledBefore.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffledBefore[i], shuffledBefore[j]] = [shuffledBefore[j], shuffledBefore[i]];
+        }
+
+        const newQueue = [...shuffledBefore, current, ...shuffledAfter];
+        setSession('queue', newQueue);
+        setSession('queueIndex', shuffledBefore.length);
+      }
+    } else if (mode === 'off' && shuffleMode === 'on') {
+      if (session.originalQueue.length > 0 && session.currentTrack) {
+        const originalCurrentIndex = session.originalQueue.findIndex(s => s.id === session.currentTrack!.id);
+        setSession('queue', session.originalQueue);
+        setSession('queueIndex', originalCurrentIndex >= 0 ? originalCurrentIndex : 0);
+        session.originalQueue = [];
+        session.originalIndex = -1;
+      }
+    }
+
+    setSession('shuffleMode', mode);
+    saveShuffleMode(mode);
+    console.log(`[MusicPlayer] Shuffle mode: ${mode}`);
+  }, [shuffleMode, queue, queueIndex]);
+
+  const addToQueue = useCallback((songs: Song[]) => {
+    if (!songs?.length) return;
+    const enrichedSongs = ensureQueueMetadata(songs);
+    
+    // If shuffle is on, shuffle the new songs before appending
+    let songsToAdd = enrichedSongs;
+    if (session.shuffleMode === 'on' && enrichedSongs.length > 1) {
+      songsToAdd = [...enrichedSongs];
+      for (let i = songsToAdd.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [songsToAdd[i], songsToAdd[j]] = [songsToAdd[j], songsToAdd[i]];
+      }
+      console.log(`[MusicPlayer] Shuffled ${songsToAdd.length} newly appended songs`);
+    }
+    
+    const newQueue = [...session.queue, ...songsToAdd];
+    setSession('queue', newQueue);
+    console.log(`[MusicPlayer] Added ${songsToAdd.length} songs to queue`);
+  }, []);
+
+  const removeFromQueue = useCallback((index: number) => {
+    const currentQueue = session.queue;
+    if (index < 0 || index >= currentQueue.length) return;
+
+    // Abort any in-flight background preload before modifying queue
+    session.bgAbortController?.abort();
+    const newAbortController = new AbortController();
+    setSession('bgAbortController', newAbortController);
+
+    const newQueue = [...currentQueue];
+    newQueue.splice(index, 1);
+
+    let newQueueIndex = session.queueIndex;
+    if (index < session.queueIndex) {
+      newQueueIndex--;
+    } else if (index === session.queueIndex && newQueue.length > 0) {
+      newQueueIndex = Math.min(index, newQueue.length - 1);
+      if (newQueue[newQueueIndex]) {
+        moduleLevelLoadAndPlay(newQueue[newQueueIndex], ++session.playGeneration);
+      }
+    }
+
+    setSession('queue', newQueue);
+    setSession('queueIndex', newQueueIndex);
+    console.log(`[MusicPlayer] Removed from queue at index ${index}`);
+  }, []);
+
+  const moveQueueItem = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const currentQueue = session.queue;
+    if (fromIndex >= currentQueue.length || toIndex >= currentQueue.length) return;
+
+    const newQueue = [...currentQueue];
+    const [moved] = newQueue.splice(fromIndex, 1);
+    newQueue.splice(toIndex, 0, moved);
+
+    let newQueueIndex = session.queueIndex;
+    if (fromIndex === session.queueIndex) newQueueIndex = toIndex;
+    else if (fromIndex < session.queueIndex && toIndex >= session.queueIndex) newQueueIndex--;
+    else if (fromIndex > session.queueIndex && toIndex <= session.queueIndex) newQueueIndex++;
+
+    setSession('queue', newQueue);
+    setSession('queueIndex', newQueueIndex);
+    console.log(`[MusicPlayer] Moved queue item from ${fromIndex} to ${toIndex}`);
+  }, []);
+
+  const clearQueue = useCallback(() => {
+    setSession('queue', []);
+    setSession('queueIndex', -1);
+    session.originalQueue = [];
+    session.originalIndex = -1;
+    console.log('[MusicPlayer] Queue cleared');
+  }, []);
+
+  const setPlayerOverlayRefs = useCallback((expand: () => void, collapse: () => void) => {
+    expandPlayerRef.current = expand;
+    collapsePlayerRef.current = collapse;
+  }, []);
+
+  const expandPlayer = useCallback(() => expandPlayerRef.current?.(), []);
+  const collapsePlayer = useCallback(() => collapsePlayerRef.current?.(), []);
 
   const setVolume = useCallback(async (newVolume: number) => {
     const clamped = Math.min(Math.max(newVolume, 0.0), 1.0);
@@ -2249,11 +2483,53 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
                   const existingIds = new Set(currentQueue.map(s => s.id));
                   const newSongs = related.filter(s => !existingIds.has(s.id));
                   if (newSongs.length) {
-                    setSession('queue', [...currentQueue, ...newSongs]);
+                    // If shuffle is on, shuffle the new songs before adding
+                    let songsToAdd = newSongs;
+                    if (session.shuffleMode === 'on' && newSongs.length > 1) {
+                      songsToAdd = [...newSongs];
+                      for (let i = songsToAdd.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [songsToAdd[i], songsToAdd[j]] = [songsToAdd[j], songsToAdd[i]];
+                      }
+                    }
+                    setSession('queue', [...currentQueue, ...songsToAdd]);
+                  }
+                } else if (!newAbortController.signal.aborted && related.length === 0 && lastRelatedSongsCache.length > 0) {
+                  // Fallback to cached related songs
+                  const cachedFiltered = lastRelatedSongsCache.filter(s => s.id !== enrichedSong.id);
+                  if (cachedFiltered.length > 0) {
+                    let songsToAdd = cachedFiltered;
+                    if (session.shuffleMode === 'on' && cachedFiltered.length > 1) {
+                      songsToAdd = [...cachedFiltered];
+                      for (let i = songsToAdd.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [songsToAdd[i], songsToAdd[j]] = [songsToAdd[j], songsToAdd[i]];
+                      }
+                    }
+                    setSession('queue', [...session.queue, ...songsToAdd]);
+                    console.log('[MusicPlayer] Using cached related songs as fallback');
+                  } else {
+                    ToastAndroid.show('Autoplay unavailable', ToastAndroid.SHORT);
                   }
                 }
               })
-              .catch(() => {});
+              .catch(() => {
+                // Fallback to cached related songs on error
+                if (lastRelatedSongsCache.length > 0) {
+                  const cachedFiltered = lastRelatedSongsCache.filter(s => s.id !== enrichedSong.id);
+                  if (cachedFiltered.length > 0) {
+                    let songsToAdd = cachedFiltered;
+                    if (session.shuffleMode === 'on' && cachedFiltered.length > 1) {
+                      songsToAdd = [...cachedFiltered];
+                      for (let i = songsToAdd.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [songsToAdd[i], songsToAdd[j]] = [songsToAdd[j], songsToAdd[i]];
+                      }
+                    }
+                    setSession('queue', [...session.queue, ...songsToAdd]);
+                  }
+                }
+              });
           }
         } else {
           showAlert('Playback Error', `Failed to play "${enrichedSong.title}". Please check your connection.`);
@@ -2380,158 +2656,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     [playDownloadedSong, showAlert],
   );
 
-  const togglePlayPause = useCallback(() => {
-    if (!session.currentTrack) {
-      showAlert('Nothing to Play', 'Please select a song first.');
-      return;
-    }
-
-    try {
-      const master = getMasterPlayer();
-      const willBePlaying = !masterState.isPlaying;
-      setSession('optimisticPlaying', willBePlaying);
-
-      if (willBePlaying) {
-        master.play();
-        console.log('[MusicPlayer] Playing');
-      } else {
-        master.pause();
-        console.log('[MusicPlayer] Paused');
-      }
-    } catch (e) {
-      console.warn('[MusicPlayer] togglePlayPause error:', e);
-    }
-  }, [masterState.isPlaying, showAlert]);
-
-  const seekTo = useCallback((positionSec: number) => {
-    try {
-      const master = getMasterPlayer();
-      master.currentTime = positionSec;
-      setSession('videoPosition', positionSec);
-    } catch (e: any) {
-      console.warn(`[MusicPlayer] seekTo error: ${e?.message || e}`);
-    }
-  }, []);
-
-  const skipToNext = useCallback(async () => { await moduleLevelSkipToNext(); }, []);
-  const skipToPrevious = useCallback(async () => { await moduleLevelSkipToPrevious(); }, []);
-
-  const skipToIndex = useCallback(async (index: number) => {
-    await moduleLevelSkipToIndex(index);
-  }, []);
-
-  const setRepeatMode = useCallback((mode: RepeatMode) => {
-    setSession('repeatMode', mode);
-    saveRepeatMode(mode);
-    console.log(`[MusicPlayer] Repeat mode: ${mode}`);
-  }, []);
-
-  const setShuffleMode = useCallback((mode: ShuffleMode) => {
-    if (mode === 'on' && shuffleMode === 'off') {
-      if (queue.length > 0 && queueIndex >= 0) {
-        session.originalQueue = [...queue];
-        session.originalIndex = queueIndex;
-
-        const current = queue[queueIndex];
-        const before = queue.slice(0, queueIndex);
-        const after = queue.slice(queueIndex + 1);
-
-        const shuffledAfter = [...after];
-        for (let i = shuffledAfter.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffledAfter[i], shuffledAfter[j]] = [shuffledAfter[j], shuffledAfter[i]];
-        }
-
-        const shuffledBefore = [...before];
-        for (let i = shuffledBefore.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffledBefore[i], shuffledBefore[j]] = [shuffledBefore[j], shuffledBefore[i]];
-        }
-
-        const newQueue = [...shuffledBefore, current, ...shuffledAfter];
-        setSession('queue', newQueue);
-        setSession('queueIndex', shuffledBefore.length);
-      }
-    } else if (mode === 'off' && shuffleMode === 'on') {
-      if (session.originalQueue.length > 0 && session.currentTrack) {
-        const originalCurrentIndex = session.originalQueue.findIndex(s => s.id === session.currentTrack!.id);
-        setSession('queue', session.originalQueue);
-        setSession('queueIndex', originalCurrentIndex >= 0 ? originalCurrentIndex : 0);
-        session.originalQueue = [];
-        session.originalIndex = -1;
-      }
-    }
-
-    setSession('shuffleMode', mode);
-    saveShuffleMode(mode);
-    console.log(`[MusicPlayer] Shuffle mode: ${mode}`);
-  }, [shuffleMode, queue, queueIndex]);
-
-  const addToQueue = useCallback((songs: Song[]) => {
-    if (!songs?.length) return;
-    const enrichedSongs = ensureQueueMetadata(songs);
-    const newQueue = [...session.queue, ...enrichedSongs];
-    setSession('queue', newQueue);
-    console.log(`[MusicPlayer] Added ${enrichedSongs.length} songs to queue`);
-  }, []);
-
-  const removeFromQueue = useCallback((index: number) => {
-    const currentQueue = session.queue;
-    if (index < 0 || index >= currentQueue.length) return;
-
-    const newQueue = [...currentQueue];
-    newQueue.splice(index, 1);
-
-    let newQueueIndex = session.queueIndex;
-    if (index < session.queueIndex) {
-      newQueueIndex--;
-    } else if (index === session.queueIndex && newQueue.length > 0) {
-      newQueueIndex = Math.min(index, newQueue.length - 1);
-      if (newQueue[newQueueIndex]) {
-        moduleLevelLoadAndPlay(newQueue[newQueueIndex], ++session.playGeneration);
-      }
-    }
-
-    setSession('queue', newQueue);
-    setSession('queueIndex', newQueueIndex);
-    console.log(`[MusicPlayer] Removed from queue at index ${index}`);
-  }, []);
-
-  const moveQueueItem = useCallback((fromIndex: number, toIndex: number) => {
-    if (fromIndex === toIndex) return;
-    const currentQueue = session.queue;
-    if (fromIndex >= currentQueue.length || toIndex >= currentQueue.length) return;
-
-    const newQueue = [...currentQueue];
-    const [moved] = newQueue.splice(fromIndex, 1);
-    newQueue.splice(toIndex, 0, moved);
-
-    let newQueueIndex = session.queueIndex;
-    if (fromIndex === session.queueIndex) newQueueIndex = toIndex;
-    else if (fromIndex < session.queueIndex && toIndex >= session.queueIndex) newQueueIndex--;
-    else if (fromIndex > session.queueIndex && toIndex <= session.queueIndex) newQueueIndex++;
-
-    setSession('queue', newQueue);
-    setSession('queueIndex', newQueueIndex);
-    console.log(`[MusicPlayer] Moved queue item from ${fromIndex} to ${toIndex}`);
-  }, []);
-
-  const clearQueue = useCallback(() => {
-    setSession('queue', []);
-    setSession('queueIndex', -1);
-    session.originalQueue = [];
-    session.originalIndex = -1;
-    console.log('[MusicPlayer] Queue cleared');
-  }, []);
-
-  const setPlayerOverlayRefs = useCallback((expand: () => void, collapse: () => void) => {
-    expandPlayerRef.current = expand;
-    collapsePlayerRef.current = collapse;
-  }, []);
-
-  const expandPlayer = useCallback(() => expandPlayerRef.current?.(), []);
-  const collapsePlayer = useCallback(() => collapsePlayerRef.current?.(), []);
-
   const engineValue: PlayerEngineState = {
     currentTrack,
     isPlaying,
@@ -2627,6 +2751,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setPlaybackRate,
     setVolume,
     setPreservePitch,
+    setSleepTimer,
+    clearSleepTimer,
+    sleepTimerEndsAt,
+    bufferedPosition,
     notifyVideoTrackFinished,
     deactivateAudio,
   };

@@ -13,15 +13,19 @@
 //   SLAVE PLAYER (Visible): Second expo-video instance for video rendering ONLY
 //   - ALWAYS MUTED - provides only video frames
 //   - Visible only on video tab
-//   - Seeks to master position on tab switch
+//   - Seeks to master position + 5 seconds on tab switch
 //   - Play/pause follows master's state
 //   - Never outputs audio
+//   - Mirrors master's playback rate
 //
 //   VIDEO OFFSET STRATEGY: When switching to video tab, slave seeks to master position + 5 seconds
 //   - Video stays ahead of audio to prevent sync issues
 //   - Progress bar always shows master position (audio)
-//   - Only master player triggers track finish
-//   - If offset drops below 2 seconds, auto re-sync
+//   - Only master player triggers track finish via status === 'idle' detection
+//
+//   END DETECTION: Master's statusChange from 'readyToPlay' to 'idle' = genuine track end
+//   - This is immune to buffering pauses, AudioFocus loss, phone calls
+//   - Slave NEVER triggers end detection
 
 import React, {
   useMemo,
@@ -106,8 +110,6 @@ const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 
 // Video offset constants (5 seconds ahead of audio)
 const VIDEO_OFFSET_SECONDS = 5;
-const MIN_OFFSET_THRESHOLD = 2; // Re-sync if offset drops below 2 seconds
-const OFFSET_SYNC_INTERVAL_MS = 2000; // Check offset every 2 seconds
 
 // Retry constants for 403 errors
 const MAX_RETRY_COUNT = 2;
@@ -132,7 +134,8 @@ try {
   masterPlayer.loop = false;
   masterPlayer.staysActiveInBackground = true;
   masterPlayer.volume = 1.0;
-  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0');
+  masterPlayer.timeUpdateEventInterval = 0.25; // Native time updates every 250ms
+  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0, timeUpdateEventInterval=0.25');
 } catch (e) {
   console.warn('[PlayerContent] Failed to configure MASTER player:', e);
 }
@@ -161,7 +164,8 @@ try {
   slavePlayer.loop = false;
   slavePlayer.staysActiveInBackground = false;
   slavePlayer.volume = 0.0;   // Zero volume ensures no audio
-  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0');
+  slavePlayer.audioMixingMode = 'mixWithOthers'; // Slave never requests AudioFocus
+  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0, audioMixingMode=mixWithOthers');
 } catch (e) {
   console.warn('[PlayerContent] Failed to configure SLAVE player:', e);
 }
@@ -743,114 +747,21 @@ function PlayerContentInner({
   const [videoError, setVideoError] = useState<string | null>(null);
   const [masterReady, setMasterReady] = useState(false);
   const [slaveReady, setSlaveReady] = useState(false);
-  const [videoOffset, setVideoOffset] = useState(0); // Current offset applied to video
-  const [showOffsetIndicator, setShowOffsetIndicator] = useState(false);
+  const [bufferedPosition, setBufferedPosition] = useState(0);
+  const [playbackRate, setPlaybackRateState] = useState(1.0);
   
   const isTransitioning = useRef(false);
   const activeSegmentRef = useRef<'song' | 'video'>('song');
-  const positionRef = useRef(positionSec);
-  const durationRef = useRef(durationSec);
-  const offsetSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Track play states
   const masterPlayingRef = useRef(false);
   const slavePlayingRef = useRef(false);
-  const videoEndedRef = useRef(false);
-
-  useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
-  useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
-
-  const [visualIsPlaying, setVisualIsPlaying] = useState(isPlaying);
-  const [visualPositionSec, setVisualPositionSec] = useState(positionSec);
-  const [visualDurationSec, setVisualDurationSec] = useState(durationSec);
-
-  useEffect(() => {
-    setVisualIsPlaying(isPlaying);
-  }, [isPlaying]);
-
-  useEffect(() => {
-    setVisualPositionSec(positionSec);
-    if (durationSec > 0 && visualDurationSec !== durationSec) {
-      setVisualDurationSec(durationSec);
-    }
-  }, [positionSec, durationSec]);
-
-  // Helper function to calculate video seek position with offset
-  const calculateVideoSeekPosition = useCallback((audioPosition: number, videoDur: number): number => {
-    if (!videoDur || videoDur <= 0) return 0;
-    // Add 5 seconds offset, but don't exceed video duration minus 0.5 seconds
-    let seekPos = audioPosition + VIDEO_OFFSET_SECONDS;
-    if (seekPos >= videoDur - 0.5) {
-      seekPos = Math.max(0, videoDur - 0.5);
-    }
-    return seekPos;
-  }, []);
-
-  // Function to sync slave to master with offset
-  const syncSlaveWithOffset = useCallback(async (audioPosition: number, forceSync: boolean = false) => {
-    if (!slaveReady || activeSegmentRef.current !== 'video') return;
-    
-    try {
-      const videoDuration = slavePlayer.duration ?? 0;
-      if (videoDuration <= 0) return;
-      
-      const currentVideoPosition = slavePlayer.currentTime ?? 0;
-      const targetVideoPosition = calculateVideoSeekPosition(audioPosition, videoDuration);
-      const currentOffset = currentVideoPosition - audioPosition;
-      
-      // Check if offset has dropped below threshold (video falling behind)
-      if (!forceSync && currentOffset < MIN_OFFSET_THRESHOLD && currentOffset > -1) {
-        console.log(`[PlayerContent] Offset low: ${currentOffset.toFixed(2)}s, re-syncing video`);
-        slavePlayer.currentTime = targetVideoPosition;
-        setVideoOffset(VIDEO_OFFSET_SECONDS);
-        setShowOffsetIndicator(true);
-        setTimeout(() => setShowOffsetIndicator(false), 2000);
-      } else if (forceSync) {
-        slavePlayer.currentTime = targetVideoPosition;
-        setVideoOffset(VIDEO_OFFSET_SECONDS);
-      }
-      
-      // Ensure slave play state matches master
-      if (masterPlayingRef.current !== slavePlayingRef.current) {
-        if (masterPlayingRef.current) {
-          await slavePlayer.play();
-          slavePlayingRef.current = true;
-        } else {
-          await slavePlayer.pause();
-          slavePlayingRef.current = false;
-        }
-      }
-    } catch (err) {
-      console.warn('[PlayerContent] Sync slave error:', err);
-    }
-  }, [slaveReady, calculateVideoSeekPosition]);
-
-  // Offset sync interval - runs every 2 seconds when video tab is active
-  useEffect(() => {
-    if (activeSegment === 'video' && slaveReady && masterReady) {
-      if (offsetSyncIntervalRef.current) clearInterval(offsetSyncIntervalRef.current);
-      
-      offsetSyncIntervalRef.current = setInterval(() => {
-        const currentAudioPos = masterPlayer.currentTime ?? positionRef.current;
-        syncSlaveWithOffset(currentAudioPos, false);
-      }, OFFSET_SYNC_INTERVAL_MS);
-      
-      return () => {
-        if (offsetSyncIntervalRef.current) {
-          clearInterval(offsetSyncIntervalRef.current);
-          offsetSyncIntervalRef.current = null;
-        }
-      };
-    } else {
-      if (offsetSyncIntervalRef.current) {
-        clearInterval(offsetSyncIntervalRef.current);
-        offsetSyncIntervalRef.current = null;
-      }
-    }
-  }, [activeSegment, slaveReady, masterReady, syncSlaveWithOffset]);
-
-  // retryMasterLoad and retrySlaveLoad intentionally removed.
-  // MusicPlayerContext owns all master retries. PlayerContent never touches master.replaceAsync.
+  
+  // SINGLE END DETECTION GATE - local to playerContent only
+  const trackEndHandledRef = useRef(false);
+  
+  // Track previous master status for proper end detection
+  const previousMasterStatusRef = useRef<string | null>(null);
 
   // ── MASTER PLAYER STATUS LISTENER ───────────────────────────────────────────
   useEffect(() => {
@@ -858,18 +769,36 @@ function PlayerContentInner({
 
     let statusListener: any = null;
     let playingListener: any = null;
+    let sourceChangeListener: any = null;
+    let rateChangeListener: any = null;
+    let timeUpdateListener: any = null;
 
     try {
+      // STATUS CHANGE - PRIMARY END DETECTION
       statusListener = masterPlayer.addListener('statusChange', ({ status, error }: any) => {
+        const previousStatus = previousMasterStatusRef.current;
+        previousMasterStatusRef.current = status;
+        
         if (status === 'readyToPlay') {
           setMasterReady(true);
           setVideoError(null);
-          videoEndedRef.current = false;
+          
+          // Generate thumbnails for scrubber preview when track is ready
+          const duration = masterPlayer.duration ?? 0;
+          if (duration > 0) {
+            const timestamps: number[] = [];
+            const interval = 10; // One thumbnail every 10 seconds
+            for (let ts = 0; ts < duration; ts += interval) {
+              timestamps.push(ts);
+            }
+            if (timestamps.length > 0) {
+              masterPlayer.generateThumbnailsAsync(timestamps).catch((e: any) => {
+                console.warn('[PlayerContent] Thumbnail generation failed:', e?.message);
+              });
+            }
+          }
         } else if (status === 'error') {
           const errMsg = error?.message || '';
-          // 403 errors on the master are handled by MusicPlayerContext (moduleLevelLoadAndPlay).
-          // PlayerContent must NOT retry the master independently — doing so causes a double-load
-          // conflict that produces the start→stop→start loop. Suppress 403 errors silently.
           if (errMsg.includes('403')) {
             console.log('[PlayerContent] Master 403 suppressed — context handles retry');
             return;
@@ -877,45 +806,74 @@ function PlayerContentInner({
           console.error('[PlayerContent] MASTER player error:', errMsg);
           setVideoError(errMsg || 'Playback error');
         }
+        
+        // PRIMARY END DETECTION: status goes from 'readyToPlay' to 'idle'
+        // This maps to ExoPlayer STATE_ENDED and is immune to buffering pauses
+        if (status === 'idle' && previousStatus === 'readyToPlay' && !trackEndHandledRef.current) {
+          console.log('[PlayerContent] Master reached end (status idle from readyToPlay), skipping to next');
+          trackEndHandledRef.current = true;
+          engine.skipToNext();
+        }
       });
       
+      // PLAYING CHANGE - Slave synchronization ONLY (NO end detection)
       playingListener = masterPlayer.addListener('playingChange', ({ isPlaying: mPlaying }: any) => {
         masterPlayingRef.current = mPlaying;
-        setVisualIsPlaying(mPlaying);
         
         // Sync slave's play state to match master
         if (slaveReady && slavePlayingRef.current !== mPlaying) {
           if (mPlaying) {
             slavePlayer.play();
+            // Also sync playback rate when starting playback
+            const currentRate = masterPlayer.playbackRate ?? 1.0;
+            slavePlayer.playbackRate = currentRate;
             slavePlayingRef.current = true;
           } else {
             slavePlayer.pause();
             slavePlayingRef.current = false;
           }
         }
+      });
+      
+      // SOURCE CHANGE - Reset end detection and sync slave source
+      sourceChangeListener = masterPlayer.addListener('sourceChange', () => {
+        console.log('[PlayerContent] Master source changed, resetting end detection');
+        trackEndHandledRef.current = false;
         
-        // Industry-standard end detection:
-        // ONLY trigger skip when ALL three conditions are true:
-        //   1. Playback just stopped (mPlaying === false)
-        //   2. We are genuinely near the end (currentTime >= duration - 0.5)
-        //   3. duration is known and > 0 (rules out false fires during load/buffering)
-        //   4. Track has played for at least 5 seconds (rules out load-time pauses)
-        //   5. We haven't already handled this finish
-        const masterDuration = masterPlayer.duration ?? 0;
-        const masterPosition = masterPlayer.currentTime ?? 0;
-        const isGenuineEnd =
-          !mPlaying &&
-          !videoEndedRef.current &&
-          masterDuration > 0 &&
-          masterPosition > 5 &&
-          masterPosition >= masterDuration - 0.5;
-
-        if (isGenuineEnd) {
-          console.log('[PlayerContent] Master reached end, skipping to next');
-          videoEndedRef.current = true;
-          engine.skipToNext();
+        // Mirror slave source from master (bare URI, no metadata)
+        const masterSource = (masterPlayer as any).source;
+        if (masterSource && typeof masterSource === 'object' && masterSource.uri) {
+          slavePlayer.replaceAsync({ uri: masterSource.uri, useCaching: true });
+        } else if (typeof masterSource === 'string') {
+          slavePlayer.replaceAsync({ uri: masterSource, useCaching: true });
         }
       });
+      
+      // RATE CHANGE - Sync slave playback rate when master rate changes
+      rateChangeListener = masterPlayer.addListener('rateChange', ({ playbackRate: newRate }: any) => {
+        setPlaybackRateState(newRate);
+        if (slaveReady && masterPlayingRef.current) {
+          slavePlayer.playbackRate = newRate;
+        }
+      });
+      
+      // TIME UPDATE - Native position updates (replaces JS setInterval polling)
+      timeUpdateListener = masterPlayer.addListener('timeUpdate', ({ currentTime }: any) => {
+        const pos = currentTime ?? masterPlayer.currentTime ?? 0;
+        const dur = masterPlayer.duration ?? 0;
+        
+        // Update visual state
+        setVisualPositionSec(pos);
+        if (dur > 0) setVisualDurationSec(dur);
+        updateVideoPosition(pos);
+        updateVideoDuration(dur);
+        setVisualIsPlaying(masterPlayingRef.current);
+        
+        // Read buffered position for scrubber buffer bar
+        const buffered = masterPlayer.bufferedPosition ?? 0;
+        setBufferedPosition(buffered);
+      });
+      
     } catch (e) {
       console.error('[PlayerContent] Failed to add MASTER listeners:', e);
     }
@@ -924,12 +882,12 @@ function PlayerContentInner({
       try {
         statusListener?.remove?.();
         playingListener?.remove?.();
+        sourceChangeListener?.remove?.();
+        rateChangeListener?.remove?.();
+        timeUpdateListener?.remove?.();
       } catch {}
     };
-    // NOTE: engine and slaveReady are stable refs; activeVideoUrl/masterRetryCount/retryMasterLoad
-    // intentionally removed — master 403 retries are owned by MusicPlayerContext, not here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, slaveReady]);
+  }, [engine, slaveReady, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
   // ── SLAVE PLAYER STATUS LISTENER ────────────────────────────────────────────
   useEffect(() => {
@@ -942,15 +900,20 @@ function PlayerContentInner({
       statusListener = slavePlayer.addListener('statusChange', ({ status, error }: any) => {
         if (status === 'readyToPlay') {
           setSlaveReady(true);
-          try { slavePlayer.muted = true; slavePlayer.volume = 0; } catch {}
+          try { 
+            slavePlayer.muted = true; 
+            slavePlayer.volume = 0;
+            // Sync rate when slave becomes ready and master is playing
+            if (masterPlayingRef.current) {
+              slavePlayer.playbackRate = masterPlayer.playbackRate ?? 1.0;
+            }
+          } catch {}
         } else if (status === 'error') {
           const errMsg = error?.message || '';
-          // Only surface video errors when the user is actually on the video tab
           if (activeSegmentRef.current === 'video') {
             console.warn('[PlayerContent] SLAVE player error (video tab active):', errMsg);
             setVideoError(errMsg || 'Video unavailable');
           } else {
-            // Slave errors on audio tab are silent — video tab will re-load on switch
             console.log('[PlayerContent] Slave error suppressed (not on video tab):', errMsg);
           }
           setSlaveReady(false);
@@ -971,19 +934,9 @@ function PlayerContentInner({
         playingListener?.remove?.();
       } catch {}
     };
-    // slavePlayer is a module-level singleton; activeVideoUrl/slaveRetryCount/retrySlaveLoad
-    // intentionally removed — slave retry logic lives in loadSlaveStream, not here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateVideoIsPlaying]);
+  }, [updateVideoIsPlaying, masterPlayingRef]);
 
   // ── LOAD SLAVE STREAM WHEN TRACK CHANGES ────────────────────────────────────
-  // IMPORTANT: MusicPlayerContext (moduleLevelLoadAndPlay) OWNS the MASTER player.
-  // It resolves the URL, calls master.replaceAsync(), and master.play() itself.
-  // PlayerContent must NEVER call master.replaceAsync() — doing so interrupts the
-  // already-playing audio and causes the start→stop→start→stop loop.
-  //
-  // PlayerContent is ONLY responsible for loading the SLAVE (muted, video-only)
-  // player so the video tab is ready when the user switches to it.
   const loadSlaveStream = useCallback(async () => {
     if (!activeVideoUrl || isLocal) return;
 
@@ -991,7 +944,7 @@ function PlayerContentInner({
 
     try {
       setSlaveReady(false);
-      slavePlayer.replace({ uri: activeVideoUrl });
+      slavePlayer.replace({ uri: activeVideoUrl, useCaching: true });
       slavePlayer.muted = true;
       slavePlayer.volume = 0;
 
@@ -1013,7 +966,6 @@ function PlayerContentInner({
       });
       console.log('[PlayerContent] Slave stream pre-loaded');
     } catch (e: any) {
-      // Non-fatal: slave failure only means video tab unavailable; audio continues
       console.warn('[PlayerContent] Slave pre-load failed (non-fatal):', e?.message);
     }
   }, [activeVideoUrl, isLocal]);
@@ -1022,28 +974,31 @@ function PlayerContentInner({
     loadSlaveStream();
   }, [loadSlaveStream]);
 
-  // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows ──────────────────
+  // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows via playingChange ──
   const handlePlayPause = useCallback(async () => {
     triggerHaptic();
     if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
 
     const willPlay = !visualIsPlaying;
-    setVisualIsPlaying(willPlay);
 
     if (willPlay) {
       await masterPlayer.play();
-      masterPlayingRef.current = true;
     } else {
       await masterPlayer.pause();
-      masterPlayingRef.current = false;
     }
-    
-    if (willPlay) {
-      engine.play();
-    } else {
-      engine.pause();
+  }, [displayTrack, visualIsPlaying]);
+
+  // ── SYNC SLAVE ON SEEK ───────────────────────────────────────────────────────
+  const syncSlaveOnSeek = useCallback(async (audioPosition: number) => {
+    if (!slaveReady || activeSegmentRef.current !== 'video') return;
+    const videoDuration = slavePlayer.duration ?? 0;
+    if (videoDuration <= 0) return;
+    let videoSeekPos = audioPosition + VIDEO_OFFSET_SECONDS;
+    if (videoSeekPos >= videoDuration - 0.5) {
+      videoSeekPos = Math.max(0, videoDuration - 0.5);
     }
-  }, [displayTrack, visualIsPlaying, engine]);
+    slavePlayer.currentTime = videoSeekPos;
+  }, [slaveReady]);
 
   // ── SEGMENT SWITCH WITH VIDEO OFFSET ────────────────────────────────────────
   const handleSegmentPress = useCallback(
@@ -1063,28 +1018,20 @@ function PlayerContentInner({
 
       try {
         if (seg === 'video') {
-          // ── SWITCHING TO VIDEO TAB ─────────────────────────────────────────────
           console.log('[PlayerContent] → VIDEO tab');
           
-          const currentAudioPosition = masterPlayer.currentTime ?? positionRef.current;
+          const currentAudioPosition = masterPlayer.currentTime ?? 0;
           const videoDuration = slavePlayer.duration ?? 0;
           
-          console.log(`[PlayerContent] Audio position: ${currentAudioPosition.toFixed(2)}s`);
-          
-          // Calculate video position with 5-second offset
           let videoSeekPosition = currentAudioPosition + VIDEO_OFFSET_SECONDS;
           if (videoSeekPosition >= videoDuration - 0.5) {
             videoSeekPosition = Math.max(0, videoDuration - 0.5);
-            console.log(`[PlayerContent] Video near end, clamping to ${videoSeekPosition.toFixed(2)}s`);
           }
           
-          console.log(`[PlayerContent] Video will seek to +${VIDEO_OFFSET_SECONDS}s: ${videoSeekPosition.toFixed(2)}s`);
-          
-          // Ensure slave is ready (load on demand if pre-load didn't finish)
           if (!slaveReady && activeVideoUrl) {
             console.log('[PlayerContent] Loading slave stream on video tab switch...');
             try {
-              slavePlayer.replace({ uri: activeVideoUrl });
+              slavePlayer.replace({ uri: activeVideoUrl, useCaching: true });
               slavePlayer.muted = true;
               slavePlayer.volume = 0;
               setSlaveReady(true);
@@ -1094,18 +1041,11 @@ function PlayerContentInner({
             }
           }
           
-          // Seek slave to offset position
           if (slaveReady) {
             slavePlayer.currentTime = videoSeekPosition;
-            setVideoOffset(VIDEO_OFFSET_SECONDS);
-            
-            // Show offset indicator briefly
-            setShowOffsetIndicator(true);
-            setTimeout(() => setShowOffsetIndicator(false), 2000);
-            
-            // Start slave playing if master is playing
             if (masterPlayingRef.current) {
               await slavePlayer.play();
+              slavePlayer.playbackRate = masterPlayer.playbackRate ?? 1.0;
               slavePlayingRef.current = true;
             } else {
               await slavePlayer.pause();
@@ -1118,13 +1058,9 @@ function PlayerContentInner({
           setVideoActive(true);
           setVideoError(null);
           
-          console.log(`[PlayerContent] Video tab active, position: ${videoSeekPosition.toFixed(2)}s (audio at ${currentAudioPosition.toFixed(2)}s)`);
-          
         } else {
-          // ── SWITCHING TO SONG TAB ─────────────────────────────────────────────
           console.log('[PlayerContent] → SONG tab');
           
-          // Hide slave player (pause to save resources)
           if (slaveReady) {
             await slavePlayer.pause();
             slavePlayingRef.current = false;
@@ -1133,9 +1069,6 @@ function PlayerContentInner({
           setActiveSegment(seg);
           activeSegmentRef.current = seg;
           setVideoActive(false);
-          setVideoOffset(0);
-          
-          console.log('[PlayerContent] Song tab active, master continues playing');
         }
       } catch (err) {
         console.error('[PlayerContent] Segment switch error:', err);
@@ -1145,7 +1078,7 @@ function PlayerContentInner({
         }, 500);
       }
     },
-    [hasVideo, displayTrack.id, videoError, isLocal, activeVideoUrl, slaveReady, slavePlayer, masterPlayer, masterPlayingRef],
+    [hasVideo, displayTrack.id, videoError, isLocal, activeVideoUrl, slaveReady, slavePlayer, masterPlayer, masterPlayingRef, setVideoActive],
   );
 
   // ── SEEK HANDLER - maintains offset when on video tab ────────────────────────
@@ -1158,34 +1091,20 @@ function PlayerContentInner({
     // Seek master player
     masterPlayer.currentTime = clampedPosition;
     
-    // If on video tab, seek slave with offset
-    if (activeSegment === 'video' && slaveReady) {
-      const videoDuration = slavePlayer.duration ?? 0;
-      let videoSeekPosition = clampedPosition + VIDEO_OFFSET_SECONDS;
-      if (videoSeekPosition >= videoDuration - 0.5) {
-        videoSeekPosition = Math.max(0, videoDuration - 0.5);
-      }
-      slavePlayer.currentTime = videoSeekPosition;
-      console.log(`[PlayerContent] Slave seeked to ${videoSeekPosition.toFixed(2)}s (+${VIDEO_OFFSET_SECONDS}s offset)`);
-      
-      // Show offset indicator briefly
-      setShowOffsetIndicator(true);
-      setTimeout(() => setShowOffsetIndicator(false), 1500);
-    }
+    // Sync slave to master's new position with offset
+    await syncSlaveOnSeek(clampedPosition);
     
     engine.seekTo(clampedPosition);
-  }, [durationSec, activeSegment, slaveReady, engine]);
+  }, [durationSec, syncSlaveOnSeek, engine]);
 
   // ── HANDLE SKIP NEXT - respects current tab ─────────────────────────────────
   const handleSkipNext = useCallback(async () => {
     triggerHaptic();
     
-    // Update preferred stream type based on active tab
     setPreferredStreamType(activeSegment === 'video' ? 'video' : 'audio');
     
     await engine.skipToNext();
     
-    // After skip, if on video tab, re-apply offset once new track loads
     if (activeSegment === 'video' && slaveReady) {
       setTimeout(async () => {
         const newAudioPos = masterPlayer.currentTime ?? 0;
@@ -1198,7 +1117,6 @@ function PlayerContentInner({
         if (masterPlayingRef.current) {
           await slavePlayer.play();
         }
-        console.log(`[PlayerContent] Post-skip sync: video at ${videoSeekPos.toFixed(2)}s`);
       }, 300);
     }
   }, [activeSegment, slaveReady, engine]);
@@ -1231,25 +1149,18 @@ function PlayerContentInner({
   useEffect(() => {
     setMasterReady(false);
     setSlaveReady(false);
-    // NOTE: masterPlayingRef and slavePlayingRef are NOT reset here.
-    // The context calls master.play() immediately after loading — resetting these refs
-    // to false here causes the slave sync logic to pause the slave right after play starts.
-    // Let the playingChange listener update them naturally.
     setActiveSegment('song');
     activeSegmentRef.current = 'song';
     setVideoError(null);
-    setVideoOffset(0);
-    setShowOffsetIndicator(false);
     setVisualPositionSec(0);
     setVisualDurationSec(0);
+    setBufferedPosition(0);
     setVideoActive(false);
     updateVideoPosition(0);
     updateVideoDuration(0);
     updateVideoIsPlaying(false);
-    // NOTE: setVisualIsPlaying is NOT reset to false here.
-    // Resetting it causes a visible "stop" flash in the UI even though audio keeps playing.
-    // The playingChange listener and isPlaying prop keep it in sync correctly.
-    videoEndedRef.current = false;
+    trackEndHandledRef.current = false;
+    previousMasterStatusRef.current = null;
   }, [displayTrack?.id, setVideoActive, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
 
   // ── Artwork colors ──────────────────────────────────────────────────────────
@@ -1455,10 +1366,8 @@ function PlayerContentInner({
       : require('@/assets/images/mavins.png');
 
   const getRepeatIcon = () => {
-    // 'repeat-off' is NOT a valid MaterialCommunityIcons name — use 'repeat' for all states.
-    // The color (muted vs gold) distinguishes off vs on. The "1" badge handles repeat-one visually.
     if (repeatMode === 'one') return 'repeat-once';
-    return 'repeat'; // covers both 'off' (muted color) and 'all' (gold color)
+    return 'repeat';
   };
 
   const getRepeatColor = () => {
@@ -1482,28 +1391,8 @@ function PlayerContentInner({
 
   const showSlavePlayer = hasVideo && !isLocal && activeSegment === 'video' && slaveReady;
 
-  // Update visual position from master (polling for smooth UI)
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
-    
-    if (masterReady) {
-      interval = setInterval(() => {
-        try {
-          const pos = masterPlayer.currentTime ?? 0;
-          const dur = masterPlayer.duration ?? 0;
-          setVisualPositionSec(pos);
-          if (dur > 0) setVisualDurationSec(dur);
-          updateVideoPosition(pos);
-          updateVideoDuration(dur);
-          setVisualIsPlaying(masterPlayingRef.current);
-        } catch {}
-      }, 250);
-    }
-    
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [masterReady, updateVideoPosition, updateVideoDuration]);
+  // Buffer fill percentage for scrubber
+  const bufferFillPercent = visualDurationSec > 0 ? Math.min(bufferedPosition / visualDurationSec, 1) : 0;
 
   // ─────────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1583,8 +1472,12 @@ function PlayerContentInner({
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                     nativeControls={false}
+                    surfaceType="textureView"
                     allowsPictureInPicture={true}
                     startsPictureInPictureAutomatically={false}
+                    onFirstFrameRender={() => {
+                      console.log('[PlayerContent] First video frame rendered');
+                    }}
                     onPictureInPictureStart={() => {
                       console.log('[PlayerContent] PiP started');
                     }}
@@ -1602,12 +1495,6 @@ function PlayerContentInner({
                       }
                     }}
                   />
-                  {/* Offset Indicator */}
-                  {showOffsetIndicator && activeSegment === 'video' && (
-                    <View style={[styles.offsetIndicator, { backgroundColor: 'rgba(0,0,0,0.7)' }]}>
-                      <Text style={styles.offsetIndicatorText}>+{VIDEO_OFFSET_SECONDS}s ahead</Text>
-                    </View>
-                  )}
                   {videoError && activeSegment === 'video' && (
                     <View style={[styles.videoErrorOverlay, { backgroundColor: 'rgba(0,0,0,0.8)' }]}>
                       <MaterialCommunityIcons name="video-off" size={32} color={colors.text} />
@@ -1756,13 +1643,26 @@ function PlayerContentInner({
               )}
             </ScrollView>
 
-            {/* Slider */}
+            {/* Slider with buffer bar */}
             <View
               style={styles.progressWrapper}
               onTouchStart={() => setSliderActive(true)}
               onTouchEnd={() => setSliderActive(false)}
               onTouchCancel={() => setSliderActive(false)}
             >
+              {/* Buffer bar background layer */}
+              <View style={styles.bufferBarBackground}>
+                <View 
+                  style={[
+                    styles.bufferBarFill, 
+                    { 
+                      width: `${bufferFillPercent * 100}%`,
+                      backgroundColor: colors.sliderTrack 
+                    }
+                  ]} 
+                />
+              </View>
+              
               <Slider
                 progress={sliderProgress}
                 minimumValue={sliderMin}
@@ -1780,7 +1680,7 @@ function PlayerContentInner({
                 )}
                 theme={{
                   minimumTrackTintColor: colors.gold,
-                  maximumTrackTintColor: colors.sliderTrack,
+                  maximumTrackTintColor: 'transparent',
                 }}
                 onSlidingStart={() => {
                   isSliding.value = true;
@@ -2020,8 +1920,6 @@ export default function PlayerContent(props: PlayerContentProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES
 // ─────────────────────────────────────────────────────────────────────────────
-// At the top of playerContent.tsx, ensure Colors is imported
-
 
 const styles = StyleSheet.create({
   topBar: { position: 'absolute', left: 0, right: 0, zIndex: 1000, alignItems: 'center' },
@@ -2094,7 +1992,21 @@ const styles = StyleSheet.create({
   },
   commentBadgeText: { color: '#000', fontSize: moderateScale(9), fontWeight: '700' },
 
-  progressWrapper: { marginTop: verticalScale(20) },
+  progressWrapper: { marginTop: verticalScale(20), position: 'relative' },
+  bufferBarBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: moderateScale(5),
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+  },
+  bufferBarFill: {
+    height: '100%',
+    borderRadius: 16,
+  },
   sliderThumb: { width: moderateScale(15), height: moderateScale(15), borderRadius: moderateScale(15) / 2 },
   bubbleContainer: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   bubbleText: { fontSize: moderateScale(11), fontWeight: '600' },
@@ -2146,20 +2058,4 @@ const styles = StyleSheet.create({
   },
   videoErrorText: { fontSize: moderateScale(14), fontWeight: '600', marginTop: verticalScale(8), textAlign: 'center', paddingHorizontal: scale(16) },
   videoErrorSubtext: { fontSize: moderateScale(12), marginTop: verticalScale(4), textAlign: 'center' },
-  
-  offsetIndicator: {
-    position: 'absolute',
-    top: verticalScale(16),
-    right: scale(16),
-    paddingHorizontal: scale(12),
-    paddingVertical: verticalScale(6),
-    borderRadius: scale(20),
-    zIndex: 10,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-  },
-  offsetIndicatorText: {
-    color: Colors.gold,
-    fontSize: moderateScale(11),
-    fontWeight: '600',
-  },
 });

@@ -6,6 +6,12 @@
 // - Horizontal scrolling action row for unlimited icons
 // - Share functionality, Download, Comments count display
 // - Optimistic UI updates with sync verification
+// - Fixed: AppState import added
+// - Fixed: Removed double engine calls in PlayPauseButton
+// - Fixed: triggerHaptic wrapped in arrow functions for TouchableOpacity
+// - Added: SleepTimerButton component with pill styling
+// - Added: PlaybackSpeedButton component with pill styling
+// - Added: Sleep timer and speed props to ActionRow
 
 import { Colors } from "@/constants/Colors";
 import { unknownTrackImageUri } from "@/constants/images";
@@ -15,7 +21,7 @@ import { useIsSongDownloaded, useIsSongDownloading } from "@/store/library";
 import { useMusicPlayer, usePlayerEngine } from "@/libs/playerSetup";
 import { MaterialCommunityIcons, MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import React, { ComponentProps, useCallback, useEffect, useRef, useState } from "react";
+import React, { ComponentProps, useCallback, useEffect, useState } from "react";
 import {
   StyleSheet,
   TouchableOpacity,
@@ -28,6 +34,8 @@ import {
   Share,
   Platform,
   Text,
+  Modal,
+  AppState,
 } from "react-native";
 import { moderateScale, scale, verticalScale } from "react-native-size-matters/extend";
 import { match } from "ts-pattern";
@@ -60,6 +68,16 @@ const formatCount = (n: number): string => {
   return n.toString();
 };
 
+// Format remaining time for sleep timer
+const formatSleepTimerRemaining = (endsAt: number | null): string | null => {
+  if (!endsAt) return null;
+  const remainingMs = endsAt - Date.now();
+  if (remainingMs <= 0) return null;
+  const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+  if (remainingMinutes <= 0) return null;
+  return `${remainingMinutes}m`;
+};
+
 export const PlayerControls = ({ style, onBeforeSkip }: PlayerControlsProps) => (
   <View style={[styles.container, style]}>
     <View style={styles.row}>
@@ -83,7 +101,6 @@ export const ReducedPlayerControls = ({ style, onBeforeSkip }: PlayerControlsPro
 );
 
 // ─── PlayPauseButton ─────────────────────────────────────────────────────────
-// Enhanced with responsive playback for instant UI feedback
 
 export const PlayPauseButton = ({
   style,
@@ -93,22 +110,8 @@ export const PlayPauseButton = ({
   const { togglePlayPause, isPlaying: actualPlaying, position, duration, isBuffering: contextBuffering } = useMusicPlayer();
   const engine = usePlayerEngine();
   
-  // Get master player instance for direct state queries
-  const getActualState = useCallback(() => {
-    const master = (global as any).__MavinAudioPlayer__;
-    return {
-      playing: master?.playing ?? actualPlaying,
-      position: master?.currentTime ?? position,
-      duration: master?.duration ?? duration,
-      buffering: master?.isBuffering ?? contextBuffering,
-    };
-  }, [actualPlaying, position, duration, contextBuffering]);
-  
-  // Use the responsive playback hook
   const {
     uiPlaying,
-    isSyncing,
-    needsSync,
     setPlaying,
     forceSync,
     resetSync,
@@ -118,11 +121,9 @@ export const PlayPauseButton = ({
     actualDuration: duration,
     actualBuffering: contextBuffering,
     onPlay: () => {
-      engine.play();
       togglePlayPause();
     },
     onPause: () => {
-      engine.pause();
       togglePlayPause();
     },
     onSeek: (pos) => {
@@ -132,23 +133,15 @@ export const PlayPauseButton = ({
     positionDriftThreshold: 0.3,
     syncIntervalMs: 2000,
     enablePositionDriftCorrection: true,
-    onSyncNeeded: () => {
-      console.log('[PlayPauseButton] Sync needed - correcting UI');
-    },
-    onSyncComplete: () => {
-      console.log('[PlayPauseButton] Sync complete');
-    },
-    onDriftDetected: (drift) => {
-      console.log(`[PlayPauseButton] Position drift detected: ${drift.toFixed(3)}s`);
-    },
+    onSyncNeeded: () => {},
+    onSyncComplete: () => {},
+    onDriftDetected: () => {},
   });
   
-  // Reset sync when track changes
   useEffect(() => {
     resetSync();
   }, [engine.currentTrack?.id, resetSync]);
   
-  // Force sync when app comes to foreground
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
@@ -158,17 +151,14 @@ export const PlayPauseButton = ({
     return () => subscription.remove();
   }, [forceSync]);
   
-  // Handle play/pause press
-  const handlePress = useCallback(() => {
+  const handlePress = () => {
     triggerHaptic();
     const newPlayingState = !uiPlaying;
     setPlaying(newPlayingState);
-  }, [uiPlaying, setPlaying]);
+  };
   
-  // Determine if we should show loading state
   const showLoading = contextBuffering && !actualPlaying && duration === 0;
   
-  // Determine icon name based on state
   const getIconName = () => {
     if (showLoading) return 'hourglass-empty';
     return uiPlaying ? 'pause' : 'play-arrow';
@@ -214,7 +204,7 @@ export const SkipToNextButton = ({
 }: PlayerButtonProps) => {
   const engine = usePlayerEngine();
 
-  const handlePress = useCallback(async () => {
+  const handlePress = async () => {
     triggerHaptic();
     onBeforeSkip?.();
     try {
@@ -222,7 +212,7 @@ export const SkipToNextButton = ({
     } catch (error) {
       console.warn('[PlayerControls] Skip next error:', error);
     }
-  }, [engine, onBeforeSkip]);
+  };
 
   return (
     <TouchableOpacity onPress={handlePress}>
@@ -244,7 +234,7 @@ export const SkipToPreviousButton = ({
 }: PlayerButtonProps) => {
   const engine = usePlayerEngine();
 
-  const handlePress = useCallback(async () => {
+  const handlePress = async () => {
     triggerHaptic();
     onBeforeSkip?.();
     try {
@@ -252,7 +242,7 @@ export const SkipToPreviousButton = ({
     } catch (error) {
       console.warn('[PlayerControls] Skip previous error:', error);
     }
-  }, [engine, onBeforeSkip]);
+  };
 
   return (
     <TouchableOpacity onPress={handlePress}>
@@ -272,7 +262,7 @@ export const AddToPlaylistButton = ({ iconSize = moderateScale(30) }) => {
   const engine = usePlayerEngine();
   const activeTrack = engine.currentTrack;
 
-  const handlePress = useCallback(async () => {
+  const handlePress = async () => {
     triggerHaptic();
     await router.push({
       pathname: "/(modals)/addToPlaylist",
@@ -287,7 +277,7 @@ export const AddToPlaylistButton = ({ iconSize = moderateScale(30) }) => {
           }
         : undefined,
     });
-  }, [router, activeTrack]);
+  };
 
   return (
     <View>
@@ -309,7 +299,7 @@ export const DownloadSongButton = ({
   const downloaded = useIsSongDownloaded(activeTrack?.id || "");
   const downloading = useIsSongDownloading(activeTrack?.id || "");
 
-  const handleDownload = useCallback(async () => {
+  const handleDownload = async () => {
     if (!activeTrack || downloaded) return;
     if (downloading) {
       ToastAndroid.show("Song is already downloading", ToastAndroid.SHORT);
@@ -324,7 +314,7 @@ export const DownloadSongButton = ({
       url: activeTrack.url,
       thumbnailUrl: activeTrack.thumbnail,
     });
-  }, [activeTrack, downloaded, downloading]);
+  };
 
   if (!activeTrack) return null;
 
@@ -354,7 +344,7 @@ export const ShareSongButton = ({
   const engine = usePlayerEngine();
   const activeTrack = engine.currentTrack;
 
-  const handleShare = useCallback(async () => {
+  const handleShare = async () => {
     if (!activeTrack) return;
     triggerHaptic();
     
@@ -374,7 +364,7 @@ export const ShareSongButton = ({
       console.warn('[PlayerControls] Share failed:', error);
       ToastAndroid.show("Failed to share song", ToastAndroid.SHORT);
     }
-  }, [activeTrack]);
+  };
 
   if (!activeTrack) return null;
 
@@ -397,9 +387,14 @@ export const CommentsButton = ({
 }: PlayerButtonProps & { commentsCount?: number; onPress?: () => void }) => {
   if (commentsCount <= 0) return null;
   
+  const handlePress = () => {
+    triggerHaptic();
+    onPress?.();
+  };
+  
   return (
     <View style={style}>
-      <TouchableOpacity onPress={onPress || triggerHaptic}>
+      <TouchableOpacity onPress={handlePress}>
         <View style={styles.commentBadgeContainer}>
           <MaterialCommunityIcons 
             name="comment-text-outline" 
@@ -424,14 +419,19 @@ export const LikeButton = ({
   isLiked = false,
   onPress,
 }: PlayerButtonProps & { likeCount?: number; isLiked?: boolean; onPress?: () => void }) => {
+  const handlePress = () => {
+    triggerHaptic();
+    onPress?.();
+  };
+  
   return (
     <View style={style}>
-      <TouchableOpacity onPress={onPress || triggerHaptic}>
+      <TouchableOpacity onPress={handlePress}>
         <View style={styles.iconWithCount}>
           <Ionicons
             name={isLiked ? "thumbs-up" : "thumbs-up-outline"}
             size={iconSize}
-            color={isLiked ? Colors.gold : Colors.text}
+            color={isLiked ? Colors.metallicBrown.primary : Colors.text}
           />
           {likeCount > 0 && (
             <Text style={styles.iconCountText}>{formatCount(likeCount)}</Text>
@@ -451,14 +451,19 @@ export const DislikeButton = ({
   isDisliked = false,
   onPress,
 }: PlayerButtonProps & { dislikeCount?: number; isDisliked?: boolean; onPress?: () => void }) => {
+  const handlePress = () => {
+    triggerHaptic();
+    onPress?.();
+  };
+  
   return (
     <View style={style}>
-      <TouchableOpacity onPress={onPress || triggerHaptic}>
+      <TouchableOpacity onPress={handlePress}>
         <View style={styles.iconWithCount}>
           <Ionicons
             name={isDisliked ? "thumbs-down" : "thumbs-down-outline"}
             size={iconSize}
-            color={isDisliked ? Colors.gold : Colors.text}
+            color={isDisliked ? Colors.metallicBrown.primary : Colors.text}
           />
           {dislikeCount > 0 && (
             <Text style={styles.iconCountText}>{formatCount(dislikeCount)}</Text>
@@ -482,7 +487,7 @@ export const ViewCountBadge = ({
   
   return (
     <View style={[styles.viewCountBadge, style]}>
-      <Ionicons name="play-circle-outline" size={14} color={Colors.textSub} />
+      <Ionicons name="play-circle-outline" size={14} color={Colors.textMuted} />
       <Text style={styles.viewCountText}>{formatCount(viewCount)} views</Text>
     </View>
   );
@@ -503,12 +508,12 @@ export const RepeatToggle = ({ ...iconProps }: RepeatIconProps) => {
 
   const repeatMode = engineToUi(engine.repeatMode);
 
-  const toggleRepeatMode = useCallback(() => {
+  const toggleRepeatMode = () => {
     triggerHaptic();
     const currentIndex = repeatOrder.indexOf(repeatMode);
     const nextUi = repeatOrder[(currentIndex + 1) % repeatOrder.length];
     engine.setRepeatMode(uiToEngine(nextUi));
-  }, [engine, repeatMode]);
+  };
 
   const icon = match(repeatMode)
     .returnType<RepeatIconName>()
@@ -528,8 +533,206 @@ export const RepeatToggle = ({ ...iconProps }: RepeatIconProps) => {
   );
 };
 
+// ─── SleepTimerButton ────────────────────────────────────────────────────────
+
+export const SleepTimerButton = ({
+  iconSize = moderateScale(20),
+  onTimerSet,
+  onTimerCleared,
+}: {
+  iconSize?: number;
+  onTimerSet?: (minutes: number) => void;
+  onTimerCleared?: () => void;
+}) => {
+  const { setSleepTimer, clearSleepTimer, sleepTimerEndsAt } = useMusicPlayer();
+  const [modalVisible, setModalVisible] = useState(false);
+  const [remainingText, setRemainingText] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const updateRemaining = () => {
+      const remaining = formatSleepTimerRemaining(sleepTimerEndsAt);
+      setRemainingText(remaining);
+    };
+    
+    updateRemaining();
+    const interval = setInterval(updateRemaining, 1000);
+    return () => clearInterval(interval);
+  }, [sleepTimerEndsAt]);
+  
+  const isActive = remainingText !== null;
+  
+  const handlePress = () => {
+    triggerHaptic();
+    setModalVisible(true);
+  };
+  
+  const handleSetTimer = (minutes: number) => {
+    setSleepTimer(minutes);
+    onTimerSet?.(minutes);
+    setModalVisible(false);
+    triggerHaptic();
+  };
+  
+  const handleEndOfTrack = () => {
+    setModalVisible(false);
+    triggerHaptic();
+  };
+  
+  const handleClearTimer = () => {
+    clearSleepTimer();
+    onTimerCleared?.();
+    setModalVisible(false);
+    triggerHaptic();
+  };
+  
+  return (
+    <>
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.7}>
+        <View style={[styles.sleepPill, isActive && styles.sleepPillActive]}>
+          <MaterialCommunityIcons 
+            name="weather-night" 
+            size={iconSize} 
+            color={isActive ? Colors.metallicBrown.primary : Colors.text} 
+          />
+          <Text style={[styles.sleepPillText, isActive && styles.sleepPillTextActive]}>
+            {remainingText ? remainingText : "Sleep"}
+          </Text>
+        </View>
+      </TouchableOpacity>
+      
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setModalVisible(false)}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Sleep Timer</Text>
+            <Text style={styles.modalSubtitle}>Stop playback after</Text>
+            
+            <View style={styles.timerOptions}>
+              {[15, 30, 45, 60].map((minutes) => (
+                <TouchableOpacity
+                  key={minutes}
+                  style={styles.timerOption}
+                  onPress={() => handleSetTimer(minutes)}
+                >
+                  <Text style={styles.timerOptionText}>{minutes} min</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            {isActive && (
+              <TouchableOpacity
+                style={styles.cancelOption}
+                onPress={handleClearTimer}
+              >
+                <Text style={styles.cancelOptionText}>Cancel timer</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+};
+
+// ─── PlaybackSpeedButton ─────────────────────────────────────────────────────
+
+export const PlaybackSpeedButton = ({
+  iconSize = moderateScale(20),
+  onSpeedChange,
+}: {
+  iconSize?: number;
+  onSpeedChange?: (rate: number) => void;
+}) => {
+  const { setPlaybackRate, playbackRate } = useMusicPlayer();
+  const [modalVisible, setModalVisible] = useState(false);
+  
+  const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+  const isActive = playbackRate !== 1.0;
+  
+  const formatSpeedLabel = (rate: number): string => {
+    if (rate === 1.0) return "1x";
+    return `${rate}x`;
+  };
+  
+  const handlePress = () => {
+    triggerHaptic();
+    setModalVisible(true);
+  };
+  
+  const handleSetSpeed = (rate: number) => {
+    setPlaybackRate(rate);
+    onSpeedChange?.(rate);
+    setModalVisible(false);
+    triggerHaptic();
+  };
+  
+  return (
+    <>
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.7}>
+        <View style={[styles.speedPill, isActive && styles.speedPillActive]}>
+          <MaterialCommunityIcons 
+            name="speedometer" 
+            size={iconSize} 
+            color={isActive ? Colors.metallicBrown.primary : Colors.text} 
+          />
+          <Text style={[styles.speedPillText, isActive && styles.speedPillTextActive]}>
+            {formatSpeedLabel(playbackRate)}
+          </Text>
+        </View>
+      </TouchableOpacity>
+      
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setModalVisible(false)}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Playback Speed</Text>
+            <Text style={styles.modalSubtitle}>Pitch is preserved at all speeds</Text>
+            
+            <View style={styles.speedOptions}>
+              {speedOptions.map((rate) => (
+                <TouchableOpacity
+                  key={rate}
+                  style={[
+                    styles.speedOption,
+                    playbackRate === rate && styles.speedOptionActive,
+                  ]}
+                  onPress={() => handleSetSpeed(rate)}
+                >
+                  <Text
+                    style={[
+                      styles.speedOptionText,
+                      playbackRate === rate && styles.speedOptionTextActive,
+                    ]}
+                  >
+                    {formatSpeedLabel(rate)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+};
+
 // ─── ActionRow (Horizontal Scrollable) ───────────────────────────────────────
-// This component wraps all action buttons in a horizontally scrollable view
 
 export const ActionRow = ({
   likeCount = 0,
@@ -545,12 +748,16 @@ export const ActionRow = ({
   onDownloadPress,
   onSharePress,
   onPlaylistPress,
+  onSleepTimerPress,
+  onSpeedPress,
   showDownload = true,
   showShare = true,
   showPlaylist = true,
   showComments = true,
   showLikeDislike = true,
   showViewCount = true,
+  showSleepTimer = true,
+  showSpeed = true,
 }: {
   likeCount?: number;
   dislikeCount?: number;
@@ -565,12 +772,16 @@ export const ActionRow = ({
   onDownloadPress?: () => void;
   onSharePress?: () => void;
   onPlaylistPress?: () => void;
+  onSleepTimerPress?: () => void;
+  onSpeedPress?: () => void;
   showDownload?: boolean;
   showShare?: boolean;
   showPlaylist?: boolean;
   showComments?: boolean;
   showLikeDislike?: boolean;
   showViewCount?: boolean;
+  showSleepTimer?: boolean;
+  showSpeed?: boolean;
 }) => {
   const iconSize = moderateScale(24);
   const smallIconSize = moderateScale(20);
@@ -582,7 +793,6 @@ export const ActionRow = ({
       contentContainerStyle={styles.actionRowContent}
       style={styles.actionScrollView}
     >
-      {/* Like button */}
       {showLikeDislike && !isLocal && (
         <View style={styles.actionItem}>
           <TouchableOpacity onPress={onLikePress} activeOpacity={0.7}>
@@ -590,7 +800,7 @@ export const ActionRow = ({
               <Ionicons
                 name={isLiked ? "thumbs-up" : "thumbs-up-outline"}
                 size={iconSize}
-                color={isLiked ? Colors.gold : Colors.text}
+                color={isLiked ? Colors.metallicBrown.primary : Colors.text}
               />
               {likeCount > 0 && (
                 <Text style={styles.iconCountText}>{formatCount(likeCount)}</Text>
@@ -600,7 +810,6 @@ export const ActionRow = ({
         </View>
       )}
       
-      {/* Dislike button */}
       {showLikeDislike && !isLocal && (
         <View style={styles.actionItem}>
           <TouchableOpacity onPress={onDislikePress} activeOpacity={0.7}>
@@ -608,7 +817,7 @@ export const ActionRow = ({
               <Ionicons
                 name={isDisliked ? "thumbs-down" : "thumbs-down-outline"}
                 size={iconSize}
-                color={isDisliked ? Colors.gold : Colors.text}
+                color={isDisliked ? Colors.metallicBrown.primary : Colors.text}
               />
               {dislikeCount > 0 && (
                 <Text style={styles.iconCountText}>{formatCount(dislikeCount)}</Text>
@@ -618,7 +827,6 @@ export const ActionRow = ({
         </View>
       )}
       
-      {/* Comments button */}
       {showComments && !isLocal && commentsCount > 0 && (
         <View style={styles.actionItem}>
           <TouchableOpacity onPress={onCommentsPress} activeOpacity={0.7}>
@@ -636,15 +844,13 @@ export const ActionRow = ({
         </View>
       )}
       
-      {/* View count badge */}
       {showViewCount && !isLocal && viewCount > 0 && (
         <View style={[styles.actionItem, styles.viewCountItem]}>
-          <Ionicons name="play-circle-outline" size={smallIconSize} color={Colors.textSub} />
+          <Ionicons name="play-circle-outline" size={smallIconSize} color={Colors.textMuted} />
           <Text style={styles.viewCountText}>{formatCount(viewCount)} views</Text>
         </View>
       )}
       
-      {/* Add to Playlist button */}
       {showPlaylist && (
         <View style={styles.actionItem}>
           <TouchableOpacity onPress={onPlaylistPress} activeOpacity={0.7}>
@@ -653,19 +859,29 @@ export const ActionRow = ({
         </View>
       )}
       
-      {/* Download button */}
       {showDownload && (
         <View style={styles.actionItem}>
           <DownloadSongButton iconSize={iconSize} />
         </View>
       )}
       
-      {/* Share button */}
       {showShare && (
         <View style={styles.actionItem}>
           <TouchableOpacity onPress={onSharePress} activeOpacity={0.7}>
             <Ionicons name="share-outline" size={iconSize} color={Colors.text} />
           </TouchableOpacity>
+        </View>
+      )}
+      
+      {showSleepTimer && !isLocal && (
+        <View style={styles.actionItem}>
+          <SleepTimerButton iconSize={smallIconSize} onTimerSet={onSleepTimerPress} />
+        </View>
+      )}
+      
+      {showSpeed && !isLocal && (
+        <View style={styles.actionItem}>
+          <PlaybackSpeedButton iconSize={smallIconSize} onSpeedChange={onSpeedPress} />
         </View>
       )}
     </ScrollView>
@@ -721,7 +937,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: -6,
     right: -10,
-    backgroundColor: Colors.gold,
+    backgroundColor: Colors.metallicBrown.primary,
     borderRadius: scale(10),
     minWidth: scale(18),
     height: scale(18),
@@ -744,8 +960,143 @@ const styles = StyleSheet.create({
     borderRadius: scale(20),
   },
   viewCountText: {
-    color: Colors.textSub,
+    color: Colors.textMuted,
     fontSize: moderateScale(11),
     fontWeight: "500",
+  },
+  sleepPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: scale(12),
+    paddingVertical: verticalScale(6),
+    borderRadius: scale(20),
+    gap: scale(6),
+  },
+  sleepPillActive: {
+    backgroundColor: "rgba(255,215,0,0.15)",
+    borderWidth: 1,
+    borderColor: Colors.metallicBrown.primary,
+  },
+  sleepPillText: {
+    color: Colors.text,
+    fontSize: moderateScale(11),
+    fontWeight: "500",
+  },
+  sleepPillTextActive: {
+    color: Colors.metallicBrown.primary,
+    fontWeight: "600",
+  },
+  speedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: scale(12),
+    paddingVertical: verticalScale(6),
+    borderRadius: scale(20),
+    gap: scale(6),
+  },
+  speedPillActive: {
+    backgroundColor: "rgba(255,215,0,0.15)",
+    borderWidth: 1,
+    borderColor: Colors.metallicBrown.primary,
+  },
+  speedPillText: {
+    color: Colors.text,
+    fontSize: moderateScale(11),
+    fontWeight: "500",
+  },
+  speedPillTextActive: {
+    color: Colors.metallicBrown.primary,
+    fontWeight: "600",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: scale(16),
+    padding: scale(20),
+    width: scale(280),
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  modalTitle: {
+    color: Colors.text,
+    fontSize: moderateScale(18),
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: verticalScale(4),
+  },
+  modalSubtitle: {
+    color: Colors.textMuted,
+    fontSize: moderateScale(12),
+    textAlign: "center",
+    marginBottom: verticalScale(16),
+  },
+  timerOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: scale(12),
+    marginBottom: verticalScale(16),
+  },
+  timerOption: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: scale(16),
+    paddingVertical: verticalScale(10),
+    borderRadius: scale(25),
+    minWidth: scale(80),
+    alignItems: "center",
+  },
+  timerOptionText: {
+    color: Colors.text,
+    fontSize: moderateScale(14),
+    fontWeight: "500",
+  },
+  cancelOption: {
+    backgroundColor: "rgba(255,100,100,0.15)",
+    paddingHorizontal: scale(16),
+    paddingVertical: verticalScale(10),
+    borderRadius: scale(25),
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,100,100,0.3)",
+  },
+  cancelOptionText: {
+    color: "#ff6666",
+    fontSize: moderateScale(14),
+    fontWeight: "600",
+  },
+  speedOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: scale(10),
+  },
+  speedOption: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: scale(16),
+    paddingVertical: verticalScale(10),
+    borderRadius: scale(25),
+    minWidth: scale(70),
+    alignItems: "center",
+  },
+  speedOptionActive: {
+    backgroundColor: "rgba(255,215,0,0.2)",
+    borderWidth: 1,
+    borderColor: Colors.metallicBrown.primary,
+  },
+  speedOptionText: {
+    color: Colors.text,
+    fontSize: moderateScale(14),
+    fontWeight: "500",
+  },
+  speedOptionTextActive: {
+    color: Colors.metallicBrown.primary,
+    fontWeight: "700",
   },
 });
