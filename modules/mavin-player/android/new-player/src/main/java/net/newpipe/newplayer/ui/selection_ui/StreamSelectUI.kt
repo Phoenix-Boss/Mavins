@@ -18,10 +18,13 @@
  * along with NewPlayer.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package net.newpipe.newplayer.ui.selection_ui
 
 import androidx.annotation.OptIn
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -90,7 +93,7 @@ internal fun StreamSelectUI(
 }
 
 /**hide*/
-@OptIn(UnstableApi::class, ExperimentalFoundationApi::class)
+@OptIn(UnstableApi::class)
 @Composable
 internal fun ReorderableStreamItemsList(
     modifier: Modifier,
