@@ -38,7 +38,6 @@ import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,15 +49,13 @@ import javax.inject.Inject
 private const val TAG = "NewPlayerService"
 
 
-@AndroidEntryPoint
 /** @hide */
 internal class NewPlayerService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private lateinit var customCommands: List<CustomCommand>
 
-    @Inject
-    lateinit var newPlayer: NewPlayer
+    var newPlayer: NewPlayer? = null
 
     private var serviceScope = CoroutineScope(Dispatchers.Main + Job())
 

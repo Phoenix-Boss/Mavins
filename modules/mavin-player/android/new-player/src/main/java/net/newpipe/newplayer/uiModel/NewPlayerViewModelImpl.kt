@@ -34,7 +34,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -55,8 +54,7 @@ private const val TAG = "VideoPlayerViewModel"
 private const val GESTURE_SCROLL_RATE_MULTIPLIER = 1.3f
 
 @UnstableApi
-@HiltViewModel
-class NewPlayerViewModelImpl @Inject constructor(
+class NewPlayerViewModelImpl(
     application: Application,
 ) : AndroidViewModel(application), InternalNewPlayerViewModel {
 

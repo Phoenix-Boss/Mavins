@@ -26,7 +26,6 @@ import android.view.LayoutInflater
 import android.widget.FrameLayout
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import dagger.hilt.android.AndroidEntryPoint
 import net.newpipe.newplayer.R
 import net.newpipe.newplayer.uiModel.InternalNewPlayerViewModel
 import net.newpipe.newplayer.uiModel.NewPlayerViewModel
@@ -38,7 +37,6 @@ import net.newpipe.newplayer.ui.theme.VideoPlayerLightTheme
 /**
  * A wrapper for [NewPlayerUI] to allow NewPlayer to be used in a [views](https://developer.android.com/develop/ui/views/layout/declaring-layout) environment.
  */
-@AndroidEntryPoint
 class NewPlayerView : FrameLayout {
 
     var viewModel: NewPlayerViewModel? = null
