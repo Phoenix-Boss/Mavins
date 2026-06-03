@@ -1,4 +1,4 @@
-const { withSettingsGradle } = require('@expo/config-plugins');
+const { withSettingsGradle, withProjectBuildGradle } = require('@expo/config-plugins');
 
 const SETTINGS_MARKER = '// [withNewPlayer] vendored local subproject';
 const SETTINGS_INJECTION = `
@@ -10,47 +10,48 @@ project(':new-player').projectDir = new File(
 )
 `;
 
-const PLUGIN_MARKER = '// [withNewPlayer] compose compiler plugin resolution';
+const BUILD_MARKER = '// [withNewPlayer] compose compiler classpath';
 
 module.exports = function withNewPlayer(config) {
   config = withSettingsGradle(config, (config) => {
-    let contents = config.modResults.contents;
-
-    // Inject into existing pluginManagement block
-    if (!contents.includes(PLUGIN_MARKER)) {
-      // Strategy: find "pluginManagement {" and insert a plugins block before its closing "}"
-      const pmIndex = contents.indexOf('pluginManagement {');
-      if (pmIndex !== -1) {
-        // Find the matching closing brace
-        let depth = 0;
-        let closeIndex = -1;
-        for (let i = pmIndex; i < contents.length; i++) {
-          if (contents[i] === '{') depth++;
-          else if (contents[i] === '}') {
-            depth--;
-            if (depth === 0) { closeIndex = i; break; }
-          }
-        }
-        if (closeIndex !== -1) {
-          const injection = `
-    // [withNewPlayer] compose compiler plugin resolution
-    plugins {
-        id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+    if (!config.modResults.contents.includes(SETTINGS_MARKER)) {
+      config.modResults.contents += SETTINGS_INJECTION;
     }
-`;
-          contents =
-            contents.slice(0, closeIndex) +
-            injection +
-            contents.slice(closeIndex);
-        }
+    return config;
+  });
+
+  config = withProjectBuildGradle(config, (config) => {
+    if (config.modResults.contents.includes(BUILD_MARKER)) {
+      return config;
+    }
+
+    const contents = config.modResults.contents;
+    const buildscriptIndex = contents.indexOf('buildscript {');
+    if (buildscriptIndex === -1) return config;
+
+    const depsIndex = contents.indexOf('dependencies {', buildscriptIndex);
+    if (depsIndex === -1) return config;
+
+    let depth = 0;
+    let closeIndex = -1;
+    for (let i = depsIndex; i < contents.length; i++) {
+      if (contents[i] === '{') depth++;
+      else if (contents[i] === '}') {
+        depth--;
+        if (depth === 0) { closeIndex = i; break; }
       }
     }
 
-    if (!contents.includes(SETTINGS_MARKER)) {
-      contents += SETTINGS_INJECTION;
-    }
+    if (closeIndex === -1) return config;
 
-    config.modResults.contents = contents;
+    const injection = `        ${BUILD_MARKER}
+        classpath('org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.1.20')
+`;
+    config.modResults.contents =
+      contents.slice(0, closeIndex) +
+      injection +
+      contents.slice(closeIndex);
+
     return config;
   });
 
