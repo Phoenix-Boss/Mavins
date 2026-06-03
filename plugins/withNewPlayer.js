@@ -3,10 +3,9 @@
  *
  * Expo config plugin that:
  * 1. Injects ':new-player' into the EAS-generated settings.gradle
- * 2. Injects the Kotlin Compose Compiler plugin classpath into root build.gradle
- *    (required for Kotlin 2.0+ when compose is enabled in a subproject)
+ * 2. Injects pluginManagement resolution for org.jetbrains.kotlin.plugin.compose
+ *    into settings.gradle (required for Kotlin 2.0+ subprojects using Compose)
  */
-
 const { withSettingsGradle, withProjectBuildGradle } = require('@expo/config-plugins');
 
 const SETTINGS_MARKER = '// [withNewPlayer] vendored local subproject';
@@ -19,31 +18,37 @@ project(':new-player').projectDir = new File(
 )
 `;
 
-const BUILD_MARKER = '// [withNewPlayer] compose compiler plugin';
-const BUILD_INJECTION = `
-${BUILD_MARKER}
-        classpath('org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:2.1.20')
+const PLUGIN_MGMT_MARKER = '// [withNewPlayer] compose compiler plugin resolution';
+const PLUGIN_MGMT_INJECTION = `
+${PLUGIN_MGMT_MARKER}
+pluginManagement {
+    plugins {
+        id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
 `;
 
 module.exports = function withNewPlayer(config) {
-  // 1. Inject :new-player into settings.gradle
+  // 1. Inject :new-player include + pluginManagement into settings.gradle
   config = withSettingsGradle(config, (config) => {
-    if (!config.modResults.contents.includes(SETTINGS_MARKER)) {
-      config.modResults.contents += SETTINGS_INJECTION;
-    }
-    return config;
-  });
+    let contents = config.modResults.contents;
 
-  // 2. Inject compose compiler classpath into root build.gradle
-  config = withProjectBuildGradle(config, (config) => {
-    if (config.modResults.contents.includes(BUILD_MARKER)) {
-      return config;
+    // Inject pluginManagement at the very top (must come before any other content)
+    if (!contents.includes(PLUGIN_MGMT_MARKER)) {
+      contents = PLUGIN_MGMT_INJECTION + '\n' + contents;
     }
-    // Insert after the last classpath line in the buildscript dependencies block
-    config.modResults.contents = config.modResults.contents.replace(
-      "classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')",
-      "classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')\n" + BUILD_INJECTION
-    );
+
+    // Inject :new-player include at the bottom
+    if (!contents.includes(SETTINGS_MARKER)) {
+      contents += SETTINGS_INJECTION;
+    }
+
+    config.modResults.contents = contents;
     return config;
   });
 
