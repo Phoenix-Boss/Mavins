@@ -235,7 +235,7 @@ class MavinMediaRepository(private val okHttpClient: OkHttpClient) : MediaReposi
 
     // ── Preview thumbnails — not implemented ───────────────────────────────────
 
-    override suspend fun getPreviewThumbnail(item: String, timestampInMs: Long): Bitmap? = null
+    override suspend fun getPreviewThumbnail(item: String, timestampInMs: Long): Bitmap? = android.graphics.BitmapFactory.decodeResource(context.resources, net.newpipe.newplayer.R.mipmap.ic_launcher)
 
     override suspend fun getPreviewThumbnailsInfo(item: String) =
         MediaRepository.PreviewThumbnailsInfo(count = 0L, distanceInMS = 0L)

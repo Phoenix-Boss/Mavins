@@ -24,8 +24,10 @@ dependencies {
     implementation project(':expo-modules-core')
     compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
 
-    // NewPlayer — the actual framework we are integrating
-    implementation 'com.github.TeamNewPipe:NewPlayer:master-SNAPSHOT'
+    // NewPlayer — vendored local subproject (JitPack removed: repo archived, master-SNAPSHOT broken)
+    // Source lives at modules/mavin-player/android/new-player
+    // Injected into EAS settings.gradle via plugins/withNewPlayer.js
+    implementation project(':new-player')
 
     // NewPipe Extractor — same version as mavin-engine, for YoutubeParsingHelper
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.0'

@@ -21,11 +21,17 @@
 //   4. Restore withExcludeDependencies with forceVersions: { "com.google.protobuf": "3.25.5" }
 //   5. Restore googleServicesFile under android: {}
 //   6. Replace any firestore() calls in the codebase with the modular Firebase v9+ API
+//
+// NEWPLAYER: JitPack dependency removed — NewPlayer is now vendored as a local
+// Android subproject at modules/mavin-player/android/new-player. The config
+// plugin ./plugins/withNewPlayer injects the include into the EAS-generated
+// settings.gradle at build time so no manual settings.gradle edits are needed.
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
 const withIconXml = require("./plugins/withIconXml");
+const withNewPlayer = require("./plugins/withNewPlayer"); // ← vendored NewPlayer
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
@@ -107,6 +113,7 @@ module.exports = {
     // ── Custom build plugins ────────────────────────────────────────────────
     withAbiSplit,
     withIconXml,
+    withNewPlayer,      // ← injects ':new-player' into EAS settings.gradle
 
     // ── Core Expo plugins ───────────────────────────────────────────────────
     "expo-router",
@@ -176,7 +183,10 @@ module.exports = {
             "-dontwarn com.pawns.sdk.**\n" +
             // ExoPlayer / expo-video — prevent R8 from stripping media3 internals
             "-keep class androidx.media3.** { *; }\n" +
-            "-dontwarn androidx.media3.**\n",
+            "-dontwarn androidx.media3.**\n" +
+            // NewPlayer — vendored local subproject
+            "-keep class net.newpipe.newplayer.** { *; }\n" +
+            "-dontwarn net.newpipe.newplayer.**\n",
           // mediaPlayback is the correct foreground service type for audio/video
           // streaming. dataSync and specialUse are unrelated to media playback
           // and were removed to avoid unnecessary permission scrutiny on Play Store.

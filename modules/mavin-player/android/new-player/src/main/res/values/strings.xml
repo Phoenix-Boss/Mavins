@@ -1,0 +1,70 @@
+<!-- NewPlayer
+
+    @author Christian Schabesberger
+
+    Copyright (C) NewPipe e.V. 2024 <code(at)newpipe-ev.de>
+
+    NewPlayer is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    NewPlayer is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with NewPlayer.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<resources>
+    <string name="new_player_name" translatable="false">NewPlayer</string>
+    <string name="video_player_fullscreen_activity">NewPlayer Fullscreen</string>
+    <string name="menu_item_open_in_browser">Open in browser</string>
+    <string name="menu_item_share_timestamp">Share timestamp</string>
+    <string name="menu_item_more_settings">More settings</string>
+    <string name="audio_mode">Audio Mode</string>
+    <string name="menu_item_fit_screen">Fit screen</string>
+    <string name="menu_item_crop_video">Crop video</string>
+    <string name="menu_item_stretch_video">Stretch video</string>
+    <string name="menu_item_sub_titles">Subtitles</string>
+    <string name="menu_selected_language_item">Selected language: %s</string>
+    <string name="menu_item_playback_speed">Playback speed</string>
+    <string name="widget_description_previous_stream">Previous stream</string>
+    <string name="widget_description_fast_rewind">Fast rewind</string>
+    <string name="widget_description_next_stream">Next stream</string>
+    <string name="widget_description_fast_forward">Fast forward</string>
+    <string name="widget_description_play">Play</string>
+    <string name="widget_description_pause">Pause</string>
+    <string name="widget_description_toggle_fullscreen">Toggle fullscreen</string>
+    <string name="widget_description_chapter_selection">Chapter selection</string>
+    <string name="widget_description_playlist_item_selection">Playlist item selection</string>
+    <string name="fast_seeking_backward">Fast seeking backward by %d seconds.</string>
+    <string name="fast_seeking_forward">Fast seeking forward by %d seconds.</string>
+    <string name="seconds">Seconds</string>
+    <string name="volume_indicator">Volume indicator</string>
+    <string name="brightness_indicator">Brightness indicator</string>
+    <string name="close_chapter_selection">Close chapter selection</string>
+    <string name="close_stream_selection">Close stream selection</string>
+    <string name="chapter">Chapter</string>
+    <string name="chapter_thumbnail">Chapter thumbnail</string>
+    <string name="stream_item_thumbnail">Stream item thumbnail</string>
+    <string name="stream_item_drag_handle">Stream item drag handle</string>
+    <string name="repeat_mode_no_repeat">Repeat mode: No repeat</string>
+    <string name="repeat_mode_repeat_all">Repeat mode: Repeat all</string>
+    <string name="repeat_mode_repeat_current">Repeat mode: Repeat currently playing</string>
+    <string name="shuffle_on">Shuffle playlist enabled</string>
+    <string name="shuffle_off">Shuffle playlist disabled</string>
+    <string name="store_playlist">Save current playlist</string>
+    <string name="close">Close</string>
+    <string name="stream_thumbnail">Stream Thumbnail</string>
+    <string name="details_view_button_description">Switch to details view</string>
+    <string name="fullscreen_button_description">Switch to fullscreen video mode</string>
+    <string name="pip_button_description">Picture in picture</string>
+    <string name="playing_in_background">Playing in the background…</string>
+    <string name="seek_thumb_preview">Video seek preview thumbnail</string>a
+    <string name="no_other_tracks_available_toast">No other stream tracks available.</string>
+    <string name="loading">Loading</string>
+    <string name="function_not_yet_implemented_toast">Function is not yet implemented.</string>
+</resources>
