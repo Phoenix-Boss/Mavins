@@ -47,7 +47,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Constraints
@@ -289,4 +289,4 @@ internal fun HiddenMeasure(
 /** @hide */
 @Composable
 internal fun getPixelsPerCentimeter() =
-    LocalResources.current.displayMetrics.xdpi * INCHES_PER_CENTIMETER
+    LocalContext.current.resources.displayMetrics.xdpi * INCHES_PER_CENTIMETER

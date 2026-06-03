@@ -179,7 +179,7 @@ internal fun GestureSurface(
 
             lastTouchPosition = currentTouchedPosition
 
-            if (!movementEventsUnlocked && deadZoneRange < vectorFromFingerDownEvent.distance()) {
+            if (!movementEventsUnlocked && deadZoneRange < vectorFromFingerDownEvent.distance().toDouble()) {
                 movementEventsUnlocked = true
                 if (regularTabJob?.isActive ?: false) {
                     Log.d(TAG, "    cancel regular tab")
@@ -215,4 +215,3 @@ internal fun GestureSurface(
         Surface(color = color, modifier = Modifier.fillMaxSize()) {}
     }
 }
-

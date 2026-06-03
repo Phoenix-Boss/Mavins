@@ -44,7 +44,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.data.PlayMode
-import javax.inject.Inject
 
 private const val TAG = "NewPlayerService"
 
@@ -55,7 +54,7 @@ internal class NewPlayerService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var customCommands: List<CustomCommand>
 
-    var newPlayer: NewPlayer? = null
+    lateinit var newPlayer: NewPlayer
 
     private var serviceScope = CoroutineScope(Dispatchers.Main + Job())
 

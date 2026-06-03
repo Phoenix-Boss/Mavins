@@ -44,7 +44,6 @@ import net.newpipe.newplayer.data.PlayMode
 import net.newpipe.newplayer.data.RepeatMode
 import net.newpipe.newplayer.data.VideoSize
 import net.newpipe.newplayer.ui.ContentScale
-import javax.inject.Inject
 import kotlin.math.abs
 
 val VIDEOPLAYER_UI_STATE = "video_player_ui_state"
