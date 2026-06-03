@@ -76,6 +76,7 @@
         "immer": "^10.2.0",
         "lrclib-api": "^2.0.4",
         "mavin-engine": "file:./modules/mavin-engine",
+        "mavin-player": "file:./modules/mavin-player",
         "pawns-sdk": "file:./modules/pawns",
         "react": "19.1.0",
         "react-dom": "19.1.0",

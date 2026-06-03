@@ -62,10 +62,14 @@ function ProgressBar({ progress, color, backgroundColor }: ProgressBarProps) {
 
 export default function FloatingPlayer() {
   const { colors, isDark } = useTheme();
+  // useTheme() always returns a fully-resolved object — either the real context
+  // value or DARK_THEME as a safe fallback (see ThemeContext.tsx). No guard
+  // needed. The previous crashes were caused by referencing colors.metallicBrown
+  // which does not exist on ThemeColors; the correct property is colors.gold.
   const { totalHeight: tabBarTotalHeight, shadowOffset, shadowRadius, shadowOpacity } = useTabBarHeight();
-  
+
   const [progress, setProgress] = useState(0);
-  const progressInterval = useRef<NodeJS.Timeout | null>(null);
+  const progressInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { expandPlayer, isPlayerVisible } = usePlayerOverlay();
   const { setPlayerOverlayRefs, togglePlayPause } = useMusicPlayer();
@@ -74,7 +78,6 @@ export default function FloatingPlayer() {
   const track = engine.currentTrack;
   const isPlaying = engine.isPlaying;
   const isBuffering = engine.isBuffering;
-  const hasVideoStream = engine.hasVideoStream;
   const isAudioOnlyTrack = engine.isAudioOnlyTrack;
   const isVideoOnlyTrack = engine.isVideoOnlyTrack;
 
@@ -116,7 +119,7 @@ export default function FloatingPlayer() {
 
   // Don't show mini-player when full player is expanded
   if (isPlayerVisible) return null;
-  
+
   // Don't show mini-player when no track is loaded
   if (!track) return null;
 
@@ -171,7 +174,7 @@ export default function FloatingPlayer() {
       onPress={handleExpandPlayer}
       style={[
         styles.container,
-        { 
+        {
           marginBottom: tabBarTotalHeight,
           backgroundColor: colors.surfaceRaised,
           shadowColor: isDark ? '#000' : '#888',
@@ -182,11 +185,11 @@ export default function FloatingPlayer() {
         },
       ]}
     >
-      <View style={[styles.accentLine, { backgroundColor: colors.metallicBrown.primary }]} />
+      <View style={[styles.accentLine, { backgroundColor: colors.gold }]} />
 
-      <ProgressBar 
-        progress={progress} 
-        color={colors.metallicBrown.primary}
+      <ProgressBar
+        progress={progress}
+        color={colors.gold}
         backgroundColor={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}
       />
 
@@ -221,7 +224,7 @@ export default function FloatingPlayer() {
             <Feather
               name="shuffle"
               size={moderateScale(16)}
-              color={engine.shuffleMode === 'off' ? colors.textMuted : colors.metallicBrown.primary}
+              color={engine.shuffleMode === 'off' ? colors.textMuted : colors.gold}
             />
           </TouchableOpacity>
         )}
@@ -271,8 +274,8 @@ export default function FloatingPlayer() {
         {/* Repeat Button */}
         {showRepeat && (
           <TouchableOpacity
-            onPress={(e) => { 
-              e?.stopPropagation(); 
+            onPress={(e) => {
+              e?.stopPropagation();
               if (engine.repeatMode === 'off') engine.setRepeatMode('all');
               else if (engine.repeatMode === 'all') engine.setRepeatMode('one');
               else engine.setRepeatMode('off');
@@ -284,7 +287,7 @@ export default function FloatingPlayer() {
             <MaterialIcons
               name={engine.repeatMode === 'one' ? 'repeat-on' : 'repeat'}
               size={moderateScale(18)}
-              color={engine.repeatMode === 'off' ? colors.textMuted : colors.metallicBrown.primary}
+              color={engine.repeatMode === 'off' ? colors.textMuted : colors.gold}
             />
           </TouchableOpacity>
         )}

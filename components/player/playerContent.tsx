@@ -3,27 +3,33 @@
 // ANDROID-ONLY: All iOS-specific code removed
 // MASTER-SLAVE ARCHITECTURE - Master always plays audio, Slave only provides muted video
 //
-// ARCHITECTURE:
-//   MASTER PLAYER (Hidden): expo-video instance that ALWAYS plays audio
+// ARCHITECTURE v11.0 - MANIFEST-FIRST PLAYBACK (Industry Standard)
+//   Uses DASH/HLS manifests from MavinEngine.getStreamInfo() as primary source
+//   Progressive URLs (MP4/WebM) are NEVER used for streaming - they are IP-bound and cause 403
+//   Manifest URLs are not IP-bound - ExoPlayer handles segment fetching internally
+//
+// MASTER PLAYER (Hidden): expo-video instance that ALWAYS plays audio
+//   - Loads DASH or HLS manifest URL from getStreamInfo()
 //   - Never paused (unless user explicitly pauses)
 //   - Never muted
 //   - Source of truth for all playback
 //   - Active regardless of which tab is visible
 //
-//   SLAVE PLAYER (Visible): Second expo-video instance for video rendering ONLY
+// SLAVE PLAYER (Visible): Second expo-video instance for video rendering ONLY
 //   - ALWAYS MUTED - provides only video frames
 //   - Visible only on video tab
 //   - Seeks to master position + 5 seconds on tab switch
 //   - Play/pause follows master's state
 //   - Never outputs audio
 //   - Mirrors master's playback rate
+//   - Loads video-only DASH stream (videoOnlyStreams) when available
 //
-//   VIDEO OFFSET STRATEGY: When switching to video tab, slave seeks to master position + 5 seconds
-//   - Video stays ahead of audio to prevent sync issues
-//   - Progress bar always shows master position (audio)
-//   - Only master player triggers track finish via status === 'idle' detection
+// MANIFEST STRATEGY:
+//   - Primary: DASH manifest (dashMpdUrl) - best compatibility with ExoPlayer
+//   - Secondary: HLS manifest (hlsUrl) - fallback for DASH failures
+//   - NEVER: Progressive MP4/WebM URLs for streaming (only for downloads)
 //
-//   END DETECTION: Master's statusChange from 'readyToPlay' to 'idle' = genuine track end
+// END DETECTION: Master's statusChange from 'readyToPlay' to 'idle' = genuine track end
 //   - This is immune to buffering pauses, AudioFocus loss, phone calls
 //   - Slave NEVER triggers end detection
 
@@ -100,6 +106,7 @@ import {
 import { useGestureContext } from '@/libs/gestureContext';
 import { downloadAndSaveSong } from '@/services/download';
 import { useIsSongDownloaded, useIsSongDownloading } from '@/store/library';
+import MavinEngine from '@/modules/mavin-engine';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -111,13 +118,13 @@ const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 // Video offset constants (5 seconds ahead of audio)
 const VIDEO_OFFSET_SECONDS = 5;
 
-// Retry constants for 403 errors
-const MAX_RETRY_COUNT = 2;
-const RETRY_DELAY_MS = 1000;
+// Manifest load timeout (DASH/HLS manifests can take longer to parse)
+const MANIFEST_LOAD_TIMEOUT_MS = 15000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MODULE-LEVEL MASTER AUDIO PLAYER SINGLETON (expo-video, hidden)
 // ALWAYS plays audio - NEVER muted - source of truth for ALL playback
+// Loads DASH/HLS manifest URLs, NOT progressive MP4 URLs
 // ─────────────────────────────────────────────────────────────────────────────
 const MASTER_PLAYER_GLOBAL_KEY = '__MavinAudioMasterPlayer__';
 
@@ -135,7 +142,8 @@ try {
   masterPlayer.staysActiveInBackground = true;
   masterPlayer.volume = 1.0;
   masterPlayer.timeUpdateEventInterval = 0.25; // Native time updates every 250ms
-  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0, timeUpdateEventInterval=0.25');
+  masterPlayer.audioMixingMode = 'doNotMix'; // Master requests exclusive AudioFocus
+  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0');
 } catch (e) {
   console.warn('[PlayerContent] Failed to configure MASTER player:', e);
 }
@@ -148,6 +156,7 @@ setMasterPlayer(masterPlayer);
 // ─────────────────────────────────────────────────────────────────────────────
 // MODULE-LEVEL SLAVE VIDEO PLAYER SINGLETON (expo-video, visible)
 // ALWAYS MUTED - provides ONLY video frames, NO audio output
+// Loads video-only DASH stream when available (videoOnlyStreams from extractor)
 // ─────────────────────────────────────────────────────────────────────────────
 const SLAVE_PLAYER_GLOBAL_KEY = '__MavinVideoSlavePlayer__';
 
@@ -165,7 +174,7 @@ try {
   slavePlayer.staysActiveInBackground = false;
   slavePlayer.volume = 0.0;   // Zero volume ensures no audio
   slavePlayer.audioMixingMode = 'mixWithOthers'; // Slave never requests AudioFocus
-  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0, audioMixingMode=mixWithOthers');
+  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0');
 } catch (e) {
   console.warn('[PlayerContent] Failed to configure SLAVE player:', e);
 }
@@ -327,10 +336,10 @@ function ArtistLine({
 }) {
   const artists = useMemo(() => parseArtists(rawArtist).map(formatArtistName), [rawArtist]);
 
-  if (!artists.length) return <Text style={[styles.artist, { color: colors.textSub }]}>—</Text>;
+  if (!artists.length) return <Text style={[styles.artist, { color: colors.textMuted }]}>—</Text>;
 
   return (
-    <Text style={[styles.artist, { color: colors.textSub }]}>
+    <Text style={[styles.artist, { color: colors.textMuted }]}>
       {artists.map((name, idx) => {
         let channelId = '';
         if (uploaderUrl && !isLocal) {
@@ -343,7 +352,7 @@ function ArtistLine({
 
         return (
           <React.Fragment key={`${name}-${idx}`}>
-            {idx > 0 && <Text style={[styles.artistSeparator, { color: colors.textSub }]}>, </Text>}
+            {idx > 0 && <Text style={[styles.artistSeparator, { color: colors.textMuted }]}>, </Text>}
             <Text
               style={[
                 styles.artistName,
@@ -363,7 +372,7 @@ function ArtistLine({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Download Button Component
+// Download Button Component (kept as-is, uses progressive URLs for downloads only)
 // ─────────────────────────────────────────────────────────────────────────────
 interface DownloadButtonProps {
   trackId: string;
@@ -648,6 +657,7 @@ function PlayerContentInner({
     updateVideoPosition,
     updateVideoDuration,
     updateVideoIsPlaying,
+    bufferedPosition,
   } = useMusicPlayer();
 
   const isPlaying = engine.isPlaying;
@@ -709,22 +719,52 @@ function PlayerContentInner({
   const viewCount = liveExtras?.viewCount ?? -1;
   const uploaderUrl: string | undefined = liveExtras?.uploaderUrl;
   const videoId: string | undefined = liveExtras?.videoId ?? displayTrack?.videoId;
-  const muxedVideoUrl: string | undefined = liveExtras?.muxedVideoUrl;
-  const videoUrl: string | undefined = liveExtras?.videoUrl;
 
-  const activeVideoUrl = useMemo(() => {
-    const url = muxedVideoUrl ?? videoUrl ?? undefined;
-    if (!url) return null;
+  // ── Manifest URLs from native module (DASH/HLS - IP-bound? NO - these are stable manifests)
+  // dashMpdUrl: DASH manifest URL - ExoPlayer's native format, best compatibility
+  // hlsUrl: HLS manifest URL - fallback when DASH is unavailable
+  // videoOnlyUrl: Video-only DASH stream URL - for slave player on video tab
+  const dashManifestUrl: string | undefined = liveExtras?.dashManifestUrl;
+  const hlsManifestUrl: string | undefined = liveExtras?.hlsManifestUrl;
+  const videoOnlyManifestUrl: string | undefined = liveExtras?.videoOnlyManifestUrl;
+
+  // Validate manifest URLs
+  const validDashUrl = useMemo(() => {
+    if (!dashManifestUrl) return null;
     try {
-      new URL(url);
-      return url;
+      new URL(dashManifestUrl);
+      return dashManifestUrl;
     } catch {
-      console.warn('[PlayerContent] Invalid video URL:', url);
+      console.warn('[PlayerContent] Invalid DASH manifest URL:', dashManifestUrl);
       return null;
     }
-  }, [muxedVideoUrl, videoUrl]);
+  }, [dashManifestUrl]);
 
-  const hasVideo = !isLocal && !!activeVideoUrl && displayTrack.id !== DUMMY_TRACK.id;
+  const validHlsUrl = useMemo(() => {
+    if (!hlsManifestUrl) return null;
+    try {
+      new URL(hlsManifestUrl);
+      return hlsManifestUrl;
+    } catch {
+      console.warn('[PlayerContent] Invalid HLS manifest URL:', hlsManifestUrl);
+      return null;
+    }
+  }, [hlsManifestUrl]);
+
+  const validVideoManifestUrl = useMemo(() => {
+    if (!videoOnlyManifestUrl) return null;
+    try {
+      new URL(videoOnlyManifestUrl);
+      return videoOnlyManifestUrl;
+    } catch {
+      console.warn('[PlayerContent] Invalid video-only manifest URL:', videoOnlyManifestUrl);
+      return null;
+    }
+  }, [videoOnlyManifestUrl]);
+
+  // Primary playback URL: DASH first, HLS as fallback
+  const primaryManifestUrl = validDashUrl ?? validHlsUrl;
+  const hasVideo = !isLocal && !!validVideoManifestUrl && displayTrack.id !== DUMMY_TRACK.id;
   const canShowLyrics = !isLocal && !!(videoId ?? displayTrack?.id) && displayTrack.id !== DUMMY_TRACK.id;
 
   const [isFavorite, setIsFavorite] = useState(false);
@@ -747,8 +787,35 @@ function PlayerContentInner({
   const [videoError, setVideoError] = useState<string | null>(null);
   const [masterReady, setMasterReady] = useState(false);
   const [slaveReady, setSlaveReady] = useState(false);
-  const [bufferedPosition, setBufferedPosition] = useState(0);
+  const [bufferedPositionState, setBufferedPositionState] = useState(0);
   const [playbackRate, setPlaybackRateState] = useState(1.0);
+  const [showSpeedPicker, setShowSpeedPicker] = useState(false);
+
+  const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+  const handleSetSpeed = useCallback((rate: number) => {
+    try {
+      masterPlayer.playbackRate = rate;
+      setPlaybackRateState(rate);
+      if (slaveReady) slavePlayer.playbackRate = rate;
+    } catch (e) {
+      console.warn('[PlayerContent] setPlaybackRate failed:', e);
+    }
+    setShowSpeedPicker(false);
+  }, [slaveReady]);
+
+  // Refs for latest values (avoid stale closures in listeners)
+  const primaryManifestUrlRef = useRef<string | null>(null);
+  const validVideoManifestUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    primaryManifestUrlRef.current = primaryManifestUrl;
+    validVideoManifestUrlRef.current = validVideoManifestUrl;
+  }, [primaryManifestUrl, validVideoManifestUrl]);
+
+  // Visual playback state — driven by the master player's timeUpdate and playingChange events
+  const [visualPositionSec, setVisualPositionSec] = useState(0);
+  const [visualDurationSec, setVisualDurationSec] = useState(0);
+  const [visualIsPlaying, setVisualIsPlaying] = useState(false);
   
   const isTransitioning = useRef(false);
   const activeSegmentRef = useRef<'song' | 'video'>('song');
@@ -763,6 +830,41 @@ function PlayerContentInner({
   // Track previous master status for proper end detection
   const previousMasterStatusRef = useRef<string | null>(null);
 
+  // Event-driven wait for player ready (no polling)
+  const waitForPlayerReady = useCallback((
+    player: any,
+    timeoutMs: number
+  ): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (player.status === 'readyToPlay') {
+        resolve();
+        return;
+      }
+
+      let timeoutId: ReturnType<typeof setTimeout>;
+      let listener: any = null;
+
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (listener) {
+          try { listener.remove?.(); } catch {}
+        }
+      };
+
+      listener = player.addListener('statusChange', ({ status }: { status: string }) => {
+        if (status === 'readyToPlay') {
+          cleanup();
+          resolve();
+        }
+      });
+
+      timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Player ready timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+  }, []);
+
   // ── MASTER PLAYER STATUS LISTENER ───────────────────────────────────────────
   useEffect(() => {
     if (!masterPlayer) return;
@@ -774,7 +876,7 @@ function PlayerContentInner({
     let timeUpdateListener: any = null;
 
     try {
-      // STATUS CHANGE - PRIMARY END DETECTION
+      // STATUS CHANGE - PRIMARY END DETECTION + MANIFEST LOAD CONFIRMATION
       statusListener = masterPlayer.addListener('statusChange', ({ status, error }: any) => {
         const previousStatus = previousMasterStatusRef.current;
         previousMasterStatusRef.current = status;
@@ -782,6 +884,12 @@ function PlayerContentInner({
         if (status === 'readyToPlay') {
           setMasterReady(true);
           setVideoError(null);
+
+          // Load slave video manifest now that master is confirmed ready
+          const videoManifestUrl = validVideoManifestUrlRef.current;
+          if (videoManifestUrl && !isLocal && hasVideo) {
+            loadSlaveVideoManifest(videoManifestUrl);
+          }
           
           // Generate thumbnails for scrubber preview when track is ready
           const duration = masterPlayer.duration ?? 0;
@@ -799,12 +907,14 @@ function PlayerContentInner({
           }
         } else if (status === 'error') {
           const errMsg = error?.message || '';
+          // Manifest 403 is rare but possible if manifest itself expired
           if (errMsg.includes('403')) {
-            console.log('[PlayerContent] Master 403 suppressed — context handles retry');
-            return;
+            console.warn('[PlayerContent] Manifest 403 - showing error without re-resolve loop');
+            setVideoError('Stream unavailable. Please try again.');
+          } else {
+            console.error('[PlayerContent] MASTER player error:', errMsg);
+            setVideoError(errMsg || 'Playback error');
           }
-          console.error('[PlayerContent] MASTER player error:', errMsg);
-          setVideoError(errMsg || 'Playback error');
         }
         
         // PRIMARY END DETECTION: status goes from 'readyToPlay' to 'idle'
@@ -819,12 +929,12 @@ function PlayerContentInner({
       // PLAYING CHANGE - Slave synchronization ONLY (NO end detection)
       playingListener = masterPlayer.addListener('playingChange', ({ isPlaying: mPlaying }: any) => {
         masterPlayingRef.current = mPlaying;
+        setVisualIsPlaying(mPlaying);
         
         // Sync slave's play state to match master
         if (slaveReady && slavePlayingRef.current !== mPlaying) {
           if (mPlaying) {
             slavePlayer.play();
-            // Also sync playback rate when starting playback
             const currentRate = masterPlayer.playbackRate ?? 1.0;
             slavePlayer.playbackRate = currentRate;
             slavePlayingRef.current = true;
@@ -835,18 +945,10 @@ function PlayerContentInner({
         }
       });
       
-      // SOURCE CHANGE - Reset end detection and sync slave source
+      // SOURCE CHANGE - Reset end detection only
       sourceChangeListener = masterPlayer.addListener('sourceChange', () => {
         console.log('[PlayerContent] Master source changed, resetting end detection');
         trackEndHandledRef.current = false;
-        
-        // Mirror slave source from master (bare URI, no metadata)
-        const masterSource = (masterPlayer as any).source;
-        if (masterSource && typeof masterSource === 'object' && masterSource.uri) {
-          slavePlayer.replaceAsync({ uri: masterSource.uri, useCaching: true });
-        } else if (typeof masterSource === 'string') {
-          slavePlayer.replaceAsync({ uri: masterSource, useCaching: true });
-        }
       });
       
       // RATE CHANGE - Sync slave playback rate when master rate changes
@@ -867,11 +969,10 @@ function PlayerContentInner({
         if (dur > 0) setVisualDurationSec(dur);
         updateVideoPosition(pos);
         updateVideoDuration(dur);
-        setVisualIsPlaying(masterPlayingRef.current);
         
         // Read buffered position for scrubber buffer bar
         const buffered = masterPlayer.bufferedPosition ?? 0;
-        setBufferedPosition(buffered);
+        setBufferedPositionState(buffered);
       });
       
     } catch (e) {
@@ -887,7 +988,7 @@ function PlayerContentInner({
         timeUpdateListener?.remove?.();
       } catch {}
     };
-  }, [engine, slaveReady, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying]);
+  }, [engine, slaveReady, updateVideoPosition, updateVideoDuration, updateVideoIsPlaying, isLocal, hasVideo]);
 
   // ── SLAVE PLAYER STATUS LISTENER ────────────────────────────────────────────
   useEffect(() => {
@@ -903,7 +1004,6 @@ function PlayerContentInner({
           try { 
             slavePlayer.muted = true; 
             slavePlayer.volume = 0;
-            // Sync rate when slave becomes ready and master is playing
             if (masterPlayingRef.current) {
               slavePlayer.playbackRate = masterPlayer.playbackRate ?? 1.0;
             }
@@ -934,45 +1034,24 @@ function PlayerContentInner({
         playingListener?.remove?.();
       } catch {}
     };
-  }, [updateVideoIsPlaying, masterPlayingRef]);
+  }, [updateVideoIsPlaying]);
 
-  // ── LOAD SLAVE STREAM WHEN TRACK CHANGES ────────────────────────────────────
-  const loadSlaveStream = useCallback(async () => {
-    if (!activeVideoUrl || isLocal) return;
-
-    console.log('[PlayerContent] Pre-loading slave (video-only) stream');
-
+  // ── LOAD SLAVE VIDEO MANIFEST ────────────────────────────────────────────────
+  // Called from master statusChange 'readyToPlay' handler.
+  // Master is confirmed playing before slave ever touches the CDN — no race.
+  const loadSlaveVideoManifest = useCallback(async (videoManifestUrl: string) => {
+    if (!videoManifestUrl || isLocal) return;
+    console.log('[PlayerContent] Master readyToPlay — loading slave video manifest');
     try {
       setSlaveReady(false);
-      slavePlayer.replace({ uri: activeVideoUrl, useCaching: true });
+      await slavePlayer.replaceAsync({ uri: videoManifestUrl, useCaching: true });
       slavePlayer.muted = true;
       slavePlayer.volume = 0;
-
-      const pollStart = Date.now();
-      await new Promise<void>((resolve) => {
-        const poll = () => {
-          if (slavePlayer.status === 'readyToPlay') {
-            setSlaveReady(true);
-            resolve();
-            return;
-          }
-          if (Date.now() - pollStart >= 8000) {
-            resolve();
-            return;
-          }
-          setTimeout(poll, 200);
-        };
-        poll();
-      });
-      console.log('[PlayerContent] Slave stream pre-loaded');
+      console.log('[PlayerContent] Slave video manifest loaded');
     } catch (e: any) {
-      console.warn('[PlayerContent] Slave pre-load failed (non-fatal):', e?.message);
+      console.warn('[PlayerContent] Slave load failed (non-fatal):', e?.message);
     }
-  }, [activeVideoUrl, isLocal]);
-
-  useEffect(() => {
-    loadSlaveStream();
-  }, [loadSlaveStream]);
+  }, [isLocal]);
 
   // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows via playingChange ──
   const handlePlayPause = useCallback(async () => {
@@ -1028,10 +1107,10 @@ function PlayerContentInner({
             videoSeekPosition = Math.max(0, videoDuration - 0.5);
           }
           
-          if (!slaveReady && activeVideoUrl) {
-            console.log('[PlayerContent] Loading slave stream on video tab switch...');
+          if (!slaveReady && validVideoManifestUrl) {
+            console.log('[PlayerContent] Loading slave video manifest on tab switch...');
             try {
-              slavePlayer.replace({ uri: activeVideoUrl, useCaching: true });
+              await slavePlayer.replaceAsync({ uri: validVideoManifestUrl, useCaching: true });
               slavePlayer.muted = true;
               slavePlayer.volume = 0;
               setSlaveReady(true);
@@ -1078,7 +1157,7 @@ function PlayerContentInner({
         }, 500);
       }
     },
-    [hasVideo, displayTrack.id, videoError, isLocal, activeVideoUrl, slaveReady, slavePlayer, masterPlayer, masterPlayingRef, setVideoActive],
+    [hasVideo, displayTrack.id, videoError, isLocal, validVideoManifestUrl, slaveReady],
   );
 
   // ── SEEK HANDLER - maintains offset when on video tab ────────────────────────
@@ -1105,6 +1184,9 @@ function PlayerContentInner({
     
     await engine.skipToNext();
     
+    // Reset end detection flag for new track
+    trackEndHandledRef.current = false;
+    
     if (activeSegment === 'video' && slaveReady) {
       setTimeout(async () => {
         const newAudioPos = masterPlayer.currentTime ?? 0;
@@ -1128,6 +1210,9 @@ function PlayerContentInner({
     setPreferredStreamType(activeSegment === 'video' ? 'video' : 'audio');
     
     await engine.skipToPrevious();
+    
+    // Reset end detection flag for new track
+    trackEndHandledRef.current = false;
     
     if (activeSegment === 'video' && slaveReady) {
       setTimeout(async () => {
@@ -1154,7 +1239,7 @@ function PlayerContentInner({
     setVideoError(null);
     setVisualPositionSec(0);
     setVisualDurationSec(0);
-    setBufferedPosition(0);
+    setBufferedPositionState(0);
     setVideoActive(false);
     updateVideoPosition(0);
     updateVideoDuration(0);
@@ -1392,7 +1477,7 @@ function PlayerContentInner({
   const showSlavePlayer = hasVideo && !isLocal && activeSegment === 'video' && slaveReady;
 
   // Buffer fill percentage for scrubber
-  const bufferFillPercent = visualDurationSec > 0 ? Math.min(bufferedPosition / visualDurationSec, 1) : 0;
+  const bufferFillPercent = visualDurationSec > 0 ? Math.min(bufferedPositionState / visualDurationSec, 1) : 0;
 
   // ─────────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1414,12 +1499,12 @@ function PlayerContentInner({
                   onPressIn={() => setButtonActive(true)}
                   onPressOut={() => setButtonActive(false)}
                 >
-                  <Text style={activeSegment === 'song' ? styles.segmentActive : [styles.segmentInactive, { color: colors.textSub }]}>
+                  <Text style={activeSegment === 'song' ? styles.segmentActive : [styles.segmentInactive, { color: colors.textMuted }]}>
                     Song
                   </Text>
                 </TouchableOpacity>
 
-                {!isLocal && (
+                {!isLocal && hasVideo && (
                   <TouchableOpacity
                     onPress={() => handleSegmentPress('video')}
                     activeOpacity={hasVideo && !videoError ? 0.7 : 1}
@@ -1429,7 +1514,7 @@ function PlayerContentInner({
                   >
                     <Text
                       style={[
-                        activeSegment === 'video' ? styles.segmentActive : [styles.segmentInactive, { color: colors.textSub }],
+                        activeSegment === 'video' ? styles.segmentActive : [styles.segmentInactive, { color: colors.textMuted }],
                         !hasVideo && { opacity: 0.3 },
                         videoError && { opacity: 0.5, textDecorationLine: 'line-through' },
                       ]}
@@ -1499,7 +1584,7 @@ function PlayerContentInner({
                     <View style={[styles.videoErrorOverlay, { backgroundColor: 'rgba(0,0,0,0.8)' }]}>
                       <MaterialCommunityIcons name="video-off" size={32} color={colors.text} />
                       <Text style={[styles.videoErrorText, { color: colors.text }]}>{videoError}</Text>
-                      <Text style={[styles.videoErrorSubtext, { color: colors.textSub }]}>Playing audio only</Text>
+                      <Text style={[styles.videoErrorSubtext, { color: colors.textMuted }]}>Playing audio only</Text>
                     </View>
                   )}
                 </Animated.View>
@@ -1603,8 +1688,8 @@ function PlayerContentInner({
                     <SkeletonPulse width={70} height={20} borderRadius={20} />
                   ) : (
                     <>
-                      <Ionicons name="play-circle-outline" size={moderateScale(18)} color={colors.textSub} />
-                      <Text style={[styles.pillText, { color: colors.textSub }]}>
+                      <Ionicons name="play-circle-outline" size={moderateScale(18)} color={colors.textMuted} />
+                      <Text style={[styles.pillText, { color: colors.textMuted }]}>
                         {formatCount(viewCount)} views
                       </Text>
                     </>
@@ -1618,12 +1703,25 @@ function PlayerContentInner({
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.actionItem}>
+              {/* Sleep timer + speed — paired pill */}
+              <View style={[styles.pillContainer, styles.actionPill]}>
                 <TouchableOpacity onPress={handleSleepTimer} activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="weather-night" size={moderateScale(22)} color={colors.text} />
+                  <MaterialCommunityIcons name="weather-night" size={moderateScale(20)} color={colors.text} />
+                </TouchableOpacity>
+                <View style={[styles.pillDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                <TouchableOpacity
+                  onPress={() => { triggerHaptic(); setShowSpeedPicker(true); }}
+                  activeOpacity={0.7}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: scale(4) }}
+                >
+                  <MaterialCommunityIcons name="speedometer" size={moderateScale(16)} color={colors.textMuted} />
+                  <Text style={[styles.pillText, { color: colors.textMuted }]}>
+                    {playbackRate === 1.0 ? '1×' : `${playbackRate}×`}
+                  </Text>
                 </TouchableOpacity>
               </View>
 
+              {/* Download + share — paired pill */}
               {!isLocal && displayTrack.id !== DUMMY_TRACK.id && (
                 <View style={[styles.pillContainer, styles.actionPill]}>
                   <DownloadButtonWithProgress
@@ -1700,10 +1798,10 @@ function PlayerContentInner({
               />
 
               <View style={styles.timeRow}>
-                <Text style={[styles.timeText, { color: colors.textSub }]}>
+                <Text style={[styles.timeText, { color: colors.textMuted }]}>
                   {formatTime(visualPositionSec)}
                 </Text>
-                <Text style={[styles.timeText, { color: colors.textSub }]}>
+                <Text style={[styles.timeText, { color: colors.textMuted }]}>
                   {formatTime(visualDurationSec)}
                 </Text>
               </View>
@@ -1805,7 +1903,7 @@ function PlayerContentInner({
                 <Text
                   style={[
                     styles.bottomTab,
-                    { color: colors.textSub },
+                    { color: colors.textMuted },
                     (!canShowLyrics || isLocal) && { opacity: 0.25 },
                   ]}
                 >
@@ -1825,7 +1923,7 @@ function PlayerContentInner({
                 <Text
                   style={[
                     styles.bottomTab,
-                    { color: colors.textSub },
+                    { color: colors.textMuted },
                     isLocal && { opacity: 0.25, textDecorationLine: 'none' },
                   ]}
                 >
@@ -1892,6 +1990,38 @@ function PlayerContentInner({
           />
         </RNModal>
       )}
+
+      {/* Speed picker */}
+      <RNModal
+        visible={showSpeedPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSpeedPicker(false)}
+      >
+        <TouchableOpacity
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' }}
+          activeOpacity={1}
+          onPress={() => setShowSpeedPicker(false)}
+        >
+          <View style={{ backgroundColor: colors.surface, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 32, paddingHorizontal: scale(20) }}>
+            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: colors.textMuted, alignSelf: 'center', marginBottom: 16 }} />
+            <Text style={{ color: colors.text, fontSize: moderateScale(15), fontWeight: '600', marginBottom: 16 }}>Playback Speed</Text>
+            {SPEED_OPTIONS.map((rate) => (
+              <TouchableOpacity
+                key={rate}
+                onPress={() => handleSetSpeed(rate)}
+                activeOpacity={0.7}
+                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: verticalScale(12) }}
+              >
+                <Text style={{ color: playbackRate === rate ? colors.gold : colors.text, fontSize: moderateScale(16), fontWeight: playbackRate === rate ? '700' : '400' }}>
+                  {rate === 1.0 ? 'Normal (1×)' : `${rate}×`}
+                </Text>
+                {playbackRate === rate && <Ionicons name="checkmark" size={20} color={colors.gold} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </RNModal>
     </>
   );
 }

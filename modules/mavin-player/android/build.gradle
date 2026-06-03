@@ -1,0 +1,38 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    compileSdk 34
+    namespace "expo.modules.mavinplayer"
+
+    defaultConfig {
+        minSdk 24
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation project(':expo-modules-core')
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+
+    // NewPlayer — the actual framework we are integrating
+    implementation 'com.github.TeamNewPipe:NewPlayer:master-SNAPSHOT'
+
+    // NewPipe Extractor — same version as mavin-engine, for YoutubeParsingHelper
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.0'
+
+    // OkHttp — same version as mavin-engine
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Coroutines — needed for MediaRepository suspend functions
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+}

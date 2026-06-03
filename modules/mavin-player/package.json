@@ -1,0 +1,6 @@
+{
+  "name": "mavin-player",
+  "version": "1.0.0",
+  "description": "MavinPlayer — NewPlayer-based YouTube-aware media player",
+  "main": "src/index.ts"
+}

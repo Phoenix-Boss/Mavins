@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="expo.modules.mavinplayer">
+
+    <application>
+        <!-- NewPlayer MediaSessionService for background playback -->
+        <service
+            android:name="net.newpipe.newplayer.service.NewPlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>
