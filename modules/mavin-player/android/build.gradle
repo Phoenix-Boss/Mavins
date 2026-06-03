@@ -2,7 +2,7 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdk 34
+    compileSdk 36
     namespace "expo.modules.mavinplayer"
 
     defaultConfig {
@@ -22,19 +22,22 @@ android {
 
 dependencies {
     implementation project(':expo-modules-core')
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
-
-    // NewPlayer — vendored local subproject (JitPack removed: repo archived, master-SNAPSHOT broken)
-    // Source lives at modules/mavin-player/android/new-player
-    // Injected into EAS settings.gradle via plugins/withNewPlayer.js
     implementation project(':new-player')
 
-    // NewPipe Extractor — same version as mavin-engine, for YoutubeParsingHelper
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+
+    // media3 — must match new-player's versions exactly
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-common:1.4.1'
+    implementation 'androidx.media3:media3-session:1.4.1'
+    implementation 'androidx.media3:media3-datasource-okhttp:1.4.1'
+
+    // NewPipe Extractor
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.0'
 
-    // OkHttp — same version as mavin-engine
+    // OkHttp
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
-    // Coroutines — needed for MediaRepository suspend functions
+    // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }
