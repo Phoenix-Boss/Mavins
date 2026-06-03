@@ -1,5 +1,6 @@
 package expo.modules.mavinplayer
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
@@ -32,7 +33,10 @@ import java.util.concurrent.TimeUnit
  *   getSubtitles(videoId)        → subtitle tracks
  *   getPreviewThumbnail()        → null (not implemented yet)
  */
-class MavinMediaRepository(private val okHttpClient: OkHttpClient) : MediaRepository {
+class MavinMediaRepository(
+    private val context: Context,
+    private val okHttpClient: OkHttpClient
+) : MediaRepository {
 
     companion object {
         private const val TAG = "MavinMediaRepository"

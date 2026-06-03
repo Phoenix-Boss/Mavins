@@ -203,7 +203,7 @@ class MavinPlayerModule : Module() {
         val app = appContext.reactContext?.applicationContext as? Application
             ?: run { Log.e(TAG, "Cannot get Application context"); return }
 
-        val repo = MavinMediaRepository(okHttpClient)
+        val repo = MavinMediaRepository(app, okHttpClient)
             .also { repository = it }
 
         // NewPlayerImpl constructor — NO Hilt needed, plain constructor
