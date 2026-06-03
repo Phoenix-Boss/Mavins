@@ -1,12 +1,4 @@
-/**
- * withNewPlayer.js
- *
- * Expo config plugin that:
- * 1. Injects ':new-player' into the EAS-generated settings.gradle
- * 2. Injects pluginManagement resolution for org.jetbrains.kotlin.plugin.compose
- *    into settings.gradle (required for Kotlin 2.0+ subprojects using Compose)
- */
-const { withSettingsGradle, withProjectBuildGradle } = require('@expo/config-plugins');
+const { withSettingsGradle } = require('@expo/config-plugins');
 
 const SETTINGS_MARKER = '// [withNewPlayer] vendored local subproject';
 const SETTINGS_INJECTION = `
@@ -18,32 +10,42 @@ project(':new-player').projectDir = new File(
 )
 `;
 
-const PLUGIN_MGMT_MARKER = '// [withNewPlayer] compose compiler plugin resolution';
-const PLUGIN_MGMT_INJECTION = `
-${PLUGIN_MGMT_MARKER}
-pluginManagement {
-    plugins {
-        id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
-    }
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-`;
+const PLUGIN_MARKER = '// [withNewPlayer] compose compiler plugin resolution';
 
 module.exports = function withNewPlayer(config) {
-  // 1. Inject :new-player include + pluginManagement into settings.gradle
   config = withSettingsGradle(config, (config) => {
     let contents = config.modResults.contents;
 
-    // Inject pluginManagement at the very top (must come before any other content)
-    if (!contents.includes(PLUGIN_MGMT_MARKER)) {
-      contents = PLUGIN_MGMT_INJECTION + '\n' + contents;
+    // Inject into existing pluginManagement block
+    if (!contents.includes(PLUGIN_MARKER)) {
+      // Strategy: find "pluginManagement {" and insert a plugins block before its closing "}"
+      const pmIndex = contents.indexOf('pluginManagement {');
+      if (pmIndex !== -1) {
+        // Find the matching closing brace
+        let depth = 0;
+        let closeIndex = -1;
+        for (let i = pmIndex; i < contents.length; i++) {
+          if (contents[i] === '{') depth++;
+          else if (contents[i] === '}') {
+            depth--;
+            if (depth === 0) { closeIndex = i; break; }
+          }
+        }
+        if (closeIndex !== -1) {
+          const injection = `
+    // [withNewPlayer] compose compiler plugin resolution
+    plugins {
+        id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+    }
+`;
+          contents =
+            contents.slice(0, closeIndex) +
+            injection +
+            contents.slice(closeIndex);
+        }
+      }
     }
 
-    // Inject :new-player include at the bottom
     if (!contents.includes(SETTINGS_MARKER)) {
       contents += SETTINGS_INJECTION;
     }
