@@ -89,6 +89,31 @@ class MavinPlayerModule : Module() {
             mapOf("success" to true)
         }
 
+        /**
+         * Primary remote-track entry point.
+         * JS passes the URLs already resolved by MavinEngine — no re-extraction happens.
+         * Arms the repository's resolver lambda, then immediately fires player.playStream().
+         * getStreams() picks up the lambda, returns the streams, clears it. One extraction,
+         * one play. Mirrors exactly how the download path works.
+         */
+        AsyncFunction("resolveAndPlay") { videoId: String, dashManifestUrl: String?, hlsManifestUrl: String?, progressiveAudioUrl: String? ->
+            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
+            val repo   = repository ?: throw IllegalStateException("Repository not initialized")
+            moduleScope.launch {
+                repo.resolveAndPlay(
+                    player              = player,
+                    videoId             = videoId,
+                    dashManifestUrl     = dashManifestUrl,
+                    hlsManifestUrl      = hlsManifestUrl,
+                    progressiveAudioUrl = progressiveAudioUrl,
+                    progressiveAudioBitrate = 128000,
+                    progressiveAudioFormat  = "webm",
+                    playMode            = PlayMode.FULLSCREEN_AUDIO
+                )
+            }
+            mapOf("success" to true)
+        }
+
         AsyncFunction("addToPlaylist") { videoId: String ->
             val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
             player.addToPlaylist(videoId)

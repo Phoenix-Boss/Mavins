@@ -5,27 +5,18 @@
 // ANDROID-ONLY: All iOS-specific code removed
 //
 // MASTER-SLAVE ARCHITECTURE (Industry standard workaround for Expo limitations):
-//   MASTER PLAYER: expo-video instance that plays audio (hidden, never muted)
+//   MASTER PLAYER: NewPlayer (MavinPlayer) instance that plays audio with YouTube headers
 //   SLAVE PLAYER: expo-video instance for video rendering (muted, visible only on video tab)
 //
-// This file manages ONLY the MASTER player. The SLAVE player is controlled by playerContent.tsx.
-// All playback state comes from the MASTER player. No expo-audio is used.
+// This file manages BOTH players. For remote tracks, MavinPlayer handles all audio playback
+// with proper YouTube headers (Origin, Referer, Cookie). For local tracks, expo-video master
+// is used as fallback.
 //
-// v11.0 - MANIFEST-FIRST PLAYBACK ARCHITECTURE
-//   Uses DASH/HLS manifest URLs from getStreamInfo() as primary source
-//   Progressive URLs (MP4/WebM) are NEVER used for streaming - they are IP-bound and cause 403
-//   Manifest URLs are stored in TrackExtras for playerContent to consume
-//   Slave video player uses video-only DASH manifest from videoOnlyStreams
-//
-// FIXED: Removed all expo-audio dependencies - using expo-video for everything
-// FIXED: Single source of truth (Master player) for position, duration, playing state
-// FIXED: No AudioFocus handoff - Master owns focus permanently
-// FIXED: Queue, repeat, shuffle fully implemented
-// UPDATED: Enhanced retry logic for NewPipeExtractor v0.26.2
-// UPDATED: Improved parsing error handling and visitor data management
-// UPDATED: Better search fallback strategies with YouTube Music support
-// FIXED: Force DASH/HLS manifest URLs for ExoPlayer compatibility (prevents 403 errors)
-// FIXED: Wait for player readyToPlay status using event-driven approach (no polling)
+// v12.0 - NEWPLAYER-FIRST PLAYBACK ARCHITECTURE
+//   Uses MavinPlayer.playStream(videoId) for ALL remote YouTube tracks
+//   Progressive URLs (MP4/WebM) are NEVER used for streaming - they cause 403 without headers
+//   MavinPlayer's OkHttpDataSource.Factory injects YouTube headers automatically
+//   expo-video master only used for local files (downloaded songs)
 
 import React, {
   createContext,
@@ -36,9 +27,8 @@ import React, {
   useEffect,
   useState,
 } from 'react';
-import { AppState, ToastAndroid } from 'react-native';
+import { AppState, ToastAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// Use legacy API to avoid deprecation warnings
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
 import MavinEngine, {
@@ -47,15 +37,11 @@ import MavinEngine, {
   VideoStream,
 } from '@/modules/mavin-engine';
 
+import MavinPlayer from '@/modules/mavin-player';
+
 import { DownloadedSongMetadata } from '@/store/library';
-import { supabase } from '@/libs/supabase';
 import { supabaseCache } from '@/libs/cache/supabase-cache';
 import type { Song } from '@/types/song';
-
-import {
-  useSystemMediaControls,
-  type SystemMediaControlsProps,
-} from '@/hooks/useSystemMediaControls';
 
 import { useAlert } from '@/contexts/AlertContext';
 
@@ -82,17 +68,14 @@ export type { Song };
 
 export type RepeatMode = 'off' | 'all' | 'one';
 export type ShuffleMode = 'off' | 'on';
+export type PlayMode = 'IDLE' | 'EMBEDDED_VIDEO' | 'FULLSCREEN_VIDEO' | 'PIP' | 'FULLSCREEN_AUDIO' | 'EMBEDDED_AUDIO';
 
 export interface TrackExtras {
-  // Manifest URLs for ExoPlayer playback (DASH/HLS - NOT IP-bound)
-  dashManifestUrl?: string;      // DASH manifest URL from getStreamInfo().dashMpdUrl
-  hlsManifestUrl?: string;       // HLS manifest URL from getStreamInfo().hlsUrl
-  videoOnlyManifestUrl?: string; // Video-only DASH stream from videoOnlyStreams (for slave player)
-  
-  // Progressive URLs (IP-bound - for DOWNLOADS ONLY, NOT for streaming)
-  videoUrl?: string;             // Progressive video URL (download only)
-  muxedVideoUrl?: string;        // Muxed progressive URL (download only)
-  
+  dashManifestUrl?: string;
+  hlsManifestUrl?: string;
+  videoOnlyManifestUrl?: string;
+  videoUrl?: string;
+  muxedVideoUrl?: string;
   videoId?: string;
   uploaderUrl?: string;
   likeCount?: number;
@@ -108,7 +91,7 @@ export interface TrackExtras {
 
 export interface ResolvedTrack {
   id: string;
-  url: string;  // Manifest URL (DASH/HLS) or progressive URL for local/downloaded
+  url: string;
   title: string;
   artist?: string;
   thumbnail?: string;
@@ -116,11 +99,11 @@ export interface ResolvedTrack {
   videoId?: string;
   isDownloaded?: boolean;
   isLocal?: boolean;
-  muxedVideoUrl?: string;      // Progressive URL (download only)
-  videoOnlyUrl?: string;       // Progressive URL (download only)
-  dashManifestUrl?: string;    // DASH manifest for primary playback
-  hlsManifestUrl?: string;     // HLS manifest fallback
-  videoOnlyManifestUrl?: string; // Video-only DASH manifest for slave player
+  muxedVideoUrl?: string;
+  videoOnlyUrl?: string;
+  dashManifestUrl?: string;
+  hlsManifestUrl?: string;
+  videoOnlyManifestUrl?: string;
   hasAudio: boolean;
   hasVideo: boolean;
   isAudioOnly: boolean;
@@ -152,10 +135,6 @@ const STORAGE_KEYS = {
   PRESERVE_PITCH: 'preserve_pitch',
 } as const;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL PLAYBACK SESSION STORE
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface PlaybackSession {
   currentTrack: Song | null;
   queue: Song[];
@@ -186,6 +165,13 @@ interface PlaybackSession {
   preferredStreamType: 'audio' | 'video';
   bufferedPosition: number;
   sleepTimerEndsAt: number | null;
+  // NewPlayer state
+  newPlayerPlaying: boolean;
+  newPlayerPosition: number;
+  newPlayerDuration: number;
+  newPlayerBufferedPercent: number;
+  usingNewPlayer: boolean;
+  currentVideoId: string | null;
 }
 
 const session: PlaybackSession = {
@@ -218,6 +204,12 @@ const session: PlaybackSession = {
   preferredStreamType: 'audio',
   bufferedPosition: 0,
   sleepTimerEndsAt: null,
+  newPlayerPlaying: false,
+  newPlayerPosition: 0,
+  newPlayerDuration: 0,
+  newPlayerBufferedPercent: 0,
+  usingNewPlayer: false,
+  currentVideoId: null,
 };
 
 const sessionListeners = new Set<() => void>();
@@ -241,10 +233,6 @@ function updateQueue(updater: (prev: Song[]) => Song[]) {
   notifySessionChange();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PUBLIC API FOR TAB-AWARE QUEUE
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function setPreferredStreamType(type: 'audio' | 'video') {
   setSession('preferredStreamType', type);
   (global as any).__MavinPreferredStreamType = type;
@@ -255,10 +243,6 @@ export function getPreferredStreamType(): 'audio' | 'video' {
   return session.preferredStreamType;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
 function normalizeLocalUri(uri: string): string {
   if (!uri) return '';
   if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
@@ -268,9 +252,6 @@ function normalizeLocalUri(uri: string): string {
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RESTORE GLOBALS
-// ─────────────────────────────────────────────────────────────────────────────
 const RESTORE_GLOBALS = {
   DONE_KEY: '__MavinRestoreDone__',
   IN_PROGRESS_KEY: '__MavinRestoreInProgress__',
@@ -280,11 +261,8 @@ const RESTORE_GLOBALS = {
   PLAYER_READY_KEY: '__MavinRestoredPlayerReady__',
   RESTORED_TAB_KEY: '__MavinRestoredTab__',
   RESTORED_VIDEO_POSITION_KEY: '__MavinRestoredVideoPosition__',
+  VIDEO_ONLY_URL_KEY: '__MavinRestoredVideoOnlyUrl__',
 } as const;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LOCAL FILE CACHE
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function cacheLocalFileForPlayback(contentUri: string, trackId: string): Promise<string | null> {
   if (!contentUri) return null;
@@ -320,10 +298,6 @@ async function cacheLocalFileForPlayback(contentUri: string, trackId: string): P
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// METADATA ENRICHMENT
-// ─────────────────────────────────────────────────────────────────────────────
-
 function extractArtistFromFilename(filename: string): string {
   if (!filename) return 'Upcoming Artist';
   const withoutExt = filename.replace(/\.[^/.]+$/, '');
@@ -345,7 +319,7 @@ function extractArtistFromFilename(filename: string): string {
   return 'Upcoming Artist';
 }
 
-function enrichLocalTrackMetadata(song: Song, filePath?: string, folderName?: string): Song {
+export function enrichLocalTrackMetadata(song: Song, filePath?: string, folderName?: string): Song {
   const enriched: Song = { ...song };
   const isGenericArtist =
     !enriched.artist ||
@@ -415,7 +389,7 @@ function enrichLocalTrackMetadata(song: Song, filePath?: string, folderName?: st
   return enriched;
 }
 
-function isLocalTrack(track: Song | null | undefined): boolean {
+export function isLocalTrack(track: Song | null | undefined): boolean {
   if (!track) return false;
   const url = track.url || '';
   return (
@@ -427,7 +401,7 @@ function isLocalTrack(track: Song | null | undefined): boolean {
   );
 }
 
-function ensureQueueMetadata(queue: Song[]): Song[] {
+export function ensureQueueMetadata(queue: Song[]): Song[] {
   return queue.map(song => {
     if (isLocalTrack(song)) {
       return enrichLocalTrackMetadata(song, song.url);
@@ -436,22 +410,7 @@ function ensureQueueMetadata(queue: Song[]): Song[] {
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPABASE HELPERS (for metadata only - NEVER for stream URLs)
-// ─────────────────────────────────────────────────────────────────────────────
-
 const TABLE_NOT_FOUND_MSG = 'track_stats';
-
-const safeGetTrackStats = async (videoId: string) => {
-  try {
-    return await supabaseCache.getTrackStats(videoId);
-  } catch (e: any) {
-    if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
-      console.warn('[MusicPlayer] getTrackStats error:', e?.message);
-    }
-    return null;
-  }
-};
 
 const safeSaveTrackStats = async (params: any) => {
   try {
@@ -462,80 +421,6 @@ const safeSaveTrackStats = async (params: any) => {
     }
   }
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UUID V5 (SHA-1 based)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-
-function uuidToBytes(uuid: string): number[] {
-  return uuid.replace(/-/g, '').match(/.{2}/g)!.map(h => parseInt(h, 16));
-}
-
-async function sha1(data: Uint8Array): Promise<Uint8Array> {
-  const H = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
-  const msg = Array.from(data);
-  const bitLen = msg.length * 8;
-  msg.push(0x80);
-  while (msg.length % 64 !== 56) msg.push(0);
-  for (let i = 7; i >= 0; i--) msg.push((bitLen / Math.pow(2, i * 8)) & 0xff);
-  for (let i = 0; i < msg.length; i += 64) {
-    const W: number[] = [];
-    for (let t = 0; t < 16; t++) {
-      W[t] =
-        (msg[i + t * 4] << 24) |
-        (msg[i + t * 4 + 1] << 16) |
-        (msg[i + t * 4 + 2] << 8) |
-        msg[i + t * 4 + 3];
-    }
-    for (let t = 16; t < 80; t++) {
-      const v = W[t - 3] ^ W[t - 8] ^ W[t - 14] ^ W[t - 16];
-      W[t] = ((v << 1) | (v >>> 31)) >>> 0;
-    }
-    let [a, b, c, d, e] = H;
-    for (let t = 0; t < 80; t++) {
-      const rot = ((a << 5) | (a >>> 27)) >>> 0;
-      let f: number, k: number;
-      if (t < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
-      else if (t < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
-      else if (t < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
-      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
-      const temp = (rot + f + e + k + W[t]) >>> 0;
-      e = d; d = c; c = ((b << 30) | (b >>> 2)) >>> 0; b = a; a = temp;
-    }
-    H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
-    H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0; H[4] = (H[4] + e) >>> 0;
-  }
-  const out = new Uint8Array(20);
-  H.forEach((v, i) => {
-    out[i * 4] = (v >>> 24) & 0xff; out[i * 4 + 1] = (v >>> 16) & 0xff;
-    out[i * 4 + 2] = (v >>> 8) & 0xff; out[i * 4 + 3] = v & 0xff;
-  });
-  return out;
-}
-
-const uuidCache = new Map<string, string>();
-
-async function videoIdToUuid(videoId: string): Promise<string> {
-  if (uuidCache.has(videoId)) return uuidCache.get(videoId)!;
-  const nsBytes = uuidToBytes(UUID_NAMESPACE);
-  const idBytes = Array.from(new TextEncoder().encode(videoId));
-  const combined = new Uint8Array([...nsBytes, ...idBytes]);
-  const hash = await sha1(combined);
-  hash[6] = (hash[6] & 0x0f) | 0x50;
-  hash[8] = (hash[8] & 0x3f) | 0x80;
-  const h = Array.from(hash.slice(0, 16))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-  const uuid = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-  uuidCache.set(videoId, uuid);
-  return uuid;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRACK EXTRAS STORE
-// ─────────────────────────────────────────────────────────────────────────────
 
 const trackExtrasStore = new Map<string, TrackExtras>();
 let trackExtrasVersion = 0;
@@ -592,10 +477,6 @@ export function useTrackExtrasVersion(): number {
   return version;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STREAM PICKING (for progressive URLs only - fallback when manifests unavailable)
-// ─────────────────────────────────────────────────────────────────────────────
-
 function pickBestAudio(streams: AudioStream[]): AudioStream | null {
   if (!streams?.length) return null;
   const direct = streams.filter(s => s.isUrl && !s.manifestUrl);
@@ -614,25 +495,16 @@ function pickBestVideo(streams: VideoStream[]): VideoStream | null {
 
 function pickBestVideoOnlyManifest(streams: VideoStream[]): VideoStream | null {
   if (!streams?.length) return null;
-  // Prefer DASH/HLS manifests for video-only streams - these are not IP-bound
   const withManifest = streams.filter(s => !s.isUrl && s.manifestUrl);
   if (withManifest.length > 0) {
-    // Return the highest resolution manifest-based stream
     return withManifest.reduce((best, s) => (s.height > best.height ? s : best), withManifest[0]);
   }
-  // Fallback to progressive if no manifest available (rare)
   const withVideo = streams.filter(s => s.height > 0 && s.isUrl);
   if (!withVideo.length) return null;
   const p720 = withVideo.find(s => s.height === 720);
   if (p720) return p720;
   return withVideo.reduce((best, s) => (s.height > best.height ? s : best), withVideo[0]);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPABASE STREAM CACHE — REMOVED: Manifest URLs are never cached.
-// Only metadata is cached. Stream URLs are resolved atomically at playback time.
-// Manifest URLs are stable and don't expire like progressive URLs.
-// ─────────────────────────────────────────────────────────────────────────────
 
 function buildExtras(
   song: Song,
@@ -658,11 +530,6 @@ function buildExtras(
     commentsCount,
   };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ENHANCED RESOLVE TRACK WITH RETRY (Updated for NewPipeExtractor v0.26.2)
-// RETURNS MANIFEST URLS FOR PLAYBACK, PROGRESSIVE URLS FOR DOWNLOADS ONLY
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.now()): Promise<ResolvedTrack | null> {
   try {
@@ -692,7 +559,6 @@ async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.n
       errorMessage.includes('timeout');
     
     const isAccountTerminated = errorMessage.includes('ACCOUNT_TERMINATED');
-    const isSignInRequired = errorMessage.includes('Sign in to confirm');
     
     if (isAccountTerminated) {
       console.error(`[MusicPlayer] Account terminated for "${song.title}"`);
@@ -720,10 +586,6 @@ async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.n
       const delayMs = CONFIG.RESOLVE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
       await delay(delayMs);
       return resolveTrackWithRetry(song, attempt + 1, startTime);
-    }
-    
-    if (isSignInRequired) {
-      console.warn(`[MusicPlayer] Sign-in required for "${song.title}" - this video may be age-restricted`);
     }
     
     throw error;
@@ -838,7 +700,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     };
   }
 
-  // Load metadata from disk cache (NOT stream URLs)
   if (song.id && !bypassCache) {
     const diskCached = await getCachedTrackExtras(song.id);
     if (diskCached) {
@@ -850,7 +711,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     }
   }
 
-  // PRIMARY EXTRACTION with enhanced fallback - GET MANIFEST URLS
   try {
     let videoId = song.videoId;
     if (!videoId && song.url) {
@@ -882,16 +742,13 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       throw new Error(`extraction returned success=false: ${info.message || 'unknown error'}`);
     }
 
-    // Extract manifest URLs (primary playback method - NOT IP-bound)
     const dashManifestUrl: string | null = info.dashMpdUrl?.length > 0 ? info.dashMpdUrl : null;
     const hlsManifestUrl: string | null = info.hlsUrl?.length > 0 ? info.hlsUrl : null;
     
-    // Extract video-only manifest URL from videoOnlyStreams (for slave player)
     const videoOnlyStreams: VideoStream[] = info.videoOnlyStreams ?? [];
     const bestVideoOnly = pickBestVideoOnlyManifest(videoOnlyStreams);
     const videoOnlyManifestUrl: string | null = bestVideoOnly?.manifestUrl?.length > 0 ? bestVideoOnly.manifestUrl : null;
     
-    // Progressive URLs (for DOWNLOADS ONLY - NOT for streaming)
     const bestAudio = pickBestAudio(info.audioStreams ?? []);
     const bestVideo = pickBestVideo(info.videoOnlyStreams ?? []) ?? pickBestVideo(info.videoStreams ?? []);
     const bestMuxed = pickBestVideo(info.videoStreams ?? []);
@@ -935,7 +792,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       }
     }
 
-    // PRIMARY PLAYBACK URL: DASH manifest first, HLS as fallback, progressive as last resort
     let primaryPlaybackUrl: string | null = null;
     if (dashManifestUrl) {
       primaryPlaybackUrl = dashManifestUrl;
@@ -944,7 +800,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       primaryPlaybackUrl = hlsManifestUrl;
       console.log(`[MusicPlayer] Using HLS manifest for "${song.title}"`);
     } else if (audioProgressiveUrl) {
-      // This should be rare - manifests are almost always available for YouTube
       console.warn(`[MusicPlayer] No manifest available for "${song.title}", falling back to progressive URL (may cause 403)`);
       primaryPlaybackUrl = audioProgressiveUrl;
     }
@@ -967,7 +822,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     );
     storeTrackExtras(song.id, { ...extras, hasAudio, hasVideo, isAudioOnly, isVideoOnly });
     
-    // Save metadata only — NEVER cache stream URLs
     if (song.videoId) {
       safeSaveTrackStats({
         videoId: song.videoId, likeCount: extras.likeCount ?? -1,
@@ -1012,7 +866,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     }
   }
 
-  // SEARCH FALLBACK STRATEGIES - Enhanced for v0.26.2
   const searchStrategies = [
     { query: `${song.title} ${song.artist}`, filter: 'music_songs' as const, priority: 1 },
     { query: `${song.title} ${song.artist} official audio`, filter: 'videos' as const, priority: 2 },
@@ -1070,14 +923,12 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
         continue;
       }
 
-      // Extract manifest URLs from search result
       const dashManifestUrl: string | null = info.dashMpdUrl?.length > 0 ? info.dashMpdUrl : null;
       const hlsManifestUrl: string | null = info.hlsUrl?.length > 0 ? info.hlsUrl : null;
       const videoOnlyStreams: VideoStream[] = info.videoOnlyStreams ?? [];
       const bestVideoOnly = pickBestVideoOnlyManifest(videoOnlyStreams);
       const videoOnlyManifestUrl: string | null = bestVideoOnly?.manifestUrl?.length > 0 ? bestVideoOnly.manifestUrl : null;
 
-      // Progressive URLs (for downloads only)
       const bestAudio = pickBestAudio(info.audioStreams ?? []);
       const bestVideo = pickBestVideo(info.videoOnlyStreams ?? []) ?? pickBestVideo(info.videoStreams ?? []);
       const bestMuxed = pickBestVideo(info.videoStreams ?? []);
@@ -1109,7 +960,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       }
       if (!audioProgressiveUrl) continue;
 
-      // Primary playback URL: manifest first
       let primaryPlaybackUrl = dashManifestUrl ?? hlsManifestUrl ?? audioProgressiveUrl;
       if (!primaryPlaybackUrl) continue;
 
@@ -1156,7 +1006,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
   return null;
 };
 
-// Module-level cache for related songs fallback
 let lastRelatedSongsCache: Song[] = [];
 
 const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
@@ -1190,10 +1039,6 @@ const fetchRelatedSongs = async (songUrl: string): Promise<Song[]> => {
     return [];
   }
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ASYNC STORAGE HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function saveLastPlayingState(track: Song | null, position?: number): Promise<void> {
   try {
@@ -1296,10 +1141,6 @@ async function restorePreservePitch(): Promise<boolean> {
     return preserve ? preserve === 'true' : true;
   } catch { return true; }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYER ENGINE STATE INTERFACE
-// ─────────────────────────────────────────────────────────────────────────────
 
 export interface PlayerEngineState {
   currentTrack: Song | null;
@@ -1406,7 +1247,6 @@ export interface MusicPlayerContextType {
   sleepTimerEndsAt: number | null;
   bufferedPosition: number;
   notifyVideoTrackFinished: () => Promise<void>;
-  /** @deprecated No-op kept for backward compatibility with Search screen */
   deactivateAudio: () => void;
 }
 
@@ -1418,15 +1258,15 @@ export const useMusicPlayer = () => {
   return ctx;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MASTER PLAYER REFERENCE (set by playerContent.tsx)
-// ─────────────────────────────────────────────────────────────────────────────
-
 let masterPlayerRef: any = null;
 
 export const setMasterPlayer = (player: any) => {
   masterPlayerRef = player;
   console.log('[MusicPlayer] Master player registered');
+};
+
+export const resetSSLFastPath = () => {
+  console.log('[MusicPlayer] resetSSLFastPath called (no-op)');
 };
 
 function getMasterPlayer(): any {
@@ -1436,18 +1276,12 @@ function getMasterPlayer(): any {
   return masterPlayerRef;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EVENT-DRIVEN WAIT FOR PLAYER READY
-// Industry standard: Use statusChange event instead of polling .status property
-// ─────────────────────────────────────────────────────────────────────────────
-
 function waitForPlayerReady(
   player: any,
   timeoutMs: number,
   signal?: AbortSignal
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Fast path: already ready
     if (player.status === 'readyToPlay') {
       resolve();
       return;
@@ -1490,10 +1324,6 @@ function waitForPlayerReady(
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL APPSTATE HANDLER
-// ─────────────────────────────────────────────────────────────────────────────
-
 let appStateSubscription: any = null;
 
 function initAppStateHandler() {
@@ -1515,10 +1345,73 @@ function initAppStateHandler() {
 
 initAppStateHandler();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL RESTORE IIFE
-// ─────────────────────────────────────────────────────────────────────────────
+// NewPlayer event listeners setup
+let newPlayerListenersInitialized = false;
 
+function initNewPlayerListeners() {
+  if (newPlayerListenersInitialized) return;
+  newPlayerListenersInitialized = true;
+
+  // Listen for playback state changes from NewPlayer
+  MavinPlayer.onPlaybackStateChanged((event) => {
+    console.log('[MusicPlayer] NewPlayer onPlaybackStateChanged:', event);
+    const isPlaying = event.isPlaying;
+    setSession('newPlayerPlaying', isPlaying);
+    setSession('optimisticPlaying', null);
+    
+    // When playback starts, mark that we're using NewPlayer
+    if (isPlaying && !session.usingNewPlayer) {
+      setSession('usingNewPlayer', true);
+    }
+    
+    notifySessionChange();
+  });
+
+  // Listen for position changes from NewPlayer
+  MavinPlayer.onPositionChanged((event) => {
+    const positionSec = event.position / 1000; // Convert ms to seconds
+    const durationSec = event.duration / 1000;
+    const bufferedPercent = event.bufferedPercent;
+    
+    setSession('newPlayerPosition', positionSec);
+    setSession('newPlayerDuration', durationSec);
+    setSession('newPlayerBufferedPercent', bufferedPercent);
+    setSession('bufferedPosition', (bufferedPercent / 100) * durationSec);
+    
+    // Update video position if video active
+    if (session.videoActive) {
+      setSession('videoPosition', positionSec);
+      setSession('videoDuration', durationSec);
+    }
+    
+    notifySessionChange();
+  });
+
+  // Listen for track changes
+  MavinPlayer.onTrackChanged((event) => {
+    console.log('[MusicPlayer] NewPlayer onTrackChanged:', event);
+    const videoId = event.item;
+    setSession('currentVideoId', videoId);
+    notifySessionChange();
+  });
+
+  // Listen for errors
+  MavinPlayer.onError((event) => {
+    console.error('[MusicPlayer] NewPlayer error:', event.message);
+    setSession('lastError', event.message);
+    setSession('isLoading', false);
+    setSession('isResolving', false);
+    setSession('optimisticPlaying', null);
+    notifySessionChange();
+  });
+
+  // Listen for playlist changes
+  MavinPlayer.onPlaylistChanged((event) => {
+    console.log('[MusicPlayer] NewPlayer playlist changed:', event.playlist?.length);
+  });
+}
+
+// Module-level restore with NewPlayer
 (async () => {
   const g = global as any;
 
@@ -1573,57 +1466,39 @@ initAppStateHandler();
       g[RESTORE_GLOBALS.RESTORED_VIDEO_POSITION_KEY] = savedVideoPos;
     }
 
-    // For restored tracks, re-resolve the stream to get fresh manifest URLs.
-    // Manifest URLs are stable but we re-resolve anyway.
-    let finalUrl: string | null = null;
-    let videoOnlyManifestUrl: string | null = null;
-
-    if (!isLocalTrack(track)) {
+    // For remote tracks, use NewPlayer
+    if (!isLocalTrack(track) && track.videoId) {
       try {
-        const resolved = await resolveTrack(track);
-        if (resolved?.url) {
-          finalUrl = resolved.url;
-          videoOnlyManifestUrl = resolved.videoOnlyManifestUrl ?? null;
-          console.log('[MusicPlayer] Module-level restore: re-resolved fresh manifest URL');
+        initNewPlayerListeners();
+        const result = await MavinPlayer.playStream(track.videoId);
+        if (result.success) {
+          setSession('usingNewPlayer', true);
+          setSession('currentVideoId', track.videoId);
+          if (savedPos > 5) {
+            await MavinPlayer.seekTo(savedPos * 1000);
+          }
+          g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
+          console.log('[MusicPlayer] Module-level restore complete with NewPlayer:', track.title);
         }
       } catch (e) {
-        console.warn('[MusicPlayer] Module-level restore re-resolve failed:', e);
+        console.warn('[MusicPlayer] NewPlayer restore failed:', e);
       }
-    } else {
-      finalUrl = normalizeLocalUri(track.url);
-    }
-
-    if (!finalUrl) {
-      console.warn('[MusicPlayer] Module-level restore: could not resolve stream URL');
-      return;
-    }
-
-    g[RESTORE_GLOBALS.RESOLVED_URL_KEY] = finalUrl;
-    if (videoOnlyManifestUrl) {
-      g[RESTORE_GLOBALS.VIDEO_ONLY_URL_KEY] = videoOnlyManifestUrl;
-    }
-
-    let attempts = 0;
-    while (!masterPlayerRef && attempts < 50) {
-      await delay(100);
-      attempts++;
-    }
-
-    if (masterPlayerRef) {
-      try {
-        await masterPlayerRef.replaceAsync({ uri: finalUrl, useCaching: true });
-        await waitForPlayerReady(masterPlayerRef, CONFIG.MANIFEST_LOAD_TIMEOUT_MS);
-        
-        if (savedPos > 5 && savedPos < (track.duration ?? Infinity)) {
-          masterPlayerRef.currentTime = savedPos;
+    } else if (isLocalTrack(track)) {
+      // For local tracks, use expo-video master
+      let finalUrl = normalizeLocalUri(track.url);
+      if (masterPlayerRef) {
+        try {
+          await masterPlayerRef.replaceAsync({ uri: finalUrl, useCaching: true });
+          await waitForPlayerReady(masterPlayerRef, CONFIG.MANIFEST_LOAD_TIMEOUT_MS);
+          if (savedPos > 5 && savedPos < (track.duration ?? Infinity)) {
+            masterPlayerRef.currentTime = savedPos;
+          }
+          g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
+          console.log('[MusicPlayer] Module-level restore complete for local track:', track.title);
+        } catch (playerErr) {
+          console.warn('[MusicPlayer] Local track restore failed:', playerErr);
         }
-        g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
-        console.log('[MusicPlayer] Module-level restore complete:', track.title);
-      } catch (playerErr) {
-        console.warn('[MusicPlayer] Module-level restore: player load failed:', playerErr);
       }
-    } else {
-      console.warn('[MusicPlayer] Module-level restore: master player not registered');
     }
   } catch (err) {
     console.warn('[MusicPlayer] Module-level restore failed:', err);
@@ -1632,10 +1507,6 @@ initAppStateHandler();
     (global as any)[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
   }
 })();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MAVIN ENGINE INITIALIZATION (v0.26.2)
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function initializeMavinEngine() {
   try {
@@ -1660,17 +1531,11 @@ async function initializeMavinEngine() {
 
 initializeMavinEngine();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL PLAYBACK ORCHESTRATION
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Track skip state to prevent multiple simultaneous skips
 let skipInProgress = false;
 let lastSkipTime = 0;
 const SKIP_DEBOUNCE_MS = 1000;
 
 async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = false): Promise<boolean> {
-  // CRITICAL: Reset didHandleFinish at the very top of every track load
   session.didHandleFinish = false;
   
   if (generation !== session.playGeneration) {
@@ -1708,11 +1573,9 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
   acquirePlaybackLockWithTimeout();
 
   try {
-    let finalUrl: string | null = null;
-    let videoOnlyManifestUrl: string | null = null;
-
+    // For LOCAL tracks: use expo-video master
     if (isLocalTrack(enrichedSong)) {
-      finalUrl = normalizeLocalUri(enrichedSong.url);
+      let finalUrl = normalizeLocalUri(enrichedSong.url);
       console.log(`[MusicPlayer] [Local] Direct playback: ${finalUrl.substring(0, 100)}...`);
       
       const master = getMasterPlayer();
@@ -1722,11 +1585,12 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       releasePlaybackLock();
       await master.play();
       
-      setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
+      setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true, usingNewPlayer: false });
       return true;
     }
 
-    // NON-LOCAL: Resolve track to get manifest URLs
+    // For REMOTE tracks: use NewPlayer with YouTube headers
+    // First, resolve to get metadata and videoId (for extras)
     if (enrichedSong.id) {
       const diskCached = await getCachedTrackExtras(enrichedSong.id);
       if (diskCached && !trackExtrasStore.has(enrichedSong.id)) {
@@ -1735,7 +1599,6 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       }
     }
 
-    // Resolve the track fresh - gets DASH/HLS manifest URLs primarily
     let resolved: ResolvedTrack | null = null;
     try {
       resolved = await resolveTrackWithRetry(enrichedSong);
@@ -1746,68 +1609,70 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       return false;
     }
 
-    if (!resolved || !resolved.url) {
-      console.error(`[MusicPlayer] No URL resolved for: "${enrichedSong.title}"`);
-      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to resolve stream', optimisticPlaying: null });
+    if (!resolved || !resolved.videoId) {
+      console.error(`[MusicPlayer] No videoId resolved for: "${enrichedSong.title}"`);
+      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to get video ID', optimisticPlaying: null });
       releasePlaybackLock();
       return false;
     }
 
-    finalUrl = resolved.url;
-    videoOnlyManifestUrl = resolved.videoOnlyManifestUrl ?? null;
-
+    // Update session with stream info
     setSessionPartial({
       hasVideoStream: resolved.hasVideo,
       isAudioOnlyTrack: resolved.isAudioOnly,
       isVideoOnlyTrack: resolved.isVideoOnly,
     });
 
-    const master = getMasterPlayer();
-    
-    console.log('[MusicPlayer] Loading manifest URL into master player:', finalUrl.substring(0, 100));
-    
-    try {
-      // Load the manifest URL (DASH or HLS) into ExoPlayer
-      await master.replaceAsync({ 
-        uri: finalUrl, 
-        useCaching: true,
-        metadata: {
-          title: enrichedSong.title,
-          artist: enrichedSong.artist || 'Unknown Artist',
-        }
-      });
-      console.log('[MusicPlayer] Master player.replace() done');
-    } catch (playError: any) {
-      // Manifest 403 is rare but can happen if manifest itself expired
-      // We do NOT auto-retry with progressive URLs here - that would cause 403 loops
-      if (!isRetry && playError?.message?.includes('403')) {
-        console.warn('[MusicPlayer] Manifest 403 - showing error, not retrying with progressive');
-        setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Stream expired. Please try again.', optimisticPlaying: null });
-        releasePlaybackLock();
-        return false;
-      } else {
-        throw playError;
-      }
-    }
+    // Initialize NewPlayer listeners if not already done
+    initNewPlayerListeners();
 
-    // Wait for player ready using event-driven approach (not polling)
+    // Arms the Kotlin resolver lambda with the already-resolved URLs, then immediately
+    // triggers player.playStream() internally. getStreams() fires the lambda once and
+    // clears it — no re-extraction ever happens. Engine and player work as one call.
+    console.log('[MusicPlayer] Calling MavinPlayer.resolveAndPlay with pre-resolved URLs for:', resolved.videoId);
+
     try {
-      await waitForPlayerReady(master, CONFIG.MANIFEST_LOAD_TIMEOUT_MS);
-      console.log('[MusicPlayer] Player ready (manifest loaded)');
-    } catch (readyErr: any) {
-      console.warn(`[MusicPlayer] Player not ready: ${readyErr?.message}`);
-      setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Player failed to load manifest', optimisticPlaying: null });
+      const result = await MavinPlayer.resolveAndPlay(
+        resolved.videoId,
+        resolved.dashManifestUrl  ?? null,
+        resolved.hlsManifestUrl   ?? null,
+        // Progressive only when no manifests — resolved.url is the best audio URL
+        // in that case (set by resolveTrack's primaryPlaybackUrl logic)
+        (!resolved.dashManifestUrl && !resolved.hlsManifestUrl) ? (resolved.url ?? null) : null,
+      );
+
+      if (!result.success) {
+        throw new Error('MavinPlayer.resolveAndPlay returned false');
+      }
+
+      console.log('[MusicPlayer] MavinPlayer.resolveAndPlay succeeded');
+      
+      // Set playback rate if not 1.0
+      if (session.playbackRate !== 1.0) {
+        await MavinPlayer.setPlaybackSpeed(session.playbackRate);
+      }
+      
+      // Seek to saved position if needed (for restores)
+      if (resolved.duration && resolved.duration > 0) {
+        // Position will be set by restore logic
+      }
+      
+      releasePlaybackLock();
+      setSessionPartial({ 
+        isLoading: false, 
+        isResolving: false, 
+        optimisticPlaying: true,
+        usingNewPlayer: true,
+        currentVideoId: resolved.videoId
+      });
+      return true;
+      
+    } catch (playError: any) {
+      console.error('[MusicPlayer] MavinPlayer.playStream failed:', playError);
+      setSessionPartial({ isLoading: false, isResolving: false, lastError: playError?.message || 'Playback failed', optimisticPlaying: null });
       releasePlaybackLock();
       return false;
     }
-    
-    console.log('[MusicPlayer] Player ready, calling master.play() — master owns AudioFocus');
-    await master.play();
-    console.log('[MusicPlayer] ✅ master.play() called — audio should be playing');
-    
-    releasePlaybackLock();
-    setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
-    return true;
 
   } catch (error: any) {
     releasePlaybackLock();
@@ -1841,15 +1706,21 @@ async function moduleLevelSkipToNext(): Promise<void> {
     console.log(`[MusicPlayer] Skip to next - index: ${currentQueueIndex}, queue length: ${currentQueue.length}`);
 
     if (repeatMode === 'one' && session.currentTrack) {
-      try {
-        const master = getMasterPlayer();
-        master.currentTime = 0;
-        await master.play();
-        setSession('optimisticPlaying', true);
-        console.log('[MusicPlayer] Repeated current track (repeat one mode)');
-      } catch (error) {
-        console.warn('[MusicPlayer] Failed to repeat track:', error);
+      // Repeat one: seek to 0 and continue playing
+      if (session.usingNewPlayer && session.currentVideoId) {
+        await MavinPlayer.seekTo(0);
+        await MavinPlayer.play();
+      } else {
+        try {
+          const master = getMasterPlayer();
+          master.currentTime = 0;
+          await master.play();
+        } catch (error) {
+          console.warn('[MusicPlayer] Failed to repeat track:', error);
+        }
       }
+      setSession('optimisticPlaying', true);
+      console.log('[MusicPlayer] Repeated current track (repeat one mode)');
       return;
     }
 
@@ -1913,14 +1784,30 @@ async function moduleLevelSkipToPrevious(): Promise<void> {
   lastSkipTime = now;
   
   try {
-    const master = getMasterPlayer();
-    const currentPosition = master.currentTime ?? 0;
+    // Check if we're within first 3 seconds to restart vs go previous
+    let currentPosition = 0;
+    if (session.usingNewPlayer) {
+      currentPosition = session.newPlayerPosition;
+    } else {
+      try {
+        const master = getMasterPlayer();
+        currentPosition = master.currentTime ?? 0;
+      } catch {}
+    }
 
     if (currentPosition > 3) {
-      try {
-        master.currentTime = 0;
-        console.log('[MusicPlayer] Restarted current track');
-      } catch {}
+      // Restart current track
+      if (session.usingNewPlayer && session.currentVideoId) {
+        await MavinPlayer.seekTo(0);
+        await MavinPlayer.play();
+      } else {
+        try {
+          const master = getMasterPlayer();
+          master.currentTime = 0;
+          await master.play();
+        } catch {}
+      }
+      console.log('[MusicPlayer] Restarted current track');
       return;
     }
 
@@ -1933,9 +1820,16 @@ async function moduleLevelSkipToPrevious(): Promise<void> {
       prevIndex = session.queue.length - 1;
       prevSong = session.queue[prevIndex];
     } else {
-      try {
-        master.currentTime = 0;
-      } catch {}
+      // No previous track, restart current
+      if (session.usingNewPlayer && session.currentVideoId) {
+        await MavinPlayer.seekTo(0);
+        await MavinPlayer.play();
+      } else {
+        try {
+          const master = getMasterPlayer();
+          master.currentTime = 0;
+        } catch {}
+      }
       return;
     }
 
@@ -2000,7 +1894,6 @@ function moduleLevelAddToQueue(songs: Song[]): void {
 function moduleLevelRemoveFromQueue(index: number): void {
   if (index < 0 || index >= session.queue.length) return;
   
-  // Abort any in-flight background preload before modifying queue
   session.bgAbortController?.abort();
   const newAbortController = new AbortController();
   setSession('bgAbortController', newAbortController);
@@ -2045,10 +1938,6 @@ function moduleLevelClearQueue(): void {
   setSession('queueIndex', -1);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYBACK LOCK
-// ─────────────────────────────────────────────────────────────────────────────
-
 let playbackLockTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function acquirePlaybackLockWithTimeout(): void {
@@ -2068,10 +1957,6 @@ function releasePlaybackLock(): void {
   setPlaybackInactive();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SLEEP TIMER
-// ─────────────────────────────────────────────────────────────────────────────
-
 function setSleepTimer(minutes: number): void {
   const endsAt = Date.now() + minutes * 60 * 1000;
   setSession('sleepTimerEndsAt', endsAt);
@@ -2083,15 +1968,15 @@ function clearSleepTimer(): void {
   console.log('[MusicPlayer] Sleep timer cleared');
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYBACK RATE
-// ─────────────────────────────────────────────────────────────────────────────
-
 async function setPlaybackRate(rate: number): Promise<void> {
   const clamped = Math.min(Math.max(rate, 0.25), 3.0);
   try {
-    const master = getMasterPlayer();
-    master.playbackRate = clamped;
+    if (session.usingNewPlayer) {
+      await MavinPlayer.setPlaybackSpeed(clamped);
+    } else {
+      const master = getMasterPlayer();
+      master.playbackRate = clamped;
+    }
     setSession('playbackRate', clamped);
     await savePlaybackRate(clamped);
     console.log(`[MusicPlayer] Playback rate set to ${clamped}`);
@@ -2099,10 +1984,6 @@ async function setPlaybackRate(rate: number): Promise<void> {
     console.warn('[MusicPlayer] setPlaybackRate error:', e);
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// REACT PROVIDER
-// ─────────────────────────────────────────────────────────────────────────────
 
 const expandPlayerRef: { current: (() => void) | null } = { current: null };
 const collapsePlayerRef: { current: (() => void) | null } = { current: null };
@@ -2124,9 +2005,47 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     return () => { sessionListeners.delete(listener); };
   }, []);
 
+  // Polling interval that reads from the appropriate source (NewPlayer or expo-video)
   useEffect(() => {
     const interval = setInterval(() => {
       try {
+        // If using NewPlayer, read from session state (updated by NewPlayer listeners)
+        if (session.usingNewPlayer) {
+          const newState = {
+            isPlaying: session.newPlayerPlaying,
+            position: session.newPlayerPosition,
+            duration: session.newPlayerDuration,
+            isBuffering: false, // NewPlayer doesn't expose buffering directly
+          };
+          setMasterState(prev => {
+            if (
+              prev.isPlaying === newState.isPlaying &&
+              Math.abs(prev.position - newState.position) < 0.1 &&
+              prev.duration === newState.duration
+            ) {
+              return prev;
+            }
+            return newState;
+          });
+          
+          // Update buffered position
+          const bufferedPercent = session.newPlayerBufferedPercent;
+          const bufferedSec = (bufferedPercent / 100) * session.newPlayerDuration;
+          if (bufferedSec !== session.bufferedPosition) {
+            setSession('bufferedPosition', bufferedSec);
+          }
+          
+          // Check sleep timer
+          if (session.sleepTimerEndsAt !== null && Date.now() >= session.sleepTimerEndsAt) {
+            console.log('[MusicPlayer] Sleep timer expired, pausing playback');
+            MavinPlayer.pause();
+            setSession('optimisticPlaying', false);
+            setSession('sleepTimerEndsAt', null);
+          }
+          return;
+        }
+        
+        // Fallback to expo-video master for local files
         const master = getMasterPlayer();
         if (master) {
           const newState = {
@@ -2147,13 +2066,11 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             return newState;
           });
 
-          // Read buffered position from master
           const buffered = master.bufferedPosition ?? 0;
           if (buffered !== session.bufferedPosition) {
             setSession('bufferedPosition', buffered);
           }
           
-          // Update session fields that don't need React renders
           if (newState.duration > 0 && session.videoDuration !== newState.duration) {
             session.videoDuration = newState.duration;
           }
@@ -2161,7 +2078,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
             session.videoPosition = newState.position;
           }
           
-          // Sleep timer check
           if (session.sleepTimerEndsAt !== null && Date.now() >= session.sleepTimerEndsAt) {
             console.log('[MusicPlayer] Sleep timer expired, pausing playback');
             master.pause();
@@ -2196,6 +2112,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const bufferedPosition = session.bufferedPosition;
   const sleepTimerEndsAt = session.sleepTimerEndsAt;
 
+  // Use the appropriate playing state based on which player is active
   const isPlaying = optimisticPlaying !== null ? optimisticPlaying : masterState.isPlaying;
   const isBuffering = masterState.isBuffering;
   const position = masterState.position;
@@ -2302,29 +2219,43 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
 
     try {
-      const master = getMasterPlayer();
-      const isCurrentlyPlaying = master.playing ?? false;
-      const willBePlaying = !isCurrentlyPlaying;
+      const willBePlaying = !isPlaying;
       setSession('optimisticPlaying', willBePlaying);
 
-      if (willBePlaying) {
-        master.play();
-        console.log('[MusicPlayer] Playing');
+      if (session.usingNewPlayer) {
+        if (willBePlaying) {
+          MavinPlayer.play();
+          console.log('[MusicPlayer] Playing via NewPlayer');
+        } else {
+          MavinPlayer.pause();
+          console.log('[MusicPlayer] Paused via NewPlayer');
+        }
       } else {
-        master.pause();
-        console.log('[MusicPlayer] Paused');
+        const master = getMasterPlayer();
+        if (willBePlaying) {
+          master.play();
+          console.log('[MusicPlayer] Playing via expo-video');
+        } else {
+          master.pause();
+          console.log('[MusicPlayer] Paused via expo-video');
+        }
       }
     } catch (e) {
       console.warn('[MusicPlayer] togglePlayPause error:', e);
     }
-  }, [showAlert]);
+  }, [isPlaying, showAlert]);
 
   const seekTo = useCallback((positionSec: number) => {
     session.didHandleFinish = false;
     try {
-      const master = getMasterPlayer();
-      master.currentTime = positionSec;
-      setSession('videoPosition', positionSec);
+      if (session.usingNewPlayer) {
+        MavinPlayer.seekTo(positionSec * 1000);
+        setSession('videoPosition', positionSec);
+      } else {
+        const master = getMasterPlayer();
+        master.currentTime = positionSec;
+        setSession('videoPosition', positionSec);
+      }
     } catch (e: any) {
       console.warn(`[MusicPlayer] seekTo error: ${e?.message || e}`);
     }
@@ -2340,6 +2271,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const setRepeatMode = useCallback((mode: RepeatMode) => {
     setSession('repeatMode', mode);
     saveRepeatMode(mode);
+    if (session.usingNewPlayer) {
+      MavinPlayer.setRepeatMode(mode);
+    }
     console.log(`[MusicPlayer] Repeat mode: ${mode}`);
   }, []);
 
@@ -2381,6 +2315,9 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     setSession('shuffleMode', mode);
     saveShuffleMode(mode);
+    if (session.usingNewPlayer) {
+      MavinPlayer.setShuffle(mode === 'on');
+    }
     console.log(`[MusicPlayer] Shuffle mode: ${mode}`);
   }, [shuffleMode, queue, queueIndex]);
 
@@ -2467,8 +2404,13 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const setVolume = useCallback(async (newVolume: number) => {
     const clamped = Math.min(Math.max(newVolume, 0.0), 1.0);
     try {
-      const master = getMasterPlayer();
-      master.volume = clamped;
+      if (session.usingNewPlayer) {
+        // NewPlayer volume control via ExoPlayer
+        // MavinPlayer doesn't expose volume directly; will be handled by native
+      } else {
+        const master = getMasterPlayer();
+        master.volume = clamped;
+      }
       setSession('volume', clamped);
       await saveVolume(clamped);
     } catch (e) { console.warn('[MusicPlayer] setVolume error:', e); }
@@ -2476,8 +2418,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const setPreservePitch = useCallback(async (preserve: boolean) => {
     try {
-      const master = getMasterPlayer();
-      master.preservesPitch = preserve;
+      if (!session.usingNewPlayer) {
+        const master = getMasterPlayer();
+        master.preservesPitch = preserve;
+      }
       setSession('preservePitch', preserve);
       await savePreservePitch(preserve);
     } catch (e) { console.warn('[MusicPlayer] setPreservePitch error:', e); }
@@ -2753,17 +2697,25 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     isVideoOnlyTrack,
     play: () => { 
       setSession('optimisticPlaying', true); 
-      try { 
-        const master = getMasterPlayer();
-        master.play(); 
-      } catch (e) {} 
+      if (session.usingNewPlayer) {
+        MavinPlayer.play();
+      } else {
+        try { 
+          const master = getMasterPlayer();
+          master.play(); 
+        } catch (e) {} 
+      }
     },
     pause: () => { 
       setSession('optimisticPlaying', false); 
-      try { 
-        const master = getMasterPlayer();
-        master.pause(); 
-      } catch (e) {} 
+      if (session.usingNewPlayer) {
+        MavinPlayer.pause();
+      } else {
+        try { 
+          const master = getMasterPlayer();
+          master.pause(); 
+        } catch (e) {} 
+      }
     },
     seekTo,
     skipToNext,

@@ -1,176 +1,159 @@
-// libs/playerSetup.tsx
+// libs/playerSetup.ts
 //
-// SINGLE SOURCE OF TRUTH for consumers.
-// All player types, hooks, and contexts are re-exported from here.
+// SINGLE SOURCE OF TRUTH for all player-related imports.
+// This file re-exports everything from MusicPlayerContext and preload,
+// plus GestureContext to avoid circular dependencies.
 //
-// MASTER-SLAVE ARCHITECTURE:
-//   - MusicPlayerContext.tsx  ← owns all logic, defines contexts, exports hooks
-//   - playerSetup.tsx         ← re-exports everything + adds GestureContext
-//   - preload.ts              ← owns ALL preload logic (search + queue)
-//   - All other files         ← import from playerSetup
-//
-// IMPORTANT: All components and screens should import from this file only.
+// IMPORTANT: All components should import from this file only.
 // Do NOT import directly from MusicPlayerContext.tsx or preload.ts.
-
-// GestureContext lives in its own file to avoid circular dependencies.
-// playerSetup re-exports it here so existing consumers don't need to change.
-import { type SharedValue } from 'react-native-reanimated';
+//
+// HMR NOTE: All values from other modules are wrapped in local functions/consts.
+// Metro HMR seals ES live bindings with Object.defineProperty({configurable:false}).
+// Re-exporting a live binding with `export { x }` causes "property is not configurable"
+// on the second hot-reload because Metro tries to re-seal the same binding.
+// Local wrapper functions are new declarations each reload — no collision.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Import from MusicPlayerContext (the actual implementation)
+// Raw imports — ALL aliased with underscore prefix, never re-exported directly
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
-  // Types
-  type Song,
-  type RepeatMode,
-  type ShuffleMode,
-  type PlayerEngineState,
-  type MusicPlayerContextType,
-  type TrackExtras,
-  type ResolvedTrack,
-  // Hooks and functions
-  usePlayerEngine,
-  useMusicPlayer,
-  useTrackExtrasVersion,
-  getTrackExtras,
-  storeTrackExtras,
-  MusicPlayerProvider,
-  setMasterPlayer,
-  setPreferredStreamType,
-  // SSL fast-path reset utility
-  resetSSLFastPath,
-  // Video state updaters (for components that need them)
+  type Song as _Song,
+  type RepeatMode as _RepeatMode,
+  type ShuffleMode as _ShuffleMode,
+  type PlayMode as _PlayMode,
+  type TrackExtras as _TrackExtras,
+  type ResolvedTrack as _ResolvedTrack,
+  type PlayerEngineState as _PlayerEngineState,
+  type MusicPlayerContextType as _MusicPlayerContextType,
+  usePlayerEngine as _usePlayerEngine,
+  useMusicPlayer as _useMusicPlayer,
+  useTrackExtrasVersion as _useTrackExtrasVersion,
+  getTrackExtras as _getTrackExtras,
+  storeTrackExtras as _storeTrackExtras,
+  MusicPlayerProvider as _MusicPlayerProvider,
+  setMasterPlayer as _setMasterPlayer,
+  setPreferredStreamType as _setPreferredStreamType,
+  getPreferredStreamType as _getPreferredStreamType,
+  resetSSLFastPath as _resetSSLFastPath,
+  isLocalTrack as _isLocalTrack,
+  enrichLocalTrackMetadata as _enrichLocalTrackMetadata,
+  extractArtistFromFilename as _extractArtistFromFilename,
+  ensureQueueMetadata as _ensureQueueMetadata,
 } from '@/components/MusicPlayerContext';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Import from preload
-// ─────────────────────────────────────────────────────────────────────────────
-
 import {
-  preloadSearchResults,
-  preloadNextTracks,
-  cancelAllPreloads,
-  getPreloadAbortSignal,
-  getActivePreloadCount,
-  type PreloadSong,
+  preloadSearchResults as _preloadSearchResults,
+  preloadNextTracks as _preloadNextTracks,
+  cancelAllPreloads as _cancelAllPreloads,
+  getPreloadAbortSignal as _getPreloadAbortSignal,
+  getActivePreloadCount as _getActivePreloadCount,
+  type PreloadSong as _PreloadSong,
 } from '@/libs/preload';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Import from trackMetadataCache
-// getCachedTrackExtrasSync is the synchronous in-memory read used by UI
-// components that need instant metadata without waiting for async disk reads.
-// ─────────────────────────────────────────────────────────────────────────────
-
-import { getCachedTrackExtrasSync } from '@/services/trackMetadataCache';
 import {
-  GestureContext,
-  useGestureContext,
-  type GestureContextValue,
+  getCachedTrackExtrasSync as _getCachedTrackExtrasSync,
+  extractPersistentMetadata as _extractPersistentMetadata,
+  setCachedTrackExtras as _setCachedTrackExtras,
+} from '@/services/trackMetadataCache';
+
+import {
+  GestureContext as _GestureContext,
+  useGestureContext as _useGestureContext,
+  type GestureContextValue as _GestureContextValue,
 } from '@/libs/gestureContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// URI NORMALIZER — Shared utility for local file URIs
-//
-// Normalizes a local file URI to a format compatible with expo-video:
-//   content:// URIs (Android MediaStore) → kept as-is (expo-video handles them)
-//   file:// URIs                         → kept as-is
-//   Absolute paths (starting with /)     → prefixed with file://
-//   Empty strings                        → returned as empty string
-//
-// NOTE: This is the canonical implementation. MusicPlayerContext.tsx has an
-// identical private copy (normalizeLocalUri) for module-level use. Keep both
-// in sync. This export is for component-level use outside the context module.
+// Type re-exports (types are erased at runtime — no live-binding collision)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function normalizeLocalUri(uri: string): string {
-  if (!uri) return '';
-  if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
-  if (uri.startsWith('/')) return `file://${uri}`;
-  return uri;
+export type Song = _Song;
+export type RepeatMode = _RepeatMode;
+export type ShuffleMode = _ShuffleMode;
+export type PlayMode = _PlayMode;
+export type TrackExtras = _TrackExtras;
+export type ResolvedTrack = _ResolvedTrack;
+export type PlayerEngineState = _PlayerEngineState;
+export type MusicPlayerContextType = _MusicPlayerContextType;
+export type PreloadSong = _PreloadSong;
+export type GestureContextValue = _GestureContextValue;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wrapper exports — local declarations, HMR-safe
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Hooks (must be stable references for React — arrow consts are fine)
+export const usePlayerEngine: typeof _usePlayerEngine = (...args) => _usePlayerEngine(...args);
+export const useMusicPlayer: typeof _useMusicPlayer = (...args) => _useMusicPlayer(...args);
+export const useTrackExtrasVersion: typeof _useTrackExtrasVersion = (...args) => _useTrackExtrasVersion(...args);
+export const useGestureContext: typeof _useGestureContext = (...args) => _useGestureContext(...args);
+
+// Context / Provider (value references, not callable — export the value directly
+// via a const that is a new binding each reload)
+export const MusicPlayerProvider = _MusicPlayerProvider;
+export const GestureContext = _GestureContext;
+
+// Track extras
+export function getTrackExtras(id: string): Record<string, any> | null {
+  return _getTrackExtras?.(id) ?? null;
+}
+export function storeTrackExtras(id: string, extras: Record<string, any>): void {
+  _storeTrackExtras?.(id, extras);
+}
+export function getCachedTrackExtrasSync(id: string): Record<string, any> | null {
+  return _getCachedTrackExtrasSync?.(id) ?? null;
+}
+export function extractPersistentMetadata(extras: Record<string, any>): Record<string, any> {
+  return _extractPersistentMetadata?.(extras) ?? {};
+}
+export function setCachedTrackExtras(id: string, extras: Record<string, any>): void {
+  _setCachedTrackExtras?.(id, extras);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Re-export everything consumers need from MusicPlayerContext
-// ─────────────────────────────────────────────────────────────────────────────
+// Local track helpers
+export function isLocalTrack(track: Parameters<typeof _isLocalTrack>[0]): boolean {
+  return _isLocalTrack?.(track) ?? false;
+}
+export function enrichLocalTrackMetadata(...args: Parameters<typeof _enrichLocalTrackMetadata>): ReturnType<typeof _enrichLocalTrackMetadata> {
+  return _enrichLocalTrackMetadata(...args);
+}
+export function extractArtistFromFilename(filename: string): string {
+  return _extractArtistFromFilename?.(filename) ?? '';
+}
+export function ensureQueueMetadata(...args: Parameters<typeof _ensureQueueMetadata>): ReturnType<typeof _ensureQueueMetadata> {
+  return _ensureQueueMetadata(...args);
+}
 
-// Types
-export type {
-  Song,
-  RepeatMode,
-  ShuffleMode,
-  PlayerEngineState,
-  MusicPlayerContextType,
-  TrackExtras,
-  ResolvedTrack,
-};
+// Player setup / stream type
+export function setMasterPlayer(player: Parameters<typeof _setMasterPlayer>[0]): void {
+  _setMasterPlayer?.(player);
+}
+export function setPreferredStreamType(type: 'audio' | 'video'): void {
+  _setPreferredStreamType?.(type);
+}
+export function getPreferredStreamType(): 'audio' | 'video' {
+  return _getPreferredStreamType?.() ?? 'audio';
+}
+export function resetSSLFastPath(): void {
+  _resetSSLFastPath?.();
+}
 
-// Hooks and Context exports
-export {
-  usePlayerEngine,
-  useMusicPlayer,
-  useTrackExtrasVersion,
-  getTrackExtras,
-  getCachedTrackExtrasSync,
-  storeTrackExtras,
-  MusicPlayerProvider,
-  setMasterPlayer,
-  setPreferredStreamType,
-  resetSSLFastPath,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Re-export preload utilities (for advanced use cases)
-// Most components won't need these directly - they're used internally
-// ─────────────────────────────────────────────────────────────────────────────
-
-export {
-  preloadSearchResults,
-  preloadNextTracks,
-  cancelAllPreloads,
-  getPreloadAbortSignal,
-  getActivePreloadCount,
-  type PreloadSong,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GestureContext — re-exported from libs/gestureContext for backward compat.
-// The actual definition lives in gestureContext.tsx to prevent the circular dep:
-//   FloatingPlayer → playerSetup → MusicPlayerContext → ... → FloatingPlayer
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type { GestureContextValue };
-export { GestureContext, useGestureContext };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper functions for expandPlayer registration
-// ─────────────────────────────────────────────────────────────────────────────
-
-let expandPlayerRegistered = false;
-let registeredExpandPlayer: (() => void) | null = null;
-
-/**
- * For internal use by MusicPlayerContext to register the expand function.
- */
-export const registerExpandPlayer = (expandFn: () => void): void => {
-  registeredExpandPlayer = expandFn;
-  expandPlayerRegistered = true;
-  console.log('[PlayerSetup] expandPlayer registered successfully');
-};
-
-/**
- * For internal use by MusicPlayerContext to get the registered expand function.
- */
-export const getRegisteredExpandPlayer = (): (() => void) | null => {
-  return registeredExpandPlayer;
-};
-
-/**
- * Check if expandPlayer is registered.
- */
-export const isExpandPlayerRegistered = (): boolean => {
-  return expandPlayerRegistered;
-};
+// Preload utilities
+export function preloadSearchResults(...args: Parameters<typeof _preloadSearchResults>): ReturnType<typeof _preloadSearchResults> {
+  return _preloadSearchResults(...args);
+}
+export function preloadNextTracks(...args: Parameters<typeof _preloadNextTracks>): ReturnType<typeof _preloadNextTracks> {
+  return _preloadNextTracks(...args);
+}
+export function cancelAllPreloads(): void {
+  _cancelAllPreloads?.();
+}
+export function getPreloadAbortSignal(): AbortSignal {
+  return _getPreloadAbortSignal();
+}
+export function getActivePreloadCount(): number {
+  return _getActivePreloadCount?.() ?? 0;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: Create a song object from minimal data
@@ -188,21 +171,10 @@ export interface CreateSongParams {
   isDownloaded?: boolean;
 }
 
-/**
- * Utility to create a standardized Song object.
- * Throws if required fields are missing.
- */
 export function createSong(params: CreateSongParams): Song {
-  if (!params.id) {
-    throw new Error('createSong: id is required');
-  }
-  if (!params.title) {
-    throw new Error('createSong: title is required');
-  }
-  if (!params.url) {
-    throw new Error('createSong: url is required');
-  }
-
+  if (!params.id) throw new Error('createSong: id is required');
+  if (!params.title) throw new Error('createSong: title is required');
+  if (!params.url) throw new Error('createSong: url is required');
   return {
     id: params.id,
     title: params.title,
@@ -220,40 +192,70 @@ export function createSong(params: CreateSongParams): Song {
 // Helper: Check if a track is local
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function isLocalTrack(
+export function checkIsLocalTrack(
   track: { url?: string; isLocal?: boolean; isDownloaded?: boolean } | null | undefined,
 ): boolean {
   if (!track) return false;
   const url = track.url || '';
   return (
-    url.startsWith('file://') === true ||
-    url.startsWith('/') === true ||
-    url.startsWith('content://') === true ||
+    url.startsWith('file://') ||
+    url.startsWith('/') ||
+    url.startsWith('content://') ||
     track.isLocal === true ||
     track.isDownloaded === true
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Format duration (seconds) to MM:SS or HH:MM:SS
+// URI Normalizer
 // ─────────────────────────────────────────────────────────────────────────────
+
+export function normalizeLocalUri(uri: string): string {
+  if (!uri) return '';
+  if (uri.startsWith('content://') || uri.startsWith('file://')) return uri;
+  if (uri.startsWith('/')) return `file://${uri}`;
+  return uri;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Formatting Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function formatTime(seconds: number): string {
+  if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+export function formatCount(n: number): string {
+  if (n <= 0) return '';
+  if (n >= 1_000_000_000_000) return `${(n / 1_000_000_000_000).toFixed(1).replace(/\.0$/, '')}T`;
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return n.toLocaleString();
+}
+
+export function parseArtists(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(/[,&]|\bft\.?\b|\bfeat\.?\b/i).map(a => a.trim()).filter(Boolean);
+}
+
+export function formatArtistName(name: string): string {
+  return name.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
 
 export function formatDuration(seconds: number | undefined | null): string {
   if (!seconds || seconds <= 0) return '0:00';
-
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: Format number of plays/listens
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function formatPlayCount(count: number | undefined | null): string {
   if (!count || count <= 0) return '';
@@ -263,38 +265,80 @@ export function formatPlayCount(count: number | undefined | null): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Extract video ID from various YouTube URL formats
+// Video ID Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function extractVideoId(url: string): string | null {
   if (!url) return null;
-
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&?#]+)/,
     /youtube\.com\/shorts\/([^&?#]+)/,
   ];
-
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match && match[1]) return match[1];
   }
-
   return null;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: Build watch URL from video ID
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function toWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Get master player state (for components that need direct access)
+// Queue Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface MasterPlayerState {
+export function getNextTrackIndex(
+  currentIndex: number,
+  queueLength: number,
+  repeatMode: 'off' | 'all' | 'one',
+): number | null {
+  if (queueLength === 0) return null;
+  if (repeatMode === 'one') return currentIndex;
+  const nextIndex = currentIndex + 1;
+  if (nextIndex < queueLength) return nextIndex;
+  if (repeatMode === 'all' && queueLength > 0) return 0;
+  return null;
+}
+
+export function getPreviousTrackIndex(
+  currentIndex: number,
+  queueLength: number,
+  repeatMode: 'off' | 'all' | 'one',
+  currentPositionSec: number,
+): number | null {
+  if (queueLength === 0) return null;
+  if (currentPositionSec > 3) return currentIndex;
+  const prevIndex = currentIndex - 1;
+  if (prevIndex >= 0) return prevIndex;
+  if (repeatMode === 'all' && queueLength > 0) return queueLength - 1;
+  return null;
+}
+
+export function createShuffledQueue(queue: any[], currentIndex: number): any[] {
+  if (queue.length <= 1) return [...queue];
+  const current = queue[currentIndex];
+  const before = queue.slice(0, currentIndex);
+  const after = queue.slice(currentIndex + 1);
+  const shuffledAfter = [...after];
+  for (let i = shuffledAfter.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffledAfter[i], shuffledAfter[j]] = [shuffledAfter[j], shuffledAfter[i]];
+  }
+  const shuffledBefore = [...before];
+  for (let i = shuffledBefore.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffledBefore[i], shuffledBefore[j]] = [shuffledBefore[j], shuffledBefore[i]];
+  }
+  return [...shuffledBefore, current, ...shuffledAfter];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Player State Getters
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlayerState {
   isPlaying: boolean;
   position: number;
   duration: number;
@@ -304,15 +348,10 @@ export interface MasterPlayerState {
   isMuted: boolean;
 }
 
-/**
- * Get the current state of the master player.
- * Returns null if master player is not registered yet.
- */
-export function getMasterPlayerState(): MasterPlayerState | null {
+export function getMasterPlayerState(): PlayerState | null {
   try {
     const master = (global as any).__MavinMasterPlayer__;
     if (!master) return null;
-    
     return {
       isPlaying: master.playing ?? false,
       position: master.currentTime ?? 0,
@@ -322,20 +361,15 @@ export function getMasterPlayerState(): MasterPlayerState | null {
       playbackRate: master.playbackRate ?? 1.0,
       isMuted: master.muted ?? false,
     };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
-/**
- * Get the current state of the slave player.
- * Returns null if slave player is not registered yet.
- */
-export function getSlavePlayerState(): MasterPlayerState | null {
+export function getSlavePlayerState(): PlayerState | null {
   try {
     const slave = (global as any).__MavinSlavePlayer__;
     if (!slave) return null;
-    
     return {
       isPlaying: slave.playing ?? false,
       position: slave.currentTime ?? 0,
@@ -345,113 +379,67 @@ export function getSlavePlayerState(): MasterPlayerState | null {
       playbackRate: slave.playbackRate ?? 1.0,
       isMuted: slave.muted ?? true,
     };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Control master player directly (for advanced use cases)
+// Direct Player Controls
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Play the master player.
- * Returns true if successful, false otherwise.
- */
 export function playMaster(): boolean {
   try {
     const master = (global as any).__MavinMasterPlayer__;
-    if (master) {
-      master.play();
-      return true;
-    }
+    if (master) { master.play(); return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] playMaster failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Pause the master player.
- * Returns true if successful, false otherwise.
- */
 export function pauseMaster(): boolean {
   try {
     const master = (global as any).__MavinMasterPlayer__;
-    if (master) {
-      master.pause();
-      return true;
-    }
+    if (master) { master.pause(); return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] pauseMaster failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Seek the master player to a specific position.
- * Returns true if successful, false otherwise.
- */
 export function seekMaster(positionSec: number): boolean {
   try {
     const master = (global as any).__MavinMasterPlayer__;
-    if (master) {
-      master.currentTime = positionSec;
-      return true;
-    }
+    if (master) { master.currentTime = positionSec; return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] seekMaster failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Set volume on the master player.
- * Returns true if successful, false otherwise.
- */
 export function setMasterVolume(volume: number): boolean {
   try {
     const master = (global as any).__MavinMasterPlayer__;
-    if (master) {
-      master.volume = Math.min(Math.max(volume, 0), 1);
-      return true;
-    }
+    if (master) { master.volume = Math.min(Math.max(volume, 0), 1); return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] setMasterVolume failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Set playback rate on the master player.
- * Returns true if successful, false otherwise.
- */
 export function setMasterPlaybackRate(rate: number): boolean {
   try {
     const master = (global as any).__MavinMasterPlayer__;
-    if (master) {
-      master.playbackRate = Math.min(Math.max(rate, 0.5), 16);
-      return true;
-    }
+    if (master) { master.playbackRate = Math.min(Math.max(rate, 0.5), 16); return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] setMasterPlaybackRate failed:', e);
-    return false;
-  }
+  } catch { return false; }
+}
+
+export function isAudioPlaying(): boolean {
+  try {
+    const master = (global as any).__MavinMasterPlayer__;
+    if (!master) return false;
+    return (master.playing === true && master.volume > 0 && master.muted === false);
+  } catch { return false; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Control slave player directly (for advanced use cases)
+// Slave Player Controls
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Show the slave player (make it visible and sync to master).
- * Returns true if successful, false otherwise.
- */
 export function showSlave(): boolean {
   try {
     const slave = (global as any).__MavinSlavePlayer__;
@@ -459,40 +447,21 @@ export function showSlave(): boolean {
     if (slave && master) {
       slave.currentTime = master.currentTime ?? 0;
       slave.muted = true;
-      if (master.playing) {
-        slave.play();
-      }
+      if (master.playing) slave.play();
       return true;
     }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] showSlave failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Hide the slave player (pause it).
- * Returns true if successful, false otherwise.
- */
 export function hideSlave(): boolean {
   try {
     const slave = (global as any).__MavinSlavePlayer__;
-    if (slave) {
-      slave.pause();
-      return true;
-    }
+    if (slave) { slave.pause(); return true; }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] hideSlave failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
-/**
- * Sync slave player position to master player.
- * Returns true if successful, false otherwise.
- */
 export function syncSlaveToMaster(): boolean {
   try {
     const slave = (global as any).__MavinSlavePlayer__;
@@ -500,96 +469,57 @@ export function syncSlaveToMaster(): boolean {
     if (slave && master) {
       const masterPos = master.currentTime ?? 0;
       const diff = Math.abs((slave.currentTime ?? 0) - masterPos);
-      if (diff > 0.3) {
-        slave.currentTime = masterPos;
-      }
+      if (diff > 0.3) slave.currentTime = masterPos;
       return true;
     }
     return false;
-  } catch (e) {
-    console.warn('[PlayerSetup] syncSlaveToMaster failed:', e);
-    return false;
-  }
+  } catch { return false; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Reset SSL fast path (for network error recovery)
+// Expand Player Registration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Reset the SSL fast path cache.
- * Call this when you encounter SSL-related playback errors.
- */
+let expandPlayerRegistered = false;
+let registeredExpandPlayer: (() => void) | null = null;
+
+export const registerExpandPlayer = (expandFn: () => void): void => {
+  registeredExpandPlayer = expandFn;
+  expandPlayerRegistered = true;
+  console.log('[PlayerSetup] expandPlayer registered successfully');
+};
+
+export const getRegisteredExpandPlayer = (): (() => void) | null => registeredExpandPlayer;
+export const isExpandPlayerRegistered = (): boolean => expandPlayerRegistered;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reset SSL Fast Path And Reload
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function resetSSLFastPathAndReload(): void {
-  resetSSLFastPath();
+  _resetSSLFastPath?.();
   console.log('[PlayerSetup] SSL fast path reset');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: Debug logging for player state
+// Update Preferred Stream Type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Log the current state of both master and slave players for debugging.
- */
-export function debugPlayerState(): void {
-  const masterState = getMasterPlayerState();
-  const slaveState = getSlavePlayerState();
-  
-  console.log('[PlayerSetup] ========== PLAYER STATE DEBUG ==========');
-  console.log('[PlayerSetup] MASTER:', masterState);
-  console.log('[PlayerSetup] SLAVE:', slaveState);
-  console.log('[PlayerSetup] =========================================');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: Check if audio is actually playing (for diagnostics)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Check if the master player is actually producing audio.
- * Returns true if playing and volume > 0.
- */
-export function isAudioPlaying(): boolean {
-  try {
-    const master = (global as any).__MavinMasterPlayer__;
-    if (!master) return false;
-    return (master.playing === true && master.volume > 0 && master.muted === false);
-  } catch (e) {
-    return false;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: Get current preferred stream type
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Get the current preferred stream type (audio or video).
- * This is used for tab-aware queue navigation.
- */
-export function getPreferredStreamType(): 'audio' | 'video' {
-  try {
-    const masterState = getMasterPlayerState();
-    // This value is stored in the session within MusicPlayerContext
-    // We can access it via global or default to 'audio'
-    const globalPref = (global as any).__MavinPreferredStreamType;
-    return globalPref === 'video' ? 'video' : 'audio';
-  } catch (e) {
-    return 'audio';
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: Update preferred stream type with global sync
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Update the preferred stream type and sync to global.
- * This ensures consistency across all components.
- */
 export function updatePreferredStreamType(type: 'audio' | 'video'): void {
   (global as any).__MavinPreferredStreamType = type;
-  setPreferredStreamType(type);
+  _setPreferredStreamType?.(type);
   console.log(`[PlayerSetup] Preferred stream type updated to: ${type}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Debug Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function debugPlayerState(): void {
+  const master = getMasterPlayerState();
+  const slave = getSlavePlayerState();
+  console.log('[PlayerSetup] ========== PLAYER STATE ==========');
+  console.log('[PlayerSetup] MASTER:', master);
+  console.log('[PlayerSetup] SLAVE:', slave);
+  console.log('[PlayerSetup] ===================================');
 }

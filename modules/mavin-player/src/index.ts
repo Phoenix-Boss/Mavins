@@ -44,6 +44,22 @@ const emitter = new EventEmitter<MavinPlayerEvents>(Native);
 
 const MavinPlayer = {
   // ── Core playback ────────────────────────────────────────────────────────
+
+  /**
+   * Primary remote-track entry point.
+   * Arms the Kotlin resolver with the already-resolved URLs from MavinEngine,
+   * then immediately triggers playback. getStreams() fires the resolver once
+   * and clears it — no re-extraction ever happens.
+   * Use this instead of playStream() for all remote YouTube tracks.
+   */
+  resolveAndPlay: (
+    videoId: string,
+    dashManifestUrl: string | null,
+    hlsManifestUrl: string | null,
+    progressiveAudioUrl: string | null,
+  ): Promise<{ success: boolean }> =>
+    Native.resolveAndPlay(videoId, dashManifestUrl, hlsManifestUrl, progressiveAudioUrl),
+
   playStream: (videoId: string): Promise<{ success: boolean }> =>
     Native.playStream(videoId),
   playStreamEmbedded: (videoId: string): Promise<{ success: boolean }> =>
