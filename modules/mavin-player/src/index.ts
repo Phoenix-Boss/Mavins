@@ -23,7 +23,28 @@ export interface PlayerState {
   currentItem: string;
 }
 
-// ── FIX: EventEmitter expects EventsMap where each property is a function type ──
+/**
+ * The HTTP context captured by MavinEngine at extraction time.
+ * These are the exact session credentials that were sent to YouTube
+ * during the resolution request. They must travel to ExoPlayer unchanged
+ * so that CDN segment requests carry the same session identity.
+ *
+ * Industry standard: Origin, Referer, and Cookie on segment requests
+ * must match the values used during resolution. YouTube CDN validates this.
+ */
+export interface PlayerHttpContext {
+  /** Raw cookie string (e.g. "SOCS=CAISAiAD; ..."). Injected as Cookie header. */
+  cookie: string;
+  /** Always "https://www.youtube.com" */
+  origin: string;
+  /** Always "https://www.youtube.com/" */
+  referer: string;
+  acceptLanguage: string;
+  xYoutubeClientName: string;
+  xYoutubeClientVersion: string;
+  userAgent: string;
+}
+
 type MavinPlayerEvents = {
   onPlaybackStateChanged: (e: {
     state: string;
@@ -43,78 +64,121 @@ type MavinPlayerEvents = {
 const emitter = new EventEmitter<MavinPlayerEvents>(Native);
 
 const MavinPlayer = {
-  // ── Core playback ────────────────────────────────────────────────────────
 
-  /**
-   * Primary remote-track entry point.
-   * Arms the Kotlin resolver with the already-resolved URLs from MavinEngine,
-   * then immediately triggers playback. getStreams() fires the resolver once
-   * and clears it — no re-extraction ever happens.
-   * Use this instead of playStream() for all remote YouTube tracks.
-   */
-  resolveAndPlay: (
+  // ── PRIMARY ENTRY POINT ───────────────────────────────────────────────────
+  //
+  // loadAndPlay — industry standard one-cycle handoff.
+  //
+  // Call this when you have a fully resolved bundle from MavinEngine.
+  // Pass the pre-resolved URLs and the HTTP context that produced them.
+  // The Kotlin module stores the bundle, then fires playStream internally.
+  // NewPlayer reads streams and HTTP context directly from the stored bundle.
+  // ExoPlayer fetches CDN segments with the exact same session that extracted.
+  //
+  // Priority of URL selection (set by JS before calling):
+  //   dashManifestUrl  — first preference (DASH, adaptive, session-bound)
+  //   hlsManifestUrl   — second preference
+  //   progressiveAudioUrl — last resort, only when no manifests available
+  //
+  // httpContext must be captured from MavinEngine at extraction time.
+  // Pass null for httpContext only for local files (never for YouTube).
+
+  loadAndPlay: (
     videoId: string,
     dashManifestUrl: string | null,
     hlsManifestUrl: string | null,
     progressiveAudioUrl: string | null,
+    httpContext: PlayerHttpContext | null
   ): Promise<{ success: boolean }> =>
-    Native.resolveAndPlay(videoId, dashManifestUrl, hlsManifestUrl, progressiveAudioUrl),
+    Native.loadAndPlay(
+      videoId,
+      dashManifestUrl,
+      hlsManifestUrl,
+      progressiveAudioUrl,
+      httpContext
+    ),
+
+  loadAndPlayVideo: (
+    videoId: string,
+    dashManifestUrl: string | null,
+    hlsManifestUrl: string | null,
+    progressiveAudioUrl: string | null,
+    httpContext: PlayerHttpContext | null
+  ): Promise<{ success: boolean }> =>
+    Native.loadAndPlayVideo(
+      videoId,
+      dashManifestUrl,
+      hlsManifestUrl,
+      progressiveAudioUrl,
+      httpContext
+    ),
+
+  // ── Legacy playStream — kept for backwards compatibility ──────────────────
+  // Use loadAndPlay() instead for all new remote tracks.
+  // playStream() will fail if no bundle has been stored for the given videoId.
 
   playStream: (videoId: string): Promise<{ success: boolean }> =>
     Native.playStream(videoId),
+
   playStreamEmbedded: (videoId: string): Promise<{ success: boolean }> =>
     Native.playStreamEmbedded(videoId),
+
   playStreamVideo: (videoId: string): Promise<{ success: boolean }> =>
     Native.playStreamVideo(videoId),
 
-  play: (): Promise<{ success: boolean }> => Native.play(),
-  pause: (): Promise<{ success: boolean }> => Native.pause(),
+  // ── Core playback ─────────────────────────────────────────────────────────
+
+  play:    (): Promise<{ success: boolean }> => Native.play(),
+  pause:   (): Promise<{ success: boolean }> => Native.pause(),
   prepare: (): Promise<{ success: boolean }> => Native.prepare(),
   release: (): Promise<{ success: boolean }> => Native.release(),
+
   seekTo: (positionMs: number): Promise<{ success: boolean }> =>
     Native.seekTo(positionMs),
 
-  // ── Queue management ─────────────────────────────────────────────────────
+  // ── Queue management ──────────────────────────────────────────────────────
+
   addToPlaylist: (videoId: string): Promise<{ success: boolean }> =>
     Native.addToPlaylist(videoId),
+
   removeFromPlaylist: (uniqueId: number): Promise<{ success: boolean }> =>
     Native.removeFromPlaylist(uniqueId),
+
   movePlaylistItem: (
     fromIndex: number,
     toIndex: number
   ): Promise<{ success: boolean }> =>
     Native.movePlaylistItem(fromIndex, toIndex),
+
   skipToPlaylistItem: (index: number): Promise<{ success: boolean }> =>
     Native.skipToPlaylistItem(index),
 
-  // ── Settings ─────────────────────────────────────────────────────────────
+  // ── Settings ──────────────────────────────────────────────────────────────
+
   setRepeatMode: (mode: RepeatMode): Promise<{ success: boolean }> =>
     Native.setRepeatMode(mode),
+
   setShuffle: (enabled: boolean): Promise<{ success: boolean }> =>
     Native.setShuffle(enabled),
+
   setPlaybackSpeed: (speed: number): Promise<{ success: boolean }> =>
     Native.setPlaybackSpeed(speed),
+
   selectChapter: (index: number): Promise<{ success: boolean }> =>
     Native.selectChapter(index),
 
-  // ── State ────────────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────
+
   getState: (): Promise<PlayerState> => Native.getState(),
 
-  // ── Events ───────────────────────────────────────────────────────────────
+  // ── Events ────────────────────────────────────────────────────────────────
+
   onPlaybackStateChanged: (
-    listener: (e: {
-      state: string;
-      isPlaying: boolean;
-      playMode: PlayMode;
-    }) => void
+    listener: (e: { state: string; isPlaying: boolean; playMode: PlayMode }) => void
   ) => emitter.addListener('onPlaybackStateChanged', listener),
 
   onPositionChanged: (
-    listener: (e: {
-      position: number;
-      duration: number;
-      bufferedPercent: number;
-    }) => void
+    listener: (e: { position: number; duration: number; bufferedPercent: number }) => void
   ) => emitter.addListener('onPositionChanged', listener),
 
   onTrackChanged: (

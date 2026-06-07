@@ -947,6 +947,34 @@ export const getSubtitles = (
 }> =>
   Native.getSubtitles(url, language ?? null, serviceId ?? null);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HTTP CONTEXT TYPE
+// Returned as the "httpContext" field inside every getStreamInfo / getStreamInfoById
+// response. No separate call needed. Engine packages URLs + session as one unit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The HTTP session context captured atomically inside streamInfoToMap at
+ * extraction time. It is returned as the "httpContext" field of every
+ * getStreamInfo() and getStreamInfoById() response.
+ *
+ * Industry standard: the resolver returns one complete package containing
+ * both the resolved URLs and the session that produced them. There is no
+ * separate context call. The player receives this object and uses it to
+ * build OkHttpDataSource.Factory so CDN segment requests carry the exact
+ * same session identity that extracted the video.
+ */
+export interface HttpContextResult {
+  /** Raw SOCS consent cookie string. Injected as Cookie header on CDN requests. */
+  cookie:                string;
+  origin:                string;
+  referer:               string;
+  acceptLanguage:        string;
+  xYoutubeClientName:    string;
+  xYoutubeClientVersion: string;
+  userAgent:             string;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // COMMENTS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1245,6 +1273,7 @@ const MavinEngine = {
   getAudioStreams,
   getVideoStreams,
   getSubtitles,
+
 
   // Comments
   getComments,

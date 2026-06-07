@@ -190,6 +190,7 @@ class MavinEngineModule : Module() {
             ensureInit(); extractSubtitles(url, language, serviceId)
         }
 
+
         // â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         AsyncFunction("getComments") { url: String, pageUrl: String?, serviceId: Int? ->
             ensureInit(); extractComments(url, pageUrl, serviceId)
@@ -1512,6 +1513,28 @@ class MavinEngineModule : Module() {
                     "urls" to m.urls.map { it.toString() }, "urlTexts" to m.urlTexts)
             })
             put("errors",                  info.errors.map { it.message.orEmpty() })
+
+            // ── HTTP context — captured atomically at extraction time ──────────────
+            // These are the exact session credentials that were active during this
+            // StreamInfo.getInfo() call. They travel with the resolved URLs as one
+            // inseparable package to the player.
+            // Industry standard: resolver returns complete package — URLs + session.
+            // Player receives one object. Zero separate context calls. One cycle.
+            val _cookie = try {
+                YoutubeParsingHelper.getCookieHeader()["Cookie"]?.firstOrNull() ?: ""
+            } catch (_: Exception) { "" }
+            val _clientVersion = try {
+                getInnerTubeConfig().clientVersion
+            } catch (_: Exception) { FALLBACK_CLIENT_VERSION }
+            put("httpContext", mapOf(
+                "cookie"                to _cookie,
+                "origin"                to "https://www.youtube.com",
+                "referer"               to "https://www.youtube.com/",
+                "acceptLanguage"        to "en-US,en;q=0.9",
+                "xYoutubeClientName"    to "3",
+                "xYoutubeClientVersion" to _clientVersion,
+                "userAgent"             to USER_AGENT
+            ))
         }
 
     private fun getBestStreamUrl(url: String, format: String, serviceId: Int?): Map<String, Any> {
@@ -2167,6 +2190,3 @@ class MavinEngineModule : Module() {
         }
     }
 }
-
-
-

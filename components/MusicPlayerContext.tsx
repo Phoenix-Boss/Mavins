@@ -35,6 +35,7 @@ import MavinEngine, {
   StreamInfoItem,
   AudioStream,
   VideoStream,
+  type HttpContextResult,
 } from '@/modules/mavin-engine';
 
 import MavinPlayer from '@/modules/mavin-player';
@@ -108,6 +109,15 @@ export interface ResolvedTrack {
   hasVideo: boolean;
   isAudioOnly: boolean;
   isVideoOnly: boolean;
+  /**
+   * The HTTP session context captured atomically inside streamInfoToMap at
+   * the moment StreamInfo.getInfo() completed. Returned as part of the
+   * getStreamInfo/getStreamInfoById response — not a separate call.
+   *
+   * Industry standard: URLs and the session that produced them are one
+   * inseparable package. This field carries that session to loadAndPlay().
+   */
+  httpContext?: HttpContextResult;
 }
 
 const CONFIG = {
@@ -837,6 +847,24 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       hasVideoManifest: !!videoOnlyManifestUrl
     });
 
+    // Extract the HTTP context that streamInfoToMap captured atomically during
+    // StreamInfo.getInfo(). This is the same session that was active during the
+    // YouTube extraction — cookie, Origin, Referer, client version.
+    // It travels with the resolved URLs as one package to loadAndPlay().
+    const httpContext: HttpContextResult | undefined = info.httpContext
+      ? {
+          cookie:                info.httpContext.cookie               ?? '',
+          origin:                info.httpContext.origin               ?? 'https://www.youtube.com',
+          referer:               info.httpContext.referer              ?? 'https://www.youtube.com/',
+          acceptLanguage:        info.httpContext.acceptLanguage       ?? 'en-US,en;q=0.9',
+          xYoutubeClientName:    info.httpContext.xYoutubeClientName   ?? '3',
+          xYoutubeClientVersion: info.httpContext.xYoutubeClientVersion ?? '',
+          userAgent:             info.httpContext.userAgent            ??
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
+      : undefined;
+
     return {
       id: song.id,
       url: primaryPlaybackUrl,
@@ -856,6 +884,7 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       hasVideo,
       isAudioOnly,
       isVideoOnly,
+      httpContext,
     };
   } catch (primaryErr: any) {
     const errorMsg = primaryErr?.message || String(primaryErr);
@@ -1589,8 +1618,20 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       return true;
     }
 
-    // For REMOTE tracks: use NewPlayer with YouTube headers
-    // First, resolve to get metadata and videoId (for extras)
+    // ── REMOTE TRACKS: MavinEngine extracts → MavinPlayer plays ────────────────
+    //
+    // Industry standard one-cycle architecture:
+    //   Phase 1 — Resolution: MavinEngine calls YouTube once, returns URLs + session
+    //   Phase 1b — Context read: httpContext field from the resolution result object
+    //   Phase 2 — Handoff: bundle (URLs + HTTP context) crosses bridge to Kotlin
+    //   Phase 3 — Playback: NewPlayer serves bundle to ExoPlayer, zero YouTube calls
+    //
+    // httpContext is captured atomically inside streamInfoToMap at extraction time.
+    // It travels as a field of the resolved object — same response, same snapshot.
+    // OkHttpDataSource.Factory uses it so CDN requests carry that exact session.
+    // YouTube sees one continuous authenticated session. No 403.
+
+    // Warm disk-cached extras while resolution is in flight (non-blocking)
     if (enrichedSong.id) {
       const diskCached = await getCachedTrackExtras(enrichedSong.id);
       if (diskCached && !trackExtrasStore.has(enrichedSong.id)) {
@@ -1599,6 +1640,8 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       }
     }
 
+    // ── Phase 1: Resolution ───────────────────────────────────────────────────
+    // One extraction call. Returns resolved URLs (DASH, HLS, or progressive).
     let resolved: ResolvedTrack | null = null;
     try {
       resolved = await resolveTrackWithRetry(enrichedSong);
@@ -1616,59 +1659,72 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       return false;
     }
 
-    // Update session with stream info
     setSessionPartial({
       hasVideoStream: resolved.hasVideo,
       isAudioOnlyTrack: resolved.isAudioOnly,
       isVideoOnlyTrack: resolved.isVideoOnly,
     });
 
-    // Initialize NewPlayer listeners if not already done
+    // ── Phase 1b: Read HTTP context from resolution result ────────────────────
+    // httpContext was captured atomically inside streamInfoToMap at the exact
+    // moment StreamInfo.getInfo() completed in the Kotlin engine. It is part
+    // of the same response object as the resolved URLs.
+    //
+    // Industry standard: resolver returns one complete package — URLs + the
+    // session that produced them. No separate call. No race. No drift.
+    // Player receives this field and uses it to build OkHttpDataSource.Factory.
+    // CDN segment requests carry the exact same session that extracted the video.
+    const httpContext: import('@/modules/mavin-player').PlayerHttpContext | null =
+      resolved.httpContext ?? null;
+    console.log('[MusicPlayer] HTTP context from resolution — cookiePresent:',
+      (httpContext?.cookie?.length ?? 0) > 0);
+
+    // ── Phase 2 + 3: Bundle handoff and playback ──────────────────────────────
+    // loadAndPlay stores the bundle atomically in the repository then fires
+    // playStream(). NewPlayer reads getStreams() and getHttpDataSourceFactory()
+    // from the stored bundle — no YouTube calls from the player side.
     initNewPlayerListeners();
 
-    // Arms the Kotlin resolver lambda with the already-resolved URLs, then immediately
-    // triggers player.playStream() internally. getStreams() fires the lambda once and
-    // clears it — no re-extraction ever happens. Engine and player work as one call.
-    console.log('[MusicPlayer] Calling MavinPlayer.resolveAndPlay with pre-resolved URLs for:', resolved.videoId);
+    console.log('[MusicPlayer] Calling MavinPlayer.loadAndPlay for:', resolved.videoId, {
+      hasDash:        !!resolved.dashManifestUrl,
+      hasHls:         !!resolved.hlsManifestUrl,
+      hasProgressive: !resolved.dashManifestUrl && !resolved.hlsManifestUrl && !!resolved.url,
+      hasCookie:      (httpContext?.cookie?.length ?? 0) > 0,
+    });
 
     try {
-      const result = await MavinPlayer.resolveAndPlay(
+      const result = await MavinPlayer.loadAndPlay(
         resolved.videoId,
         resolved.dashManifestUrl  ?? null,
         resolved.hlsManifestUrl   ?? null,
-        // Progressive only when no manifests — resolved.url is the best audio URL
-        // in that case (set by resolveTrack's primaryPlaybackUrl logic)
+        // Progressive URL only when no manifests available.
+        // resolved.url is the best audio URL in that case.
         (!resolved.dashManifestUrl && !resolved.hlsManifestUrl) ? (resolved.url ?? null) : null,
+        httpContext,
       );
 
       if (!result.success) {
-        throw new Error('MavinPlayer.resolveAndPlay returned false');
+        throw new Error('MavinPlayer.loadAndPlay returned false');
       }
 
-      console.log('[MusicPlayer] MavinPlayer.resolveAndPlay succeeded');
-      
-      // Set playback rate if not 1.0
+      console.log('[MusicPlayer] MavinPlayer.loadAndPlay succeeded for:', resolved.videoId);
+
       if (session.playbackRate !== 1.0) {
-        await MavinPlayer.setPlaybackSpeed(session.playbackRate);
+        await MavinPlayer.setPlaybackSpeed(session.playbackRate).catch(() => {});
       }
-      
-      // Seek to saved position if needed (for restores)
-      if (resolved.duration && resolved.duration > 0) {
-        // Position will be set by restore logic
-      }
-      
+
       releasePlaybackLock();
-      setSessionPartial({ 
-        isLoading: false, 
-        isResolving: false, 
+      setSessionPartial({
+        isLoading: false,
+        isResolving: false,
         optimisticPlaying: true,
         usingNewPlayer: true,
-        currentVideoId: resolved.videoId
+        currentVideoId: resolved.videoId,
       });
       return true;
-      
+
     } catch (playError: any) {
-      console.error('[MusicPlayer] MavinPlayer.playStream failed:', playError);
+      console.error('[MusicPlayer] MavinPlayer.loadAndPlay failed:', playError?.message);
       setSessionPartial({ isLoading: false, isResolving: false, lastError: playError?.message || 'Playback failed', optimisticPlaying: null });
       releasePlaybackLock();
       return false;

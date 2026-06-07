@@ -1,28 +1,28 @@
 // components/player/playerContent.tsx
 //
 // ANDROID-ONLY: All iOS-specific code removed
-// MASTER-SLAVE ARCHITECTURE v12.0 - SINGLE NEWPLAYER INSTANCE
+// ARCHITECTURE v13.0 - SINGLE NEWPLAYER INSTANCE WITH NATIVE VIDEO SURFACE
 //
-// ARCHITECTURE: Single NewPlayer (ExoPlayer) handles ALL playback.
+// SINGLE PLAYER ARCHITECTURE: One NewPlayer (ExoPlayer) instance handles ALL playback.
 //   - Audio plays through NewPlayer with YouTube headers via OkHttpDataSource.Factory
-//   - Video renders through native MavinPlayerVideoView component
+//   - Video renders through native MavinPlayerVideoView component (exported from MavinPlayer)
 //   - Tab switching simply shows/hides the video surface - no second player, no offset seeking
-//
-// MASTER PLAYER (Hidden): NewPlayer instance (created in MusicPlayerContext, exposed via MavinPlayer)
-//   - Single source of truth for ALL playback state
-//   - Plays audio with headers, never muted
-//   - Video surface attaches/detaches on demand
-//
-// VIDEO SURFACE: MavinPlayerVideoView (native ExoPlayer PlayerView)
-//   - Visible only on video tab
-//   - Automatically attaches to the existing NewPlayer instance
-//   - No separate loading, no offset, no sync logic
+//   - The same NewPlayer instance continues playing seamlessly when video surface attaches/detaches
 //
 // LOCAL TRACKS: expo-video master player (kept for local file playback only)
 //   - For downloaded songs and content URIs
-//   - Slave player NOT used for remote tracks
+//   - NewPlayer handles all remote YouTube tracks
 //
-// END DETECTION: NewPlayer's onTrackChanged events bridge through MusicPlayerContext → engine.skipToNext()
+// STATE: All playback state comes from MusicPlayerContext (which bridges NewPlayer events)
+//   - isPlaying, position, duration, bufferedPosition from context
+//   - No local state for video loading, seeking, or sync
+//
+// VIDEO SURFACE: MavinPlayerVideoView (native ExoPlayer PlayerView)
+//   - Imported from MavinPlayer module (same as playback methods)
+//   - Visible only on video tab
+//   - Automatically attaches to the existing NewPlayer instance when rendered
+//   - Detaches when hidden - player continues audio-only
+//   - No separate loading, no offset, no sync logic, no manifest re-fetch
 
 import React, {
   useMemo,
@@ -47,7 +47,6 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer } from 'expo-video';
-import MavinPlayer from '@/modules/mavin-player';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -99,6 +98,7 @@ import {
 import { useGestureContext } from '@/libs/gestureContext';
 import { downloadAndSaveSong } from '@/services/download';
 import { useIsSongDownloaded, useIsSongDownloading } from '@/store/library';
+import MavinPlayer, { MavinPlayerVideoView } from '@/modules/mavin-player';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -653,7 +653,6 @@ function PlayerContentInner({
   const showSkeletonForStats = musicPlayerLoading || isResolving || (engine.isBuffering && !isPlaying && durationSec === 0);
 
   const [activeSegment, setActiveSegment] = useState<'song' | 'video'>('song');
-  const [masterReady, setMasterReady] = useState(false);
   const [playbackRate, setPlaybackRateState] = useState(1.0);
   const [showSpeedPicker, setShowSpeedPicker] = useState(false);
 
@@ -726,8 +725,6 @@ function PlayerContentInner({
         previousMasterStatusRef.current = status;
 
         if (status === 'readyToPlay') {
-          setMasterReady(true);
-
           const duration = masterPlayer.duration ?? 0;
           if (duration > 0) {
             const timestamps: number[] = [];
@@ -836,7 +833,6 @@ function PlayerContentInner({
   }, [activeSegment, engine]);
 
   useEffect(() => {
-    setMasterReady(false);
     setActiveSegment('song');
     trackEndHandledRef.current = false;
     previousMasterStatusRef.current = null;
@@ -1076,9 +1072,6 @@ function PlayerContentInner({
 
   const bufferFillPercent = visualDurationSec > 0 ? Math.min(bufferedPosition / visualDurationSec, 1) : 0;
 
-  // Import the native video view component (to be implemented separately)
-  const MavinPlayerVideoView = require('@/modules/mavin-player-video-view').default;
-
   return (
     <>
       <View style={{ flex: 1, backgroundColor: gradientColors[2] }}>
@@ -1149,6 +1142,15 @@ function PlayerContentInner({
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                     allowsPictureInPicture={true}
+                    onFirstFrameRender={() => {
+                      console.log('[PlayerContent] First video frame rendered');
+                    }}
+                    onPictureInPictureStart={() => {
+                      console.log('[PlayerContent] PiP started');
+                    }}
+                    onPictureInPictureStop={() => {
+                      console.log('[PlayerContent] PiP stopped');
+                    }}
                   />
                 </Animated.View>
               )}

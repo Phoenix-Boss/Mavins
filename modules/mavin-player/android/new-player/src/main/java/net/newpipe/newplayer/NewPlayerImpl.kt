@@ -218,18 +218,18 @@ class NewPlayerImpl(
                 super.onMediaItemTransition(mediaItem, reason)
                 mutableCurrentlyPlaying.update { mediaItem }
                 if (mediaItem != null) {
+                    // The StreamSelection for this item was stored in uniqueIdToStreamSelectionLookup
+                    // when it was originally resolved and added to ExoPlayer. Use it directly.
+                    // No network call. No repository call. One-cycle guarantee holds for queues
+                    // and playlist advances exactly the same as for direct play.
                     val streamSelection =
                         uniqueIdToStreamSelectionLookup[mediaItem.mediaId.toLong()]!!
-                    launchJobAndCollectError {
-                        mutableCurrentlyAvailableTracks.update {
-                            val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(
-                                repository.getStreams(
-                                    streamSelection.item
-                                )
-                            )
-                            Log.d(TAG, "New available tracks: \n" + tracks.joinToString())
-                            tracks
-                        }
+                    mutableCurrentlyAvailableTracks.update {
+                        val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(
+                            listOf(streamSelection.stream)
+                        )
+                        Log.d(TAG, "New available tracks on transition: \n" + tracks.joinToString())
+                        tracks
                     }
                 } else {
                     mutableCurrentlyAvailableTracks.update { emptyList() }
@@ -359,7 +359,8 @@ class NewPlayerImpl(
             prepare()
         }
         launchJobAndCollectError {
-            val mediaSource = toMediaSource(item)
+            val streams = repository.getStreams(item)
+            val mediaSource = toMediaSource(streams, item)
             exoPlayer.value?.addMediaSource(mediaSource)
         }
     }
@@ -381,17 +382,19 @@ class NewPlayerImpl(
     @OptIn(UnstableApi::class)
     override fun playStream(item: String, playMode: PlayMode) {
         launchJobAndCollectError {
+            // Extract once. Pass the same list to both the track update and the
+            // media source builder. This is the one-cycle guarantee — getStreams()
+            // is called exactly once per playStream() invocation.
+            val streams = repository.getStreams(item)
+
             mutableCurrentlyAvailableTracks.update {
-                val tracks =
-                    TrackUtils.getNonDynamicTracksNonDuplicated(repository.getStreams(item))
+                val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(streams)
                 Log.d(TAG, "New available tracks: \n" + tracks.joinToString())
                 tracks
             }
 
-            val mediaSource = toMediaSource(item)
-            
-/** @hide */
-internalPlayStream(mediaSource, playMode)
+            val mediaSource = toMediaSource(streams, item)
+            internalPlayStream(mediaSource, playMode)
         }
     }
 
@@ -427,9 +430,7 @@ internalPlayStream(mediaSource, playMode)
 
 
     @OptIn(UnstableApi::class)
-    private fun 
-/** @hide */
-internalPlayStream(mediaSource: MediaSource, playMode: PlayMode) {
+    private fun internalPlayStream(mediaSource: MediaSource, playMode: PlayMode) {
         currentStreamLanguageConstraint = null
         if (exoPlayer.value?.playbackState == Player.STATE_IDLE || exoPlayer.value == null) {
             prepare()
@@ -468,26 +469,27 @@ internalPlayStream(mediaSource: MediaSource, playMode: PlayMode) {
     }
 
     private suspend fun replaceCurrentItem(item: String) {
+        val streams = repository.getStreams(item)
+
         mutableCurrentlyAvailableTracks.update {
-            val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(repository.getStreams(item))
+            val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(streams)
             Log.d(TAG, "New available tracks: \n" + tracks.joinToString())
             tracks
         }
 
-        val mediaSource = toMediaSource(item)
+        val mediaSource = toMediaSource(streams, item)
         replaceCurrentMediaSource(mediaSource)
     }
 
     @OptIn(UnstableApi::class)
-    private suspend
-    fun toMediaSource(item: String): MediaSource {
+    private suspend fun toMediaSource(streams: List<net.newpipe.newplayer.data.Stream>, item: String): MediaSource {
         val autoStreamSelector = AutoStreamSelector(
             preferredLanguages = preferredStreamLanguages,
             streamLanguageConstraint = currentStreamLanguageConstraint
         )
 
         val selection = autoStreamSelector.selectStreamAutomatically(
-            availableStreams = repository.getStreams(item),
+            availableStreams = streams,
         )
         return toMediaSource(selection, item)
     }
