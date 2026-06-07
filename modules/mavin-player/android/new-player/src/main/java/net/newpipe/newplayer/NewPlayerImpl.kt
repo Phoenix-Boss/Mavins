@@ -61,6 +61,8 @@ import net.newpipe.newplayer.data.RepeatMode
 import net.newpipe.newplayer.logic.NoResponse
 import net.newpipe.newplayer.logic.StreamExceptionResponse
 import net.newpipe.newplayer.data.StreamSelection
+import net.newpipe.newplayer.data.SingleSelection
+import net.newpipe.newplayer.data.MultiSelection
 import net.newpipe.newplayer.logic.ReplaceStreamSelectionResponse
 import net.newpipe.newplayer.data.StreamTrack
 import net.newpipe.newplayer.logic.ReplaceItemResponse
@@ -226,7 +228,11 @@ class NewPlayerImpl(
                         uniqueIdToStreamSelectionLookup[mediaItem.mediaId.toLong()]!!
                     mutableCurrentlyAvailableTracks.update {
                         val tracks = TrackUtils.getNonDynamicTracksNonDuplicated(
-                            listOf(streamSelection.stream)
+                            when (streamSelection) {
+                                is SingleSelection -> listOf(streamSelection.stream)
+                                is MultiSelection  -> streamSelection.streams
+                                else               -> emptyList()
+                            }
                         )
                         Log.d(TAG, "New available tracks on transition: \n" + tracks.joinToString())
                         tracks

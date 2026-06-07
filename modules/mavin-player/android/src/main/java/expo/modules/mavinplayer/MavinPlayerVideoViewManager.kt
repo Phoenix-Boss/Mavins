@@ -6,7 +6,6 @@ import android.widget.FrameLayout
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
-import expo.modules.kotlin.views.ViewManagerDefinition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -137,23 +136,4 @@ class MavinPlayerVideoView(context: android.content.Context, appContext: AppCont
         android.util.Log.d("MavinPlayerVideoView", "Picture in picture allowed: $allows")
         // PiP is handled at the Activity level; this property informs the component
     }
-}
-
-/**
- * ViewManager definition for React Native.
- * This registers the component so it can be used in playerContent.tsx.
- */
-object MavinPlayerVideoViewManagerDefinition {
-    fun getViewManagerDefinition() = ViewManagerDefinition(
-        viewFactory = { context, appContext -> MavinPlayerVideoView(context, appContext) },
-        props = mapOf(
-            "contentFit" to ViewManagerDefinition.PropSetter("contentFit") { view, value: String ->
-                view.setContentFit(value)
-            },
-            "allowsPictureInPicture" to ViewManagerDefinition.PropSetter("allowsPictureInPicture") { view, value: Boolean ->
-                view.setAllowsPictureInPicture(value)
-            }
-        ),
-        events = listOf("onFirstFrameRender", "onPictureInPictureStart", "onPictureInPictureStop")
-    )
 }

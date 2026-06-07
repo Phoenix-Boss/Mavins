@@ -1,4 +1,5 @@
-import { requireNativeModule, EventEmitter } from 'expo-modules-core';
+import { requireNativeModule, requireNativeViewManager, EventEmitter } from 'expo-modules-core';
+import React from 'react';
 
 const Native = requireNativeModule('MavinPlayer');
 
@@ -195,3 +196,20 @@ const MavinPlayer = {
 };
 
 export default MavinPlayer;
+
+// ── Native video surface component ────────────────────────────────────────────
+//
+// MavinPlayerVideoView renders the ExoPlayer video frames inside a React Native
+// view. It attaches a SurfaceView to the live NewPlayer ExoPlayer instance when
+// mounted, and clears the surface (audio-only continues) when unmounted.
+//
+// Used in playerContent.tsx to render the Video tab without a second player.
+// Registered on the Kotlin side via the View() block in MavinPlayerModule.
+export const MavinPlayerVideoView: React.ComponentType<{
+  style?: import('react-native').StyleProp<import('react-native').ViewStyle>;
+  contentFit?: 'cover' | 'contain' | 'stretch';
+  allowsPictureInPicture?: boolean;
+  onFirstFrameRender?: (e: { surfaceReady: boolean }) => void;
+  onPictureInPictureStart?: () => void;
+  onPictureInPictureStop?: () => void;
+}> = requireNativeViewManager('MavinPlayerVideoView');

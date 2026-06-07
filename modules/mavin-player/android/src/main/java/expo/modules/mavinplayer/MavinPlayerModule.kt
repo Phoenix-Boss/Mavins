@@ -61,6 +61,14 @@ class MavinPlayerModule : Module() {
             // are injected as raw "Cookie" header values in the data source factory.
             .cookieJar(okhttp3.CookieJar.NO_COOKIES)
             .build()
+
+        /**
+         * Returns the live ExoPlayer instance for video surface attachment.
+         * Called by MavinPlayerVideoView to bind its SurfaceView to the player.
+         * Returns null when NewPlayer is in IDLE state (no ExoPlayer allocated).
+         */
+        fun getExoPlayerForSurface(): androidx.media3.common.Player? =
+            newPlayer?.exoPlayer?.value
     }
 
     private val moduleScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -83,6 +91,24 @@ class MavinPlayerModule : Module() {
 
         OnDestroy {
             moduleScope.cancel()
+        }
+
+        // ── Video surface view — bridges ExoPlayer frames into React Native ────
+        //
+        // MavinPlayerVideoView attaches a SurfaceView to the live ExoPlayer instance
+        // via getExoPlayerForSurface(). This is the only mechanism available to render
+        // NewPlayer's video output inside a React Native component tree.
+        // The view auto-attaches on mount and clears the surface on unmount so the
+        // player continues audio-only when the Video tab is hidden.
+
+        View(MavinPlayerVideoView::class) {
+            Prop("contentFit") { view: MavinPlayerVideoView, value: String ->
+                view.setContentFit(value)
+            }
+            Prop("allowsPictureInPicture") { view: MavinPlayerVideoView, value: Boolean ->
+                view.setAllowsPictureInPicture(value)
+            }
+            Events("onFirstFrameRender", "onPictureInPictureStart", "onPictureInPictureStop")
         }
 
         // ── PRIMARY ENTRY POINT ───────────────────────────────────────────────
