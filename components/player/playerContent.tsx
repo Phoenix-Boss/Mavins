@@ -18,7 +18,7 @@
 //   - No local state for video loading, seeking, or sync
 //
 // VIDEO SURFACE: MavinPlayerVideoView (native ExoPlayer PlayerView)
-//   - Imported from MavinPlayer module (same as playback methods)
+//   - Imported from the native module's default export
 //   - Visible only on video tab
 //   - Automatically attaches to the existing NewPlayer instance when rendered
 //   - Detaches when hidden - player continues audio-only
@@ -98,6 +98,9 @@ import {
 import { useGestureContext } from '@/libs/gestureContext';
 import { downloadAndSaveSong } from '@/services/download';
 import { useIsSongDownloaded, useIsSongDownloading } from '@/store/library';
+
+// FIX: Import MavinPlayer and MavinPlayerVideoView correctly from the native module
+// The native module exports MavinPlayer as default and MavinPlayerVideoView as a named export
 import MavinPlayer, { MavinPlayerVideoView } from '@/modules/mavin-player';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');

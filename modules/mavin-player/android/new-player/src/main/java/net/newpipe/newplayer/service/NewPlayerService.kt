@@ -58,8 +58,34 @@ internal class NewPlayerService : MediaSessionService() {
 
     private var serviceScope = CoroutineScope(Dispatchers.Main + Job())
 
+    companion object {
+        @Volatile
+        private var playerInstance: NewPlayer? = null
+
+        fun setNewPlayer(instance: NewPlayer) {
+            synchronized(this) {
+                playerInstance = instance
+                Log.d(TAG, "NewPlayer instance stored in companion holder")
+            }
+        }
+
+        private fun getNewPlayer(): NewPlayer? {
+            return playerInstance
+        }
+    }
+
     @OptIn(UnstableApi::class)
     override fun onCreate() {
+        // Retrieve the NewPlayer instance from the companion holder before anything else
+        val instance = getNewPlayer()
+        if (instance == null) {
+            Log.e(TAG, "No NewPlayer instance found in companion holder - service cannot start")
+            stopSelf()
+            return
+        }
+        newPlayer = instance
+        Log.d(TAG, "NewPlayer instance retrieved from companion holder and assigned")
+
         super.onCreate()
 
         setMediaNotificationProvider(object : MediaNotification.Provider {

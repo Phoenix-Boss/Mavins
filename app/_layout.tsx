@@ -92,7 +92,6 @@ import {
   PlayerOverlayProvider,
   usePlayerOverlay,
 } from '@/libs/playerOverlay';
-import { useSystemMediaControls } from '@/hooks/useSystemMediaControls';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANDROID LOG SUPPRESSION
@@ -374,35 +373,6 @@ function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
       showPlayer();
     }
   }, [currentTrack, isPlayerVisible, showPlayer]);
-
-  // ── Lock screen / notification media controls ──────────────────────────────
-  useSystemMediaControls({
-    track: currentTrack
-      ? {
-          title: currentTrack.title,
-          artist: currentTrack.artist ?? 'Unknown Artist',
-          artwork: currentTrack.thumbnail,
-          videoId: currentTrack.videoId,
-          duration: currentTrack.duration,
-        }
-      : undefined,
-    isPlaying,
-    isBuffering,
-    position,
-    duration,
-    onPlay: () => {
-      try { (global as any).__mavinMasterPlay?.(); } catch {}
-    },
-    onPause: () => {
-      try { (global as any).__mavinMasterPause?.(); } catch {}
-    },
-    onSkipNext: skipToNext,
-    onSkipPrevious: skipToPrevious,
-    onSeek: seekTo,
-    onExpandPlayer: expandPlayer,
-    onAppBackground: () => {},
-    onAppForeground: () => {},
-  });
 
   return (
     <>

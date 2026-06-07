@@ -1,293 +1,114 @@
 package expo.modules.mavinplayer
 
-import android.app.Application
+import android.app.Activity
+import android.content.Context
+import android.net.Uri
 import android.util.Log
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.upstream.HttpDataSource
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
 import net.newpipe.newplayer.data.PlayMode
-import net.newpipe.newplayer.data.RepeatMode
-import okhttp3.OkHttpClient
-import androidx.core.graphics.drawable.IconCompat
-import java.util.concurrent.TimeUnit
+import net.newpipe.newplayer.service.NewPlayerService
 
-/**
- * MavinPlayerModule — Expo native module bridging JS to NewPlayer.
- *
- * The complete one-cycle architecture:
- *
- *   JS calls loadAndPlay(videoId, bundle):
- *     1. Module deserializes the bundle (URLs + HTTP context from MavinEngine)
- *     2. Module calls repository.storeBundle(bundle) — atomic handoff
- *     3. Module calls newPlayer.playStream(videoId, playMode)
- *     4. NewPlayer calls repository.getStreams()              → URLs from bundle
- *     5. NewPlayer calls repository.getHttpDataSourceFactory() → OkHttp with engine's session
- *     6. ExoPlayer fetches CDN using engine's exact cookies/headers
- *
- * resolveAndPlay() is REMOVED. It was calling a method that did not exist.
- * The new loadAndPlay() is the single entry point for remote playback.
- *
- * OkHttpClient construction:
- *   - NO cookie jar. Cookies come from the bundle as raw headers.
- *   - HTTP/2 enabled by default in OkHttp — no override needed.
- *   - Connection pool shared across all tracks for HTTP/2 multiplexing.
- *   - Same client instance for all segment requests (CDN session affinity).
- */
+private const val TAG = "MavinPlayerModule"
+
 class MavinPlayerModule : Module() {
 
+    private var newPlayer: NewPlayer? = null
+    private var playerScope = CoroutineScope(Dispatchers.Main + Job())
+    private var currentVideoId: String? = null
+    private var currentPlayMode: PlayMode = PlayMode.AUDIO
+
+    // Stored bundle from loadAndPlay
+    private var storedDashUrl: String? = null
+    private var storedHlsUrl: String? = null
+    private var storedProgressiveUrl: String? = null
+    private var storedHttpContext: PlayerHttpContext? = null
+
+    // Static reference for surface attachment
     companion object {
-        private const val TAG = "MavinPlayerModule"
+        @Volatile
+        private var currentExoPlayer: ExoPlayer? = null
 
-        @Volatile private var newPlayer: NewPlayerImpl? = null
-        @Volatile private var repository: MavinMediaRepository? = null
+        fun getExoPlayerForSurface(): ExoPlayer? {
+            return currentExoPlayer
+        }
 
-        // Single OkHttpClient shared across all tracks.
-        // NO cookie jar — bundle cookies are injected as raw headers.
-        // HTTP/2 is enabled by default. Connection pool preserves CDN affinity.
-        private val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            // Explicitly no cookie jar — null means OkHttp will not store
-            // or send any cookies automatically. All cookies from the bundle
-            // are injected as raw "Cookie" header values in the data source factory.
-            .cookieJar(okhttp3.CookieJar.NO_COOKIES)
-            .build()
-
-        /**
-         * Returns the live ExoPlayer instance for video surface attachment.
-         * Called by MavinPlayerVideoView to bind its SurfaceView to the player.
-         * Returns null when NewPlayer is in IDLE state (no ExoPlayer allocated).
-         */
-        fun getExoPlayerForSurface(): androidx.media3.common.Player? =
-            newPlayer?.exoPlayer?.value
+        private fun updateExoPlayer(player: ExoPlayer?) {
+            currentExoPlayer = player
+        }
     }
-
-    private val moduleScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun definition() = ModuleDefinition {
         Name("MavinPlayer")
 
-        Events(
-            "onPlaybackStateChanged",
-            "onPositionChanged",
-            "onTrackChanged",
-            "onError",
-            "onPlaylistChanged"
-        )
+        // ─────────────────────────────────────────────────────────────────────────
+        // INITIALIZATION
+        // ─────────────────────────────────────────────────────────────────────────
 
         OnCreate {
-            initNewPlayer()
-            observeNewPlayer()
+            initializePlayer()
         }
 
         OnDestroy {
-            moduleScope.cancel()
+            releasePlayer()
         }
 
-        // ── Video surface view — bridges ExoPlayer frames into React Native ────
-        //
-        // MavinPlayerVideoView attaches a SurfaceView to the live ExoPlayer instance
-        // via getExoPlayerForSurface(). This is the only mechanism available to render
-        // NewPlayer's video output inside a React Native component tree.
-        // The view auto-attaches on mount and clears the surface on unmount so the
-        // player continues audio-only when the Video tab is hidden.
+        // ─────────────────────────────────────────────────────────────────────────
+        // VIEW MANAGER REGISTRATION - FIX FOR MavinPlayerVideoView WARNING
+        // ─────────────────────────────────────────────────────────────────────────
+        // This registers the native video surface component so that
+        // requireNativeViewManager('MavinPlayerVideoView') can find it.
+        // The view name must match exactly what is used in index.ts
 
-        View(MavinPlayerVideoView::class) {
-            Prop("contentFit") { view: MavinPlayerVideoView, value: String ->
-                view.setContentFit(value)
-            }
-            Prop("allowsPictureInPicture") { view: MavinPlayerVideoView, value: Boolean ->
-                view.setAllowsPictureInPicture(value)
-            }
-            Events("onFirstFrameRender", "onPictureInPictureStart", "onPictureInPictureStop")
+        View(MavinPlayerVideoViewManager.define())
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // PRIMARY ENTRY POINT - loadAndPlay
+        // ─────────────────────────────────────────────────────────────────────────
+
+        AsyncFunction("loadAndPlay") { videoId: String, dashUrl: String?, hlsUrl: String?, progressiveUrl: String?, httpContext: PlayerHttpContext? ->
+            ensurePlayerInitialized()
+            loadAndPlayInternal(videoId, dashUrl, hlsUrl, progressiveUrl, httpContext, PlayMode.AUDIO)
         }
 
-        // ── PRIMARY ENTRY POINT ───────────────────────────────────────────────
-        //
-        // loadAndPlay — the industry standard one-cycle handoff.
-        //
-        // JS calls this with:
-        //   videoId     — the YouTube video ID
-        //   dashUrl     — DASH manifest URL from MavinEngine (preferred)
-        //   hlsUrl      — HLS manifest URL from MavinEngine (fallback)
-        //   audioUrl    — progressive audio URL (last resort, only when no manifests)
-        //   httpContext — the exact HTTP session MavinEngine used during extraction:
-        //                 cookie, origin, referer, userAgent, clientName, clientVersion
-        //
-        // This function:
-        //   1. Deserializes the HTTP context from the JS map
-        //   2. Builds a ResolvedBundle and stores it in the repository (atomic)
-        //   3. Calls newPlayer.playStream() — which triggers getStreams() and
-        //      getHttpDataSourceFactory() on the repository immediately
-        //
-        // The repository serves both calls from the same bundle snapshot.
-        // No race. No stale data. One session. One cycle.
-
-        AsyncFunction("loadAndPlay") { videoId: String,
-                                       dashUrl: String?,
-                                       hlsUrl: String?,
-                                       audioUrl: String?,
-                                       httpContextMap: Map<String, String>? ->
-
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            val repo   = repository ?: throw IllegalStateException("Repository not initialized")
-
-            // Deserialize the HTTP context the engine used during extraction.
-            // Default values match YouTube's expected headers if any field is missing.
-            val httpCtx = BundleHttpContext(
-                cookie               = httpContextMap?.get("cookie")               ?: "",
-                origin               = httpContextMap?.get("origin")               ?: "https://www.youtube.com",
-                referer              = httpContextMap?.get("referer")               ?: "https://www.youtube.com/",
-                acceptLanguage       = httpContextMap?.get("acceptLanguage")        ?: "en-US,en;q=0.9",
-                xYoutubeClientName   = httpContextMap?.get("xYoutubeClientName")   ?: "3",
-                xYoutubeClientVersion = httpContextMap?.get("xYoutubeClientVersion") ?: "",
-                userAgent            = httpContextMap?.get("userAgent")
-                    ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-
-            // Bundle validation — ensure at least one URL is present.
-            if (dashUrl.isNullOrEmpty() && hlsUrl.isNullOrEmpty() && audioUrl.isNullOrEmpty()) {
-                throw IllegalArgumentException(
-                    "loadAndPlay: at least one of dashUrl, hlsUrl, or audioUrl must be non-empty"
-                )
-            }
-
-            val bundle = ResolvedBundle(
-                videoId             = videoId,
-                dashManifestUrl     = dashUrl?.takeIf { it.isNotEmpty() },
-                hlsManifestUrl      = hlsUrl?.takeIf { it.isNotEmpty() },
-                progressiveAudioUrl = audioUrl?.takeIf { it.isNotEmpty() },
-                title               = videoId, // metadata is enriched via getMetaInfo
-                artist              = null,
-                thumbnailUrl        = null,
-                httpContext         = httpCtx
-            )
-
-            // Atomic handoff: repository now holds the bundle before playStream() fires.
-            repo.storeBundle(bundle)
-
-            Log.i(TAG, "loadAndPlay: bundle stored, triggering playStream for videoId=$videoId " +
-                "hasDash=${!dashUrl.isNullOrEmpty()} hasHls=${!hlsUrl.isNullOrEmpty()} " +
-                "hasProgressive=${!audioUrl.isNullOrEmpty()}")
-
-            // Fire playStream on the main dispatcher — NewPlayer requires main thread.
-            moduleScope.launch {
-                player.playStream(videoId, PlayMode.FULLSCREEN_AUDIO)
-            }
-
-            mapOf("success" to true)
+        AsyncFunction("loadAndPlayVideo") { videoId: String, dashUrl: String?, hlsUrl: String?, progressiveUrl: String?, httpContext: PlayerHttpContext? ->
+            ensurePlayerInitialized()
+            loadAndPlayInternal(videoId, dashUrl, hlsUrl, progressiveUrl, httpContext, PlayMode.VIDEO)
         }
 
-        // ── loadAndPlayVideo — same cycle, video play mode ────────────────────
-
-        AsyncFunction("loadAndPlayVideo") { videoId: String,
-                                            dashUrl: String?,
-                                            hlsUrl: String?,
-                                            audioUrl: String?,
-                                            httpContextMap: Map<String, String>? ->
-
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            val repo   = repository ?: throw IllegalStateException("Repository not initialized")
-
-            val httpCtx = BundleHttpContext(
-                cookie               = httpContextMap?.get("cookie")               ?: "",
-                origin               = httpContextMap?.get("origin")               ?: "https://www.youtube.com",
-                referer              = httpContextMap?.get("referer")               ?: "https://www.youtube.com/",
-                acceptLanguage       = httpContextMap?.get("acceptLanguage")        ?: "en-US,en;q=0.9",
-                xYoutubeClientName   = httpContextMap?.get("xYoutubeClientName")   ?: "3",
-                xYoutubeClientVersion = httpContextMap?.get("xYoutubeClientVersion") ?: "",
-                userAgent            = httpContextMap?.get("userAgent")
-                    ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-
-            if (dashUrl.isNullOrEmpty() && hlsUrl.isNullOrEmpty() && audioUrl.isNullOrEmpty()) {
-                throw IllegalArgumentException("loadAndPlayVideo: at least one URL required")
-            }
-
-            val bundle = ResolvedBundle(
-                videoId             = videoId,
-                dashManifestUrl     = dashUrl?.takeIf { it.isNotEmpty() },
-                hlsManifestUrl      = hlsUrl?.takeIf { it.isNotEmpty() },
-                progressiveAudioUrl = audioUrl?.takeIf { it.isNotEmpty() },
-                title               = videoId,
-                artist              = null,
-                thumbnailUrl        = null,
-                httpContext         = httpCtx
-            )
-
-            repo.storeBundle(bundle)
-
-            Log.i(TAG, "loadAndPlayVideo: bundle stored for videoId=$videoId")
-
-            moduleScope.launch {
-                player.playStream(videoId, PlayMode.EMBEDDED_VIDEO)
-            }
-
-            mapOf("success" to true)
-        }
-
-        // ── Legacy playStream — kept for queue advance and playlist auto-play ─
-        // These calls come from NewPlayer's internal queue management after the
-        // first track in a playlist is already playing. For these cases NewPlayer
-        // calls repository.getStreams() which will throw if no bundle is stored.
-        // JS must call loadAndPlay() before any playStream() for a new videoId.
+        // ─────────────────────────────────────────────────────────────────────────
+        // LEGACY playStream - kept for backwards compatibility
+        // ─────────────────────────────────────────────────────────────────────────
 
         AsyncFunction("playStream") { videoId: String ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            moduleScope.launch {
-                player.playStream(videoId, PlayMode.FULLSCREEN_AUDIO)
-            }
-            mapOf("success" to true)
+            ensurePlayerInitialized()
+            playStreamInternal(videoId, PlayMode.AUDIO)
         }
 
         AsyncFunction("playStreamEmbedded") { videoId: String ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            moduleScope.launch {
-                player.playStream(videoId, PlayMode.EMBEDDED_AUDIO)
-            }
-            mapOf("success" to true)
+            ensurePlayerInitialized()
+            playStreamInternal(videoId, PlayMode.EMBEDDED)
         }
 
         AsyncFunction("playStreamVideo") { videoId: String ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            moduleScope.launch {
-                player.playStream(videoId, PlayMode.EMBEDDED_VIDEO)
-            }
-            mapOf("success" to true)
+            ensurePlayerInitialized()
+            playStreamInternal(videoId, PlayMode.VIDEO)
         }
 
-        // ── Queue management ──────────────────────────────────────────────────
-
-        AsyncFunction("addToPlaylist") { videoId: String ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            player.addToPlaylist(videoId)
-            mapOf("success" to true)
-        }
-
-        AsyncFunction("removeFromPlaylist") { uniqueId: Double ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            player.removePlaylistItem(uniqueId.toLong())
-            mapOf("success" to true)
-        }
-
-        AsyncFunction("movePlaylistItem") { fromIndex: Int, toIndex: Int ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            player.movePlaylistItem(fromIndex, toIndex)
-            mapOf("success" to true)
-        }
-
-        // ── Core playback controls ────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────────
+        // CORE PLAYBACK CONTROLS
+        // ─────────────────────────────────────────────────────────────────────────
 
         AsyncFunction("play") {
             newPlayer?.play()
@@ -305,41 +126,31 @@ class MavinPlayerModule : Module() {
         }
 
         AsyncFunction("release") {
-            repository?.clearBundle()
-            newPlayer?.release()
+            releasePlayer()
             mapOf("success" to true)
         }
 
-        AsyncFunction("seekTo") { positionMs: Double ->
+        AsyncFunction("seekTo") { positionMs: Int ->
             newPlayer?.currentPosition = positionMs.toLong()
             mapOf("success" to true)
         }
 
-        // ── Settings ──────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────────
+        // QUEUE MANAGEMENT
+        // ─────────────────────────────────────────────────────────────────────────
 
-        AsyncFunction("setRepeatMode") { mode: String ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            player.repeatMode = when (mode) {
-                "one"  -> RepeatMode.REPEAT_ONE
-                "all"  -> RepeatMode.REPEAT_ALL
-                else   -> RepeatMode.DO_NOT_REPEAT
-            }
+        AsyncFunction("addToPlaylist") { videoId: String ->
+            newPlayer?.addToPlaylist(videoId)
             mapOf("success" to true)
         }
 
-        AsyncFunction("setShuffle") { enabled: Boolean ->
-            val player = newPlayer ?: throw IllegalStateException("NewPlayer not initialized")
-            player.shuffle = enabled
+        AsyncFunction("removeFromPlaylist") { uniqueId: Int ->
+            newPlayer?.removePlaylistItem(uniqueId.toLong())
             mapOf("success" to true)
         }
 
-        AsyncFunction("setPlaybackSpeed") { speed: Double ->
-            newPlayer?.exoPlayer?.value?.setPlaybackSpeed(speed.toFloat())
-            mapOf("success" to true)
-        }
-
-        AsyncFunction("selectChapter") { index: Int ->
-            newPlayer?.selectChapter(index)
+        AsyncFunction("movePlaylistItem") { fromIndex: Int, toIndex: Int ->
+            newPlayer?.movePlaylistItem(fromIndex, toIndex)
             mapOf("success" to true)
         }
 
@@ -348,119 +159,328 @@ class MavinPlayerModule : Module() {
             mapOf("success" to true)
         }
 
-        // ── State ─────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────────
+        // SETTINGS
+        // ─────────────────────────────────────────────────────────────────────────
+
+        AsyncFunction("setRepeatMode") { mode: String ->
+            val repeatMode = when (mode) {
+                "off" -> net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT
+                "one" -> net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE
+                "all" -> net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL
+                else -> net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT
+            }
+            newPlayer?.repeatMode = repeatMode
+            mapOf("success" to true)
+        }
+
+        AsyncFunction("setShuffle") { enabled: Boolean ->
+            newPlayer?.shuffle = enabled
+            mapOf("success" to true)
+        }
+
+        AsyncFunction("setPlaybackSpeed") { speed: Float ->
+            newPlayer?.exoPlayer?.value?.setPlaybackSpeed(speed)
+            mapOf("success" to true)
+        }
+
+        AsyncFunction("selectChapter") { index: Int ->
+            try {
+                newPlayer?.selectChapter(index)
+                mapOf("success" to true)
+            } catch (e: IndexOutOfBoundsException) {
+                mapOf("success" to false, "error" to e.message)
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // STATE
+        // ─────────────────────────────────────────────────────────────────────────
 
         AsyncFunction("getState") {
-            val player = newPlayer ?: return@AsyncFunction mapOf(
-                "isPlaying"       to false,
-                "position"        to 0.0,
-                "duration"        to 0.0,
-                "bufferedPercent" to 0,
-                "playMode"        to "IDLE",
-                "repeatMode"      to "off",
-                "shuffle"         to false,
-                "currentItem"     to ""
-            )
+            val player = newPlayer?.exoPlayer?.value
             mapOf(
-                "isPlaying"       to player.playWhenReady,
-                "position"        to player.currentPosition.toDouble(),
-                "duration"        to player.duration.coerceAtLeast(0L).toDouble(),
-                "bufferedPercent" to player.bufferedPercentage,
-                "playMode"        to player.playBackMode.value.name,
-                "repeatMode"      to when (player.repeatMode) {
-                    RepeatMode.REPEAT_ONE -> "one"
-                    RepeatMode.REPEAT_ALL -> "all"
-                    else                  -> "off"
+                "isPlaying" to (player?.isPlaying ?: false),
+                "position" to (player?.currentPosition?.toDouble() ?: 0.0),
+                "duration" to (player?.duration?.toDouble() ?: 0.0),
+                "bufferedPercent" to (player?.bufferedPercentage ?: 0),
+                "playMode" to currentPlayMode.name,
+                "repeatMode" to when (newPlayer?.repeatMode) {
+                    net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                    net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE -> "one"
+                    net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL -> "all"
+                    else -> "off"
                 },
-                "shuffle"         to player.shuffle,
-                "currentItem"     to (player.currentlyPlaying.value?.mediaId ?: "")
+                "shuffle" to (newPlayer?.shuffle ?: false),
+                "currentItem" to (currentVideoId ?: "")
             )
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // HELPER FUNCTIONS
+        // ─────────────────────────────────────────────────────────────────────────
+
+        AsyncFunction("isInitialized") {
+            mapOf("initialized" to (newPlayer != null))
+        }
+
+        AsyncFunction("getVersion") {
+            mapOf("version" to "1.0.0", "library" to "NewPlayer")
         }
     }
 
-    // ── Initialization ────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // PRIVATE METHODS
+    // ─────────────────────────────────────────────────────────────────────────
 
-    private fun initNewPlayer() {
-        if (newPlayer != null) {
-            Log.i(TAG, "NewPlayer already initialized")
-            return
+    private fun initializePlayer() {
+        if (newPlayer != null) return
+
+        try {
+            val appContext = appContext.reactContext?.applicationContext ?: run {
+                Log.e(TAG, "Cannot initialize player: application context is null")
+                return
+            }
+
+            val okHttpClient = net.okhttp3.OkHttpClient.Builder()
+                .cookieJar(net.okhttp3.CookieJar.NO_COOKIES)
+                .build()
+
+            val repository = MavinMediaRepository(appContext, okHttpClient)
+            val playerActivityClass = getMainActivityClass()
+
+            if (playerActivityClass == null) {
+                Log.e(TAG, "Cannot initialize player: MainActivity class not found")
+                return
+            }
+
+            newPlayer = NewPlayerImpl(
+                app = appContext,
+                playerActivityClass = playerActivityClass,
+                repository = repository,
+                rescueStreamFault = { item, mediaItem, exception, repo ->
+                    Log.e(TAG, "Stream fault: ${exception.message}")
+                    net.newpipe.newplayer.logic.NoResponse()
+                }
+            )
+
+            // CRITICAL FIX: Store the NewPlayer instance in NewPlayerService companion holder
+            // This ensures the service can retrieve it when Android starts it for background playback
+            val playerInstance = newPlayer
+            if (playerInstance != null) {
+                NewPlayerService.setNewPlayer(playerInstance)
+                Log.i(TAG, "NewPlayer instance stored in NewPlayerService companion holder")
+            }
+
+            // Update companion ExoPlayer reference for surface attachment
+            newPlayer?.exoPlayer?.value?.let { exoPlayer ->
+                updateExoPlayer(exoPlayer)
+                Log.i(TAG, "ExoPlayer reference stored for surface attachment")
+            }
+
+            newPlayer?.prepare()
+            Log.i(TAG, "NewPlayer initialized successfully")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize NewPlayer", e)
+        }
+    }
+
+    private fun ensurePlayerInitialized() {
+        if (newPlayer == null) {
+            initializePlayer()
+        }
+    }
+
+    private fun releasePlayer() {
+        newPlayer?.release()
+        newPlayer = null
+        updateExoPlayer(null)
+        currentVideoId = null
+        storedDashUrl = null
+        storedHlsUrl = null
+        storedProgressiveUrl = null
+        storedHttpContext = null
+        Log.i(TAG, "NewPlayer released")
+    }
+
+    private fun loadAndPlayInternal(
+        videoId: String,
+        dashUrl: String?,
+        hlsUrl: String?,
+        progressiveUrl: String?,
+        httpContext: PlayerHttpContext?,
+        playMode: PlayMode
+    ): Map<String, Any> {
+        currentVideoId = videoId
+        currentPlayMode = playMode
+
+        // Store the bundle for potential future use
+        storedDashUrl = dashUrl
+        storedHlsUrl = hlsUrl
+        storedProgressiveUrl = progressiveUrl
+        storedHttpContext = httpContext
+
+        // Build the stream URL based on priority: DASH > HLS > Progressive
+        val streamUrl = when {
+            !dashUrl.isNullOrEmpty() -> {
+                Log.i(TAG, "Using DASH manifest for $videoId")
+                dashUrl
+            }
+            !hlsUrl.isNullOrEmpty() -> {
+                Log.i(TAG, "Using HLS manifest for $videoId")
+                hlsUrl
+            }
+            !progressiveUrl.isNullOrEmpty() -> {
+                Log.i(TAG, "Using progressive URL for $videoId (may have limited quality)")
+                progressiveUrl
+            }
+            else -> {
+                Log.e(TAG, "No stream URL provided for $videoId")
+                return mapOf("success" to false, "error" to "No stream URL provided")
+            }
         }
 
-        val app = appContext.reactContext?.applicationContext as? Application
-            ?: run { Log.e(TAG, "Cannot get Application context"); return }
-
-        val repo = MavinMediaRepository(app, okHttpClient)
-            .also { repository = it }
-
-        newPlayer = NewPlayerImpl(
-            app                 = app,
-            playerActivityClass = getMainActivityClass(app),
-            repository          = repo,
-            notificationIcon    = IconCompat.createWithResource(
-                app,
-                android.R.drawable.ic_media_play
-            )
+        // Store the resolved bundle in the repository
+        val bundle = ResolvedBundle(
+            videoId = videoId,
+            dashManifestUrl = dashUrl,
+            hlsManifestUrl = hlsUrl,
+            progressiveAudioUrl = progressiveUrl,
+            title = "",
+            artist = null,
+            thumbnailUrl = null,
+            httpContext = httpContext?.let { ctx ->
+                BundleHttpContext(
+                    cookie = ctx.cookie,
+                    origin = ctx.origin,
+                    referer = ctx.referer,
+                    acceptLanguage = ctx.acceptLanguage,
+                    xYoutubeClientName = ctx.xYoutubeClientName,
+                    xYoutubeClientVersion = ctx.xYoutubeClientVersion,
+                    userAgent = ctx.userAgent
+                )
+            } ?: BundleHttpContext()
         )
 
-        Log.i(TAG, "NewPlayer initialized")
+        val repository = (newPlayer as? NewPlayerImpl)?.repository as? MavinMediaRepository
+        repository?.storeBundle(bundle)
+
+        val success = playStreamWithResolvedUrl(videoId, streamUrl, httpContext, playMode)
+
+        return mapOf("success" to success)
     }
 
-    private fun getMainActivityClass(app: Application): Class<out android.app.Activity> {
+    private fun playStreamWithResolvedUrl(
+        videoId: String,
+        streamUrl: String,
+        httpContext: PlayerHttpContext?,
+        playMode: PlayMode
+    ): Boolean {
         return try {
-            @Suppress("UNCHECKED_CAST")
-            Class.forName("${app.packageName}.MainActivity") as Class<out android.app.Activity>
+            val exoPlayer = newPlayer?.exoPlayer?.value
+            if (exoPlayer == null) {
+                Log.e(TAG, "ExoPlayer is null, cannot play")
+                return false
+            }
+
+            // Update companion reference for surface attachment
+            updateExoPlayer(exoPlayer)
+
+            // Build MediaItem with custom headers if httpContext is provided
+            val mediaItemBuilder = MediaItem.Builder()
+                .setUri(Uri.parse(streamUrl))
+                .setMediaId(videoId)
+
+            // Add custom headers from httpContext if present
+            httpContext?.let { ctx ->
+                val headers = mutableMapOf<String, String>()
+                if (ctx.cookie.isNotEmpty()) {
+                    headers["Cookie"] = ctx.cookie
+                }
+                if (ctx.origin.isNotEmpty()) {
+                    headers["Origin"] = ctx.origin
+                }
+                if (ctx.referer.isNotEmpty()) {
+                    headers["Referer"] = ctx.referer
+                }
+                if (ctx.userAgent.isNotEmpty()) {
+                    headers["User-Agent"] = ctx.userAgent
+                }
+                if (headers.isNotEmpty()) {
+                    mediaItemBuilder.setCustomHeaders(headers)
+                }
+                Log.d(TAG, "Added ${headers.size} custom headers to MediaItem")
+            }
+
+            val mediaItem = mediaItemBuilder.build()
+
+            // Clear existing items and set the new one
+            exoPlayer.clearMediaItems()
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
+            exoPlayer.play()
+
+            Log.i(TAG, "Playing $videoId with ${if (httpContext != null) "session context" else "no session context"}")
+            true
+
         } catch (e: Exception) {
-            Log.w(TAG, "Could not find MainActivity: ${e.message}")
-            android.app.Activity::class.java
+            Log.e(TAG, "Failed to play stream with resolved URL", e)
+            false
         }
     }
 
-    // ── Event observation ─────────────────────────────────────────────────────
+    private fun playStreamInternal(videoId: String, playMode: PlayMode): Map<String, Any> {
+        currentVideoId = videoId
+        currentPlayMode = playMode
 
-    private fun observeNewPlayer() {
-        val player = newPlayer ?: return
-
-        player.playBackMode
-            .onEach { mode ->
-                sendEvent("onPlaybackStateChanged", mapOf(
-                    "state"     to if (player.playWhenReady) "playing" else "paused",
-                    "isPlaying" to player.playWhenReady,
-                    "playMode"  to mode.name
-                ))
+        // If we have stored bundle from loadAndPlay, use it
+        if (!storedDashUrl.isNullOrEmpty() || !storedHlsUrl.isNullOrEmpty() || !storedProgressiveUrl.isNullOrEmpty()) {
+            val streamUrl = when {
+                !storedDashUrl.isNullOrEmpty() -> storedDashUrl
+                !storedHlsUrl.isNullOrEmpty() -> storedHlsUrl
+                else -> storedProgressiveUrl
             }
-            .launchIn(moduleScope)
-
-        player.currentlyPlaying
-            .onEach { mediaItem ->
-                sendEvent("onTrackChanged", mapOf(
-                    "item" to (mediaItem?.mediaId ?: "")
-                ))
+            if (!streamUrl.isNullOrEmpty()) {
+                val success = playStreamWithResolvedUrl(videoId, streamUrl, storedHttpContext, playMode)
+                return mapOf("success" to success)
             }
-            .launchIn(moduleScope)
+        }
 
-        player.playlist
-            .onEach { playlist ->
-                sendEvent("onPlaylistChanged", mapOf(
-                    "playlist" to playlist.map { it.mediaId }
-                ))
-            }
-            .launchIn(moduleScope)
-
-        player.onExoPlayerEvent
-            .onEach { (exo, _) ->
-                sendEvent("onPositionChanged", mapOf(
-                    "position"        to exo.currentPosition.toDouble(),
-                    "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
-                    "bufferedPercent" to exo.bufferedPercentage
-                ))
-            }
-            .launchIn(moduleScope)
-
-        player.errorFlow
-            .onEach { error ->
-                Log.e(TAG, "NewPlayer error: ${error.message}", error)
-                sendEvent("onError", mapOf("message" to (error.message ?: "Unknown error")))
-            }
-            .launchIn(moduleScope)
+        // Fallback: let NewPlayer resolve it via repository
+        try {
+            newPlayer?.playStream(videoId, playMode)
+            // Update companion reference for surface attachment
+            newPlayer?.exoPlayer?.value?.let { updateExoPlayer(it) }
+            Log.i(TAG, "Playing $videoId via NewPlayer repository resolution")
+            return mapOf("success" to true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to play stream $videoId", e)
+            return mapOf("success" to false, "error" to e.message)
+        }
     }
+
+    private fun getMainActivityClass(): Class<out Activity>? {
+        return try {
+            val appContext = appContext.reactContext?.applicationContext ?: return null
+            Class.forName("com.mavins.player.MainActivity").asSubclass(Activity::class.java)
+        } catch (e: ClassNotFoundException) {
+            Log.e(TAG, "MainActivity class not found", e)
+            null
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DATA CLASSES
+    // ─────────────────────────────────────────────────────────────────────────
+
+    data class PlayerHttpContext(
+        val cookie: String,
+        val origin: String,
+        val referer: String,
+        val acceptLanguage: String,
+        val xYoutubeClientName: String,
+        val xYoutubeClientVersion: String,
+        val userAgent: String
+    )
 }
