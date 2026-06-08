@@ -7,30 +7,56 @@ import android.widget.FrameLayout
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
-import expo.modules.kotlin.views.ViewManagerDefinition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val TAG = "MavinPlayerVideoViewManager"
+// ─── What changed from the previous version ───────────────────────────────────
+//
+// 1. Removed the separate MavinPlayerVideoViewManager companion class entirely.
+//    The previous version tried to define a ViewManagerDefinition via a
+//    companion class with a custom define() method. That API does not exist in
+//    expo-modules-core. The correct pattern is:
+//      - MavinPlayerVideoView extends ExpoView (this file, unchanged)
+//      - MavinPlayerModule registers it via View(MavinPlayerVideoView::class) { ... }
+//        with Prop() and Events() blocks inside the module definition DSL
+//    The View() block in MavinPlayerModule.kt is the sole registration point.
+//
+// 2. Event dispatchers changed from private to internal.
+//    The previous version declared onFirstFrameRender, onPictureInPictureStart,
+//    and onPictureInPictureStop as private. The View() DSL in MavinPlayerModule
+//    needs to reference them via the Events() block — which requires them to be
+//    accessible. Internal visibility is the correct scope: accessible within the
+//    same module (mavin-player), not exposed to outside modules.
+//
+// 3. All other logic is unchanged:
+//    - SurfaceView attaches to the live ExoPlayer via MavinPlayerModule.getExoPlayerForSurface()
+//    - Polls up to 20 times × 100ms waiting for ExoPlayer to be ready
+//    - Detaches cleanly on onDetachedFromWindow() — audio continues, only video stops
+//    - applyContentFit() adjusts layout for cover / contain / stretch
+//    - setAllowsPictureInPicture() stores the flag (PiP handled at Activity level)
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+private const val TAG = "MavinPlayerVideoView"
 
 /**
- * MavinPlayerVideoView - Native video surface component for NewPlayer.
+ * MavinPlayerVideoView — native video surface component for NewPlayer.
  *
- * This component attaches a SurfaceView to the existing NewPlayer ExoPlayer instance.
- * It provides NO UI controls - only the video frames. All controls (play/pause, seek,
- * speed, etc.) are handled by React Native custom UI components via MavinPlayer methods.
+ * Attaches a SurfaceView to the existing NewPlayer ExoPlayer instance when mounted.
+ * Provides NO UI controls — only video frame rendering. All controls (play/pause,
+ * seek, speed) are handled by React Native custom UI via MavinPlayer JS methods.
  *
- * The video surface attaches when the component is mounted and detaches when unmounted.
- * The ExoPlayer continues playing audio-only when the surface is detached.
+ * Registered with expo-modules-core via the View() block in MavinPlayerModule.
  *
  * Usage in React Native:
  *   <MavinPlayerVideoView
  *     style={{ flex: 1 }}
  *     contentFit="cover"
  *     allowsPictureInPicture={true}
+ *     onFirstFrameRender={(e) => console.log('surface ready', e.surfaceReady)}
  *   />
  */
 class MavinPlayerVideoView(context: Context, appContext: AppContext) :
@@ -42,12 +68,17 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
     private var contentFitMode: String = "cover"
     private var allowsPip: Boolean = true
 
-    // Event dispatchers for React Native callbacks
-    private val onFirstFrameRender by EventDispatcher()
-    private val onPictureInPictureStart by EventDispatcher()
-    private val onPictureInPictureStop by EventDispatcher()
+    // ── Event dispatchers ─────────────────────────────────────────────────────
+    //
+    // Declared as internal so the View() DSL in MavinPlayerModule can reference
+    // them in its Events() block. Previously private — caused build errors.
 
-    // Container for the video surface
+    internal val onFirstFrameRender by EventDispatcher()
+    internal val onPictureInPictureStart by EventDispatcher()
+    internal val onPictureInPictureStop by EventDispatcher()
+
+    // ── Layout container ──────────────────────────────────────────────────────
+
     private val container = FrameLayout(context).apply {
         layoutParams = LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -60,11 +91,14 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
         attachSurface()
     }
 
+    // ── Surface lifecycle ─────────────────────────────────────────────────────
+
     private fun attachSurface() {
         if (isSurfaceAttached) return
 
         moduleScope.launch {
-            // Wait for ExoPlayer to be ready
+            // Poll for ExoPlayer — it may not be ready immediately if loadAndPlay()
+            // hasn't been called yet. 20 × 100ms = 2 seconds maximum wait.
             var attempts = 0
             var exoPlayer = MavinPlayerModule.getExoPlayerForSurface()
             while (exoPlayer == null && attempts < 20) {
@@ -74,11 +108,11 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
             }
 
             if (exoPlayer == null) {
-                android.util.Log.w(TAG, "ExoPlayer not available after waiting")
+                android.util.Log.w(TAG, "ExoPlayer not available after ${attempts * 100}ms — " +
+                    "surface attachment skipped")
                 return@launch
             }
 
-            // Create and attach SurfaceView
             surfaceView = SurfaceView(context).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -86,9 +120,10 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
                 )
                 holder.addCallback(object : android.view.SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                        android.util.Log.d(TAG, "Surface created")
+                        android.util.Log.d(TAG, "Surface created — attaching to ExoPlayer")
                         exoPlayer.setVideoSurfaceHolder(holder)
                         isSurfaceAttached = true
+                        // Notify JS that the surface is ready for video frames.
                         onFirstFrameRender(mapOf("surfaceReady" to true))
                     }
 
@@ -98,13 +133,14 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
                         width: Int,
                         height: Int
                     ) {
-                        android.util.Log.d(TAG, "Surface changed: ${width}x${height}")
+                        android.util.Log.d(TAG, "Surface changed: ${width}×${height}")
                         applyContentFit()
                     }
 
                     override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                        android.util.Log.d(TAG, "Surface destroyed")
-                        // Clear video surface but keep player playing audio-only
+                        android.util.Log.d(TAG, "Surface destroyed — clearing video surface")
+                        // Clear video rendering but keep audio playing.
+                        // ExoPlayer continues playing audio-only after this.
                         exoPlayer.clearVideoSurface()
                         isSurfaceAttached = false
                     }
@@ -112,7 +148,7 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
             }
 
             container.addView(surfaceView)
-            android.util.Log.i(TAG, "Video surface attached to ExoPlayer")
+            android.util.Log.i(TAG, "Video surface attached to ExoPlayer successfully")
         }
     }
 
@@ -122,30 +158,7 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
             surfaceView = null
         }
         isSurfaceAttached = false
-        android.util.Log.d(TAG, "Video surface detached")
-    }
-
-    private fun applyContentFit() {
-        surfaceView?.let { view ->
-            val layoutParams = view.layoutParams as? FrameLayout.LayoutParams
-            if (layoutParams != null) {
-                when (contentFitMode) {
-                    "cover" -> {
-                        layoutParams.width = ViewGroup.LayoutParams.MATCH_PARENT
-                        layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
-                    }
-                    "contain" -> {
-                        layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
-                        layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                    }
-                    "stretch" -> {
-                        layoutParams.width = ViewGroup.LayoutParams.MATCH_PARENT
-                        layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
-                    }
-                }
-                view.layoutParams = layoutParams
-            }
-        }
+        android.util.Log.d(TAG, "Video surface detached — audio-only continues")
     }
 
     override fun onDetachedFromWindow() {
@@ -153,50 +166,41 @@ class MavinPlayerVideoView(context: Context, appContext: AppContext) :
         detachSurface()
     }
 
-    // Property setters for React Native props
+    // ── Content fit ───────────────────────────────────────────────────────────
+
+    private fun applyContentFit() {
+        val view = surfaceView ?: return
+        val lp = view.layoutParams as? FrameLayout.LayoutParams ?: return
+        when (contentFitMode) {
+            "contain" -> {
+                lp.width  = ViewGroup.LayoutParams.WRAP_CONTENT
+                lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            }
+            // "cover" and "stretch" both fill the container.
+            // True aspect-ratio-aware cover scaling requires a custom SurfaceView subclass
+            // or AspectRatioFrameLayout — add later if needed.
+            else -> {
+                lp.width  = ViewGroup.LayoutParams.MATCH_PARENT
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+            }
+        }
+        view.layoutParams = lp
+    }
+
+    // ── React Native prop setters ─────────────────────────────────────────────
+    //
+    // Called by the Prop() blocks in MavinPlayerModule's View() DSL.
+
     fun setContentFit(fit: String) {
         contentFitMode = fit
         applyContentFit()
-        android.util.Log.d(TAG, "Content fit mode: $fit")
+        android.util.Log.d(TAG, "contentFit set to: $fit")
     }
 
     fun setAllowsPictureInPicture(allows: Boolean) {
         allowsPip = allows
-        android.util.Log.d(TAG, "Picture in picture allowed: $allows")
-    }
-}
-
-/**
- * ViewManager for MavinPlayerVideoView - registers the native component with expo-modules-core.
- * This class must be referenced in MavinPlayerModule.kt's View() block.
- */
-class MavinPlayerVideoViewManager {
-    companion object {
-        fun define(): ViewManagerDefinition {
-            return ViewManagerDefinition(
-                viewFactory = { context, appContext ->
-                    MavinPlayerVideoView(context, appContext)
-                },
-                props = mapOf(
-                    "contentFit" to { view: MavinPlayerVideoView, value: String ->
-                        view.setContentFit(value)
-                    },
-                    "allowsPictureInPicture" to { view: MavinPlayerVideoView, value: Boolean ->
-                        view.setAllowsPictureInPicture(value)
-                    }
-                ),
-                events = mapOf(
-                    "onFirstFrameRender" to { view: MavinPlayerVideoView ->
-                        view.onFirstFrameRender
-                    },
-                    "onPictureInPictureStart" to { view: MavinPlayerVideoView ->
-                        view.onPictureInPictureStart
-                    },
-                    "onPictureInPictureStop" to { view: MavinPlayerVideoView ->
-                        view.onPictureInPictureStop
-                    }
-                )
-            )
-        }
+        android.util.Log.d(TAG, "allowsPictureInPicture set to: $allows")
+        // PiP is handled at the Activity level via enterPictureInPictureMode().
+        // This flag is stored here so the parent activity can query it if needed.
     }
 }
