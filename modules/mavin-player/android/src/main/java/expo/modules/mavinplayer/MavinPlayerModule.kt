@@ -104,7 +104,7 @@ class MavinPlayerModule : Module() {
                 )
                 cont.resume(state) {}
             } catch (e: Exception) {
-                cont.resumeWithException(e)
+                cont.resumeWith(Result.failure(e))
             }
         }
     }
@@ -284,10 +284,10 @@ class MavinPlayerModule : Module() {
         // verifyApplicationThread() check regardless of which thread calls getState().
 
         AsyncFunction("getState") {
-            val exo = newPlayer?.exoPlayer?.value
+            val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                val state = suspendReadExoState(exo)
-                val isPlaying = suspendReadIsPlaying(exo)
+                val state = kotlinx.coroutines.runBlocking { suspendReadExoState(exo) }
+                val isPlaying = kotlinx.coroutines.runBlocking { suspendReadIsPlaying(exo) }
                 mapOf(
                     "isPlaying"       to isPlaying,
                     "position"        to state.position,
@@ -391,7 +391,7 @@ class MavinPlayerModule : Module() {
         // isPlaying is read via suspendReadIsPlaying() to respect ExoPlayer's looper.
         playerScope.launch {
             player.playBackMode.collectLatest { mode ->
-                val exo = player.exoPlayer.value
+                val exo = player.exoPlayer.value as? androidx.media3.exoplayer.ExoPlayer
                 val playing = if (exo != null) suspendReadIsPlaying(exo) else false
                 sendEvent("onPlaybackStateChanged", mapOf(
                     "state"     to mode.name,
