@@ -35,12 +35,12 @@ const withNewPlayer = require("./plugins/withNewPlayer"); // ← vendored NewPla
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "wicemi90311",
-  slug: "wicemi9031",
+  owner: "besifo52561",
+  slug: "besifo5256",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "e053d760-bfb2-464f-b169-7a76ebfa3247",
+      projectId: "027e908f-a940-42c8-afc1-23241d20fe2b",
     },
   },
 
