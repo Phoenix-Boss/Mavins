@@ -6,48 +6,46 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
 import net.newpipe.newplayer.data.PlayMode
 import net.newpipe.newplayer.service.NewPlayerService
 
-// ─── What changed from the previous version ───────────────────────────────────
+// ─── Fixes applied in this version ────────────────────────────────────────────
 //
-// 1. Removed the entire bypass architecture (playStreamWithResolvedUrl, storedDashUrl,
-//    storedHlsUrl, storedProgressiveUrl, storedHttpContext, direct ExoPlayer manipulation).
-//    That bypass skipped NewPlayer's playStream() and therefore never called
-//    repository.getHttpDataSourceFactory() — meaning CDN requests went out with no
-//    headers and caused 403s.
+// FIX 1 — CRASH: "Player is accessed on the wrong thread"
+//   Root cause: observeNewPlayer() collected onExoPlayerEvent on a coroutine bound
+//   to Dispatchers.Main (Android main thread). ExoPlayer was created on the React
+//   Native JS thread ('mqt_v_js'), which becomes its applicationLooper thread.
+//   ExoPlayer.verifyApplicationThread() checks that every call comes from that
+//   specific looper thread, not just *any* main-equivalent thread.
+//   withContext(Dispatchers.Main) was a no-op when the scope was already on Main
+//   and did nothing to switch to the ExoPlayer looper.
 //
-// 2. loadAndPlayInternal() now:
-//      a. Stores the bundle in MavinMediaRepository (unchanged).
-//      b. Calls newPlayer.playStream(videoId, playMode) — the correct NewPlayer API.
-//    NewPlayer.playStream() → repository.getStreams() → AutoStreamSelector → MediaSourceBuilder
-//    → repository.getHttpDataSourceFactory() → OkHttpDataSource.Factory with all YouTube
-//    session headers. This is the one-cycle industry-standard path.
+//   Fix: Read ExoPlayer state (currentPosition, duration, bufferedPercentage) by
+//   posting a Runnable to exoPlayer.applicationLooper directly, capturing the
+//   values in a suspendCoroutine callback, then emitting the event from any thread.
+//   Helper: suspendReadExoState() below.
 //
-// 3. PlayMode enum values corrected:
-//      AUDIO    → PlayMode.FULLSCREEN_AUDIO
-//      VIDEO    → PlayMode.FULLSCREEN_VIDEO
-//      EMBEDDED → PlayMode.EMBEDDED_AUDIO
-//    These are the exact values defined in NewPlayer's PlayMode enum.
+//   Same fix applied to getState() AsyncFunction which also reads those fields.
 //
-// 4. playStreamInternal() simplified: it stores the bundle (if present) then delegates
-//    to newPlayer.playStream(). The old "if we have a stored bundle use it" special-case
-//    is gone — the repository already handles that correctly.
+// FIX 2 — WARN: View manager name mismatch
+//   expo-modules-core registers views under the name "<ModuleName>_<ViewClassName>".
+//   The module name is "MavinPlayer" and the view class is MavinPlayerVideoView, so
+//   the exported manager name is "MavinPlayer_MavinPlayerVideoView". The JS side
+//   was calling requireNativeViewManager('MavinPlayerVideoView') — wrong name.
+//   Fix is in index.ts (requireNativeViewManager('MavinPlayer_MavinPlayerVideoView')).
+//   No change needed on the Kotlin side; the View() DSL name is correct.
 //
-// 5. observeNewPlayer() wired into OnCreate so JS events fire as soon as the module loads.
-//    ExoPlayer reference is updated whenever NewPlayer's exoPlayer StateFlow emits,
-//    so the video surface always gets the live instance even after a player rebuild.
-//
-// 6. getState() now reads position/duration from exoPlayer.value instead of a cached field,
-//    and converts Long milliseconds to Double for JS consistency.
-//
-// 7. PlayerHttpContext data class kept here — it is the bridge type that JS passes over
-//    the React Native bridge. It is separate from BundleHttpContext (Kotlin-internal).
+// FIX 3 — Scope resilience: Job() → SupervisorJob()
+//   playerScope used raw Job(). If any single coroutine threw an uncaught exception
+//   it would cancel the entire scope and silence all subsequent observer coroutines
+//   (position ticks, state changes, errors). SupervisorJob() isolates failures so
+//   one dead observer doesn't take down the others.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -56,7 +54,8 @@ private const val TAG = "MavinPlayerModule"
 class MavinPlayerModule : Module() {
 
     private var newPlayer: NewPlayer? = null
-    private val playerScope = CoroutineScope(Dispatchers.Main + Job())
+    // FIX 3: SupervisorJob() so individual observer failures don't cancel the scope.
+    private val playerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentVideoId: String? = null
     private var currentPlayMode: PlayMode = PlayMode.FULLSCREEN_AUDIO
     private var repository: MavinMediaRepository? = null
@@ -70,6 +69,58 @@ class MavinPlayerModule : Module() {
 
         private fun updateExoPlayer(player: androidx.media3.exoplayer.ExoPlayer?) {
             currentExoPlayer = player
+        }
+    }
+
+    // ── FIX 1 helper ─────────────────────────────────────────────────────────
+    //
+    // Read position/duration/buffered from ExoPlayer on its own applicationLooper
+    // thread, then return the captured values to the calling coroutine.
+    //
+    // ExoPlayer.verifyApplicationThread() requires that every state-read comes from
+    // the looper that was active when the player was built. On React Native that
+    // looper belongs to 'mqt_v_js', not to the Android main thread. We post a
+    // Runnable to that specific looper via Handler and suspend until it completes.
+    //
+    // This is the correct cross-thread ExoPlayer access pattern recommended in:
+    // https://developer.android.com/guide/topics/media/issues/player-accessed-on-wrong-thread
+
+    private data class ExoState(
+        val position: Double,
+        val duration: Double,
+        val buffered: Int
+    )
+
+    private suspend fun suspendReadExoState(
+        exoPlayer: androidx.media3.exoplayer.ExoPlayer
+    ): ExoState = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val handler = android.os.Handler(exoPlayer.applicationLooper)
+        handler.post {
+            try {
+                val state = ExoState(
+                    position = exoPlayer.currentPosition.toDouble(),
+                    duration = exoPlayer.duration.coerceAtLeast(0L).toDouble(),
+                    buffered = exoPlayer.bufferedPercentage
+                )
+                cont.resume(state) {}
+            } catch (e: Exception) {
+                cont.resumeWithException(e)
+            }
+        }
+    }
+
+    // ── Read isPlaying safely — same looper constraint applies ────────────────
+
+    private suspend fun suspendReadIsPlaying(
+        exoPlayer: androidx.media3.exoplayer.ExoPlayer
+    ): Boolean = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val handler = android.os.Handler(exoPlayer.applicationLooper)
+        handler.post {
+            try {
+                cont.resume(exoPlayer.isPlaying) {}
+            } catch (e: Exception) {
+                cont.resume(false) {}
+            }
         }
     }
 
@@ -97,9 +148,10 @@ class MavinPlayerModule : Module() {
 
         // ── Video surface view registration ───────────────────────────────────
         //
-        // The View() DSL registers MavinPlayerVideoView with expo-modules-core so
-        // requireNativeViewManager('MavinPlayerVideoView') resolves on the JS side.
-        // Props and events declared here are the only ones the component exposes.
+        // expo-modules-core registers this view under the key:
+        //   "MavinPlayer_MavinPlayerVideoView"
+        // (pattern: "<ModuleName>_<ViewClassName>")
+        // The JS side must use requireNativeViewManager('MavinPlayer_MavinPlayerVideoView').
 
         View(MavinPlayerVideoView::class) {
             Prop("contentFit") { view: MavinPlayerVideoView, value: String ->
@@ -112,18 +164,6 @@ class MavinPlayerModule : Module() {
         }
 
         // ── PRIMARY ENTRY POINT — loadAndPlay ─────────────────────────────────
-        //
-        // Industry-standard one-cycle flow:
-        //   JS resolves once via MavinEngine → gets URLs + HTTP context
-        //   JS calls loadAndPlay() with the complete bundle
-        //   Kotlin stores bundle in MavinMediaRepository
-        //   newPlayer.playStream() calls repository.getStreams() (zero network)
-        //   MediaSourceBuilder calls repository.getHttpDataSourceFactory() (zero network)
-        //   ExoPlayer fetches CDN segments with the exact same session that extracted
-        //
-        // httpContext travels as one inseparable package with the URLs.
-        // OkHttpDataSource.Factory injects all YouTube session headers on every
-        // CDN segment request. YouTube sees one continuous authenticated session.
 
         AsyncFunction("loadAndPlay") { videoId: String, dashUrl: String?, hlsUrl: String?,
                                        progressiveUrl: String?, httpContext: PlayerHttpContext? ->
@@ -139,12 +179,7 @@ class MavinPlayerModule : Module() {
                 httpContext, PlayMode.FULLSCREEN_VIDEO)
         }
 
-        // ── Legacy playStream — kept for backwards compatibility ───────────────
-        //
-        // Will only work if a bundle is already stored in the repository
-        // (i.e. a prior loadAndPlay() was called in this process lifecycle).
-        // The cold-restore path in MusicPlayerContext now uses loadAndPlay()
-        // via moduleLevelLoadAndPlay(), so this is only hit by edge-cases.
+        // ── Legacy playStream ─────────────────────────────────────────────────
 
         AsyncFunction("playStream") { videoId: String ->
             ensurePlayerInitialized()
@@ -243,24 +278,43 @@ class MavinPlayerModule : Module() {
         }
 
         // ── State ─────────────────────────────────────────────────────────────
+        //
+        // FIX 1 applied here: exoPlayer state fields are read via suspendReadExoState()
+        // which posts to the player's applicationLooper, satisfying ExoPlayer's
+        // verifyApplicationThread() check regardless of which thread calls getState().
 
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value
-            mapOf(
-                "isPlaying"      to (exo?.isPlaying ?: false),
-                "position"       to (exo?.currentPosition?.toDouble() ?: 0.0),
-                "duration"       to (exo?.duration?.coerceAtLeast(0L)?.toDouble() ?: 0.0),
-                "bufferedPercent" to (exo?.bufferedPercentage ?: 0),
-                "playMode"       to currentPlayMode.name,
-                "repeatMode"     to when (newPlayer?.repeatMode) {
-                    net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
-                    net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
-                    net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
-                    else                                                 -> "off"
-                },
-                "shuffle"        to (newPlayer?.shuffle ?: false),
-                "currentItem"    to (currentVideoId ?: "")
-            )
+            if (exo != null) {
+                val state = suspendReadExoState(exo)
+                val isPlaying = suspendReadIsPlaying(exo)
+                mapOf(
+                    "isPlaying"       to isPlaying,
+                    "position"        to state.position,
+                    "duration"        to state.duration,
+                    "bufferedPercent" to state.buffered,
+                    "playMode"        to currentPlayMode.name,
+                    "repeatMode"      to when (newPlayer?.repeatMode) {
+                        net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
+                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
+                        else                                                 -> "off"
+                    },
+                    "shuffle"         to (newPlayer?.shuffle ?: false),
+                    "currentItem"     to (currentVideoId ?: "")
+                )
+            } else {
+                mapOf(
+                    "isPlaying"       to false,
+                    "position"        to 0.0,
+                    "duration"        to 0.0,
+                    "bufferedPercent" to 0,
+                    "playMode"        to currentPlayMode.name,
+                    "repeatMode"      to "off",
+                    "shuffle"         to false,
+                    "currentItem"     to (currentVideoId ?: "")
+                )
+            }
         }
 
         AsyncFunction("isInitialized") {
@@ -283,10 +337,6 @@ class MavinPlayerModule : Module() {
                 return
             }
 
-            // OkHttpClient with NO cookie jar.
-            // All cookies are injected as raw "Cookie" headers from the bundle context.
-            // This prevents OkHttp from silently overriding bundle cookies with stale
-            // values from a built-in cookie store.
             val okHttpClient = okhttp3.OkHttpClient.Builder()
                 .cookieJar(okhttp3.CookieJar.NO_COOKIES)
                 .build()
@@ -299,8 +349,6 @@ class MavinPlayerModule : Module() {
                 return
             }
 
-            // NewPlayerImpl requires Application, not Context.
-            // applicationContext IS the Application instance on Android.
             val application = appContext as android.app.Application
 
             newPlayer = NewPlayerImpl(
@@ -313,12 +361,9 @@ class MavinPlayerModule : Module() {
                 }
             )
 
-            // Store the NewPlayer instance in NewPlayerService companion holder so the
-            // MediaSessionService can retrieve it when Android starts it for background playback.
             newPlayer?.let { NewPlayerService.setNewPlayer(it) }
 
-            // Observe NewPlayer's ExoPlayer StateFlow so the companion reference stays
-            // current even if NewPlayer rebuilds ExoPlayer internally (e.g. after release).
+            // Track live ExoPlayer reference for the video surface view.
             playerScope.launch {
                 newPlayer?.exoPlayer?.collectLatest { player ->
                     val exo = player as? androidx.media3.exoplayer.ExoPlayer
@@ -329,7 +374,6 @@ class MavinPlayerModule : Module() {
                 }
             }
 
-            // Observe playback state and position to fire JS events.
             observeNewPlayer()
 
             newPlayer?.prepare()
@@ -343,40 +387,42 @@ class MavinPlayerModule : Module() {
     private fun observeNewPlayer() {
         val player = newPlayer ?: return
 
-        // Playback mode / isPlaying state changes
+        // Playback mode / isPlaying state changes.
+        // isPlaying is read via suspendReadIsPlaying() to respect ExoPlayer's looper.
         playerScope.launch {
             player.playBackMode.collectLatest { mode ->
                 val exo = player.exoPlayer.value
+                val playing = if (exo != null) suspendReadIsPlaying(exo) else false
                 sendEvent("onPlaybackStateChanged", mapOf(
                     "state"     to mode.name,
-                    "isPlaying" to (exo?.isPlaying ?: false),
+                    "isPlaying" to playing,
                     "playMode"  to mode.name
                 ))
             }
         }
 
-        // Position + duration + buffered ticks from ExoPlayer events.
-        // ExoPlayer methods (currentPosition, duration, bufferedPercentage) must be
-        // called on the thread that owns the player's application looper — which is
-        // the Android main thread. The collectLatest lambda may be scheduled on a
-        // different coroutine dispatcher, so we explicitly switch to Dispatchers.Main
-        // before reading any ExoPlayer state to avoid the wrong-thread crash:
-        //   java.lang.IllegalStateException: Player is accessed on the wrong thread.
+        // FIX 1: Position ticks — read ExoPlayer state on its own applicationLooper.
+        //
+        // The previous code used withContext(Dispatchers.Main) which ran on the
+        // Android main thread. ExoPlayer's verifyApplicationThread() rejected this
+        // because the player was created on 'mqt_v_js' (the React Native JS thread)
+        // and that thread's looper became the player's applicationLooper.
+        //
+        // suspendReadExoState() posts to exoPlayer.applicationLooper directly, so
+        // the read always happens on the correct thread regardless of which
+        // coroutine dispatcher is currently active.
         playerScope.launch {
             player.onExoPlayerEvent.collectLatest { (exoPlayer, _) ->
-                val position: Double
-                val duration: Double
-                val buffered: Int
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    position = exoPlayer.currentPosition.toDouble()
-                    duration = exoPlayer.duration.coerceAtLeast(0L).toDouble()
-                    buffered = exoPlayer.bufferedPercentage
+                try {
+                    val state = suspendReadExoState(exoPlayer as androidx.media3.exoplayer.ExoPlayer)
+                    sendEvent("onPositionChanged", mapOf(
+                        "position"        to state.position,
+                        "duration"        to state.duration,
+                        "bufferedPercent" to state.buffered
+                    ))
+                } catch (e: Exception) {
+                    Log.w(TAG, "observeNewPlayer: failed to read ExoPlayer state: ${e.message}")
                 }
-                sendEvent("onPositionChanged", mapOf(
-                    "position"        to position,
-                    "duration"        to duration,
-                    "bufferedPercent" to buffered
-                ))
             }
         }
 
@@ -418,25 +464,6 @@ class MavinPlayerModule : Module() {
         Log.i(TAG, "NewPlayer released")
     }
 
-    // ── loadAndPlayInternal ───────────────────────────────────────────────────
-    //
-    // This is the one-cycle handoff. It does two things:
-    //   1. Stores the complete bundle (URLs + HTTP context) in MavinMediaRepository.
-    //   2. Calls newPlayer.playStream(videoId, playMode).
-    //
-    // NewPlayer.playStream() then:
-    //   → calls repository.getStreams(videoId)          ← reads from stored bundle
-    //   → AutoStreamSelector picks DASH > HLS > progressive
-    //   → MediaSourceBuilder calls repository.getHttpDataSourceFactory(videoId)
-    //                                                   ← builds OkHttpDataSource.Factory
-    //                                                      with all YouTube session headers
-    //   → ExoPlayer receives a MediaSource backed by that factory
-    //   → CDN segment requests carry Cookie, Origin, Referer, User-Agent
-    //   → YouTube CDN sees one continuous authenticated session → no 403
-    //
-    // This is the correct path. The previous version bypassed this entirely
-    // by calling exoPlayer.setMediaItem() directly, which skipped the factory.
-
     private fun loadAndPlayInternal(
         videoId: String,
         dashUrl: String?,
@@ -457,9 +484,6 @@ class MavinPlayerModule : Module() {
         currentVideoId = videoId
         currentPlayMode = playMode
 
-        // Step 1 — Store the bundle. This is an in-memory atomic swap.
-        // repository.getStreams() and repository.getHttpDataSourceFactory() both read
-        // from this same snapshot so they are always consistent with each other.
         val bundle = ResolvedBundle(
             videoId   = videoId,
             dashManifestUrl      = dashUrl?.takeIf { it.isNotEmpty() },
@@ -482,9 +506,6 @@ class MavinPlayerModule : Module() {
         )
         repo.storeBundle(bundle)
 
-        // Step 2 — Delegate to NewPlayer. This triggers the full one-cycle path:
-        // getStreams() → AutoStreamSelector → MediaSourceBuilder → getHttpDataSourceFactory()
-        // → OkHttpDataSource.Factory → ExoPlayer with authenticated session.
         return try {
             player.playStream(videoId, playMode)
             Log.i(TAG, "loadAndPlayInternal: playStream dispatched for $videoId " +
@@ -496,12 +517,6 @@ class MavinPlayerModule : Module() {
             mapOf("success" to false, "error" to (e.message ?: "playStream failed"))
         }
     }
-
-    // ── playStreamInternal ────────────────────────────────────────────────────
-    //
-    // Legacy path. Assumes the repository already has a bundle stored from a prior
-    // loadAndPlay() call. Delegates directly to newPlayer.playStream() — same
-    // one-cycle path as loadAndPlayInternal, just without storing a new bundle.
 
     private fun playStreamInternal(videoId: String, playMode: PlayMode): Map<String, Any> {
         val player = newPlayer ?: return mapOf("success" to false, "error" to "Player not initialized")
@@ -529,15 +544,6 @@ class MavinPlayerModule : Module() {
     }
 
     // ── PlayerHttpContext ─────────────────────────────────────────────────────
-    //
-    // Bridge type: this is what crosses the React Native bridge from JS.
-    // Must implement expo.modules.kotlin.records.Record so that expo-modules-core
-    // can find a TypeConverter for it — without this the module crashes with
-    // MissingTypeConverter at startup before any JS call is made.
-    // Each field that travels over the bridge must be annotated with @Field.
-    // It is mapped to BundleHttpContext (the Kotlin-internal type) inside
-    // loadAndPlayInternal(). Keeping them separate means the bridge type can
-    // change independently of the internal storage type.
 
     class PlayerHttpContext : expo.modules.kotlin.records.Record {
         @expo.modules.kotlin.records.Field

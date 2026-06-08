@@ -205,9 +205,24 @@ export default MavinPlayer;
 
 // ── Native video surface component ────────────────────────────────────────────
 //
-// MavinPlayerVideoView renders the ExoPlayer video frames inside a React Native
-// view. It attaches a SurfaceView to the live NewPlayer ExoPlayer instance when
-// mounted, and clears the surface (audio-only continues) when unmounted.
+// FIX: expo-modules-core registers view managers under the combined key
+//   "<ModuleName>_<ViewClassName>"
+// The module name is "MavinPlayer" (set by Name("MavinPlayer") in the Kotlin DSL)
+// and the view class is MavinPlayerVideoView, so the exported manager name is
+// "MavinPlayer_MavinPlayerVideoView".
+//
+// The previous code used requireNativeViewManager('MavinPlayerVideoView') which
+// did not match the exported name and produced this warning at runtime:
+//   WARN The native view manager for module(MavinPlayerVideoView) from
+//   NativeViewManagerAdapter isn't exported by expo-modules-core.
+//   Views of this type may not render correctly.
+//
+// Exported managers listed in the warning confirmed the correct name:
+//   [MavinPlayer_MavinPlayerVideoView, ...]
+//
+// MavinPlayerVideoView renders ExoPlayer video frames inside a React Native view.
+// It attaches a SurfaceView to the live NewPlayer ExoPlayer instance when mounted,
+// and clears the surface (audio-only continues) when unmounted.
 //
 // Used in playerContent.tsx to render the Video tab without a second player.
 // Registered on the Kotlin side via the View() block in MavinPlayerModule.
@@ -218,4 +233,4 @@ export const MavinPlayerVideoView: React.ComponentType<{
   onFirstFrameRender?: (e: { surfaceReady: boolean }) => void;
   onPictureInPictureStart?: () => void;
   onPictureInPictureStop?: () => void;
-}> = requireNativeViewManager('MavinPlayerVideoView');
+}> = requireNativeViewManager('MavinPlayer_MavinPlayerVideoView');
