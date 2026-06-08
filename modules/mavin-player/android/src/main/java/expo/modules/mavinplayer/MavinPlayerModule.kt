@@ -286,8 +286,8 @@ class MavinPlayerModule : Module() {
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                val state = kotlinx.coroutines.runBlocking { suspendReadExoState(exo) }
-                val isPlaying = kotlinx.coroutines.runBlocking { suspendReadIsPlaying(exo) }
+                val state = suspendReadExoState(exo)
+                val isPlaying = suspendReadIsPlaying(exo)
                 mapOf(
                     "isPlaying"       to isPlaying,
                     "position"        to state.position,
