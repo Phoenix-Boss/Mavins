@@ -172,6 +172,12 @@ const MavinPlayer = {
 
   getState: (): Promise<PlayerState> => Native.getState(),
 
+  isInitialized: (): Promise<{ initialized: boolean }> =>
+    Native.isInitialized(),
+
+  getVersion: (): Promise<{ version: string; library: string }> =>
+    Native.getVersion(),
+
   // ── Events ────────────────────────────────────────────────────────────────
 
   onPlaybackStateChanged: (

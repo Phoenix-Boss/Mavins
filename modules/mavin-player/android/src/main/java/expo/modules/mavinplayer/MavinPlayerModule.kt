@@ -355,13 +355,27 @@ class MavinPlayerModule : Module() {
             }
         }
 
-        // Position + duration + buffered ticks from ExoPlayer events
+        // Position + duration + buffered ticks from ExoPlayer events.
+        // ExoPlayer methods (currentPosition, duration, bufferedPercentage) must be
+        // called on the thread that owns the player's application looper — which is
+        // the Android main thread. The collectLatest lambda may be scheduled on a
+        // different coroutine dispatcher, so we explicitly switch to Dispatchers.Main
+        // before reading any ExoPlayer state to avoid the wrong-thread crash:
+        //   java.lang.IllegalStateException: Player is accessed on the wrong thread.
         playerScope.launch {
             player.onExoPlayerEvent.collectLatest { (exoPlayer, _) ->
+                val position: Double
+                val duration: Double
+                val buffered: Int
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    position = exoPlayer.currentPosition.toDouble()
+                    duration = exoPlayer.duration.coerceAtLeast(0L).toDouble()
+                    buffered = exoPlayer.bufferedPercentage
+                }
                 sendEvent("onPositionChanged", mapOf(
-                    "position"       to exoPlayer.currentPosition.toDouble(),
-                    "duration"       to exoPlayer.duration.coerceAtLeast(0L).toDouble(),
-                    "bufferedPercent" to exoPlayer.bufferedPercentage
+                    "position"        to position,
+                    "duration"        to duration,
+                    "bufferedPercent" to buffered
                 ))
             }
         }
@@ -517,17 +531,34 @@ class MavinPlayerModule : Module() {
     // ── PlayerHttpContext ─────────────────────────────────────────────────────
     //
     // Bridge type: this is what crosses the React Native bridge from JS.
+    // Must implement expo.modules.kotlin.records.Record so that expo-modules-core
+    // can find a TypeConverter for it — without this the module crashes with
+    // MissingTypeConverter at startup before any JS call is made.
+    // Each field that travels over the bridge must be annotated with @Field.
     // It is mapped to BundleHttpContext (the Kotlin-internal type) inside
     // loadAndPlayInternal(). Keeping them separate means the bridge type can
     // change independently of the internal storage type.
 
-    data class PlayerHttpContext(
-        val cookie: String,
-        val origin: String,
-        val referer: String,
-        val acceptLanguage: String,
-        val xYoutubeClientName: String,
-        val xYoutubeClientVersion: String,
-        val userAgent: String
-    )
+    class PlayerHttpContext : expo.modules.kotlin.records.Record {
+        @expo.modules.kotlin.records.Field
+        var cookie: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var origin: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var referer: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var acceptLanguage: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var xYoutubeClientName: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var xYoutubeClientVersion: String = ""
+
+        @expo.modules.kotlin.records.Field
+        var userAgent: String = ""
+    }
 }
