@@ -8,9 +8,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
 import net.newpipe.newplayer.data.PlayMode
@@ -280,21 +279,23 @@ class MavinPlayerModule : Module() {
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // AsyncFunction does NOT run inside a coroutine, so suspend functions cannot be
-        // called directly from its lambda. The fix is to dispatch into playerScope via
-        // async { }.await(), which runs the lambda as a suspend block on the scope's
-        // dispatcher and bridges the result back to the calling thread.
+        // AsyncFunction lambdas are NOT coroutines — suspend functions cannot be
+        // called directly from them. runBlocking{} bridges the background thread
+        // that expo-modules dispatches AsyncFunction on into a coroutine context,
+        // allowing suspendReadExoState() and suspendReadIsPlaying() to be called.
+        //
+        // runBlocking is safe here because AsyncFunction already runs off the main
+        // thread (expo-modules uses its own thread pool), so blocking that thread
+        // does not freeze the UI.
         //
         // suspendReadExoState() and suspendReadIsPlaying() post a Runnable to
-        // exoPlayer.applicationLooper — the looper owned by the 'mqt_v_js' thread where
-        // ExoPlayer was constructed. This satisfies ExoPlayer's verifyApplicationThread()
-        // check regardless of which thread async{} happens to run on.
+        // exoPlayer.applicationLooper — the looper owned by the 'mqt_v_js' thread
+        // where ExoPlayer was constructed — satisfying verifyApplicationThread().
 
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                // Dispatch into a coroutine so suspend functions can be called.
-                playerScope.async {
+                runBlocking {
                     val state     = suspendReadExoState(exo)
                     val isPlaying = suspendReadIsPlaying(exo)
                     mapOf(
@@ -312,7 +313,7 @@ class MavinPlayerModule : Module() {
                         "shuffle"         to (newPlayer?.shuffle ?: false),
                         "currentItem"     to (currentVideoId ?: "")
                     )
-                }.await()
+                }
             } else {
                 mapOf(
                     "isPlaying"       to false,
