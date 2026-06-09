@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.newpipe.newplayer.NewPlayer
@@ -279,30 +280,39 @@ class MavinPlayerModule : Module() {
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // FIX 1 applied here: exoPlayer state fields are read via suspendReadExoState()
-        // which posts to the player's applicationLooper, satisfying ExoPlayer's
-        // verifyApplicationThread() check regardless of which thread calls getState().
+        // AsyncFunction does NOT run inside a coroutine, so suspend functions cannot be
+        // called directly from its lambda. The fix is to dispatch into playerScope via
+        // async { }.await(), which runs the lambda as a suspend block on the scope's
+        // dispatcher and bridges the result back to the calling thread.
+        //
+        // suspendReadExoState() and suspendReadIsPlaying() post a Runnable to
+        // exoPlayer.applicationLooper — the looper owned by the 'mqt_v_js' thread where
+        // ExoPlayer was constructed. This satisfies ExoPlayer's verifyApplicationThread()
+        // check regardless of which thread async{} happens to run on.
 
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                val state = suspendReadExoState(exo)
-                val isPlaying = suspendReadIsPlaying(exo)
-                mapOf(
-                    "isPlaying"       to isPlaying,
-                    "position"        to state.position,
-                    "duration"        to state.duration,
-                    "bufferedPercent" to state.buffered,
-                    "playMode"        to currentPlayMode.name,
-                    "repeatMode"      to when (newPlayer?.repeatMode) {
-                        net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
-                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
-                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
-                        else                                                 -> "off"
-                    },
-                    "shuffle"         to (newPlayer?.shuffle ?: false),
-                    "currentItem"     to (currentVideoId ?: "")
-                )
+                // Dispatch into a coroutine so suspend functions can be called.
+                playerScope.async {
+                    val state     = suspendReadExoState(exo)
+                    val isPlaying = suspendReadIsPlaying(exo)
+                    mapOf(
+                        "isPlaying"       to isPlaying,
+                        "position"        to state.position,
+                        "duration"        to state.duration,
+                        "bufferedPercent" to state.buffered,
+                        "playMode"        to currentPlayMode.name,
+                        "repeatMode"      to when (newPlayer?.repeatMode) {
+                            net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
+                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
+                            else                                                 -> "off"
+                        },
+                        "shuffle"         to (newPlayer?.shuffle ?: false),
+                        "currentItem"     to (currentVideoId ?: "")
+                    )
+                }.await()
             } else {
                 mapOf(
                     "isPlaying"       to false,
