@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
@@ -31,7 +32,9 @@ import net.newpipe.newplayer.service.NewPlayerService
 // withContext(Dispatchers.Main) — the idiomatic pattern used by NewPlayerImpl
 // itself for all of its ExoPlayer interactions.
 //
-// No Handler, no applicationLooper lookups, no runBlocking needed.
+// No Handler, no applicationLooper lookups needed.
+// NOTE: AsyncFunction lambdas are NOT suspend, so withContext() inside them must
+// be bridged via runBlocking { withContext(Dispatchers.Main) { ... } }.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -207,11 +210,12 @@ class MavinPlayerModule : Module() {
         }
 
         AsyncFunction("setPlaybackSpeed") { speed: Float ->
-            // ExoPlayer must be called from the main thread. AsyncFunction lambdas
-            // run on expo-modules' background pool, so switch to Dispatchers.Main.
+            // ExoPlayer must be called from the main thread. AsyncFunction lambdas are
+            // NOT suspend, so we bridge to a coroutine via runBlocking and then switch
+            // to Dispatchers.Main for the actual ExoPlayer call.
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                withContext(Dispatchers.Main) { exo.setPlaybackSpeed(speed) }
+                runBlocking { withContext(Dispatchers.Main) { exo.setPlaybackSpeed(speed) } }
             }
             mapOf("success" to true)
         }
@@ -227,32 +231,33 @@ class MavinPlayerModule : Module() {
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // AsyncFunction lambdas run on expo-modules' background thread pool.
-        // ExoPlayer state reads must happen on Dispatchers.Main (the thread ExoPlayer
-        // was constructed on). withContext(Dispatchers.Main) switches to the correct
-        // thread inside the suspend lambda that expo-modules-core provides.
+        // AsyncFunction lambdas are NOT suspend. ExoPlayer state reads must happen
+        // on Dispatchers.Main (the thread ExoPlayer was constructed on). Bridge via
+        // runBlocking { withContext(Dispatchers.Main) { ... } }.
 
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                // AsyncFunction runs on expo-modules' background thread; switch to
-                // main thread to satisfy ExoPlayer.verifyApplicationThread().
-                withContext(Dispatchers.Main) {
-                    mapOf(
-                        "isPlaying"       to exo.isPlaying,
-                        "position"        to exo.currentPosition.toDouble(),
-                        "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
-                        "bufferedPercent" to exo.bufferedPercentage,
-                        "playMode"        to currentPlayMode.name,
-                        "repeatMode"      to when (newPlayer?.repeatMode) {
-                            net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
-                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
-                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
-                            else                                                 -> "off"
-                        },
-                        "shuffle"         to (newPlayer?.shuffle ?: false),
-                        "currentItem"     to (currentVideoId ?: "")
-                    )
+                // AsyncFunction lambdas are NOT suspend. Bridge to coroutine via runBlocking,
+                // then switch to Dispatchers.Main to satisfy ExoPlayer.verifyApplicationThread().
+                runBlocking {
+                    withContext(Dispatchers.Main) {
+                        mapOf(
+                            "isPlaying"       to exo.isPlaying,
+                            "position"        to exo.currentPosition.toDouble(),
+                            "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
+                            "bufferedPercent" to exo.bufferedPercentage,
+                            "playMode"        to currentPlayMode.name,
+                            "repeatMode"      to when (newPlayer?.repeatMode) {
+                                net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                                net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
+                                net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
+                                else                                                 -> "off"
+                            },
+                            "shuffle"         to (newPlayer?.shuffle ?: false),
+                            "currentItem"     to (currentVideoId ?: "")
+                        )
+                    }
                 }
             } else {
                 mapOf(
