@@ -9,43 +9,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
 import net.newpipe.newplayer.data.PlayMode
 import net.newpipe.newplayer.service.NewPlayerService
 
-// ─── Fixes applied in this version ────────────────────────────────────────────
+// ─── Threading model ──────────────────────────────────────────────────────────
 //
-// FIX 1 — CRASH: "Player is accessed on the wrong thread"
-//   Root cause: observeNewPlayer() collected onExoPlayerEvent on a coroutine bound
-//   to Dispatchers.Main (Android main thread). ExoPlayer was created on the React
-//   Native JS thread ('mqt_v_js'), which becomes its applicationLooper thread.
-//   ExoPlayer.verifyApplicationThread() checks that every call comes from that
-//   specific looper thread, not just *any* main-equivalent thread.
-//   withContext(Dispatchers.Main) was a no-op when the scope was already on Main
-//   and did nothing to switch to the ExoPlayer looper.
+// ExoPlayer must be created AND accessed on the Android main thread (Looper.main).
 //
-//   Fix: Read ExoPlayer state (currentPosition, duration, bufferedPercentage) by
-//   posting a Runnable to exoPlayer.applicationLooper directly, capturing the
-//   values in a suspendCoroutine callback, then emitting the event from any thread.
-//   Helper: suspendReadExoState() below.
+// expo-modules calls OnCreate / OnDestroy and AsyncFunction lambdas from the
+// React Native JS thread ('mqt_v_js'). If prepare() — which triggers
+// ExoPlayer.Builder.build() — runs there, ExoPlayer records mqt_v_js as its
+// applicationLooper, then rejects every subsequent call from Dispatchers.Main
+// with "Player is accessed on the wrong thread".
 //
-//   Same fix applied to getState() AsyncFunction which also reads those fields.
+// Fix: initializePlayer() launches prepare() via playerScope (Dispatchers.Main),
+// ensuring ExoPlayer is constructed on the Android main thread. All subsequent
+// observer coroutines and AsyncFunction calls that touch ExoPlayer go through
+// withContext(Dispatchers.Main) — the idiomatic pattern used by NewPlayerImpl
+// itself for all of its ExoPlayer interactions.
 //
-// FIX 2 — WARN: View manager name mismatch
-//   expo-modules-core registers views under the name "<ModuleName>_<ViewClassName>".
-//   The module name is "MavinPlayer" and the view class is MavinPlayerVideoView, so
-//   the exported manager name is "MavinPlayer_MavinPlayerVideoView". The JS side
-//   was calling requireNativeViewManager('MavinPlayerVideoView') — wrong name.
-//   Fix is in index.ts (requireNativeViewManager('MavinPlayer_MavinPlayerVideoView')).
-//   No change needed on the Kotlin side; the View() DSL name is correct.
-//
-// FIX 3 — Scope resilience: Job() → SupervisorJob()
-//   playerScope used raw Job(). If any single coroutine threw an uncaught exception
-//   it would cancel the entire scope and silence all subsequent observer coroutines
-//   (position ticks, state changes, errors). SupervisorJob() isolates failures so
-//   one dead observer doesn't take down the others.
+// No Handler, no applicationLooper lookups, no runBlocking needed.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -72,57 +58,6 @@ class MavinPlayerModule : Module() {
         }
     }
 
-    // ── FIX 1 helper ─────────────────────────────────────────────────────────
-    //
-    // Read position/duration/buffered from ExoPlayer on its own applicationLooper
-    // thread, then return the captured values to the calling coroutine.
-    //
-    // ExoPlayer.verifyApplicationThread() requires that every state-read comes from
-    // the looper that was active when the player was built. On React Native that
-    // looper belongs to 'mqt_v_js', not to the Android main thread. We post a
-    // Runnable to that specific looper via Handler and suspend until it completes.
-    //
-    // This is the correct cross-thread ExoPlayer access pattern recommended in:
-    // https://developer.android.com/guide/topics/media/issues/player-accessed-on-wrong-thread
-
-    private data class ExoState(
-        val position: Double,
-        val duration: Double,
-        val buffered: Int
-    )
-
-    private suspend fun suspendReadExoState(
-        exoPlayer: androidx.media3.exoplayer.ExoPlayer
-    ): ExoState = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-        val handler = android.os.Handler(exoPlayer.applicationLooper)
-        handler.post {
-            try {
-                val state = ExoState(
-                    position = exoPlayer.currentPosition.toDouble(),
-                    duration = exoPlayer.duration.coerceAtLeast(0L).toDouble(),
-                    buffered = exoPlayer.bufferedPercentage
-                )
-                cont.resume(state) {}
-            } catch (e: Exception) {
-                cont.resumeWith(Result.failure(e))
-            }
-        }
-    }
-
-    // ── Read isPlaying safely — same looper constraint applies ────────────────
-
-    private suspend fun suspendReadIsPlaying(
-        exoPlayer: androidx.media3.exoplayer.ExoPlayer
-    ): Boolean = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-        val handler = android.os.Handler(exoPlayer.applicationLooper)
-        handler.post {
-            try {
-                cont.resume(exoPlayer.isPlaying) {}
-            } catch (e: Exception) {
-                cont.resume(false) {}
-            }
-        }
-    }
 
     override fun definition() = ModuleDefinition {
 
@@ -160,7 +95,15 @@ class MavinPlayerModule : Module() {
             Prop("allowsPictureInPicture") { view: MavinPlayerVideoView, value: Boolean ->
                 view.setAllowsPictureInPicture(value)
             }
-            Events("onFirstFrameRender", "onPictureInPictureStart", "onPictureInPictureStop")
+            // NOTE: No Events() call here. The three EventDispatcher fields on
+            // MavinPlayerVideoView (onFirstFrameRender, onPictureInPictureStart,
+            // onPictureInPictureStop) are discovered automatically by expo-modules-core
+            // via reflection when this View() block is processed. An explicit Events()
+            // call alongside EventDispatcher fields collides with the module-level
+            // Events() block, causing NativeViewManagerAdapter to mis-report the view
+            // config to the JS bridge — producing:
+            //   "Unable to get the view config for MavinPlayer_MavinPlayerVideoView
+            //    from module default view"
         }
 
         // ── PRIMARY ENTRY POINT — loadAndPlay ─────────────────────────────────
@@ -264,7 +207,12 @@ class MavinPlayerModule : Module() {
         }
 
         AsyncFunction("setPlaybackSpeed") { speed: Float ->
-            newPlayer?.exoPlayer?.value?.setPlaybackSpeed(speed)
+            // ExoPlayer must be called from the main thread. AsyncFunction lambdas
+            // run on expo-modules' background pool, so switch to Dispatchers.Main.
+            val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
+            if (exo != null) {
+                withContext(Dispatchers.Main) { exo.setPlaybackSpeed(speed) }
+            }
             mapOf("success" to true)
         }
 
@@ -279,30 +227,22 @@ class MavinPlayerModule : Module() {
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // AsyncFunction lambdas are NOT coroutines — suspend functions cannot be
-        // called directly from them. runBlocking{} bridges the background thread
-        // that expo-modules dispatches AsyncFunction on into a coroutine context,
-        // allowing suspendReadExoState() and suspendReadIsPlaying() to be called.
-        //
-        // runBlocking is safe here because AsyncFunction already runs off the main
-        // thread (expo-modules uses its own thread pool), so blocking that thread
-        // does not freeze the UI.
-        //
-        // suspendReadExoState() and suspendReadIsPlaying() post a Runnable to
-        // exoPlayer.applicationLooper — the looper owned by the 'mqt_v_js' thread
-        // where ExoPlayer was constructed — satisfying verifyApplicationThread().
+        // AsyncFunction lambdas run on expo-modules' background thread pool.
+        // ExoPlayer state reads must happen on Dispatchers.Main (the thread ExoPlayer
+        // was constructed on). withContext(Dispatchers.Main) switches to the correct
+        // thread inside the suspend lambda that expo-modules-core provides.
 
         AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                runBlocking {
-                    val state     = suspendReadExoState(exo)
-                    val isPlaying = suspendReadIsPlaying(exo)
+                // AsyncFunction runs on expo-modules' background thread; switch to
+                // main thread to satisfy ExoPlayer.verifyApplicationThread().
+                withContext(Dispatchers.Main) {
                     mapOf(
-                        "isPlaying"       to isPlaying,
-                        "position"        to state.position,
-                        "duration"        to state.duration,
-                        "bufferedPercent" to state.buffered,
+                        "isPlaying"       to exo.isPlaying,
+                        "position"        to exo.currentPosition.toDouble(),
+                        "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
+                        "bufferedPercent" to exo.bufferedPercentage,
                         "playMode"        to currentPlayMode.name,
                         "repeatMode"      to when (newPlayer?.repeatMode) {
                             net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
@@ -387,7 +327,14 @@ class MavinPlayerModule : Module() {
 
             observeNewPlayer()
 
-            newPlayer?.prepare()
+            // CRITICAL: prepare() calls setupNewExoplayer() → ExoPlayer.Builder.build().
+            // ExoPlayer records the looper of the thread it's built on as its
+            // applicationLooper. We must build it on Dispatchers.Main (the Android main
+            // thread) so that all subsequent main-thread accesses pass
+            // verifyApplicationThread(). OnCreate fires on mqt_v_js — if we called
+            // prepare() directly here, ExoPlayer would record mqt_v_js as its looper
+            // and reject every Dispatchers.Main access with "wrong thread".
+            playerScope.launch { newPlayer?.prepare() }
             Log.i(TAG, "NewPlayer initialized successfully")
 
         } catch (e: Exception) {
@@ -398,12 +345,13 @@ class MavinPlayerModule : Module() {
     private fun observeNewPlayer() {
         val player = newPlayer ?: return
 
-        // Playback mode / isPlaying state changes.
-        // isPlaying is read via suspendReadIsPlaying() to respect ExoPlayer's looper.
+        // Playback mode / isPlaying state changes — read isPlaying on the main thread.
         playerScope.launch {
             player.playBackMode.collectLatest { mode ->
                 val exo = player.exoPlayer.value as? androidx.media3.exoplayer.ExoPlayer
-                val playing = if (exo != null) suspendReadIsPlaying(exo) else false
+                val playing = if (exo != null) {
+                    withContext(Dispatchers.Main) { exo.isPlaying }
+                } else false
                 sendEvent("onPlaybackStateChanged", mapOf(
                     "state"     to mode.name,
                     "isPlaying" to playing,
@@ -412,24 +360,22 @@ class MavinPlayerModule : Module() {
             }
         }
 
-        // FIX 1: Position ticks — read ExoPlayer state on its own applicationLooper.
-        //
-        // The previous code used withContext(Dispatchers.Main) which ran on the
-        // Android main thread. ExoPlayer's verifyApplicationThread() rejected this
-        // because the player was created on 'mqt_v_js' (the React Native JS thread)
-        // and that thread's looper became the player's applicationLooper.
-        //
-        // suspendReadExoState() posts to exoPlayer.applicationLooper directly, so
-        // the read always happens on the correct thread regardless of which
-        // coroutine dispatcher is currently active.
+        // Position ticks — read ExoPlayer state on the main thread (where it was built).
         playerScope.launch {
             player.onExoPlayerEvent.collectLatest { (exoPlayer, _) ->
                 try {
-                    val state = suspendReadExoState(exoPlayer as androidx.media3.exoplayer.ExoPlayer)
+                    val exo = exoPlayer as androidx.media3.exoplayer.ExoPlayer
+                    val (position, duration, buffered) = withContext(Dispatchers.Main) {
+                        Triple(
+                            exo.currentPosition.toDouble(),
+                            exo.duration.coerceAtLeast(0L).toDouble(),
+                            exo.bufferedPercentage
+                        )
+                    }
                     sendEvent("onPositionChanged", mapOf(
-                        "position"        to state.position,
-                        "duration"        to state.duration,
-                        "bufferedPercent" to state.buffered
+                        "position"        to position,
+                        "duration"        to duration,
+                        "bufferedPercent" to buffered
                     ))
                 } catch (e: Exception) {
                     Log.w(TAG, "observeNewPlayer: failed to read ExoPlayer state: ${e.message}")
