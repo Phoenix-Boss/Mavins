@@ -2,6 +2,7 @@ package expo.modules.mavinplayer
 
 import android.app.Activity
 import android.util.Log
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.CoroutineScope
@@ -9,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import net.newpipe.newplayer.NewPlayer
 import net.newpipe.newplayer.NewPlayerImpl
@@ -20,21 +20,40 @@ import net.newpipe.newplayer.service.NewPlayerService
 //
 // ExoPlayer must be created AND accessed on the Android main thread (Looper.main).
 //
-// expo-modules calls OnCreate / OnDestroy and AsyncFunction lambdas from the
-// React Native JS thread ('mqt_v_js'). If prepare() — which triggers
-// ExoPlayer.Builder.build() — runs there, ExoPlayer records mqt_v_js as its
-// applicationLooper, then rejects every subsequent call from Dispatchers.Main
-// with "Player is accessed on the wrong thread".
+// expo-modules-core calls OnCreate / OnDestroy and AsyncFunction lambdas on a
+// background thread ('expo.modules.AsyncFunctionQueue'). NewPlayerImpl has NO
+// internal thread-switching — its entire public API (play, pause, prepare,
+// playStream, etc.) assumes the caller is already on the main thread, because
+// its own playerScope is Dispatchers.Main.
 //
-// Fix: initializePlayer() launches prepare() via playerScope (Dispatchers.Main),
-// ensuring ExoPlayer is constructed on the Android main thread. All subsequent
-// observer coroutines and AsyncFunction calls that touch ExoPlayer go through
-// withContext(Dispatchers.Main) — the idiomatic pattern used by NewPlayerImpl
-// itself for all of its ExoPlayer interactions.
+// ── Official solution (docs.expo.dev/modules/module-api) ─────────────────────
 //
-// No Handler, no applicationLooper lookups needed.
-// NOTE: AsyncFunction lambdas are NOT suspend, so withContext() inside them must
-// be bridged via runBlocking { withContext(Dispatchers.Main) { ... } }.
+// Option A — .runOnQueue(Queues.MAIN)
+//   Makes the entire AsyncFunction body run on the Android main thread.
+//   Used by expo's own first-party modules (expo-navigation-bar, expo-system-ui).
+//   Best for fire-and-forget calls: play, pause, seekTo, loadAndPlay, etc.
+//
+//     AsyncFunction("play") { newPlayer?.play() }.runOnQueue(Queues.MAIN)
+//
+// Option B — AsyncFunction("name") Coroutine { ... }
+//   Runs the body as a suspend function in the module's coroutine scope.
+//   withContext(Dispatchers.Main) { ... } is valid inside.
+//   Best when you need to return a computed value from ExoPlayer (getState).
+//
+//     AsyncFunction("getState") Coroutine {
+//         withContext(Dispatchers.Main) { mapOf(...) }
+//     }
+//
+// NEVER use runBlocking { withContext(Dispatchers.Main) { ... } }:
+//   Blocks AsyncFunctionQueue while waiting for the main thread, which can
+//   deadlock if the main thread is dispatching back to the same queue.
+//
+// ─── ExoPlayer construction thread ───────────────────────────────────────────
+//
+// initializePlayer() launches prepare() via playerScope (Dispatchers.Main) so
+// ExoPlayer is built on the main thread and records it as its applicationLooper.
+// All .runOnQueue(Queues.MAIN) calls and withContext(Dispatchers.Main) blocks
+// then satisfy ExoPlayer's verifyApplicationThread() check.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -43,7 +62,6 @@ private const val TAG = "MavinPlayerModule"
 class MavinPlayerModule : Module() {
 
     private var newPlayer: NewPlayer? = null
-    // FIX 3: SupervisorJob() so individual observer failures don't cancel the scope.
     private val playerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentVideoId: String? = null
     private var currentPlayMode: PlayMode = PlayMode.FULLSCREEN_AUDIO
@@ -60,7 +78,6 @@ class MavinPlayerModule : Module() {
             currentExoPlayer = player
         }
     }
-
 
     override fun definition() = ModuleDefinition {
 
@@ -110,86 +127,94 @@ class MavinPlayerModule : Module() {
         }
 
         // ── PRIMARY ENTRY POINT — loadAndPlay ─────────────────────────────────
+        //
+        // .runOnQueue(Queues.MAIN) ensures the entire lambda runs on the Android
+        // main thread. NewPlayerImpl.playStream() dispatches internally via its
+        // own Dispatchers.Main playerScope, so it must be called from main thread.
 
         AsyncFunction("loadAndPlay") { videoId: String, dashUrl: String?, hlsUrl: String?,
                                        progressiveUrl: String?, httpContext: PlayerHttpContext? ->
             ensurePlayerInitialized()
             loadAndPlayInternal(videoId, dashUrl, hlsUrl, progressiveUrl,
                 httpContext, PlayMode.FULLSCREEN_AUDIO)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("loadAndPlayVideo") { videoId: String, dashUrl: String?, hlsUrl: String?,
                                             progressiveUrl: String?, httpContext: PlayerHttpContext? ->
             ensurePlayerInitialized()
             loadAndPlayInternal(videoId, dashUrl, hlsUrl, progressiveUrl,
                 httpContext, PlayMode.FULLSCREEN_VIDEO)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         // ── Legacy playStream ─────────────────────────────────────────────────
 
         AsyncFunction("playStream") { videoId: String ->
             ensurePlayerInitialized()
             playStreamInternal(videoId, PlayMode.FULLSCREEN_AUDIO)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("playStreamEmbedded") { videoId: String ->
             ensurePlayerInitialized()
             playStreamInternal(videoId, PlayMode.EMBEDDED_AUDIO)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("playStreamVideo") { videoId: String ->
             ensurePlayerInitialized()
             playStreamInternal(videoId, PlayMode.FULLSCREEN_VIDEO)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         // ── Core playback controls ────────────────────────────────────────────
+        //
+        // Each AsyncFunction runs on Queues.MAIN. NewPlayerImpl.play/pause/prepare
+        // call ExoPlayer directly without any internal thread switch — they require
+        // the caller to already be on the main thread.
 
         AsyncFunction("play") {
             newPlayer?.play()
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("pause") {
             newPlayer?.pause()
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("prepare") {
             newPlayer?.prepare()
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("release") {
             releasePlayer()
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("seekTo") { positionMs: Int ->
             newPlayer?.currentPosition = positionMs.toLong()
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         // ── Queue management ──────────────────────────────────────────────────
 
         AsyncFunction("addToPlaylist") { videoId: String ->
             newPlayer?.addToPlaylist(videoId)
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("removeFromPlaylist") { uniqueId: Int ->
             newPlayer?.removePlaylistItem(uniqueId.toLong())
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("movePlaylistItem") { fromIndex: Int, toIndex: Int ->
             newPlayer?.movePlaylistItem(fromIndex, toIndex)
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("skipToPlaylistItem") { index: Int ->
             newPlayer?.currentlyPlayingPlaylistItem = index
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         // ── Settings ──────────────────────────────────────────────────────────
 
@@ -202,23 +227,18 @@ class MavinPlayerModule : Module() {
             }
             newPlayer?.repeatMode = repeatMode
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("setShuffle") { enabled: Boolean ->
             newPlayer?.shuffle = enabled
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("setPlaybackSpeed") { speed: Float ->
-            // ExoPlayer must be called from the main thread. AsyncFunction lambdas are
-            // NOT suspend, so we bridge to a coroutine via runBlocking and then switch
-            // to Dispatchers.Main for the actual ExoPlayer call.
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
-            if (exo != null) {
-                runBlocking { withContext(Dispatchers.Main) { exo.setPlaybackSpeed(speed) } }
-            }
+            exo?.setPlaybackSpeed(speed)
             mapOf("success" to true)
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("selectChapter") { index: Int ->
             try {
@@ -227,37 +247,38 @@ class MavinPlayerModule : Module() {
             } catch (e: IndexOutOfBoundsException) {
                 mapOf("success" to false, "error" to e.message)
             }
-        }
+        }.runOnQueue(Queues.MAIN)
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // AsyncFunction lambdas are NOT suspend. ExoPlayer state reads must happen
-        // on Dispatchers.Main (the thread ExoPlayer was constructed on). Bridge via
-        // runBlocking { withContext(Dispatchers.Main) { ... } }.
+        // getState reads multiple ExoPlayer properties, so we use the Coroutine
+        // body form (Option B) with withContext(Dispatchers.Main) rather than
+        // .runOnQueue(Queues.MAIN). Both are correct; this form avoids tying up
+        // the main thread for the duration of a potentially heavier read.
+        //
+        // Syntax: AsyncFunction("name") Coroutine { ... }
+        // — runs in the module's coroutine scope
+        // — withContext(Dispatchers.Main) is valid here because it IS a suspend fn
 
-        AsyncFunction("getState") {
+        AsyncFunction("getState") Coroutine {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                // AsyncFunction lambdas are NOT suspend. Bridge to coroutine via runBlocking,
-                // then switch to Dispatchers.Main to satisfy ExoPlayer.verifyApplicationThread().
-                runBlocking {
-                    withContext(Dispatchers.Main) {
-                        mapOf(
-                            "isPlaying"       to exo.isPlaying,
-                            "position"        to exo.currentPosition.toDouble(),
-                            "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
-                            "bufferedPercent" to exo.bufferedPercentage,
-                            "playMode"        to currentPlayMode.name,
-                            "repeatMode"      to when (newPlayer?.repeatMode) {
-                                net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
-                                net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
-                                net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
-                                else                                                 -> "off"
-                            },
-                            "shuffle"         to (newPlayer?.shuffle ?: false),
-                            "currentItem"     to (currentVideoId ?: "")
-                        )
-                    }
+                withContext(Dispatchers.Main) {
+                    mapOf(
+                        "isPlaying"       to exo.isPlaying,
+                        "position"        to exo.currentPosition.toDouble(),
+                        "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
+                        "bufferedPercent" to exo.bufferedPercentage,
+                        "playMode"        to currentPlayMode.name,
+                        "repeatMode"      to when (newPlayer?.repeatMode) {
+                            net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
+                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
+                            else                                                 -> "off"
+                        },
+                        "shuffle"         to (newPlayer?.shuffle ?: false),
+                        "currentItem"     to (currentVideoId ?: "")
+                    )
                 }
             } else {
                 mapOf(
