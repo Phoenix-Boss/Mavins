@@ -103,21 +103,21 @@ class MavinPlayerModule : Module() {
         // The JS side must use requireNativeViewManager('MavinPlayer_MavinPlayerVideoView').
 
         View(MavinPlayerVideoView::class) {
+            // Events MUST be declared here inside the View() block so the JS bridge
+            // can build the view config. The name of each event must exactly match
+            // the EventDispatcher property name declared in MavinPlayerVideoView.
+            // Without this, requireNativeViewManager produces:
+            //   "Unable to get the view config for MavinPlayer_MavinPlayerVideoView"
+            // because the bridge has no event registration to query.
+            // Ref: docs.expo.dev/modules/module-api/#events (view-bound events section)
+            Events("onFirstFrameRender", "onPictureInPictureStart", "onPictureInPictureStop")
+
             Prop("contentFit") { view: MavinPlayerVideoView, value: String ->
                 view.setContentFit(value)
             }
             Prop("allowsPictureInPicture") { view: MavinPlayerVideoView, value: Boolean ->
                 view.setAllowsPictureInPicture(value)
             }
-            // NOTE: No Events() call here. The three EventDispatcher fields on
-            // MavinPlayerVideoView (onFirstFrameRender, onPictureInPictureStart,
-            // onPictureInPictureStop) are discovered automatically by expo-modules-core
-            // via reflection when this View() block is processed. An explicit Events()
-            // call alongside EventDispatcher fields collides with the module-level
-            // Events() block, causing NativeViewManagerAdapter to mis-report the view
-            // config to the JS bridge — producing:
-            //   "Unable to get the view config for MavinPlayer_MavinPlayerVideoView
-            //    from module default view"
         }
 
         // ── PRIMARY ENTRY POINT — loadAndPlay ─────────────────────────────────
@@ -305,8 +305,49 @@ class MavinPlayerModule : Module() {
                 return
             }
 
+            // ── OkHttpClient with YouTube Range-header interceptor ────────────
+            //
+            // YouTube CDN for progressive streams rejects the standard HTTP
+            // Range: header that ExoPlayer sends by default. It requires the
+            // byte range as a `range=` query parameter instead.
+            //
+            // This interceptor intercepts every outgoing request that targets
+            // googlevideo.com (YouTube's CDN domain) and rewrites:
+            //   Range: bytes=X-Y   →   removed
+            //   URL query param    →   &range=X-Y appended
+            //
+            // DASH and HLS manifests are not affected — they use their own
+            // segment URLs which already embed range information. Only
+            // progressive stream fetches (isDashOrHls=false in the repository)
+            // carry a bare Range: header from ExoPlayer's DefaultHttpDataSource.
+            //
+            // References:
+            //   https://github.com/google/ExoPlayer/issues/5762
+            //   YouTube CDN enforces range-as-query-param for non-adaptive streams.
             val okHttpClient = okhttp3.OkHttpClient.Builder()
                 .cookieJar(okhttp3.CookieJar.NO_COOKIES)
+                .addInterceptor { chain ->
+                    val original = chain.request()
+                    val rangeHeader = original.header("Range")
+                    val isYoutubeCdn = original.url.host.contains("googlevideo.com")
+
+                    if (rangeHeader != null && isYoutubeCdn) {
+                        // Range header format: "bytes=X-Y" or "bytes=X-"
+                        // Strip the "bytes=" prefix to get the raw range value.
+                        val rangeValue = rangeHeader.removePrefix("bytes=")
+                        val newUrl = original.url.newBuilder()
+                            .addQueryParameter("range", rangeValue)
+                            .build()
+                        val newRequest = original.newBuilder()
+                            .url(newUrl)
+                            .removeHeader("Range")
+                            .build()
+                        Log.d(TAG, "Range interceptor: rewrote Range: $rangeHeader → range=$rangeValue for ${newUrl.host}")
+                        chain.proceed(newRequest)
+                    } else {
+                        chain.proceed(original)
+                    }
+                }
                 .build()
 
             val repo = MavinMediaRepository(appContext, okHttpClient)
@@ -323,8 +364,17 @@ class MavinPlayerModule : Module() {
                 app = application,
                 playerActivityClass = playerActivityClass,
                 repository = repo,
-                rescueStreamFault = { item, _, exception, _ ->
-                    Log.e(TAG, "Stream fault for item=$item: ${exception.message}")
+                rescueStreamFault = { item, mediaItem, exception, _ ->
+                    // Surface the full exception chain so we can see the exact
+                    // HTTP status, codec error, or URI that ExoPlayer failed on.
+                    val rootCause = generateSequence(exception as Throwable) { it.cause }
+                        .lastOrNull() ?: exception
+                    val uri = mediaItem?.localConfiguration?.uri?.toString()?.take(120)
+                    Log.e(TAG, "rescueStreamFault: item=$item" +
+                        "\n  exceptionClass=${exception.javaClass.simpleName}" +
+                        "\n  message=${exception.message}" +
+                        "\n  rootCause=${rootCause.javaClass.simpleName}: ${rootCause.message}" +
+                        "\n  uri=$uri")
                     net.newpipe.newplayer.logic.NoResponse()
                 }
             )

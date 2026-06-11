@@ -872,7 +872,9 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       artist: song.artist,
       thumbnail: song.thumbnail,
       duration: duration > 0 ? duration : undefined,
-      videoId: song.videoId,
+      // song.videoId may be undefined for queue items built without it.
+      // info.id is the canonical video ID returned by NewPipeExtractor — always present.
+      videoId: song.videoId || info.id || videoId || undefined,
       isDownloaded: false,
       isLocal: false,
       videoOnlyUrl: videoProgressiveUrl ?? undefined,
@@ -1013,7 +1015,8 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
         artist: song.artist,
         thumbnail: song.thumbnail,
         duration: duration > 0 ? duration : undefined,
-        videoId: song.videoId,
+        // Use the video ID we found during search if song.videoId was missing.
+        videoId: song.videoId || foundVideoId || info.id || undefined,
         isDownloaded: false,
         isLocal: false,
         videoOnlyUrl: videoProgressiveUrl ?? undefined,
@@ -1376,6 +1379,10 @@ initAppStateHandler();
 
 // NewPlayer event listeners setup
 let newPlayerListenersInitialized = false;
+// Bounded retry counter for PlaybackException re-resolve cycles.
+// Reset to 0 on every successful loadAndPlay. Capped at 1 so a broken
+// progressive URL doesn't loop forever.
+let newPlayerErrorRetryCount = 0;
 
 function initNewPlayerListeners() {
   if (newPlayerListenersInitialized) return;
@@ -1424,14 +1431,78 @@ function initNewPlayerListeners() {
     notifySessionChange();
   });
 
-  // Listen for errors
+  // Listen for errors — bounded re-resolve retry on PlaybackException.
+  //
+  // When ExoPlayer fails (most commonly: progressive URL 403, codec error,
+  // or network timeout), rescueStreamFault fires NoResponse which surfaces
+  // here as an onError event. We get one retry: re-resolve the current track
+  // with a fresh visitor data refresh, then call loadAndPlay again with the
+  // new URLs. If the retry also fails, or if this isn't a retryable error,
+  // we clear loading state and stop.
   MavinPlayer.onError((event) => {
     console.error('[MusicPlayer] NewPlayer error:', event.message);
     setSession('lastError', event.message);
-    setSession('isLoading', false);
-    setSession('isResolving', false);
-    setSession('optimisticPlaying', null);
-    notifySessionChange();
+
+    const isPlaybackException =
+      event.message?.includes('Playback Exception') ||
+      event.message?.includes('rescueStreamFault') ||
+      event.message?.includes('HttpDataSourceException') ||
+      event.message?.includes('Unable to connect') ||
+      event.message?.includes('Response code: 403') ||
+      event.message?.includes('Response code: 404');
+
+    const track = session.currentTrack;
+    const canRetry =
+      isPlaybackException &&
+      newPlayerErrorRetryCount < CONFIG.MAX_PLAYBACK_ERROR_RETRIES &&
+      track !== null &&
+      !isLocalTrack(track);
+
+    if (canRetry) {
+      newPlayerErrorRetryCount++;
+      const retryGeneration = session.playGeneration;
+      console.warn(
+        `[MusicPlayer] PlaybackException — re-resolving with fresh visitor data (attempt ${newPlayerErrorRetryCount})`,
+      );
+
+      // Re-resolve on a microtask so we don't block the event callback.
+      Promise.resolve()
+        .then(() => MavinEngine.refreshVisitorData().catch(() => {}))
+        .then(() => resolveTrack(track!, /* bypassCache= */ true))
+        .then(async (resolved) => {
+          // Generation guard: abort if a newer track started while we resolved.
+          if (!resolved || !resolved.videoId || retryGeneration !== session.playGeneration) {
+            console.log('[MusicPlayer] Retry resolve abandoned (stale generation or no result)');
+            setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: null });
+            return;
+          }
+          console.log('[MusicPlayer] Retry resolve succeeded, calling loadAndPlay again');
+          const result = await MavinPlayer.loadAndPlay(
+            resolved.videoId,
+            resolved.dashManifestUrl  ?? null,
+            resolved.hlsManifestUrl   ?? null,
+            (!resolved.dashManifestUrl && !resolved.hlsManifestUrl) ? (resolved.url ?? null) : null,
+            resolved.httpContext ?? null,
+          );
+          if (result?.success) {
+            console.log('[MusicPlayer] Retry loadAndPlay succeeded');
+            setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
+          } else {
+            console.error('[MusicPlayer] Retry loadAndPlay returned false');
+            setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: null });
+          }
+        })
+        .catch((err) => {
+          console.error('[MusicPlayer] Retry resolve/play failed:', err?.message ?? err);
+          setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: null });
+        });
+    } else {
+      newPlayerErrorRetryCount = 0;
+      setSession('isLoading', false);
+      setSession('isResolving', false);
+      setSession('optimisticPlaying', null);
+      notifySessionChange();
+    }
   });
 
   // Listen for playlist changes
@@ -1659,6 +1730,19 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       return false;
     }
 
+    // Back-fill videoId onto the queue entry if it was missing.
+    // Queue items built from search results or playlist responses often lack videoId.
+    // Patching the queue now means skipToNext/skipToPrevious will find it populated.
+    if (!enrichedSong.videoId && resolved.videoId) {
+      enrichedSong = { ...enrichedSong, videoId: resolved.videoId };
+      const idx = session.queueIndex;
+      if (idx >= 0 && session.queue[idx]?.id === enrichedSong.id) {
+        const updatedQueue = [...session.queue];
+        updatedQueue[idx] = enrichedSong;
+        setSession('queue', updatedQueue);
+      }
+    }
+
     setSessionPartial({
       hasVideoStream: resolved.hasVideo,
       isAudioOnlyTrack: resolved.isAudioOnly,
@@ -1708,6 +1792,9 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
       }
 
       console.log('[MusicPlayer] MavinPlayer.loadAndPlay succeeded for:', resolved.videoId);
+
+      // Reset the playback-error retry counter — this track loaded cleanly.
+      newPlayerErrorRetryCount = 0;
 
       if (session.playbackRate !== 1.0) {
         await MavinPlayer.setPlaybackSpeed(session.playbackRate).catch(() => {});
