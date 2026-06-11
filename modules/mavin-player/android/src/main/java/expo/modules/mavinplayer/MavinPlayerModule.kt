@@ -28,32 +28,26 @@ import net.newpipe.newplayer.service.NewPlayerService
 //
 // ── Official solution (docs.expo.dev/modules/module-api) ─────────────────────
 //
-// Option A — .runOnQueue(Queues.MAIN)
+// .runOnQueue(Queues.MAIN)
 //   Makes the entire AsyncFunction body run on the Android main thread.
 //   Used by expo's own first-party modules (expo-navigation-bar, expo-system-ui).
-//   Best for fire-and-forget calls: play, pause, seekTo, loadAndPlay, etc.
+//   This is the correct pattern for all AsyncFunctions that touch NewPlayer/ExoPlayer.
 //
 //     AsyncFunction("play") { newPlayer?.play() }.runOnQueue(Queues.MAIN)
 //
-// Option B — AsyncFunction("name") Coroutine { ... }
-//   Runs the body as a suspend function in the module's coroutine scope.
-//   withContext(Dispatchers.Main) { ... } is valid inside.
-//   Best when you need to return a computed value from ExoPlayer (getState).
+// NOTE: The Coroutine infix DSL (AsyncFunction("name") Coroutine { ... }) is
+// documented but causes "Unresolved reference: Coroutine" in expo-modules-core
+// 3.0.29 — see https://github.com/expo/expo/issues/31277. Do not use it.
 //
-//     AsyncFunction("getState") Coroutine {
-//         withContext(Dispatchers.Main) { mapOf(...) }
-//     }
-//
-// NEVER use runBlocking { withContext(Dispatchers.Main) { ... } }:
-//   Blocks AsyncFunctionQueue while waiting for the main thread, which can
-//   deadlock if the main thread is dispatching back to the same queue.
+// NOTE: runBlocking { withContext(Dispatchers.Main) { ... } } is also WRONG —
+// it can deadlock if the main thread tries to post back to AsyncFunctionQueue.
 //
 // ─── ExoPlayer construction thread ───────────────────────────────────────────
 //
 // initializePlayer() launches prepare() via playerScope (Dispatchers.Main) so
 // ExoPlayer is built on the main thread and records it as its applicationLooper.
-// All .runOnQueue(Queues.MAIN) calls and withContext(Dispatchers.Main) blocks
-// then satisfy ExoPlayer's verifyApplicationThread() check.
+// All .runOnQueue(Queues.MAIN) lambda bodies then satisfy
+// ExoPlayer's verifyApplicationThread() check.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -251,35 +245,32 @@ class MavinPlayerModule : Module() {
 
         // ── State ─────────────────────────────────────────────────────────────
         //
-        // getState reads multiple ExoPlayer properties, so we use the Coroutine
-        // body form (Option B) with withContext(Dispatchers.Main) rather than
-        // .runOnQueue(Queues.MAIN). Both are correct; this form avoids tying up
-        // the main thread for the duration of a potentially heavier read.
-        //
-        // Syntax: AsyncFunction("name") Coroutine { ... }
-        // — runs in the module's coroutine scope
-        // — withContext(Dispatchers.Main) is valid here because it IS a suspend fn
+        // .runOnQueue(Queues.MAIN) makes the entire lambda run on the Android
+        // main thread, satisfying ExoPlayer.verifyApplicationThread() for all
+        // property reads. The Coroutine infix DSL requires an explicit import
+        // that is not in scope in this version of expo-modules-core (3.0.29) —
+        // see https://github.com/expo/expo/issues/31277. .runOnQueue(Queues.MAIN)
+        // is the correct and fully supported solution for all thread-sensitive
+        // AsyncFunctions in this version.
 
-        AsyncFunction("getState") Coroutine {
+        AsyncFunction("getState") {
             val exo = newPlayer?.exoPlayer?.value as? androidx.media3.exoplayer.ExoPlayer
             if (exo != null) {
-                withContext(Dispatchers.Main) {
-                    mapOf(
-                        "isPlaying"       to exo.isPlaying,
-                        "position"        to exo.currentPosition.toDouble(),
-                        "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
-                        "bufferedPercent" to exo.bufferedPercentage,
-                        "playMode"        to currentPlayMode.name,
-                        "repeatMode"      to when (newPlayer?.repeatMode) {
-                            net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
-                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
-                            net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
-                            else                                                 -> "off"
-                        },
-                        "shuffle"         to (newPlayer?.shuffle ?: false),
-                        "currentItem"     to (currentVideoId ?: "")
-                    )
-                }
+                mapOf(
+                    "isPlaying"       to exo.isPlaying,
+                    "position"        to exo.currentPosition.toDouble(),
+                    "duration"        to exo.duration.coerceAtLeast(0L).toDouble(),
+                    "bufferedPercent" to exo.bufferedPercentage,
+                    "playMode"        to currentPlayMode.name,
+                    "repeatMode"      to when (newPlayer?.repeatMode) {
+                        net.newpipe.newplayer.data.RepeatMode.DO_NOT_REPEAT -> "off"
+                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ONE    -> "one"
+                        net.newpipe.newplayer.data.RepeatMode.REPEAT_ALL    -> "all"
+                        else                                                 -> "off"
+                    },
+                    "shuffle"         to (newPlayer?.shuffle ?: false),
+                    "currentItem"     to (currentVideoId ?: "")
+                )
             } else {
                 mapOf(
                     "isPlaying"       to false,
@@ -292,7 +283,7 @@ class MavinPlayerModule : Module() {
                     "currentItem"     to (currentVideoId ?: "")
                 )
             }
-        }
+        }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("isInitialized") {
             mapOf("initialized" to (newPlayer != null))
