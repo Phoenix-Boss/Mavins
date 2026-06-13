@@ -1,7 +1,7 @@
 // app.config.js
 //
 // FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
-// FIX 2: Added expo-audio plugin with enableBackgroundAudio
+// FIX 2: Removed expo-audio plugin (uninstalled — background audio handled by expo-media-control)
 // FIX 3: Removed extraMavenRepos jitpack — pawns SDK now bundled as local AAR in modules/pawns/android/libs/
 
 const IS_DEV = process.env.APP_VARIANT === "development";
@@ -111,13 +111,6 @@ module.exports = {
       {
         supportsBackgroundPlayback: true,
         supportsPictureInPicture: true,
-      },
-    ],
-
-    [
-      "expo-audio",
-      {
-        enableBackgroundAudio: true,
       },
     ],
 

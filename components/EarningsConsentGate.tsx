@@ -461,7 +461,7 @@ export function EarningsConsentGate({
       onRequestClose={handleDismiss}
       statusBarTranslucent
     >
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: isDark ? 'rgba(0,0,0,0.72)' : 'rgba(0,0,0,0.55)' }]}>
         <View
           style={[
             styles.card,
@@ -603,6 +603,7 @@ export function EarningsConsentGate({
               style={[
                 styles.acceptButton,
                 {
+                  shadowColor:     isDark ? '#000' : colors.gold,
                   backgroundColor: consentGiven && !isLoading
                     ? colors.gold
                     : dimmedGold,
@@ -652,7 +653,6 @@ const styles = StyleSheet.create({
   // ── Full-screen overlay
   overlay: {
     flex:              1,
-    backgroundColor:   'rgba(0,0,0,0.72)',
     justifyContent:    'center',
     alignItems:        'center',
     paddingHorizontal: 16,
@@ -828,7 +828,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius:    12,
     elevation:       2,
-    shadowColor:     '#000',
     shadowOffset:    { width: 0, height: 1 },
     shadowOpacity:   0.12,
     shadowRadius:    4,
