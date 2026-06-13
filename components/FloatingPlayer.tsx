@@ -282,7 +282,7 @@ export default function FloatingPlayer() {
             style={styles.controlButton}
           >
             <MaterialIcons
-              name={engine.repeatMode === 'off' ? 'repeat-off' : engine.repeatMode === 'all' ? 'repeat' : 'repeat-on'}
+              name={engine.repeatMode === 'one' ? 'repeat-one' : 'repeat'}
               size={moderateScale(18)}
               color={engine.repeatMode === 'off' ? colors.textMuted : colors.gold}
             />

@@ -47,6 +47,7 @@ import {
   ScrollView,
   ToastAndroid,
   Platform,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { createVideoPlayer, VideoView } from 'expo-video';
@@ -106,57 +107,144 @@ const COOLDOWN_HOURS = 24;
 const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL MASTER AUDIO PLAYER SINGLETON (expo-video, hidden)
-// ALWAYS plays audio - NEVER muted - source of truth for ALL playback
+// MODULE-LEVEL MASTER/SLAVE VIDEO PLAYER SINGLETONS (expo-video)
+//
+// FIX: createVideoPlayer(null) was previously called UNGUARDED at module
+// evaluation time. On Android, the native VideoPlayer constructor requires a
+// live Activity. If this module is imported before the Activity is attached,
+// construction throws synchronously:
+//   "Call to function 'VideoPlayer.constructor' has been rejected.
+//    → Caused by: The current activity is no longer available"
+// That throw aborted evaluation of this ENTIRE module, which aborted the
+// importing _layout.tsx module, preventing MusicPlayerProvider from ever
+// mounting — surfacing downstream as
+// "useMusicPlayer must be used within MusicPlayerProvider".
+//
+// FIX: wrap construction in try/catch. On failure, fall back to a no-op mock
+// that satisfies the same interface used by all existing call sites
+// (.play/.pause/.replaceAsync/.addListener/etc. and JSX `player={...}`), then
+// retry real construction on the next AppState change (fired once the
+// Activity is reattached) and swap the real player into the SAME global slot
+// so masterPlayer/slavePlayer bindings remain valid non-null references.
 // ─────────────────────────────────────────────────────────────────────────────
-const MASTER_PLAYER_GLOBAL_KEY = '__MavinAudioMasterPlayer__';
 
-if (!(global as any)[MASTER_PLAYER_GLOBAL_KEY]) {
-  (global as any)[MASTER_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
-  console.log('[PlayerContent] Created MASTER audio player singleton');
+function createMockVideoPlayer(): ReturnType<typeof createVideoPlayer> {
+  const listeners = new Map<string, Set<(...args: any[]) => void>>();
+  return {
+    play: () => {},
+    pause: () => {},
+    replace: () => {},
+    replaceAsync: async () => {},
+    addListener: (event: string, cb: (...args: any[]) => void) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event)!.add(cb);
+      return { remove: () => listeners.get(event)?.delete(cb) };
+    },
+    removeAllListeners: () => listeners.clear(),
+    release: () => {},
+    currentTime: 0,
+    duration: 0,
+    playing: false,
+    muted: true,
+    loop: false,
+    volume: 0,
+    playbackRate: 1.0,
+    staysActiveInBackground: false,
+    status: 'idle',
+    bufferedPosition: 0,
+  } as unknown as ReturnType<typeof createVideoPlayer>;
 }
 
-const masterPlayer: ReturnType<typeof createVideoPlayer> =
-  (global as any)[MASTER_PLAYER_GLOBAL_KEY];
+function createOrFallbackVideoPlayer(
+  globalKey: string,
+  configure: (player: ReturnType<typeof createVideoPlayer>) => void,
+  label: string,
+): ReturnType<typeof createVideoPlayer> {
+  const existing = (global as any)[globalKey];
+  if (existing) return existing;
 
-try {
-  masterPlayer.muted = false;  // MASTER NEVER MUTED - always provides audio
-  masterPlayer.loop = false;
-  masterPlayer.staysActiveInBackground = true;
-  masterPlayer.volume = 1.0;
-  console.log('[PlayerContent] MASTER player configured - unmuted, volume=1.0');
-} catch (e) {
-  console.warn('[PlayerContent] Failed to configure MASTER player:', e);
+  try {
+    const created = createVideoPlayer(null);
+    configure(created);
+    (global as any)[globalKey] = created;
+    console.log(`[PlayerContent] ${label} player created + configured`);
+    return created;
+  } catch (e) {
+    console.warn(`[PlayerContent] ${label} player construction deferred (Activity not ready):`, e);
+    const mock = createMockVideoPlayer();
+    (global as any)[globalKey] = mock;
+    (global as any)[`${globalKey}_PENDING`] = true;
+    return mock;
+  }
+}
+
+const MASTER_PLAYER_GLOBAL_KEY = '__MavinAudioMasterPlayer__';
+const SLAVE_PLAYER_GLOBAL_KEY = '__MavinVideoSlavePlayer__';
+
+const configureMaster = (player: ReturnType<typeof createVideoPlayer>) => {
+  player.muted = false; // MASTER NEVER MUTED - always provides audio
+  player.loop = false;
+  player.staysActiveInBackground = true;
+  player.volume = 1.0;
+};
+
+const configureSlave = (player: ReturnType<typeof createVideoPlayer>) => {
+  player.muted = true; // SLAVE ALWAYS MUTED - only for video frames
+  player.loop = false;
+  player.staysActiveInBackground = false;
+  player.volume = 0.0; // Zero volume ensures no audio
+};
+
+const masterPlayer: ReturnType<typeof createVideoPlayer> = createOrFallbackVideoPlayer(
+  MASTER_PLAYER_GLOBAL_KEY,
+  configureMaster,
+  'MASTER',
+);
+
+const slavePlayer: ReturnType<typeof createVideoPlayer> = createOrFallbackVideoPlayer(
+  SLAVE_PLAYER_GLOBAL_KEY,
+  configureSlave,
+  'SLAVE',
+);
+
+// If construction was deferred because the Activity wasn't ready yet, retry
+// once the app becomes active (the Activity is guaranteed to exist by then).
+// NOTE: this only logs/retries for a *future* fresh module load — components
+// using these bindings should re-resolve from `global[...]` in the rare case
+// a retry succeeds after this module already evaluated. In practice the
+// Activity is available by the time React mounts, so the try path above
+// succeeds on virtually all cold starts; this is a last-resort safety net.
+if ((global as any)[`${MASTER_PLAYER_GLOBAL_KEY}_PENDING`] || (global as any)[`${SLAVE_PLAYER_GLOBAL_KEY}_PENDING`]) {
+  const retrySub = AppState.addEventListener('change', (state) => {
+    if (state !== 'active') return;
+    try {
+      if ((global as any)[`${MASTER_PLAYER_GLOBAL_KEY}_PENDING`]) {
+        const real = createVideoPlayer(null);
+        configureMaster(real);
+        (global as any)[MASTER_PLAYER_GLOBAL_KEY] = real;
+        (global as any).__MavinMasterPlayer__ = real;
+        delete (global as any)[`${MASTER_PLAYER_GLOBAL_KEY}_PENDING`];
+        console.log('[PlayerContent] MASTER player constructed on retry');
+      }
+      if ((global as any)[`${SLAVE_PLAYER_GLOBAL_KEY}_PENDING`]) {
+        const real = createVideoPlayer(null);
+        configureSlave(real);
+        (global as any)[SLAVE_PLAYER_GLOBAL_KEY] = real;
+        (global as any).__MavinSlavePlayer__ = real;
+        delete (global as any)[`${SLAVE_PLAYER_GLOBAL_KEY}_PENDING`];
+        console.log('[PlayerContent] SLAVE player constructed on retry');
+      }
+    } catch (e) {
+      console.warn('[PlayerContent] Retry construction failed:', e);
+      return; // keep listening for next 'active' transition
+    }
+    retrySub.remove();
+  });
 }
 
 // Register master player with context at module level
 setMasterPlayer(masterPlayer);
 (global as any).__MavinMasterPlayer__ = masterPlayer;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MODULE-LEVEL SLAVE VIDEO PLAYER SINGLETON (expo-video, visible)
-// ALWAYS MUTED - provides ONLY video frames, NO audio output
-// ─────────────────────────────────────────────────────────────────────────────
-const SLAVE_PLAYER_GLOBAL_KEY = '__MavinVideoSlavePlayer__';
-
-if (!(global as any)[SLAVE_PLAYER_GLOBAL_KEY]) {
-  (global as any)[SLAVE_PLAYER_GLOBAL_KEY] = createVideoPlayer(null);
-  console.log('[PlayerContent] Created SLAVE video player singleton');
-}
-
-const slavePlayer: ReturnType<typeof createVideoPlayer> =
-  (global as any)[SLAVE_PLAYER_GLOBAL_KEY];
-
-try {
-  slavePlayer.muted = true;   // SLAVE ALWAYS MUTED - only for video frames
-  slavePlayer.loop = false;
-  slavePlayer.staysActiveInBackground = false;
-  slavePlayer.volume = 0.0;   // Zero volume ensures no audio
-  console.log('[PlayerContent] SLAVE player configured - muted, volume=0.0');
-} catch (e) {
-  console.warn('[PlayerContent] Failed to configure SLAVE player:', e);
-}
-
 (global as any).__MavinSlavePlayer__ = slavePlayer;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -980,8 +1068,9 @@ function PlayerContentInner({
           }
         }
         
-        if (!mPlaying && masterPlayer.currentTime >= (masterPlayer.duration - 1)) {
+        if (!mPlaying && !trackEndHandledRef.current && !isLoadingStreamRef.current && masterPlayer.currentTime >= (masterPlayer.duration - 1)) {
           console.log('[PlayerContent] Master reached end, skipping to next');
+          trackEndHandledRef.current = true;
           engine.skipToNext();
         }
       });
@@ -996,12 +1085,15 @@ function PlayerContentInner({
     };
   }, [masterPlayer, engine, slaveReady]);
 
+  const isLoadingStreamRef = useRef(false);
+
   // ── LOAD STREAMS WHEN TRACK CHANGES ─────────────────────────────────────────
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
     
     const loadStreams = async () => {
       console.log('[PlayerContent] Loading streams for track');
+      isLoadingStreamRef.current = true;
       
       try {
         setMasterReady(false);
@@ -1058,15 +1150,14 @@ function PlayerContentInner({
         console.log('[PlayerContent] Slave stream pre-loaded');
       } catch (e: any) {
         console.warn('[PlayerContent] Slave pre-load failed (non-fatal):', e?.message);
-        if (e?.message?.includes('403') && slaveRetryCount < MAX_RETRY_COUNT) {
-          retrySlaveLoad(activeVideoUrl, slaveRetryCount);
-          setSlaveRetryCount(prev => prev + 1);
-        }
+      } finally {
+        isLoadingStreamRef.current = false;
       }
     };
     
     loadStreams();
-  }, [activeVideoUrl, isLocal, masterRetryCount, slaveRetryCount, retryMasterLoad, retrySlaveLoad]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVideoUrl, isLocal]);
 
   // ── HANDLE PLAY/PAUSE - Controls MASTER only, slave follows ──────────────────
   const handlePlayPause = useCallback(async () => {

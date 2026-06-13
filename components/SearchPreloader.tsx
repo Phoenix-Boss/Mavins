@@ -68,7 +68,7 @@ export function SearchPreloader() {
     setLoading, 
     hasAnyData, 
     isDataFresh,
-    clearAllData
+    reset: clearAllData
   } = useSearchStore();
 
   useEffect(() => {

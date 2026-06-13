@@ -1,52 +1,60 @@
 // components/player/ShareSheet.tsx
 //
-// Spotify/BandLab-grade share sheet overlay
-// Features:
-//   • Slide-up bottom sheet with spring animation + swipe-to-dismiss
-//   • Song preview card (artwork + title + artist)
-//   • Theme selector — coloured gradient swatches (like Spotify share)
-//   • Caption text editor with character count (like BandLab)
-//   • Share-to row: WhatsApp, Telegram, X, Instagram, Copy Link, More
-//   • Haptic feedback on every interaction
-//   • Fully theme-aware (light/dark via useTheme)
+// Premium portrait-modal share sheet
+// — "Portrait in a portrait": outer card = blurred art bg, inner card floats
+// — Artist name + smart title displayed at TOP of outer card (like cover art)
+// — Long mixtape titles auto-collapse to "Mixtape"
+// — No caption pill, no pen icon
+// — Share targets as a flat bottom tab row (single row, evenly spaced) with labels
+// — MAVIN-PLAYER branding bottom-right with music note icon
+// — Theme picker: static always-visible vertical swatch column (frosted-glass panel)
+//   floating on the card's right edge — no toggle, no slide animation.
+//
+// ZERO RE-RENDER THEME SWITCHING:
+//   All 10 tint overlays are pre-rendered as stacked Animated.Views on mount.
+//   Each has its own Animated.Value (opacity). Switching themes calls
+//   `.setValue()` imperatively on those values — the native layer updates
+//   opacity without React ever scheduling a re-render. The card content
+//   (artwork, text, branding) never unmounts or re-renders on theme change.
+//
+// ANIMATION FIX:
+//   Sheet reliably slides in from the bottom on first render with visible=true.
+//   useLayoutEffect resets translateY/backdropOp synchronously before paint.
 
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import {
   Animated,
   Dimensions,
-  KeyboardAvoidingView,
   Linking,
   Modal,
-  PanResponder,
   Platform,
-  ScrollView,
+  Pressable,
   Share,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableOpacity,
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters/extend';
 
 import { triggerHaptic } from '@/helpers/haptics';
-import { useTheme } from '@/contexts/ThemeContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
-
 export interface ShareSheetProps {
   visible: boolean;
   onClose: () => void;
@@ -62,108 +70,269 @@ export interface ShareSheetProps {
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
+const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_HEIGHT * 0.82;
-const DISMISS_THRESHOLD = SHEET_HEIGHT * 0.18;
-const SNAP_DURATION = 300;
-const CAPTION_MAX = 280;
+const OUTER_CARD_W = SCREEN_W - scale(32);
+const OUTER_CARD_H = OUTER_CARD_W * (4 / 3.0);
 
-// Theme swatches — gradient pairs for the card preview background
-interface ThemeSwatch {
-  key: string;
-  colors: [string, string, ...string[]];
-  label: string;
+const INNER_CARD_W = OUTER_CARD_W * 0.72;
+const INNER_CARD_H = INNER_CARD_W * 1.25;
+
+const ARTWORK_SIZE = INNER_CARD_W * 0.85;
+
+const ICON_SIZE = scale(46);
+
+const MIXTAPE_CHAR_LIMIT = 40;
+
+const SNAP_MS = 320;
+
+const MAX_SHEET_H = SCREEN_H * 0.94;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function smartTitle(title: string): string {
+  return title.length > MIXTAPE_CHAR_LIMIT ? 'Mixtape' : title;
 }
 
-const THEME_SWATCHES: ThemeSwatch[] = [
-  { key: 'midnight', colors: ['#0f0c29', '#302b63', '#24243e'], label: 'Midnight' },
-  { key: 'ember',    colors: ['#232526', '#414345'],             label: 'Carbon' },
-  { key: 'gold',     colors: ['#5c3d0f', '#c8862a', '#7b4f12'], label: 'Gold' },
-  { key: 'ocean',    colors: ['#0f2027', '#203a43', '#2c5364'], label: 'Ocean' },
-  { key: 'rose',     colors: ['#3a0d20', '#b5294e', '#3a0d20'], label: 'Rose' },
-  { key: 'forest',   colors: ['#0a2118', '#1e5631', '#0a2118'], label: 'Forest' },
-  { key: 'violet',   colors: ['#1a0533', '#6c1fa3', '#1a0533'], label: 'Violet' },
+// ─────────────────────────────────────────────────────────────────────────────
+// SWATCH DEFINITIONS  (10 total)
+// ─────────────────────────────────────────────────────────────────────────────
+interface ThemeSwatch {
+  key: string;
+  /** Color shown as the circular dot in the swatch column */
+  dotColors: [string, string, ...string[]];
+  /** rgba tint overlaid on the blurred artwork — used in SwatchTintStack */
+  tint: string;
+  /** Gradient colours for the outer card background fallback (no thumbnail) */
+  bgColors: [string, string, ...string[]];
+}
+
+const SWATCHES: ThemeSwatch[] = [
+  // ── Original 8 ────────────────────────────────────────────────────────────
+  {
+    key: 'natural',
+    dotColors:  ['#1a1a2e', '#16213e'],
+    tint:       'rgba(0,0,0,0.18)',
+    bgColors:   ['#1a1a2e', '#16213e'],
+  },
+  {
+    key: 'midnight',
+    dotColors:  ['#0f0c29', '#302b63', '#24243e'],
+    tint:       'rgba(15,12,41,0.55)',
+    bgColors:   ['#0f0c29', '#302b63', '#24243e'],
+  },
+  {
+    key: 'carbon',
+    dotColors:  ['#1a1a1a', '#2d2d2d'],
+    tint:       'rgba(10,10,10,0.60)',
+    bgColors:   ['#1a1a1a', '#2d2d2d'],
+  },
+  {
+    key: 'gold',
+    dotColors:  ['#3d2300', '#b06820', '#3d2300'],
+    tint:       'rgba(61,35,0,0.52)',
+    bgColors:   ['#3d2300', '#b06820', '#3d2300'],
+  },
+  {
+    key: 'ocean',
+    dotColors:  ['#071929', '#1a3a4a', '#0d2e40'],
+    tint:       'rgba(7,25,41,0.55)',
+    bgColors:   ['#071929', '#1a3a4a', '#0d2e40'],
+  },
+  {
+    key: 'rose',
+    dotColors:  ['#280a16', '#9e1f40', '#280a16'],
+    tint:       'rgba(40,10,22,0.55)',
+    bgColors:   ['#280a16', '#9e1f40', '#280a16'],
+  },
+  {
+    key: 'forest',
+    dotColors:  ['#071410', '#164d24', '#071410'],
+    tint:       'rgba(7,20,16,0.55)',
+    bgColors:   ['#071410', '#164d24', '#071410'],
+  },
+  {
+    key: 'violet',
+    dotColors:  ['#12032a', '#5a189a', '#12032a'],
+    tint:       'rgba(18,3,42,0.55)',
+    bgColors:   ['#12032a', '#5a189a', '#12032a'],
+  },
+
+  // ── New #9: B&W Old-School ─────────────────────────────────────────────────
+  // Monochrome silver-to-charcoal gradient with a sepia-tinged overlay —
+  // evokes classic vinyl sleeve aesthetics and silver-gelatin photography.
+  {
+    key: 'oldschool',
+    dotColors:  ['#e8e0d0', '#7a7060', '#2a2420'],
+    tint:       'rgba(20,16,10,0.62)',
+    bgColors:   ['#e8e0d0', '#7a7060', '#2a2420'],
+  },
+
+  // ── New #10: Neon Noir Cinematic ───────────────────────────────────────────
+  // A vibe that doesn't exist in mainstream apps: deep wet-asphalt black
+  // shot through with magenta-to-cyan underglow — think rain-slicked alley
+  // neon reflections in a city that never sleeps. The tint is a near-opaque
+  // magenta-purple with just enough transparency to let blurred art breathe.
+  {
+    key: 'neonnoir',
+    dotColors:  ['#0a001a', '#8b005d', '#00d4ff'],
+    tint:       'rgba(90,0,60,0.48)',
+    bgColors:   ['#0a001a', '#3d0040', '#001833'],
+  },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ICON COMPONENTS
-// ─────────────────────────────────────────────────────────────────────────────
+// Pre-build a fast key→swatch lookup
+const SWATCH_MAP = new Map<string, ThemeSwatch>(SWATCHES.map(s => [s.key, s]));
 
-const ICON_SIZE = scale(50);
+// ─────────────────────────────────────────────────────────────────────────────
+// SWATCH TINT STACK
+// Pre-renders all 10 tint overlays at mount. Only the active one has opacity 1;
+// the rest are 0. Switching is done imperatively via Animated.Value.setValue()
+// on the native driver — React never re-renders.
+// ─────────────────────────────────────────────────────────────────────────────
+interface SwatchTintStackProps {
+  /** Ref map: key → Animated.Value (opacity). Created once in parent. */
+  animMap: Map<string, Animated.Value>;
+}
 
-function IconCircle({ bg, children }: { bg: string; children: React.ReactNode }) {
+function SwatchTintStack({ animMap }: SwatchTintStackProps) {
   return (
-    <View style={[iconStyles.circle, { backgroundColor: bg, width: ICON_SIZE, height: ICON_SIZE, borderRadius: ICON_SIZE / 2 }]}>
+    <>
+      {SWATCHES.map(sw => (
+        <Animated.View
+          key={sw.key}
+          style={[
+            StyleSheet.absoluteFillObject,
+            { backgroundColor: sw.tint, opacity: animMap.get(sw.key) },
+          ]}
+          pointerEvents="none"
+        />
+      ))}
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ICON CIRCLE
+// ─────────────────────────────────────────────────────────────────────────────
+function IconCircle({
+  bg,
+  children,
+  border,
+}: {
+  bg: string;
+  children: React.ReactNode;
+  border?: boolean;
+}) {
+  return (
+    <View style={[iconCircleStyles.wrap, { backgroundColor: bg }, border && iconCircleStyles.border]}>
       {children}
     </View>
   );
 }
 
-const iconStyles = StyleSheet.create({
-  circle: { alignItems: 'center', justifyContent: 'center' },
+const iconCircleStyles = StyleSheet.create({
+  wrap: {
+    width: ICON_SIZE,
+    height: ICON_SIZE,
+    borderRadius: ICON_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  border: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARE TARGET ITEM
+// SHARE TARGET
 // ─────────────────────────────────────────────────────────────────────────────
+function ShareTarget({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+}) {
+  // Both scale and opacity are Animated.Values on the native driver.
+  // No useState, no JS re-render on press — the native layer responds instantly.
+  const scaleAnim   = useRef(new Animated.Value(1)).current;
+  const opacityAnim = useRef(new Animated.Value(1)).current;
 
-function ShareTargetItem({
-  icon, label, onPress,
-}: { icon: React.ReactNode; label: string; onPress: () => void }) {
-  const scale_ = useRef(new Animated.Value(1)).current;
+  const handlePressIn = useCallback(() => {
+    triggerHaptic('light');
+    Animated.parallel([
+      Animated.spring(scaleAnim,   { toValue: 0.82, useNativeDriver: true, speed: 50, bounciness: 2 }),
+      Animated.timing(opacityAnim, { toValue: 0.7,  useNativeDriver: true, duration: 60 }),
+    ]).start();
+  }, []);
+
+  const handlePressOut = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scaleAnim,   { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }),
+      Animated.timing(opacityAnim, { toValue: 1, useNativeDriver: true, duration: 100 }),
+    ]).start();
+  }, []);
 
   return (
-    <Animated.View style={{ transform: [{ scale: scale_ }] }}>
-      <TouchableOpacity
-        style={targetStyles.wrapper}
-        activeOpacity={1}
-        onPress={onPress}
-        onPressIn={() =>
-          Animated.spring(scale_, { toValue: 0.87, useNativeDriver: true, speed: 30, bounciness: 6 }).start()
-        }
-        onPressOut={() =>
-          Animated.spring(scale_, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 10 }).start()
-        }
-      >
+    <Pressable
+      style={shareTargetStyles.wrap}
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true, radius: ICON_SIZE }}
+    >
+      <Animated.View style={{ transform: [{ scale: scaleAnim }], opacity: opacityAnim }}>
         {icon}
-        <Text style={targetStyles.label} numberOfLines={1}>{label}</Text>
-      </TouchableOpacity>
-    </Animated.View>
+      </Animated.View>
+      <Text style={shareTargetStyles.label} numberOfLines={1}>{label}</Text>
+    </Pressable>
   );
 }
 
-const targetStyles = StyleSheet.create({
-  wrapper: { alignItems: 'center', gap: verticalScale(6), width: scale(58) },
+const shareTargetStyles = StyleSheet.create({
+  wrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: verticalScale(6),
+    flex: 1,
+    paddingVertical: verticalScale(4),
+  },
   label: {
-    color: 'rgba(255,255,255,0.65)',
-    fontSize: moderateScale(10.5),
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: moderateScale(10),
     fontWeight: '500',
     textAlign: 'center',
-    letterSpacing: 0.1,
+    marginTop: verticalScale(2),
   },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COPY TOAST
 // ─────────────────────────────────────────────────────────────────────────────
-
 function CopyToast({ visible }: { visible: boolean }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-
+  const op = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (visible) {
       Animated.sequence([
-        Animated.timing(opacity, { toValue: 1, duration: 160, useNativeDriver: true }),
-        Animated.delay(1400),
-        Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: true }),
+        Animated.timing(op, { toValue: 1, duration: 150, useNativeDriver: true }),
+        Animated.delay(1300),
+        Animated.timing(op, { toValue: 0, duration: 250, useNativeDriver: true }),
       ]).start();
     }
   }, [visible]);
-
   return (
-    <Animated.View style={[toastStyles.wrap, { opacity }]} pointerEvents="none">
-      <Ionicons name="checkmark-circle" size={moderateScale(15)} color="#4ADE80" />
+    <Animated.View style={[toastStyles.wrap, { opacity: op }]} pointerEvents="none">
+      <Ionicons name="checkmark-circle" size={moderateScale(13)} color="#4ADE80" />
       <Text style={toastStyles.text}>Link copied</Text>
     </Animated.View>
   );
@@ -172,663 +341,554 @@ function CopyToast({ visible }: { visible: boolean }) {
 const toastStyles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    bottom: verticalScale(20),
+    bottom: verticalScale(100),
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: scale(6),
-    backgroundColor: 'rgba(20,20,20,0.94)',
-    paddingHorizontal: scale(16),
-    paddingVertical: verticalScale(9),
-    borderRadius: moderateScale(22),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(12,12,14,0.96)',
+    paddingHorizontal: scale(14),
+    paddingVertical: verticalScale(7),
+    borderRadius: moderateScale(20),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.1)',
+    zIndex: 20,
   },
-  text: { color: '#fff', fontSize: moderateScale(13), fontWeight: '600' },
+  text: { color: '#fff', fontSize: moderateScale(11), fontWeight: '600' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SONG PREVIEW CARD  (shown inside the selected gradient theme)
+// THEME SWATCH COLUMN
+// Static frosted-glass panel, always visible. 10 swatches.
 // ─────────────────────────────────────────────────────────────────────────────
+const SWATCH_D = scale(24); // slightly smaller to fit 10 in column comfortably
 
-function SongPreviewCard({
-  track,
-  themeSwatch,
-  caption,
-}: {
-  track: ShareSheetProps['track'];
-  themeSwatch: ThemeSwatch;
-  caption: string;
-}) {
-  return (
-    <LinearGradient
-      colors={themeSwatch.colors}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={previewStyles.card}
-    >
-      {/* Artwork */}
-      <View style={previewStyles.artworkWrap}>
-        {track.thumbnail ? (
-          <Image
-            source={{ uri: track.thumbnail }}
-            style={previewStyles.artwork}
-            contentFit="cover"
-          />
-        ) : (
-          <View style={[previewStyles.artwork, previewStyles.artworkFallback]}>
-            <Ionicons name="musical-notes" size={moderateScale(32)} color="rgba(255,255,255,0.4)" />
-          </View>
-        )}
-        {/* Glass border on artwork */}
-        <View style={previewStyles.artworkBorder} pointerEvents="none" />
-      </View>
-
-      {/* Track info */}
-      <Text style={previewStyles.title} numberOfLines={2}>{track.title}</Text>
-      {!!track.artist && (
-        <Text style={previewStyles.artist} numberOfLines={1}>{track.artist}</Text>
-      )}
-
-      {/* Caption preview */}
-      {!!caption && (
-        <Text style={previewStyles.caption} numberOfLines={3}>{caption}</Text>
-      )}
-
-      {/* Branding pill */}
-      <View style={previewStyles.brandPill}>
-        <Ionicons name="musical-note" size={moderateScale(10)} color="rgba(255,255,255,0.7)" />
-        <Text style={previewStyles.brandText}>Mavin</Text>
-      </View>
-    </LinearGradient>
-  );
-}
-
-const CARD_W = SCREEN_WIDTH - scale(40);
-const CARD_H = CARD_W * 0.72;
-
-const previewStyles = StyleSheet.create({
-  card: {
-    width: CARD_W,
-    height: CARD_H,
-    borderRadius: moderateScale(18),
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: scale(16),
-    overflow: 'hidden',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
-  },
-  artworkWrap: {
-    position: 'relative',
-    borderRadius: moderateScale(12),
-    overflow: 'hidden',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    marginBottom: verticalScale(10),
-  },
-  artwork: {
-    width: scale(80),
-    height: scale(80),
-    borderRadius: moderateScale(12),
-  },
-  artworkFallback: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  artworkBorder: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderRadius: moderateScale(12),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-  },
-  title: {
-    color: '#fff',
-    fontSize: moderateScale(15),
-    fontWeight: '700',
-    textAlign: 'center',
-    letterSpacing: -0.2,
-    lineHeight: moderateScale(20),
-  },
-  artist: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: moderateScale(12),
-    fontWeight: '500',
-    textAlign: 'center',
-    marginTop: verticalScale(3),
-  },
-  caption: {
-    color: 'rgba(255,255,255,0.82)',
-    fontSize: moderateScale(11),
-    fontWeight: '400',
-    textAlign: 'center',
-    marginTop: verticalScale(8),
-    lineHeight: moderateScale(16),
-    fontStyle: 'italic',
-  },
-  brandPill: {
-    position: 'absolute',
-    bottom: scale(10),
-    right: scale(12),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: scale(3),
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    paddingHorizontal: scale(8),
-    paddingVertical: verticalScale(3),
-    borderRadius: scale(20),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-  brandText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: moderateScale(9),
-    fontWeight: '600',
-    letterSpacing: 0.4,
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// THEME SWATCH PICKER
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ThemePicker({
+function ThemeSwatchColumn({
   selected,
   onSelect,
-}: { selected: string; onSelect: (key: string) => void }) {
+}: {
+  selected: string;
+  onSelect: (k: string) => void;
+}) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={swatchStyles.row}
-    >
-      {THEME_SWATCHES.map(sw => (
-        <TouchableOpacity
-          key={sw.key}
-          onPress={() => { triggerHaptic(); onSelect(sw.key); }}
-          activeOpacity={0.8}
-          style={swatchStyles.item}
-        >
-          <LinearGradient
-            colors={sw.colors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[
-              swatchStyles.swatch,
-              selected === sw.key && swatchStyles.swatchSelected,
-            ]}
-          />
-          <Text style={[
-            swatchStyles.label,
-            selected === sw.key && swatchStyles.labelSelected,
-          ]}>
-            {sw.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
+    <View style={sidePanelStyles.panelShadowWrap}>
+      <BlurView intensity={42} tint="dark" style={sidePanelStyles.panel}>
+        <View style={sidePanelStyles.panelTint} pointerEvents="none" />
+        <View style={sidePanelStyles.panelRim} pointerEvents="none" />
+        <View style={sidePanelStyles.column}>
+          {SWATCHES.map(sw => {
+            const isActive = selected === sw.key;
+            return (
+              <Pressable
+                key={sw.key}
+                onPress={() => { triggerHaptic('light'); onSelect(sw.key); }}
+                hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+                style={({ pressed }) => [
+                  sidePanelStyles.dotWrap,
+                  pressed && sidePanelStyles.dotWrapPressed,
+                ]}
+              >
+                <LinearGradient
+                  colors={sw.dotColors}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[
+                    sidePanelStyles.dot,
+                    isActive && sidePanelStyles.dotActive,
+                  ]}
+                />
+              </Pressable>
+            );
+          })}
+        </View>
+      </BlurView>
+    </View>
   );
 }
 
-const swatchStyles = StyleSheet.create({
-  row: { paddingHorizontal: scale(20), gap: scale(12), alignItems: 'center' },
-  item: { alignItems: 'center', gap: verticalScale(5) },
-  swatch: {
-    width: scale(38),
-    height: scale(38),
-    borderRadius: scale(10),
+const sidePanelStyles = StyleSheet.create({
+  panelShadowWrap: {
+    position: 'absolute',
+    right: scale(2),
+    top: '50%',
+    // Panel height ≈ 10*(SWATCH_D + 4px padding*2) + 9 gaps*8 + 20 vert padding
+    // ≈ 10*32 + 72 + 20 = 412 scaled → -206 margin
+    marginTop: -scale(206),
+    zIndex: 11,
+    borderRadius: scale(20),
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 11,
+  },
+  panel: {
+    borderRadius: scale(20),
+    overflow: 'hidden',
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(7),
+  },
+  panelTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  panelRim: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: scale(20),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+  } as any,
+  column: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: scale(8),
+  },
+  dotWrap: {
+    padding: scale(2),
+    borderRadius: SWATCH_D / 2 + scale(2),
+  },
+  dotWrapPressed: {
+    transform: [{ scale: 0.88 }],
+    opacity: 0.7,
+  },
+  dot: {
+    width: SWATCH_D,
+    height: SWATCH_D,
+    borderRadius: SWATCH_D / 2,
     borderWidth: 2,
-    borderColor: 'transparent',
+    borderColor: 'rgba(255,255,255,0.18)',
   },
-  swatchSelected: {
-    borderColor: '#fff',
+  dotActive: {
+    borderColor: '#ffffff',
     transform: [{ scale: 1.12 }],
-  },
-  label: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: moderateScale(9),
-    fontWeight: '500',
-  },
-  labelSelected: {
-    color: '#fff',
-    fontWeight: '700',
+    shadowColor: '#fff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 8,
   },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN COMPONENT
+// PREVIEW CARD
+// Receives `animMap` — the pre-built opacity Animated.Value map for all tints.
+// SwatchTintStack is rendered inside the card; switching themes never causes
+// this component to re-render because selectedKey doesn't flow into it.
 // ─────────────────────────────────────────────────────────────────────────────
+interface PreviewCardProps {
+  track: ShareSheetProps['track'];
+  animMap: Map<string, Animated.Value>;
+}
 
+const PreviewCard = React.memo(function PreviewCard({ track, animMap }: PreviewCardProps) {
+  const displayTitle = smartTitle(track.title);
+  const artist = track.artist ?? '';
+
+  return (
+    <View style={outerCardStyles.card}>
+
+      {/* Blurred artwork background */}
+      {track.thumbnail ? (
+        <Image
+          source={{ uri: track.thumbnail }}
+          style={StyleSheet.absoluteFillObject}
+          contentFit="cover"
+          blurRadius={26}
+        />
+      ) : (
+        <View style={[StyleSheet.absoluteFillObject, outerCardStyles.fallbackBg]} />
+      )}
+
+      {/* All 10 tint overlays pre-rendered — only active one has opacity 1 */}
+      <SwatchTintStack animMap={animMap} />
+
+      {/* Cinematic vignette */}
+      <LinearGradient
+        colors={['rgba(0,0,0,0.72)', 'rgba(0,0,0,0.18)', 'rgba(0,0,0,0.18)', 'rgba(0,0,0,0.72)']}
+        locations={[0, 0.28, 0.68, 1]}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+
+      {/* TOP TEXT: artist + title */}
+      <View style={outerCardStyles.topTextBlock}>
+        {artist.length > 0 && (
+          <Text style={outerCardStyles.artistText} numberOfLines={1}>
+            {artist.toUpperCase()}
+          </Text>
+        )}
+        <Text style={outerCardStyles.titleText} numberOfLines={2} adjustsFontSizeToFit>
+          {displayTitle}
+        </Text>
+        <View style={outerCardStyles.titleRule} />
+      </View>
+
+      {/* INNER CARD: floating frosted art frame */}
+      <View style={innerCardStyles.card}>
+        <BlurView intensity={16} tint="dark" style={StyleSheet.absoluteFillObject} />
+        <View style={[StyleSheet.absoluteFillObject, innerCardStyles.glassOverlay]} pointerEvents="none" />
+        <View style={[StyleSheet.absoluteFillObject, innerCardStyles.glassRim]} pointerEvents="none" />
+        <LinearGradient
+          colors={['rgba(255,255,255,0.10)', 'transparent']}
+          style={innerCardStyles.topGloss}
+          pointerEvents="none"
+        />
+
+        <View style={innerCardStyles.artworkWrap}>
+          {track.thumbnail ? (
+            <Image
+              source={{ uri: track.thumbnail }}
+              style={innerCardStyles.artwork}
+              contentFit="cover"
+            />
+          ) : (
+            <View style={[innerCardStyles.artwork, innerCardStyles.artworkFallback]}>
+              <Ionicons name="musical-notes" size={moderateScale(40)} color="rgba(255,255,255,0.3)" />
+            </View>
+          )}
+          <View style={innerCardStyles.artGlassRim} pointerEvents="none" />
+          <View
+            style={[innerCardStyles.artwork, { position: 'absolute', overflow: 'hidden', borderRadius: moderateScale(14) }]}
+            pointerEvents="none"
+          >
+            <LinearGradient
+              colors={['rgba(255,255,255,0.13)', 'transparent']}
+              style={{ height: '40%', width: '100%' }}
+            />
+          </View>
+        </View>
+      </View>
+
+      {/* BOTTOM-RIGHT branding */}
+      <View style={outerCardStyles.brandRow}>
+        <View style={outerCardStyles.brandPill}>
+          <Text style={outerCardStyles.brandTxt}>MAVIN-PLAYER</Text>
+          <Ionicons name="musical-note" size={moderateScale(9)} color="rgba(255,255,255,0.7)" />
+        </View>
+      </View>
+    </View>
+  );
+});
+
+const outerCardStyles = StyleSheet.create({
+  card: {
+    width: OUTER_CARD_W,
+    height: OUTER_CARD_H,
+    borderRadius: moderateScale(22),
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.45,
+    shadowRadius: 22,
+    elevation: 14,
+  },
+  fallbackBg: {
+    backgroundColor: '#0f0c29',
+  },
+  topTextBlock: {
+    position: 'absolute',
+    top: scale(14),
+    left: scale(16),
+    right: scale(16),
+    alignItems: 'center',
+    gap: verticalScale(3),
+  },
+  artistText: {
+    color: 'rgba(255,255,255,0.70)',
+    fontSize: moderateScale(9.5),
+    fontWeight: '600',
+    letterSpacing: 2.5,
+    textAlign: 'center',
+  },
+  titleText: {
+    color: '#ffffff',
+    fontSize: moderateScale(18),
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    textAlign: 'center',
+    lineHeight: moderateScale(22),
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  titleRule: {
+    marginTop: verticalScale(4),
+    width: scale(36),
+    height: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 1,
+  },
+  brandRow: {
+    position: 'absolute',
+    bottom: scale(16),
+    right: scale(14),
+  },
+  brandPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(4),
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.15)',
+    borderRadius: scale(20),
+    paddingHorizontal: scale(9),
+    paddingVertical: verticalScale(4),
+  },
+  brandTxt: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: moderateScale(8),
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+});
+
+const innerCardStyles = StyleSheet.create({
+  card: {
+    width: INNER_CARD_W,
+    height: INNER_CARD_H,
+    borderRadius: moderateScale(20),
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.65,
+    shadowRadius: 28,
+  },
+  glassOverlay: {
+    backgroundColor: 'rgba(255,255,255,0.055)',
+  },
+  glassRim: {
+    borderRadius: moderateScale(20),
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  topGloss: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '30%',
+    borderTopLeftRadius: moderateScale(20),
+    borderTopRightRadius: moderateScale(20),
+  },
+  artworkWrap: {
+    elevation: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+  },
+  artwork: {
+    width: ARTWORK_SIZE,
+    height: ARTWORK_SIZE,
+    borderRadius: moderateScale(14),
+  },
+  artworkFallback: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  artGlassRim: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: moderateScale(14),
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.14)',
+  } as any,
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 export default function ShareSheet({ visible, onClose, track }: ShareSheetProps) {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
 
-  // ── Local state ───────────────────────────────────────────────────────────
-  const [caption, setCaption] = useState('');
-  const [selectedTheme, setSelectedTheme] = useState<string>(THEME_SWATCHES[0].key);
-  const [copyToastVisible, setCopyToastVisible] = useState(false);
+  // ── Theme state + imperative anim map ─────────────────────────────────────
+  // `animMap` is created once (useMemo with [] deps) — a Map of key →
+  // Animated.Value. Initial values: first swatch = 1, rest = 0.
+  // When selectedSwatch changes we call .setValue() imperatively so the
+  // native layer flips opacity without touching React's render cycle.
+  const animMap = useMemo(() => {
+    const m = new Map<string, Animated.Value>();
+    SWATCHES.forEach((sw, i) => m.set(sw.key, new Animated.Value(i === 0 ? 1 : 0)));
+    return m;
+  }, []);
 
-  const currentSwatch = THEME_SWATCHES.find(s => s.key === selectedTheme) ?? THEME_SWATCHES[0];
+  const [selectedSwatch, setSelectedSwatch] = useState(SWATCHES[0].key);
 
-  // ── Animation values ──────────────────────────────────────────────────────
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const handleSwatchSelect = useCallback((key: string) => {
+    // Flip old → 0, new → 1 imperatively (native driver, no React re-render)
+    animMap.get(selectedSwatch)?.setValue(0);
+    animMap.get(key)?.setValue(1);
+    // Update React state only for the swatch column highlight — the card
+    // itself does NOT read selectedSwatch, so it does NOT re-render.
+    setSelectedSwatch(key);
+  }, [selectedSwatch, animMap]);
 
-  // ── Shared URL / text ──────────────────────────────────────────────────────
-  const shareUrl = track.videoId
-    ? `https://www.youtube.com/watch?v=${track.videoId}`
-    : (track.url ?? '');
+  const [copyToast, setCopyToast] = useState(false);
 
-  const shareText = `${track.title}${track.artist ? ` · ${track.artist}` : ''}`;
-  const shareMessage = caption
-    ? `${caption}\n\n🎵 ${shareText}\n${shareUrl}`
-    : `🎵 ${shareText}\n\n${shareUrl}`;
+  // ── Sheet slide animation ──────────────────────────────────────────────────
+  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
+  const backdropOp = useRef(new Animated.Value(0)).current;
 
-  // ── Open / close ──────────────────────────────────────────────────────────
+  useLayoutEffect(() => {
+    if (visible) {
+      translateY.setValue(SCREEN_H);
+      backdropOp.setValue(0);
+    }
+  }, [visible]);
+
   useEffect(() => {
     if (visible) {
-      setCaption('');
-      translateY.setValue(SHEET_HEIGHT);
-      backdropOpacity.setValue(0);
       Animated.parallel([
-        Animated.spring(translateY, {
-          toValue: 0,
-          useNativeDriver: true,
-          damping: 22,
-          mass: 0.9,
-          stiffness: 200,
-        }),
-        Animated.timing(backdropOpacity, {
-          toValue: 1,
-          duration: 250,
-          useNativeDriver: true,
-        }),
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: true, damping: 24, mass: 0.95, stiffness: 240 }),
+        Animated.timing(backdropOp, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(translateY, { toValue: SCREEN_H, duration: SNAP_MS, useNativeDriver: true }),
+        Animated.timing(backdropOp, { toValue: 0, duration: SNAP_MS, useNativeDriver: true }),
       ]).start();
     }
   }, [visible]);
 
-  const dismiss = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(translateY, {
-        toValue: SHEET_HEIGHT,
-        duration: SNAP_DURATION,
-        useNativeDriver: true,
-      }),
-      Animated.timing(backdropOpacity, {
-        toValue: 0,
-        duration: SNAP_DURATION,
-        useNativeDriver: true,
-      }),
-    ]).start(() => onClose());
-  }, [onClose]);
+  const dismiss = useCallback(() => { onClose(); }, [onClose]);
 
-  // ── Swipe-down pan ────────────────────────────────────────────────────────
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 5,
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) translateY.setValue(g.dy);
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > DISMISS_THRESHOLD || g.vy > 0.6) {
-          triggerHaptic();
-          dismiss();
-        } else {
-          Animated.spring(translateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            damping: 20,
-            stiffness: 220,
-          }).start();
-        }
-      },
-    }),
-  ).current;
+  // ── Share helpers ──────────────────────────────────────────────────────────
+  const displayTitle = smartTitle(track.title);
+  const shareUrl = track.videoId
+    ? `https://www.youtube.com/watch?v=${track.videoId}`
+    : (track.url ?? '');
+  const shareMsg = `🎵 ${displayTitle}${track.artist ? ` · ${track.artist}` : ''}\n\n${shareUrl}`;
 
-  // ── Share actions ─────────────────────────────────────────────────────────
-  const openDeepLink = useCallback((url: string) => {
+  const deepLink = useCallback((url: string) => {
     triggerHaptic();
     Linking.canOpenURL(url)
-      .then(can => {
-        if (can) Linking.openURL(url);
-        else Share.share({ title: track.title, message: shareMessage });
-      })
-      .catch(() => Share.share({ title: track.title, message: shareMessage }));
-  }, [shareMessage, track.title]);
+      .then(ok => { ok ? Linking.openURL(url) : Share.share({ title: displayTitle, message: shareMsg }); })
+      .catch(() => Share.share({ title: displayTitle, message: shareMsg }));
+  }, [displayTitle, shareMsg]);
 
-  const handleWhatsApp = useCallback(() => {
-    openDeepLink(`whatsapp://send?text=${encodeURIComponent(shareMessage)}`);
-  }, [shareMessage, openDeepLink]);
+  const handleCopy      = useCallback(() => { triggerHaptic(); Clipboard.setString(shareUrl); setCopyToast(false); setTimeout(() => setCopyToast(true), 10); }, [shareUrl]);
+  const handleWhatsApp  = useCallback(() => deepLink(`whatsapp://send?text=${encodeURIComponent(shareMsg)}`), [deepLink, shareMsg]);
+  const handleTelegram  = useCallback(() => deepLink(`tg://msg?text=${encodeURIComponent(shareMsg)}`), [deepLink, shareMsg]);
+  const handleX         = useCallback(() => deepLink(`twitter://post?message=${encodeURIComponent(`${displayTitle} ${shareUrl}`)}`), [deepLink, displayTitle, shareUrl]);
+  const handleInstagram = useCallback(() => { triggerHaptic(); Linking.canOpenURL('instagram://').then(ok => { ok ? Linking.openURL('instagram://') : Share.share({ title: displayTitle, message: shareMsg }); }); }, [displayTitle, shareMsg]);
+  const handleMore      = useCallback(() => { triggerHaptic(); Share.share({ title: displayTitle, message: Platform.OS === 'android' ? shareMsg : `🎵 ${displayTitle}`, url: Platform.OS === 'ios' ? shareUrl : undefined }); }, [displayTitle, shareMsg, shareUrl]);
 
-  const handleTelegram = useCallback(() => {
-    openDeepLink(`tg://msg?text=${encodeURIComponent(shareMessage)}`);
-  }, [shareMessage, openDeepLink]);
-
-  const handleX = useCallback(() => {
-    openDeepLink(`twitter://post?message=${encodeURIComponent(`${shareText} ${shareUrl}`)}`);
-  }, [shareText, shareUrl, openDeepLink]);
-
-  const handleInstagram = useCallback(() => {
-    triggerHaptic();
-    Linking.canOpenURL('instagram://').then(can => {
-      if (can) Linking.openURL('instagram://');
-      else Share.share({ title: track.title, message: shareMessage });
-    });
-  }, [shareMessage, track.title]);
-
-  const handleCopyLink = useCallback(() => {
-    triggerHaptic();
-    Clipboard.setString(shareUrl);
-    setCopyToastVisible(false);
-    setTimeout(() => setCopyToastVisible(true), 10);
-  }, [shareUrl]);
-
-  const handleNativeShare = useCallback(() => {
-    triggerHaptic();
-    Share.share({
-      title: track.title,
-      message: Platform.OS === 'android' ? shareMessage : shareText,
-      url: Platform.OS === 'ios' ? shareUrl : undefined,
-    });
-  }, [track.title, shareMessage, shareText, shareUrl]);
-
-  // ── Sheet background ──────────────────────────────────────────────────────
-  const sheetBg = isDark ? '#0e0e0f' : '#111113';
-
-  const targets = [
-    {
-      key: 'whatsapp',
-      label: 'WhatsApp',
-      icon: <IconCircle bg="#25D366"><MaterialCommunityIcons name="whatsapp" size={ICON_SIZE * 0.52} color="#fff" /></IconCircle>,
-      onPress: handleWhatsApp,
-    },
-    {
-      key: 'telegram',
-      label: 'Telegram',
-      icon: <IconCircle bg="#2AABEE"><MaterialCommunityIcons name="send" size={ICON_SIZE * 0.46} color="#fff" /></IconCircle>,
-      onPress: handleTelegram,
-    },
-    {
-      key: 'x',
-      label: 'X',
-      icon: <IconCircle bg="#000"><MaterialCommunityIcons name="twitter" size={ICON_SIZE * 0.5} color="#fff" /></IconCircle>,
-      onPress: handleX,
-    },
-    {
-      key: 'instagram',
-      label: 'Instagram',
-      icon: <IconCircle bg="#E1306C"><MaterialCommunityIcons name="instagram" size={ICON_SIZE * 0.5} color="#fff" /></IconCircle>,
-      onPress: handleInstagram,
-    },
-    {
-      key: 'copy',
-      label: 'Copy Link',
-      icon: <IconCircle bg="rgba(255,255,255,0.12)"><Ionicons name="copy-outline" size={ICON_SIZE * 0.46} color="#fff" /></IconCircle>,
-      onPress: handleCopyLink,
-    },
-    {
-      key: 'more',
-      label: 'More',
-      icon: <IconCircle bg="rgba(255,255,255,0.12)"><Ionicons name="ellipsis-horizontal" size={ICON_SIZE * 0.46} color="#fff" /></IconCircle>,
-      onPress: handleNativeShare,
-    },
+  const TARGETS = [
+    { key: 'cp', label: 'Copy',      bg: 'rgba(255,255,255,0.08)', border: true, icon: <Ionicons name="copy-outline"          size={moderateScale(19)} color="#fff" />, onPress: handleCopy },
+    { key: 'wa', label: 'WhatsApp',  bg: '#25D366',                              icon: <MaterialCommunityIcons name="whatsapp"  size={moderateScale(21)} color="#fff" />, onPress: handleWhatsApp },
+    { key: 'tg', label: 'Telegram',  bg: '#2AABEE',                              icon: <MaterialCommunityIcons name="send"      size={moderateScale(19)} color="#fff" />, onPress: handleTelegram },
+    { key: 'x',  label: 'X',         bg: '#000000',                              icon: <MaterialCommunityIcons name="twitter"   size={moderateScale(20)} color="#fff" />, onPress: handleX },
+    { key: 'ig', label: 'Instagram', bg: '#C13584',                              icon: <MaterialCommunityIcons name="instagram" size={moderateScale(21)} color="#fff" />, onPress: handleInstagram },
+    { key: 'mo', label: 'More',      bg: 'rgba(255,255,255,0.08)', border: true, icon: <Ionicons name="ellipsis-horizontal"    size={moderateScale(19)} color="#fff" />, onPress: handleMore },
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="none"
-      onRequestClose={dismiss}
-      statusBarTranslucent
-    >
-      {/* Dim backdrop */}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={dismiss} statusBarTranslucent>
+
+      {/* Backdrop */}
       <TouchableWithoutFeedback onPress={dismiss}>
-        <Animated.View
-          style={[
-            StyleSheet.absoluteFillObject,
-            { backgroundColor: 'rgba(0,0,0,0.72)', opacity: backdropOpacity },
-          ]}
-        />
+        <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.75)', opacity: backdropOp }]} />
       </TouchableWithoutFeedback>
 
-      {/* Sheet */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={sheetStyles.kvWrapper}
-        pointerEvents="box-none"
+      {/* Portrait bottom sheet */}
+      <Animated.View
+        style={[ss.sheet, { maxHeight: MAX_SHEET_H, transform: [{ translateY }] }]}
       >
-        <Animated.View
-          style={[
-            sheetStyles.sheet,
-            {
-              backgroundColor: sheetBg,
-              paddingBottom: insets.bottom + verticalScale(10),
-              transform: [{ translateY }],
-            },
-          ]}
-        >
-          {/* Drag handle zone */}
-          <View {...panResponder.panHandlers} style={sheetStyles.handleZone}>
-            <View style={sheetStyles.handle} />
-          </View>
+        {/* Drag handle */}
+        <View style={ss.dragIndicator}>
+          <View style={ss.dragBar} />
+        </View>
 
-          {/* Header */}
-          <View style={sheetStyles.header}>
-            <Text style={sheetStyles.headerTitle}>Share</Text>
-            <TouchableOpacity onPress={dismiss} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <View style={sheetStyles.closeBtn}>
-                <Ionicons name="close" size={moderateScale(15)} color="rgba(255,255,255,0.7)" />
-              </View>
-            </TouchableOpacity>
-          </View>
+        {/* Card zone: PreviewCard (memo, never re-renders on theme switch)
+            + ThemeSwatchColumn (re-renders only for highlight update) */}
+        <View style={ss.cardZone}>
+          <PreviewCard track={track} animMap={animMap} />
+          <ThemeSwatchColumn selected={selectedSwatch} onSelect={handleSwatchSelect} />
+        </View>
 
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={sheetStyles.scrollContent}
-          >
-            {/* ── Song preview card ── */}
-            <View style={sheetStyles.cardWrapper}>
-              <SongPreviewCard
-                track={track}
-                themeSwatch={currentSwatch}
-                caption={caption}
-              />
-            </View>
+        {/* Divider */}
+        <View style={ss.divider} />
 
-            {/* ── Section: Theme ── */}
-            <View style={sheetStyles.sectionHeader}>
-              <Text style={sheetStyles.sectionLabel}>Theme</Text>
-            </View>
-            <ThemePicker selected={selectedTheme} onSelect={setSelectedTheme} />
+        {/* Share targets */}
+        <View style={[ss.tabRow, { paddingBottom: Math.max(insets.bottom, verticalScale(10)) }]}>
+          {TARGETS.map(t => (
+            <ShareTarget
+              key={t.key}
+              label={t.label}
+              onPress={t.onPress}
+              icon={
+                <IconCircle bg={t.bg} border={(t as any).border}>
+                  {t.icon}
+                </IconCircle>
+              }
+            />
+          ))}
+        </View>
 
-            {/* ── Section: Caption ── */}
-            <View style={sheetStyles.sectionHeader}>
-              <Text style={sheetStyles.sectionLabel}>Caption</Text>
-              <Text style={[
-                sheetStyles.charCount,
-                caption.length > CAPTION_MAX * 0.85 && sheetStyles.charCountWarn,
-                caption.length >= CAPTION_MAX && sheetStyles.charCountOver,
-              ]}>
-                {caption.length}/{CAPTION_MAX}
-              </Text>
-            </View>
-            <View style={sheetStyles.captionWrap}>
-              <TextInput
-                style={sheetStyles.captionInput}
-                placeholder="Add a caption…"
-                placeholderTextColor="rgba(255,255,255,0.28)"
-                multiline
-                maxLength={CAPTION_MAX}
-                value={caption}
-                onChangeText={setCaption}
-                selectionColor="rgba(255,255,255,0.5)"
-                returnKeyType="done"
-                blurOnSubmit
-              />
-            </View>
-
-            {/* ── Divider ── */}
-            <View style={sheetStyles.divider} />
-
-            {/* ── Share targets ── */}
-            <View style={sheetStyles.targetsRow}>
-              {targets.map(t => (
-                <ShareTargetItem
-                  key={t.key}
-                  icon={t.icon}
-                  label={t.label}
-                  onPress={t.onPress}
-                />
-              ))}
-            </View>
-          </ScrollView>
-
-          <CopyToast visible={copyToastVisible} />
-        </Animated.View>
-      </KeyboardAvoidingView>
+        <CopyToast visible={copyToast} />
+      </Animated.View>
     </Modal>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STYLES
+// SHEET STYLES
 // ─────────────────────────────────────────────────────────────────────────────
-
-const sheetStyles = StyleSheet.create({
-  kvWrapper: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
+const ss = StyleSheet.create({
   sheet: {
-    borderTopLeftRadius: moderateScale(24),
-    borderTopRightRadius: moderateScale(24),
-    overflow: 'hidden',
-    elevation: 28,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#0b0b0d',
+    borderTopLeftRadius: moderateScale(28),
+    borderTopRightRadius: moderateScale(28),
+    flexDirection: 'column',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    maxHeight: SHEET_HEIGHT,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 25,
+    overflow: 'hidden',
   },
-  handleZone: {
+  dragIndicator: {
+    width: '100%',
     alignItems: 'center',
-    paddingTop: verticalScale(12),
+    paddingTop: verticalScale(10),
     paddingBottom: verticalScale(4),
   },
-  handle: {
-    width: scale(36),
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+  dragBar: {
+    width: scale(38),
+    height: scale(4),
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: scale(2),
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: scale(20),
-    paddingBottom: verticalScale(12),
-    paddingTop: verticalScale(2),
-  },
-  headerTitle: {
-    color: '#fff',
-    fontSize: moderateScale(17),
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  closeBtn: {
-    width: scale(28),
-    height: scale(28),
-    borderRadius: scale(14),
-    backgroundColor: 'rgba(255,255,255,0.1)',
+  cardZone: {
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: scale(16),
+    paddingTop: verticalScale(6),
+    paddingBottom: verticalScale(10),
+    position: 'relative',
   },
-
-  scrollContent: {
-    paddingBottom: verticalScale(8),
-  },
-
-  // Song preview card
-  cardWrapper: {
-    alignItems: 'center',
-    paddingHorizontal: scale(20),
-    marginBottom: verticalScale(18),
-  },
-
-  // Section headers
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: scale(20),
-    marginBottom: verticalScale(10),
-  },
-  sectionLabel: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: moderateScale(11),
-    fontWeight: '600',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  charCount: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: moderateScale(11),
-    fontWeight: '500',
-  },
-  charCountWarn: {
-    color: '#F59E0B',
-  },
-  charCountOver: {
-    color: '#EF4444',
-  },
-
-  // Caption editor
-  captionWrap: {
-    marginHorizontal: scale(20),
-    marginBottom: verticalScale(18),
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: moderateScale(14),
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    paddingHorizontal: scale(14),
-    paddingVertical: verticalScale(10),
-    minHeight: verticalScale(72),
-  },
-  captionInput: {
-    color: '#fff',
-    fontSize: moderateScale(14),
-    fontWeight: '400',
-    lineHeight: moderateScale(20),
-    minHeight: verticalScale(52),
-    textAlignVertical: 'top',
-  },
-
-  // Divider
   divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.07)',
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
     marginHorizontal: scale(20),
-    marginBottom: verticalScale(20),
+    marginTop: verticalScale(2),
+    marginBottom: verticalScale(2),
   },
-
-  // Share targets
-  targetsRow: {
+  tabRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-around',
-    paddingHorizontal: scale(12),
-    rowGap: verticalScale(14),
-    paddingBottom: verticalScale(4),
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingHorizontal: scale(8),
+    paddingTop: verticalScale(4),
   },
 });
