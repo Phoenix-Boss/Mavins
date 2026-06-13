@@ -311,7 +311,7 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
-  const { playerMode, expandPlayer, collapsePlayer, isPlayerVisible, showPlayer } = usePlayerOverlay();
+  const { playerMode, expandPlayer, collapsePlayer, showPlayer } = usePlayerOverlay();
   const { setPlayerOverlayRefs, currentTrack } = useMusicPlayer();
 
   // Register overlay functions with MusicPlayerContext
@@ -321,19 +321,19 @@ function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
     }
   }, [setPlayerOverlayRefs, expandPlayer, collapsePlayer]);
 
-  // Auto-show mini-player when a track is loaded and player is hidden
+  // When a track loads and player is completely hidden, surface the mini-player
   useEffect(() => {
-    if (currentTrack && !isPlayerVisible) {
+    if (currentTrack && playerMode === 'hidden') {
       showPlayer();
     }
-  }, [currentTrack, isPlayerVisible, showPlayer]);
+  }, [currentTrack, playerMode, showPlayer]);
 
   return (
     <>
       {children}
-      {/* Only show FloatingPlayer when player is visible (collapsed or expanded, not hidden) */}
-      {/* The FloatingPlayer component now handles checking isPlayerVisible internally */}
-      <FloatingPlayer />
+      {/* Mini-player: visible only when playerMode === 'collapsed' */}
+      {playerMode === 'collapsed' && <FloatingPlayer />}
+      {/* Full player overlay: visible only when playerMode === 'expanded' */}
       {playerMode === 'expanded' && (
         <FullPlayerOverlay onCollapse={collapsePlayer} />
       )}

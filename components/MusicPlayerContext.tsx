@@ -399,7 +399,6 @@ const safeGetTrackStats = async (videoId: string) => {
     return await supabaseCache.getTrackStats(videoId);
   } catch (e: any) {
     if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
-      console.warn('[MusicPlayer] getTrackStats error:', e?.message);
     }
     return null;
   }
@@ -410,7 +409,6 @@ const safeSaveTrackStats = async (params: any) => {
     await supabaseCache.saveTrackStats(params);
   } catch (e: any) {
     if (!e?.message?.includes(TABLE_NOT_FOUND_MSG)) {
-      console.warn('[MusicPlayer] saveTrackStats error:', e?.message);
     }
   }
 };
@@ -613,7 +611,6 @@ async function invalidateStreamCache(trackId: string, streamType?: 'audio' | 'vi
     const { error } = await query;
     if (error) console.warn('[MusicPlayer] invalidateStreamCache error:', error?.message);
   } catch (e) {
-    console.warn('[MusicPlayer] invalidateStreamCache failed:', e);
   }
 }
 
@@ -651,7 +648,6 @@ async function cacheStreamsToSupabase(
     });
     if (error) console.warn('[MusicPlayer] stream cache write error:', error?.message);
   } catch (e) {
-    console.warn('[MusicPlayer] cacheStreamsToSupabase error:', e);
   }
 }
 
@@ -709,7 +705,6 @@ async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.n
     const isSignInRequired = errorMessage.includes('Sign in to confirm');
     
     if (isAccountTerminated) {
-      console.error(`[MusicPlayer] Account terminated for "${song.title}"`);
       setSessionPartial({ lastError: 'YouTube account terminated. Please check your connection.' });
       return null;
     }
@@ -723,13 +718,9 @@ async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.n
         await invalidateStreamCache(song.id);
         try {
           await MavinEngine.refreshVisitorData();
-          console.log('[MusicPlayer] Refreshed visitor data for retry');
         } catch (e) {}
-        console.warn(`[MusicPlayer] Parsing error on attempt ${attempt}, clearing cache and retrying`);
       } else if (isSslError) {
-        console.warn(`[MusicPlayer] SSL error on attempt ${attempt}, retrying`);
       } else if (isNetworkError) {
-        console.warn(`[MusicPlayer] Network error on attempt ${attempt}, retrying`);
       }
       
       const delayMs = CONFIG.RESOLVE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
@@ -738,7 +729,6 @@ async function resolveTrackWithRetry(song: Song, attempt = 1, startTime = Date.n
     }
     
     if (isSignInRequired) {
-      console.warn(`[MusicPlayer] Sign-in required for "${song.title}" - this video may be age-restricted`);
     }
     
     throw error;
@@ -750,37 +740,29 @@ async function getStreamInfoWithFallback(url: string, videoId?: string, songTitl
   
   if (videoId) {
     try {
-      console.log(`[MusicPlayer] Trying getStreamInfoById with videoId: ${videoId}`);
       const info = await MavinEngine.getStreamInfoById(videoId, 0);
       if (info.success) {
-        console.log(`[MusicPlayer] ✓ getStreamInfoById succeeded`);
         return info;
       }
       errors.push(`getStreamInfoById: ${info.message || 'no success'}`);
     } catch (err: any) {
       errors.push(`getStreamInfoById: ${err?.message || err}`);
-      console.warn(`[MusicPlayer] getStreamInfoById failed:`, err?.message);
     }
   }
   
   try {
-    console.log(`[MusicPlayer] Trying getStreamInfo with URL`);
     const info = await MavinEngine.getStreamInfo(url, 0);
     if (info.success) {
-      console.log(`[MusicPlayer] ✓ getStreamInfo succeeded`);
       return info;
     }
     errors.push(`getStreamInfo: ${info.message || 'no success'}`);
   } catch (err: any) {
     errors.push(`getStreamInfo: ${err?.message || err}`);
-    console.warn(`[MusicPlayer] getStreamInfo failed:`, err?.message);
   }
   
   try {
-    console.log(`[MusicPlayer] Trying getStreamInfo with serviceId 0 (explicit)`);
     const info = await MavinEngine.getStreamInfo(url, 0);
     if (info.success) {
-      console.log(`[MusicPlayer] ✓ getStreamInfo with explicit serviceId succeeded`);
       return info;
     }
   } catch (err: any) {
@@ -789,11 +771,9 @@ async function getStreamInfoWithFallback(url: string, videoId?: string, songTitl
   
   if (videoId) {
     try {
-      console.log(`[MusicPlayer] Trying getStreamInfoById with fresh visitor data`);
       await MavinEngine.refreshVisitorData();
       const info = await MavinEngine.getStreamInfoById(videoId, 0);
       if (info.success) {
-        console.log(`[MusicPlayer] ✓ getStreamInfoById with fresh visitor data succeeded`);
         return info;
       }
     } catch (err: any) {
@@ -807,7 +787,6 @@ async function getStreamInfoWithFallback(url: string, videoId?: string, songTitl
 export const resolveTrack = async (song: Song, bypassCache = false): Promise<ResolvedTrack | null> => {
   const url = song.url || '';
   if (!url) {
-    console.warn(`[MusicPlayer] Track "${song.title}" has no URL`);
     return null;
   }
 
@@ -907,7 +886,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
         };
       }
     } catch (cacheErr) {
-      console.warn(`[MusicPlayer] cache read error for "${song.title}":`, cacheErr);
     }
   }
 
@@ -925,18 +903,15 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     try {
       const visitorStatus = await MavinEngine.getVisitorDataStatus();
       if (!visitorStatus.isValid) {
-        console.log('[MusicPlayer] Visitor data invalid, refreshing before extraction');
         await MavinEngine.refreshVisitorData();
       }
     } catch (e) {
-      console.warn('[MusicPlayer] Could not check visitor data status:', e);
     }
     
     const info = await getStreamInfoWithFallback(song.url, videoId, song.title);
     
     if (!info.success) {
       if (info.error === 'ACCOUNT_TERMINATED') {
-        console.warn(`[MusicPlayer] Account terminated for "${song.title}"`);
         setSessionPartial({ lastError: 'Account terminated. Please check your connection.' });
         return null;
       }
@@ -960,14 +935,12 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     if (bestMuxed?.url) { muxedVideoUrl = bestMuxed.url; hasVideo = true; }
 
     if (!audioUrl && (videoUrl || muxedVideoUrl)) {
-      console.log(`[MusicPlayer] Video-only track detected for "${song.title}"`);
       audioUrl = muxedVideoUrl || videoUrl;
       hasAudio = true;
       isVideoOnly = true;
     }
 
     if (audioUrl && !videoUrl && !muxedVideoUrl) {
-      console.log(`[MusicPlayer] Audio-only track detected for "${song.title}"`);
       isAudioOnly = true;
       hasVideo = false;
     }
@@ -982,7 +955,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       if (lowerQualityAudio?.url) {
         audioUrl = lowerQualityAudio.url;
         hasAudio = true;
-        console.log(`[MusicPlayer] Falling back to lower quality audio for "${song.title}"`);
       }
     }
 
@@ -1004,7 +976,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       });
     }
 
-    console.log(`[MusicPlayer] Resolved track "${song.title}":`, { hasAudio, hasVideo, isAudioOnly, isVideoOnly, duration });
 
     return {
       id: song.id, url: audioUrl, title: info.title ?? song.title, artist: song.artist,
@@ -1016,7 +987,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
     };
   } catch (primaryErr: any) {
     const errorMsg = primaryErr?.message || String(primaryErr);
-    console.warn(`[MusicPlayer] primary extraction failed for "${song.title}":`, errorMsg);
     
     if (errorMsg === 'ACCOUNT_TERMINATED') {
       return null;
@@ -1037,11 +1007,9 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
 
   for (const strategy of searchStrategies) {
     try {
-      console.log(`[MusicPlayer] Search attempt: "${strategy.query}" (filter: ${strategy.filter})`);
       const searchResult = await MavinEngine.search(strategy.query, strategy.filter, undefined, 0);
       
       if (!searchResult.success || !searchResult.results?.length) {
-        console.log(`[MusicPlayer] Search returned no results`);
         continue;
       }
 
@@ -1057,11 +1025,9 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       }
       
       if (!firstStream?.url) {
-        console.log(`[MusicPlayer] No valid stream URL found`);
         continue;
       }
 
-      console.log(`[MusicPlayer] Found match: "${firstStream.name}" by ${firstStream.uploaderName}`);
 
       let foundVideoId = firstStream.url.includes('v=') 
         ? firstStream.url.split('v=')[1]?.split('&')[0]
@@ -1077,7 +1043,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       }
       
       if (!info.success) {
-        console.log(`[MusicPlayer] Stream info extraction failed for found URL`);
         continue;
       }
 
@@ -1117,7 +1082,6 @@ export const resolveTrack = async (song: Song, bypassCache = false): Promise<Res
       storeTrackExtras(song.id, { ...extras, hasAudio, hasVideo, isAudioOnly, isVideoOnly });
       cacheStreamsToSupabase(song.id, audioUrl, videoUrl, muxedVideoUrl, duration).catch(() => {});
 
-      console.log(`[MusicPlayer] ✓ Search fallback succeeded for "${song.title}"`);
 
       return {
         id: song.id, url: audioUrl, title: info.title ?? song.title, artist: song.artist,
@@ -1392,7 +1356,6 @@ let masterPlayerRef: any = null;
 
 export const setMasterPlayer = (player: any) => {
   masterPlayerRef = player;
-  console.log('[MusicPlayer] Master player registered');
 };
 
 function getMasterPlayer(): any {
@@ -1413,14 +1376,12 @@ function initAppStateHandler() {
 
   appStateSubscription = AppState.addEventListener('change', nextAppState => {
     if (nextAppState === 'background') {
-      console.log('[MusicPlayer] App backgrounding - saving state');
       saveLastPlayingState(session.currentTrack, session.videoPosition);
       saveLastActiveTab(session.videoActive ? 'video' : 'song');
       if (session.videoActive) {
         saveLastVideoPosition(session.videoPosition);
       }
     } else if (nextAppState === 'active') {
-      console.log('[MusicPlayer] App foregrounded');
     }
   });
 }
@@ -1436,7 +1397,6 @@ initAppStateHandler();
 
   if (g[RESTORE_GLOBALS.DONE_KEY]) return;
   if (g[RESTORE_GLOBALS.IN_PROGRESS_KEY]) {
-    console.log('[MusicPlayer] Clearing stale restore lock');
     g[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
   }
 
@@ -1461,7 +1421,6 @@ initAppStateHandler();
     }
 
     if (!track?.url) {
-      console.log('[MusicPlayer] Module-level restore: no saved track');
       return;
     }
 
@@ -1470,11 +1429,9 @@ initAppStateHandler();
       if (diskCached) {
         trackExtrasStore.set(track.id, diskCached);
         notifyTrackExtrasChange();
-        console.log('[MusicPlayer] Pre-loaded disk-cached metadata for restored track');
       }
     }
 
-    console.log('[MusicPlayer] Module-level restore starting:', track.title);
 
     g[RESTORE_GLOBALS.TRACK_KEY] = track;
     g[RESTORE_GLOBALS.POSITION_KEY] = savedPos;
@@ -1487,7 +1444,6 @@ initAppStateHandler();
 
     const resolved = await resolveTrack(track);
     if (!resolved?.url) {
-      console.warn('[MusicPlayer] Module-level restore: could not resolve stream URL');
       return;
     }
 
@@ -1506,15 +1462,11 @@ initAppStateHandler();
           masterPlayerRef.currentTime = savedPos;
         }
         g[RESTORE_GLOBALS.PLAYER_READY_KEY] = true;
-        console.log('[MusicPlayer] Module-level restore complete:', track.title);
       } catch (playerErr) {
-        console.warn('[MusicPlayer] Module-level restore: player load failed:', playerErr);
       }
     } else {
-      console.warn('[MusicPlayer] Module-level restore: master player not registered');
     }
   } catch (err) {
-    console.warn('[MusicPlayer] Module-level restore failed:', err);
   } finally {
     (global as any)[RESTORE_GLOBALS.DONE_KEY] = true;
     (global as any)[RESTORE_GLOBALS.IN_PROGRESS_KEY] = false;
@@ -1527,22 +1479,16 @@ initAppStateHandler();
 
 async function initializeMavinEngine() {
   try {
-    console.log('[MavinEngine] Initializing with v0.26.2 features');
     
     const visitorResult = await MavinEngine.refreshVisitorData();
-    console.log('[MavinEngine] Visitor data refresh:', visitorResult);
     
     const keyStatus = await MavinEngine.getApiKeyStatus();
-    console.log('[MavinEngine] API Key status:', keyStatus);
     
     const visitorStatus = await MavinEngine.getVisitorDataStatus();
-    console.log('[MavinEngine] Visitor data status:', visitorStatus);
     
     const config = await MavinEngine.getInnerTubeConfig();
-    console.log('[MavinEngine] InnerTube client version:', config.clientVersion);
     
   } catch (err) {
-    console.warn('[MavinEngine] Initialization warning:', err);
   }
 }
 
@@ -1554,17 +1500,14 @@ initializeMavinEngine();
 
 async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = false): Promise<boolean> {
   if (generation !== session.playGeneration) {
-    console.log('[MusicPlayer] moduleLevelLoadAndPlay skipped (stale generation)');
     return false;
   }
 
   if (!song || !song.id || !song.url) {
-    console.error('[MusicPlayer] Invalid track in moduleLevelLoadAndPlay');
     setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Invalid track' });
     return false;
   }
 
-  console.log(`[MusicPlayer] Module-level loading: "${song.title || 'Unknown'}"`);
   setSessionPartial({
     currentTrack: song,
     currentSongId: song.id,
@@ -1581,7 +1524,6 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
 
     if (isLocalTrack(song)) {
       finalUrl = normalizeLocalUri(finalUrl);
-      console.log(`[MusicPlayer] [Local] Direct playback: ${finalUrl.substring(0, 100)}...`);
       
       const master = getMasterPlayer();
       await master.replaceAsync(finalUrl);
@@ -1606,7 +1548,6 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
     releasePlaybackLock();
 
     if (!resolved || !resolved.url) {
-      console.error(`[MusicPlayer] Failed to resolve track: "${song.title}"`);
       setSessionPartial({ isLoading: false, isResolving: false, lastError: 'Failed to resolve stream' });
       return false;
     }
@@ -1620,29 +1561,23 @@ async function moduleLevelLoadAndPlay(song: Song, generation: number, isRetry = 
 
     const master = getMasterPlayer();
     
-    console.log('[MusicPlayer] Loading audio URL into master player...');
     try {
       await master.replaceAsync(finalUrl);
-      console.log('[MusicPlayer] Master player.replace() done');
     } catch (playError: any) {
       if (!isRetry && playError?.message?.includes('403')) {
-        console.log('[MusicPlayer] 403 on first play, retrying with cache bypass');
         await invalidateStreamCache(song.id);
         return moduleLevelLoadAndPlay(song, generation, true);
       }
       throw playError;
     }
 
-    console.log('[MusicPlayer] Calling master.play() — master owns AudioFocus');
     await master.play();
-    console.log('[MusicPlayer] ✅ master.play() called — audio should be playing');
     
     setSessionPartial({ isLoading: false, isResolving: false, optimisticPlaying: true });
     return true;
 
   } catch (error: any) {
     releasePlaybackLock();
-    console.error(`[MusicPlayer] Error loading track: ${error?.message || error}`);
     setSessionPartial({ isLoading: false, isResolving: false, lastError: error?.message || 'Unknown error' });
     return false;
   }
@@ -1660,7 +1595,6 @@ async function moduleLevelSkipToNext(): Promise<void> {
       master.play();
       setSession('optimisticPlaying', true);
     } catch (error) {
-      console.warn('[MusicPlayer] Failed to repeat track:', error);
     }
     return;
   }
@@ -1677,7 +1611,6 @@ async function moduleLevelSkipToNext(): Promise<void> {
     const success = await moduleLevelLoadAndPlay(firstSong, session.playGeneration);
     if (success) preloadNextTracks(currentQueue, 0, session.bgAbortController?.signal);
   } else {
-    console.log('[MusicPlayer] Queue exhausted, playback stopped');
   }
 }
 
@@ -1776,7 +1709,6 @@ function acquirePlaybackLockWithTimeout(): void {
   setPlaybackActive();
   if (playbackLockTimeout) clearTimeout(playbackLockTimeout);
   playbackLockTimeout = setTimeout(() => {
-    console.warn('[MusicPlayer] Playback lock auto-released after timeout');
     setPlaybackInactive();
   }, CONFIG.PLAYBACK_LOCK_TIMEOUT_MS);
 }
@@ -1900,22 +1832,14 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       try {
         const master = getMasterPlayer();
         if (master) {
-          const newState = {
+          setMasterState({
             isPlaying: master.playing ?? false,
             position: master.currentTime ?? 0,
             duration: master.duration ?? 0,
             isBuffering: master.isBuffering ?? false,
-          };
-          setMasterState(newState);
-          
-          if (newState.duration > 0 && session.videoDuration !== newState.duration) {
-            setSession('videoDuration', newState.duration);
-          }
-          if (newState.position !== session.videoPosition) {
-            setSession('videoPosition', newState.position);
-          }
+          });
         }
-      } catch (e) {
+      } catch {
         // Master not ready yet
       }
     }, 250);
@@ -1954,11 +1878,25 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   }, [masterState.isPlaying, optimisticPlaying]);
 
+  const _lastSaveRef = useRef(0);
+  const _positionRef = useRef(0);
+  // Keep positionRef in sync inside the polling interval — no setState, no re-render.
+  // This ref is read by the throttled save effect below so that `position` (which
+  // changes every 250 ms) is NOT a reactive dependency and cannot cause an
+  // infinite setState → re-render → setState loop.
   useEffect(() => {
-    if (currentTrack && currentTrack.url) {
-      saveLastPlayingState(currentTrack, position);
-    }
-  }, [currentTrack, position]);
+    _positionRef.current = masterState.position;
+  });
+
+  useEffect(() => {
+    if (!currentTrack?.url) return;
+    const now = Date.now();
+    if (now - _lastSaveRef.current < 5000) return;
+    _lastSaveRef.current = now;
+    saveLastPlayingState(currentTrack, _positionRef.current);
+  // `currentTrack` identity only changes when the track actually changes, so
+  // this fires at most once per track switch — never on every position tick.
+  }, [currentTrack]);
 
   useEffect(() => {
     if (isVideoActive) {
@@ -1993,7 +1931,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     if (!restoredTrack) return;
 
-    console.log(`[MusicPlayer] Syncing React state from module-level restore: "${restoredTrack.title}"`);
 
     setSessionPartial({
       currentTrack: restoredTrack,
@@ -2016,7 +1953,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (!masterState.isPlaying && masterState.duration > 0 && 
         masterState.position >= masterState.duration - 1 && !session.didHandleFinish) {
       setSession('didHandleFinish', true);
-      console.log('[MusicPlayer] Track reached end, advancing queue');
       moduleLevelSkipToNext();
     } else if (masterState.isPlaying && masterState.position < masterState.duration - 1) {
       setSession('didHandleFinish', false);
@@ -2030,7 +1966,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const setVideoActive = useCallback((active: boolean) => {
     setSession('videoActive', active);
     if (!active) {
-      console.log('[MusicPlayer] Video tab deactivated');
     }
   }, []);
 
@@ -2048,7 +1983,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const notifyVideoTrackFinished = useCallback(async () => {
     if (!session.videoActive) return;
-    console.log('[MusicPlayer] Video track finished on video tab — advancing queue');
     session.didHandleFinish = true;
     await moduleLevelSkipToNext();
   }, []);
@@ -2169,7 +2103,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
 
       } catch (error: any) {
-        console.error(`[MusicPlayer] playAudio error: ${error?.message || error}`);
         showAlert('Playback Error', `Failed to play "${songToPlay.title}".`);
         setSessionPartial({ isLoading: false, isResolving: false });
       }
@@ -2194,7 +2127,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       const insertIndex = queueIndex + 1;
       const newQueue = [...queue.slice(0, insertIndex), ...songsToAdd, ...queue.slice(insertIndex)];
       setSession('queue', newQueue);
-      console.log(`[MusicPlayer] Added ${songsToAdd.length} songs to play next`);
     },
     [queue, queueIndex],
   );
@@ -2268,7 +2200,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
           showAlert('Playback Error', `Failed to play "${songToPlay.title}"`);
         }
       } catch (error: any) {
-        console.error('[playDownloadedSong] Error:', error);
         showAlert('Playback Error', `Failed to play "${songToPlay.title}"`);
         setSessionPartial({ isLoading: false, isResolving: false });
       }
@@ -2300,13 +2231,10 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       if (willBePlaying) {
         master.play();
-        console.log('[MusicPlayer] Playing');
       } else {
         master.pause();
-        console.log('[MusicPlayer] Paused');
       }
     } catch (e) {
-      console.warn('[MusicPlayer] togglePlayPause error:', e);
     }
   }, [masterState.isPlaying, showAlert]);
 
@@ -2316,7 +2244,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       master.currentTime = positionSec;
       setSession('videoPosition', positionSec);
     } catch (e: any) {
-      console.warn(`[MusicPlayer] seekTo error: ${e?.message || e}`);
     }
   }, []);
 
@@ -2325,10 +2252,8 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const skipToIndex = useCallback(async (index: number) => {
     if (index < 0 || index >= queue.length) {
-      console.warn(`[MusicPlayer] skipToIndex: invalid index ${index}`);
       return;
     }
-    console.log(`[MusicPlayer] Skipping to index ${index}: "${queue[index].title}"`);
     setSession('queueIndex', index);
     const success = await moduleLevelLoadAndPlay(queue[index], ++session.playGeneration);
     if (success) {
@@ -2339,7 +2264,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const setRepeatMode = useCallback((mode: RepeatMode) => {
     setSession('repeatMode', mode);
     saveRepeatMode(mode);
-    console.log(`[MusicPlayer] Repeat mode: ${mode}`);
   }, []);
 
   const setShuffleMode = useCallback((mode: ShuffleMode) => {
@@ -2380,14 +2304,12 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     setSession('shuffleMode', mode);
     saveShuffleMode(mode);
-    console.log(`[MusicPlayer] Shuffle mode: ${mode}`);
   }, [shuffleMode, queue, queueIndex]);
 
   const addToQueue = useCallback((songs: Song[]) => {
     if (!songs?.length) return;
     const newQueue = [...session.queue, ...songs];
     setSession('queue', newQueue);
-    console.log(`[MusicPlayer] Added ${songs.length} songs to queue`);
   }, []);
 
   const removeFromQueue = useCallback((index: number) => {
@@ -2409,7 +2331,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     setSession('queue', newQueue);
     setSession('queueIndex', newQueueIndex);
-    console.log(`[MusicPlayer] Removed from queue at index ${index}`);
   }, []);
 
   const moveQueueItem = useCallback((fromIndex: number, toIndex: number) => {
@@ -2428,7 +2349,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
 
     setSession('queue', newQueue);
     setSession('queueIndex', newQueueIndex);
-    console.log(`[MusicPlayer] Moved queue item from ${fromIndex} to ${toIndex}`);
   }, []);
 
   const clearQueue = useCallback(() => {
@@ -2436,7 +2356,6 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setSession('queueIndex', -1);
     session.originalQueue = [];
     session.originalIndex = -1;
-    console.log('[MusicPlayer] Queue cleared');
   }, []);
 
   const setPlayerOverlayRefs = useCallback((expand: () => void, collapse: () => void) => {

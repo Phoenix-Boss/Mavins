@@ -67,7 +67,7 @@ export default function FloatingPlayer() {
   const [progress, setProgress] = useState(0);
   const progressInterval = useRef<NodeJS.Timeout | null>(null);
 
-  const { expandPlayer, isPlayerVisible } = usePlayerOverlay();
+  const { expandPlayer, playerMode } = usePlayerOverlay();
   const { setPlayerOverlayRefs } = useMusicPlayer();
   const engine = usePlayerEngine();
 
@@ -115,11 +115,10 @@ export default function FloatingPlayer() {
     setProgress(0);
   }, [track?.id]);
 
-  // Don't show mini-player when full player is expanded
-  if (isPlayerVisible) return null;
-  
-  // Don't show mini-player when no track is loaded
-  if (!track) return null;
+  // Show mini-player ONLY in 'collapsed' mode.
+  // Hidden when playerMode === 'expanded' (full player covers screen)
+  // Hidden when playerMode === 'hidden' (no track loaded yet)
+  if (playerMode !== 'collapsed') return null;
 
   const showPlayingState = isBuffering ? false : isPlaying;
 

@@ -27,10 +27,10 @@ import {
   ScrollView,
   Share,
   Platform,
+  Text,
 } from "react-native";
 import { moderateScale, scale, verticalScale } from "react-native-size-matters/extend";
 import { match } from "ts-pattern";
-import { useAudioPlayerStatus } from "expo-audio";
 
 type RepeatMode = "off" | "queue" | "track";
 
@@ -88,20 +88,32 @@ export const PlayPauseButton = ({
   isFloatingPlayer = false,
 }: PlayerButtonProps) => {
   const { togglePlayPause } = useMusicPlayer();
-  
-  const [audioPlayer, setAudioPlayer] = useState<any>(null);
-  
+
+  // Read playing state directly from the master player singleton
+  // This is the source of truth in the master-slave architecture
+  const [isActuallyPlaying, setIsActuallyPlaying] = useState(false);
+
   useEffect(() => {
-    const globalPlayer = (global as any).__MavinAudioPlayer__;
-    setAudioPlayer(globalPlayer);
+    const masterPlayer = (global as any).__MavinMasterPlayer__;
+    if (!masterPlayer) return;
+
+    // Sync initial state
+    try { setIsActuallyPlaying(masterPlayer.playing ?? false); } catch {}
+
+    let listener: any = null;
+    try {
+      listener = masterPlayer.addListener('playingChange', ({ isPlaying: mPlaying }: any) => {
+        setIsActuallyPlaying(mPlaying);
+      });
+    } catch (e) {
+      console.warn('[PlayPauseButton] Failed to add listener:', e);
+    }
+    return () => { try { listener?.remove?.(); } catch {} };
   }, []);
-  
-  const status = useAudioPlayerStatus(audioPlayer);
-  const isActuallyPlaying = status?.playing ?? false;
-  
+
   const [optimisticPlaying, setOptimisticPlaying] = useState<boolean | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
   const displayPlaying = optimisticPlaying !== null ? optimisticPlaying : isActuallyPlaying;
 
   const handlePress = useCallback(() => {

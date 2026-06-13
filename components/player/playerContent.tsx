@@ -43,11 +43,8 @@ import {
   Dimensions,
   Animated as RNAnimated,
   Modal as RNModal,
-  AppState,
-  AppStateStatus,
   ActivityIndicator,
   ScrollView,
-  Share,
   ToastAndroid,
   Platform,
 } from 'react-native';
@@ -93,9 +90,11 @@ import {
   getCachedTrackExtrasSync,
   useTrackExtrasVersion,
   setMasterPlayer,
+  setPreferredStreamType,
+  isLocalTrack as checkIsLocalTrack,
+  useGestureContext,
 } from '@/libs/playerSetup';
-
-import { useGestureContext } from '@/libs/playerSetup';
+import ShareSheet from '@/components/player/ShareSheet';
 import { downloadAndSaveSong } from '@/services/download';
 import { useIsSongDownloaded, useIsSongDownloading } from '@/store/library';
 
@@ -195,6 +194,7 @@ const LYRICS_LEAD_IN_S = 0.25;
 const BACKWARD_SEEK_OFFSET = 0.2;
 const MAX_RETRY_COUNT = 2;
 const RETRY_DELAY_MS = 1000;
+const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 const DUMMY_TRACK = {
   id: 'dummy-track-id',
@@ -622,6 +622,7 @@ function PlayerContentInner({
   const [showLyricsModal, setShowLyricsModal] = useState(false);
   const [showRelatedModal, setShowRelatedModal] = useState(false);
   const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [showShareSheet, setShowShareSheet] = useState(false);
 
   const [lyricsData, setLyricsData] = useState({ title: '', artist: '', videoId: '' });
   const [relatedData, setRelatedData] = useState({ songUrl: '', title: '', artist: '' });
@@ -634,7 +635,6 @@ function PlayerContentInner({
   const {
     isLoading: musicPlayerLoading,
     togglePlayPause,
-    isLocalTrack,
     setVideoActive,
     updateVideoPosition,
     updateVideoDuration,
@@ -669,8 +669,8 @@ function PlayerContentInner({
   }, [engine.currentTrack]);
 
   const isLocal = useMemo(
-    () => isLocalTrack(engine.currentTrack),
-    [engine.currentTrack, isLocalTrack],
+    () => checkIsLocalTrack(engine.currentTrack),
+    [engine.currentTrack],
   );
 
   // ── Track extras ─────────────────────────────────────────────────────────────
@@ -749,6 +749,14 @@ function PlayerContentInner({
   // Track play states
   const masterPlayingRef = useRef(false);
   const slavePlayingRef = useRef(false);
+
+  // Local track end detection refs
+  const trackEndHandledRef = useRef(false);
+  const previousMasterStatusRef = useRef<string | null>(null);
+
+  // Playback speed state
+  const [playbackRate, setPlaybackRateState] = useState(1.0);
+  const [showSpeedPicker, setShowSpeedPicker] = useState(false);
 
   useEffect(() => { positionRef.current = positionSec; }, [positionSec]);
   useEffect(() => { durationRef.current = durationSec; }, [durationSec]);
@@ -840,14 +848,30 @@ function PlayerContentInner({
     }
   }, []);
 
+  // ── PLAYBACK SPEED ────────────────────────────────────────────────────────────
+  const handleSetSpeed = useCallback((rate: number) => {
+    try {
+      masterPlayer.playbackRate = rate;
+      setPlaybackRateState(rate);
+    } catch (e) {
+      console.warn('[PlayerContent] setPlaybackRate failed:', e);
+    }
+    setShowSpeedPicker(false);
+  }, []);
+
   // ── MASTER PLAYER STATUS LISTENER ───────────────────────────────────────────
   useEffect(() => {
     if (!masterPlayer) return;
 
     let statusListener: any = null;
+    let sourceChangeListener: any = null;
+    let rateChangeListener: any = null;
 
     try {
       statusListener = masterPlayer.addListener('statusChange', ({ status, error }: any) => {
+        const previousStatus = previousMasterStatusRef.current;
+        previousMasterStatusRef.current = status;
+
         if (status === 'readyToPlay') {
           setMasterReady(true);
           setVideoError(null);
@@ -855,14 +879,36 @@ function PlayerContentInner({
         } else if (status === 'error') {
           console.error('[PlayerContent] MASTER player error:', error?.message);
           setVideoError(error?.message || 'Playback error');
-          
+
           if (error?.message?.includes('403') && masterRetryCount < MAX_RETRY_COUNT && activeVideoUrl) {
             console.log('[PlayerContent] 403 error detected, retrying master load');
             retryMasterLoad(activeVideoUrl, masterRetryCount);
             setMasterRetryCount(prev => prev + 1);
           }
         }
+
+        // Local track end: status transitions idle ← readyToPlay
+        if (
+          status === 'idle' &&
+          previousStatus === 'readyToPlay' &&
+          !trackEndHandledRef.current &&
+          isLocal
+        ) {
+          console.log('[PlayerContent] Local master reached end, skipping to next');
+          trackEndHandledRef.current = true;
+          engine.skipToNext();
+        }
       });
+
+      sourceChangeListener = masterPlayer.addListener('sourceChange', () => {
+        trackEndHandledRef.current = false;
+        previousMasterStatusRef.current = null;
+      });
+
+      rateChangeListener = masterPlayer.addListener('rateChange', ({ playbackRate: newRate }: any) => {
+        setPlaybackRateState(newRate);
+      });
+
     } catch (e) {
       console.error('[PlayerContent] Failed to add MASTER listener:', e);
     }
@@ -870,9 +916,11 @@ function PlayerContentInner({
     return () => {
       try {
         statusListener?.remove?.();
+        sourceChangeListener?.remove?.();
+        rateChangeListener?.remove?.();
       } catch {}
     };
-  }, [masterPlayer, activeVideoUrl, masterRetryCount, retryMasterLoad]);
+  }, [masterPlayer, activeVideoUrl, masterRetryCount, retryMasterLoad, engine, isLocal]);
 
   // ── SLAVE PLAYER STATUS LISTENER ────────────────────────────────────────────
   useEffect(() => {
@@ -1139,6 +1187,8 @@ function PlayerContentInner({
     setSlaveReady(false);
     masterPlayingRef.current = false;
     slavePlayingRef.current = false;
+    trackEndHandledRef.current = false;
+    previousMasterStatusRef.current = null;
     setActiveSegment('song');
     activeSegmentRef.current = 'song';
     setVideoError(null);
@@ -1210,13 +1260,15 @@ function PlayerContentInner({
 
   const handleSkipBack = useCallback(async () => {
     triggerHaptic();
+    setPreferredStreamType(activeSegment === 'video' ? 'video' : 'audio');
     await engine.skipToPrevious();
-  }, [engine]);
+  }, [engine, activeSegment]);
 
   const handleSkipNext = useCallback(async () => {
     triggerHaptic();
+    setPreferredStreamType(activeSegment === 'video' ? 'video' : 'audio');
     await engine.skipToNext();
-  }, [engine]);
+  }, [engine, activeSegment]);
 
   const handleOpenQueue = () => {
     triggerHaptic();
@@ -1342,27 +1394,11 @@ function PlayerContentInner({
     onMinimize();
   }, [onMinimize]);
 
-  const handleShare = useCallback(async () => {
+  const handleShare = useCallback(() => {
     if (!displayTrack || displayTrack.id === DUMMY_TRACK.id) return;
     triggerHaptic();
-
-    try {
-      const shareUrl = videoId
-        ? `https://www.youtube.com/watch?v=${videoId}`
-        : displayTrack.url;
-
-      const message = `Check out "${displayTrack.title}" by ${displayTrack.artist || 'Unknown Artist'}`;
-
-      await Share.share({
-        title: displayTrack.title,
-        message: Platform.OS === 'android' ? `${message}\n\n${shareUrl}` : message,
-        url: Platform.OS === 'ios' ? shareUrl : undefined,
-      });
-    } catch (error) {
-      console.warn('[PlayerContent] Share failed:', error);
-      ToastAndroid.show("Failed to share song", ToastAndroid.SHORT);
-    }
-  }, [displayTrack, videoId]);
+    setShowShareSheet(true);
+  }, [displayTrack]);
 
   const artworkSource =
     typeof displayTrack?.thumbnail === 'string' && displayTrack.thumbnail
@@ -1395,6 +1431,11 @@ function PlayerContentInner({
   }));
 
   const showSlavePlayer = hasVideo && !isLocal && activeSegment === 'video' && slaveReady;
+
+  // Buffer fill for the progress bar underlay
+  const bufferFillPercent = visualDurationSec > 0
+    ? Math.min(((masterPlayer as any).bufferedPosition ?? 0) / visualDurationSec, 1)
+    : 0;
 
   // Update visual position from master (polling for smooth UI)
   useEffect(() => {
@@ -1634,9 +1675,20 @@ function PlayerContentInner({
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.actionItem}>
+              <View style={[styles.pillContainer, styles.actionPill]}>
                 <TouchableOpacity onPress={handleSleepTimer} activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="weather-night" size={moderateScale(22)} color={colors.text} />
+                  <MaterialCommunityIcons name="weather-night" size={moderateScale(20)} color={colors.text} />
+                </TouchableOpacity>
+                <View style={[styles.pillDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                <TouchableOpacity
+                  onPress={() => { triggerHaptic(); setShowSpeedPicker(true); }}
+                  activeOpacity={0.7}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: scale(4) }}
+                >
+                  <MaterialCommunityIcons name="speedometer" size={moderateScale(16)} color={colors.textMuted} />
+                  <Text style={[styles.pillText, { color: colors.textMuted }]}>
+                    {playbackRate === 1.0 ? '1×' : `${playbackRate}×`}
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -1895,6 +1947,19 @@ function PlayerContentInner({
           />
         </RNModal>
       )}
+
+      {/* Share Sheet — custom bottom-sheet, not a pageSheet modal */}
+      <ShareSheet
+        visible={showShareSheet}
+        onClose={() => setShowShareSheet(false)}
+        track={{
+          title: displayTrack?.title ?? '',
+          artist: displayTrack?.artist,
+          thumbnail: displayTrack?.thumbnail,
+          videoId: videoId,
+          url: displayTrack?.url,
+        }}
+      />
     </>
   );
 }

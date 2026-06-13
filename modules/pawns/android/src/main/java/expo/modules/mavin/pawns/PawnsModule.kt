@@ -1,16 +1,12 @@
 package expo.modules.mavin.pawns
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import com.pawns.sdk.common.dto.ServiceConfig
 import com.pawns.sdk.common.dto.ServiceState
-import com.pawns.sdk.common.dto.ServiceType
 import com.pawns.sdk.common.sdk.Pawns
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -22,42 +18,43 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+// ─── What changed from the original ──────────────────────────────────────────
+//
+// 1. Removed Pawns.Builder call from initialize().
+//    The SDK is now built in MainApplication.onCreate() before anything else
+//    runs, so calling Builder again here is redundant and risks resetting SDK
+//    state mid-session.
+//
+// 2. Removed ensureChannel() and all NotificationChannel / NotificationManager
+//    imports. The module manifest declares:
+//      <meta-data android:name="com.pawns.sdk.pawns_service_channel_name" .../>
+//    so the SDK owns channel creation. Our manual channel was a duplicate.
+//
+// 3. initialize() now simply confirms the SDK singleton already exists, marks
+//    the module as initialised, and subscribes to state changes. It still
+//    accepts the apiKey argument from JS so the call-site in EarningsConsentGate
+//    does not need to change.
+//
+// 4. isRunning in getStatus() now returns true for both Running AND LowBattery,
+//    because the service is active and sharing in both states.
+//
+// 5. Removed unused companion object constants that were only needed for the
+//    manual channel (NOTIFICATION_ID, CHANNEL_ID, CHANNEL_NAME, PREFS_NAME,
+//    PREF_NOTIF_*). resolveIcon is also gone — icon resolution now lives solely
+//    in MainApplication.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
 class PawnsModule : Module() {
 
     companion object {
-        private const val TAG          = "PawnsModule"
-        const val NOTIFICATION_ID      = 9901
-        private const val CHANNEL_ID   = "pawns_sharing_channel"
-        private const val CHANNEL_NAME = "Bandwidth Sharing"
-        const val PREFS_NAME           = "pawns_module_prefs"
-        const val PREF_NOTIF_TITLE     = "notif_title"
-        const val PREF_NOTIF_BODY      = "notif_body"
-        const val PREF_NOTIF_ICON      = "notif_icon"
-        const val PREF_NOTIF_ID        = "notif_id"
-
-        fun ensureChannel(context: Context) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
-                    mgr.createNotificationChannel(
-                        NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW)
-                            .apply { setShowBadge(false) }
-                    )
-                }
-            }
-        }
-
-        fun resolveIcon(context: Context, name: String): Int {
-            val id = context.resources.getIdentifier(name, "drawable", context.packageName)
-            return if (id != 0) id else android.R.drawable.ic_dialog_info
-        }
+        private const val TAG = "PawnsModule"
     }
 
     private var initialized        = false
     private var lastError: String? = null
     private var stateJob: Job?     = null
     private val scope              = CoroutineScope(Dispatchers.Main)
-    private var notifIcon          = "ic_notification"
 
     override fun definition() = ModuleDefinition {
 
@@ -65,26 +62,23 @@ class PawnsModule : Module() {
 
         Events("onSdkStarted", "onSdkStopped", "onConsentGranted", "onConsentDenied", "onError")
 
-        AsyncFunction("initialize") { apiKey: String, promise: Promise ->
+        // initialize() — SDK is already built in MainApplication.onCreate().
+        // This call's job is to confirm the singleton is live, mark the module
+        // as ready, and wire up the state-change event subscription.
+        // The apiKey param is accepted but not used here; it is kept so the
+        // JS call-site (EarningsConsentGate) requires no changes.
+        AsyncFunction("initialize") { _: String, promise: Promise ->
             try {
-                val ctx      = appContext.reactContext!!
-                val iconRes  = resolveIcon(ctx, notifIcon)
-                val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
-                    .takeIf { it != 0 } ?: android.R.string.ok
-                val bodyRes  = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
-                    .takeIf { it != 0 } ?: android.R.string.cancel
-                ensureChannel(ctx)
-                Pawns.Builder(ctx)
-                    .apiKey(apiKey)
-                    .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
-                    .serviceType(ServiceType.FOREGROUND)
-                    .build()
+                // Calling getInstance() will throw if Builder was never called.
+                // That would only happen if Application.onCreate() failed, in
+                // which case we surface the error to JS gracefully.
+                Pawns.getInstance()
                 initialized = true
                 subscribeStateChanges()
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
-                promise.reject("INIT_ERROR", e.message ?: "error", e)
+                promise.reject("INIT_ERROR", e.message ?: "SDK not initialised", e)
             }
         }
 
@@ -138,7 +132,13 @@ class PawnsModule : Module() {
             try {
                 val state   = Pawns.getInstance().getServiceStateSnapshot()
                 val consent = Pawns.getInstance().isConsentGiven()
-                val isRunning = state is ServiceState.Launched.Running
+
+                // LowBattery is still an active sharing state — the service is
+                // running and connected, just throttled. Original code returned
+                // false for isRunning in this state, which was incorrect.
+                val isRunning = state is ServiceState.Launched.Running ||
+                                state is ServiceState.Launched.LowBattery
+
                 val stateName = when (state) {
                     is ServiceState.Off                 -> "STOPPED"
                     is ServiceState.On                  -> "STARTING"
@@ -147,6 +147,7 @@ class PawnsModule : Module() {
                     is ServiceState.Launched.Error      -> "ERROR"
                     else                                -> "UNKNOWN"
                 }
+
                 promise.resolve(mapOf(
                     "isRunning"      to isRunning,
                     "isConsentGiven" to consent,
@@ -204,6 +205,8 @@ class PawnsModule : Module() {
                             sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
                         }
                         is ServiceState.Launched.LowBattery -> {
+                            // Service is still active and sharing — fire onSdkStarted
+                            // so JS-side status reflects running correctly.
                             sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
                         }
                         is ServiceState.Launched.Error -> {

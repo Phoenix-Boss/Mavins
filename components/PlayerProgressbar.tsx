@@ -1,13 +1,11 @@
 /**
  * PlayerProgressBar
  *
- * INDUSTRY STANDARD DUAL-MODE ARCHITECTURE:
- *   - Uses useAudioPlayerStatus from expo-audio for REAL-TIME position updates
- *   - No reliance on engine.position (which is a snapshot, not reactive)
- *   - Progress bar updates at 250ms intervals (native-driven)
- *
- * FIXED: Position now updates correctly using expo-audio's useAudioPlayerStatus hook
- * FIXED: No skeleton UI - shows cover art immediately
+ * MASTER-SLAVE ARCHITECTURE:
+ *   - Reads position/duration by subscribing to the master player's timeUpdate
+ *     and statusChange events directly — no expo-audio hook needed.
+ *   - Falls back to engine.position / engine.duration when master isn't ready.
+ *   - Seek writes to masterPlayer.currentTime (master) and engine.seekTo (context).
  */
 
 import { fontSize } from "@/constants/tokens";
@@ -19,29 +17,70 @@ import { Slider } from "react-native-awesome-slider";
 import { useSharedValue, runOnJS } from "react-native-reanimated";
 import { ScaledSheet, moderateScale } from "react-native-size-matters/extend";
 import { useRef, useCallback, useEffect, useState } from "react";
-import { useAudioPlayerStatus } from "expo-audio";
 
 import { usePlayerEngine } from "@/libs/playerSetup";
 
 export const PlayerProgressBar = ({ style }: ViewProps) => {
   const engine = usePlayerEngine();
-  
-  // Get the global audio player instance from the module-level singleton
-  const [audioPlayer, setAudioPlayer] = useState<any>(null);
-  
+
+  const [positionSec, setPositionSec] = useState(engine.position ?? 0);
+  const [durationSec, setDurationSec] = useState(engine.duration ?? 0);
+
+  // Subscribe to master player events for real-time position updates
   useEffect(() => {
-    // Access the global audio player created by MusicPlayerContext
-    const globalPlayer = (global as any).__MavinAudioPlayer__;
-    setAudioPlayer(globalPlayer);
+    const masterPlayer = (global as any).__MavinMasterPlayer__;
+    if (!masterPlayer) return;
+
+    // Sync initial values
+    try {
+      const pos = masterPlayer.currentTime ?? 0;
+      const dur = masterPlayer.duration ?? 0;
+      setPositionSec(pos);
+      if (dur > 0) setDurationSec(dur);
+    } catch {}
+
+    let timeUpdateListener: any = null;
+    let statusListener: any = null;
+
+    try {
+      timeUpdateListener = masterPlayer.addListener('timeUpdate', ({ currentTime }: any) => {
+        setPositionSec(currentTime ?? 0);
+        const dur = masterPlayer.duration ?? 0;
+        if (dur > 0) setDurationSec(dur);
+      });
+
+      statusListener = masterPlayer.addListener('statusChange', ({ status }: any) => {
+        if (status === 'readyToPlay') {
+          try {
+            const dur = masterPlayer.duration ?? 0;
+            if (dur > 0) setDurationSec(dur);
+          } catch {}
+        } else if (status === 'idle') {
+          setPositionSec(0);
+        }
+      });
+    } catch (e) {
+      console.warn('[PlayerProgressBar] Failed to add master listeners:', e);
+    }
+
+    return () => {
+      try {
+        timeUpdateListener?.remove?.();
+        statusListener?.remove?.();
+      } catch {}
+    };
   }, []);
-  
-  // Use expo-audio's reactive hook for real-time position updates
-  // This is the INDUSTRY STANDARD way to get playback position
-  const status = useAudioPlayerStatus(audioPlayer);
-  
-  // Use reactive values from the hook, fallback to engine values
-  const positionSec = status?.currentTime ?? engine.position;
-  const durationSec = status?.duration ?? engine.duration;
+
+  // Keep in sync with engine as fallback when master isn't active (e.g. local tracks
+  // where context drives state, or before master loads)
+  useEffect(() => {
+    if (engine.position > 0 && positionSec === 0) {
+      setPositionSec(engine.position);
+    }
+    if (engine.duration > 0 && durationSec === 0) {
+      setDurationSec(engine.duration);
+    }
+  }, [engine.position, engine.duration]);
 
   const isSliding = useSharedValue(false);
   const progress = useSharedValue(0);
@@ -50,20 +89,22 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
   const max = useSharedValue(1);
 
   const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
   const commitSeek = useCallback((fraction: number) => {
     if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
     seekDebounceRef.current = setTimeout(() => {
-      // expo-audio uses currentTime property for seeking
-      if (audioPlayer) {
-        (audioPlayer as any).currentTime = fraction * durationSec;
-      } else {
-        engine.seekTo(fraction * durationSec);
-      }
+      const targetSec = fraction * durationSec;
+      // Seek master player (source of truth)
+      try {
+        const masterPlayer = (global as any).__MavinMasterPlayer__;
+        if (masterPlayer) masterPlayer.currentTime = targetSec;
+      } catch {}
+      // Also notify engine/context
+      engine.seekTo(targetSec);
     }, 80);
-  }, [durationSec, engine, audioPlayer]);
+  }, [durationSec, engine]);
 
-  // Update progress when not sliding - reacts to positionSec changes
+  // Update slider progress when not dragging
   useEffect(() => {
     if (!isSliding.value && durationSec > 0) {
       progress.value = positionSec / durationSec;
@@ -72,7 +113,6 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
 
   const trackElapsedTime = formatSecondsToMinutes(positionSec);
   const trackRemainingTime = formatSecondsToMinutes(durationSec - positionSec);
-  const trackDuration = formatSecondsToMinutes(durationSec);
 
   return (
     <View style={style}>
@@ -107,12 +147,12 @@ export const PlayerProgressBar = ({ style }: ViewProps) => {
           if (!isSliding.value) return;
           isSliding.value = false;
           if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
-          // Final seek on complete
-          if (audioPlayer) {
-            (audioPlayer as any).currentTime = value * durationSec;
-          } else {
-            engine.seekTo(value * durationSec);
-          }
+          const targetSec = value * durationSec;
+          try {
+            const masterPlayer = (global as any).__MavinMasterPlayer__;
+            if (masterPlayer) masterPlayer.currentTime = targetSec;
+          } catch {}
+          engine.seekTo(targetSec);
         }}
       />
 
