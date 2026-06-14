@@ -9,7 +9,7 @@
     <application>
         <service
             android:name="com.pawns.sdk.internal.service.PeerServiceForeground"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
