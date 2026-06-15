@@ -89,6 +89,7 @@ export interface TrackExtras {
   hasVideo?: boolean;
   isAudioOnly?: boolean;
   isVideoOnly?: boolean;
+  bestPartStart?: number;
 }
 
 export interface ResolvedTrack {

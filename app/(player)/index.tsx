@@ -22,6 +22,7 @@ import { useHomeStore, Song, CampaignCard } from "@/store/home";
 import { useMusicPlayer } from "@/libs/playerSetup";
 import { usePlayerOverlay } from "@/libs/playerOverlay";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useNotificationBadge } from "@/hooks/useNotificationBadge";
 
 // Section components
 import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
@@ -41,15 +42,6 @@ const { width } = Dimensions.get("window");
 const GRID_SIZE = (width - 48) / 3;
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
-
-const shuffleArray = <T,>(array: T[]): T[] => {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-};
 
 // ─── Section Error Boundary ───────────────────────────────────────────────────
 
@@ -137,9 +129,7 @@ function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
 
 function TrendingNowWrapper({ data }: { data: Song[] }) {
   if (!data.length) return null;
-  const shuffled = shuffleArray(data).slice(0, 4);
-  if (!shuffled.length) return null;
-  return <TrendingNowSection data={shuffled} />;
+  return <TrendingNowSection data={data} />;
 }
 
 function BiggestHitsWrapper({ data }: { data: Song[] }) {
@@ -206,6 +196,7 @@ export default function HomeScreen() {
   const { expandPlayer } = usePlayerOverlay();
   const { playAudio } = useMusicPlayer();
   const { colors } = useTheme();
+  const unreadNotificationCount = useNotificationBadge();
 
   useEffect(() => {
     if (colors && colors.background) {
@@ -229,6 +220,19 @@ export default function HomeScreen() {
   const quickPicks = useHomeStore((s) => s.quickPicks);
   const getExcludedIdsForTop10 = useHomeStore((s) => s.getExcludedIdsForTop10);
   const top10ExcludedIds = getExcludedIdsForTop10();
+
+  // FIX: previously, TrendingNowWrapper called shuffleArray(...).slice(0, 4)
+  // directly during render with no memoization. Since HomeScreen re-renders
+  // frequently (store updates, theme ticks, scroll/refresh state, etc.),
+  // this produced a brand-new random 4-song selection on EVERY render —
+  // visibly reshuffling the "Trending Now" section in front of the user.
+  //
+  // `trending` itself is already shuffled once per day by
+  // setTrendingWithDailyShuffle() in the home store, so its order is stable
+  // for the whole day. We just need to take a stable slice of it here, and
+  // only recompute that slice when `trending`'s reference actually changes
+  // (i.e. once per day), not on every render.
+  const trendingDisplay = useMemo(() => trending.slice(0, 4), [trending]);
 
   useEffect(() => {
     Animated.loop(
@@ -335,13 +339,22 @@ export default function HomeScreen() {
               style={styles.iconButton}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="notifications-outline" size={24} color={colors.gold} />
+              <View>
+                <Ionicons name="notifications-outline" size={24} color={colors.gold} />
+                {unreadNotificationCount > 0 && (
+                  <View style={[styles.notificationBadge, { backgroundColor: colors.error || "#FF3B30", borderColor: colors.background }]}>
+                    <Text style={styles.notificationBadgeText}>
+                      {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </TouchableOpacity>
           </View>
         </View>
       </View>
     ),
-    [colors, top, handleSearchPress, handleNotificationsPress],
+    [colors, top, handleSearchPress, handleNotificationsPress, unreadNotificationCount],
   );
 
   if (!isThemeReady) {
@@ -393,7 +406,7 @@ export default function HomeScreen() {
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Trending Now">
-          <TrendingNowWrapper data={trending} />
+          <TrendingNowWrapper data={trendingDisplay} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary sectionName="Biggest Hits">
@@ -469,6 +482,24 @@ const styles = StyleSheet.create({
   searchPlaceholderText: { fontSize: 16, flex: 1 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 16 },
   iconButton: { padding: 4 },
+  notificationBadge: {
+    position: "absolute",
+    top: -2,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1.5,
+  },
+  notificationBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "700",
+    lineHeight: 11,
+  },
   scrollContent: { paddingHorizontal: 16 },
   bottomSpacing: { height: 140 },
 

@@ -207,6 +207,37 @@ const slavePlayer: ReturnType<typeof createVideoPlayer> = createOrFallbackVideoP
   'SLAVE',
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL "CURRENTLY LOADED URL" TRACKER
+//
+// FIX: PlayerContentInner is mounted/unmounted as the expanded player is
+// expanded/collapsed (the mini-player remounts it on every expand). Its local
+// state (masterReady, etc.) resets on each mount, which previously caused the
+// "LOAD STREAMS WHEN TRACK CHANGES" effect to call masterPlayer.replaceAsync()
+// again on every expand — even though the SAME stream was already loaded and
+// playing at a non-zero position on the singleton masterPlayer. replaceAsync
+// resets playback to position 0, causing the "restart from beginning" bug.
+//
+// These globals persist across remounts (they live on the module, not the
+// component), so a fresh mount can detect "this URL is already loaded on the
+// master/slave players" and skip the reload entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+const MASTER_LOADED_URL_KEY = '__MavinMasterLoadedUrl__';
+const SLAVE_LOADED_URL_KEY = '__MavinSlaveLoadedUrl__';
+
+function getMasterLoadedUrl(): string | null {
+  return (global as any)[MASTER_LOADED_URL_KEY] ?? null;
+}
+function setMasterLoadedUrl(url: string | null) {
+  (global as any)[MASTER_LOADED_URL_KEY] = url;
+}
+function getSlaveLoadedUrl(): string | null {
+  return (global as any)[SLAVE_LOADED_URL_KEY] ?? null;
+}
+function setSlaveLoadedUrl(url: string | null) {
+  (global as any)[SLAVE_LOADED_URL_KEY] = url;
+}
+
 // If construction was deferred because the Activity wasn't ready yet, retry
 // once the app becomes active (the Activity is guaranteed to exist by then).
 // NOTE: this only logs/retries for a *future* fresh module load — components
@@ -877,6 +908,7 @@ function PlayerContentInner({
     
     try {
       await masterPlayer.replaceAsync(url);
+      setMasterLoadedUrl(url);
       const pollStart = Date.now();
       await new Promise<void>((resolve) => {
         const poll = () => {
@@ -913,6 +945,7 @@ function PlayerContentInner({
     try {
       await slavePlayer.replaceAsync(url);
       slavePlayer.muted = true;
+      setSlaveLoadedUrl(url);
       const pollStart = Date.now();
       await new Promise<void>((resolve) => {
         const poll = () => {
@@ -1090,7 +1123,56 @@ function PlayerContentInner({
   // ── LOAD STREAMS WHEN TRACK CHANGES ─────────────────────────────────────────
   useEffect(() => {
     if (!activeVideoUrl || isLocal) return;
-    
+
+    // FIX: If this URL is already loaded on the master player (e.g. this is a
+    // remount caused by expanding the player back open on an already-playing
+    // track), DO NOT call replaceAsync again — that would reset playback to 0.
+    // Just sync local "ready" state from the player's actual current status.
+    if (getMasterLoadedUrl() === activeVideoUrl && masterPlayer.status === 'readyToPlay') {
+      console.log('[PlayerContent] Master already loaded with this URL — skipping reload');
+      setMasterReady(true);
+      setVideoError(null);
+
+      if (getSlaveLoadedUrl() === activeVideoUrl && slavePlayer.status === 'readyToPlay') {
+        setSlaveReady(true);
+      } else if (!isLoadingStreamRef.current) {
+        // Slave wasn't preloaded (or was for a different URL) — load it now
+        // without touching the master.
+        isLoadingStreamRef.current = true;
+        (async () => {
+          try {
+            setSlaveReady(false);
+            await slavePlayer.replaceAsync(activeVideoUrl);
+            slavePlayer.muted = true;
+            setSlaveLoadedUrl(activeVideoUrl);
+
+            const pollStart = Date.now();
+            await new Promise<void>((resolve) => {
+              const poll = () => {
+                if (slavePlayer.status === 'readyToPlay') {
+                  setSlaveReady(true);
+                  resolve();
+                  return;
+                }
+                if (Date.now() - pollStart >= 8000) {
+                  resolve();
+                  return;
+                }
+                setTimeout(poll, 200);
+              };
+              poll();
+            });
+          } catch (e: any) {
+            console.warn('[PlayerContent] Slave pre-load failed (non-fatal):', e?.message);
+          } finally {
+            isLoadingStreamRef.current = false;
+          }
+        })();
+      }
+
+      return;
+    }
+
     const loadStreams = async () => {
       console.log('[PlayerContent] Loading streams for track');
       isLoadingStreamRef.current = true;
@@ -1098,6 +1180,7 @@ function PlayerContentInner({
       try {
         setMasterReady(false);
         await masterPlayer.replaceAsync(activeVideoUrl);
+        setMasterLoadedUrl(activeVideoUrl);
         
         const pollStart = Date.now();
         await new Promise<void>((resolve) => {
@@ -1130,6 +1213,7 @@ function PlayerContentInner({
         setSlaveReady(false);
         await slavePlayer.replaceAsync(activeVideoUrl);
         slavePlayer.muted = true;
+        setSlaveLoadedUrl(activeVideoUrl);
         
         const pollStart = Date.now();
         await new Promise<void>((resolve) => {
@@ -1216,6 +1300,7 @@ function PlayerContentInner({
             try {
               await slavePlayer.replaceAsync(activeVideoUrl);
               slavePlayer.muted = true;
+              setSlaveLoadedUrl(activeVideoUrl);
               setSlaveReady(true);
               await new Promise(resolve => setTimeout(resolve, 500));
             } catch (e) {
@@ -1274,6 +1359,38 @@ function PlayerContentInner({
 
   // ── TRACK CHANGE RESET ──────────────────────────────────────────────────────
   useEffect(() => {
+    // FIX: Don't reset visual/progress/segment state if this is just a remount
+    // (expand after collapse) for the SAME track that's already loaded and
+    // playing on the master player. Resetting here caused the UI (and, in
+    // combination with the load-streams effect, the audio) to jump back to 0
+    // when reopening the expanded player.
+    const sameTrackAlreadyLoaded =
+      !!activeVideoUrl &&
+      !isLocal &&
+      getMasterLoadedUrl() === activeVideoUrl &&
+      masterPlayer.status === 'readyToPlay';
+
+    if (sameTrackAlreadyLoaded) {
+      // Sync local state to the master player's real, in-progress state
+      // instead of zeroing everything out.
+      const currentPos = masterPlayer.currentTime ?? 0;
+      const currentDur = masterPlayer.duration ?? 0;
+      setMasterReady(true);
+      setSlaveReady(getSlaveLoadedUrl() === activeVideoUrl && slavePlayer.status === 'readyToPlay');
+      masterPlayingRef.current = !!masterPlayer.playing;
+      trackEndHandledRef.current = false;
+      previousMasterStatusRef.current = masterPlayer.status;
+      setActiveSegment('song');
+      activeSegmentRef.current = 'song';
+      setVideoError(null);
+      setVisualPositionSec(currentPos);
+      setVisualDurationSec(currentDur);
+      setVisualIsPlaying(!!masterPlayer.playing);
+      setMasterRetryCount(0);
+      setSlaveRetryCount(0);
+      return;
+    }
+
     setMasterReady(false);
     setSlaveReady(false);
     masterPlayingRef.current = false;

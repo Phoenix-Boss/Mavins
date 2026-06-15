@@ -580,6 +580,7 @@ async function fetchQuickActions(): Promise<any[]> {
 export function HomePreloader() {
   const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
   const setAllData = useHomeStore((s) => s.setAllData);
+  const setTrendingWithDailyShuffle = useHomeStore((s) => s.setTrendingWithDailyShuffle);
   const setRecentSongs = useHomeStore((s) => s.setRecentSongs);
   const setQuickPicks = useHomeStore((s) => s.setQuickPicks);
   const setLoading = useHomeStore((s) => s.setLoading);
@@ -641,8 +642,10 @@ export function HomePreloader() {
         ]);
 
         // ─── 4. Prepare data for store ───
+        // NOTE: `trending` is intentionally NOT included here — it's applied
+        // separately via setTrendingWithDailyShuffle so it only shuffles
+        // once per calendar day instead of on every fetch.
         const storeData = {
-          trending,
           biggestHits,
           peoplesChoice,
           mavinsBest,
@@ -655,7 +658,7 @@ export function HomePreloader() {
         };
 
         console.log('📦 [HomePreloader] Setting store data:', {
-          trending: storeData.trending.length,
+          trending: trending.length,
           biggestHits: storeData.biggestHits.length,
           peoplesChoice: storeData.peoplesChoice.length,
           mavinsBest: storeData.mavinsBest.length,
@@ -669,6 +672,7 @@ export function HomePreloader() {
           quickPicks: quickPicksCards.length,
         });
 
+        setTrendingWithDailyShuffle(trending);
         setAllData(storeData);
 
       } catch (error) {
@@ -680,7 +684,7 @@ export function HomePreloader() {
     };
 
     fetchAllData();
-  }, [hasAnyData, isDataFresh, hasAttemptedFetch, setAllData, setRecentSongs, setQuickPicks, setLoading]);
+  }, [hasAnyData, isDataFresh, hasAttemptedFetch, setAllData, setTrendingWithDailyShuffle, setRecentSongs, setQuickPicks, setLoading]);
 
   return null;
 }

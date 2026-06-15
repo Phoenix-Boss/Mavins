@@ -16,7 +16,11 @@
  *
  * Accept flow  : initialize() → optIn() → start() → store 'accepted'
  * Settings flow: soft dismiss → onOpenSettings()
- * ✕ close      : soft dismiss, no decision stored
+ *
+ * This modal is non-dismissable: the user must either Accept or go to
+ * Settings. There is no close (✕) affordance and no checkbox — the consent
+ * text is shown as a single concise line with a "More" expander that reveals
+ * the full text in place.
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -66,45 +70,6 @@ function openUrl(url: string) {
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
 interface ThemedProps { colors: ThemeColors; }
-
-// ─── Checkbox ─────────────────────────────────────────────────────────────────
-
-interface CheckboxProps extends ThemedProps {
-  checked:  boolean;
-  onPress:  () => void;
-  label:    string | React.ReactNode;
-  testID?:  string;
-}
-
-function Checkbox({ checked, onPress, label, testID, colors }: CheckboxProps) {
-  return (
-    <TouchableOpacity
-      style={styles.checkboxRow}
-      onPress={onPress}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
-      testID={testID}
-      activeOpacity={0.7}
-    >
-      <View
-        style={[
-          styles.checkboxBox,
-          { borderColor: colors.borderGold, backgroundColor: colors.surface },
-          checked && { backgroundColor: colors.gold, borderColor: colors.gold },
-        ]}
-      >
-        {checked && (
-          <Text style={[styles.checkboxTick, { color: colors.textInverse }]}>✓</Text>
-        )}
-      </View>
-      {typeof label === 'string' ? (
-        <Text style={[styles.checkboxLabel, { color: colors.text }]}>{label}</Text>
-      ) : (
-        <View style={styles.checkboxLabelWrap}>{label}</View>
-      )}
-    </TouchableOpacity>
-  );
-}
 
 // ─── LinkText ─────────────────────────────────────────────────────────────────
 
@@ -381,24 +346,20 @@ export function EarningsConsentGate({
 }: EarningsConsentGateProps) {
   const { colors, isDark } = useTheme();
 
-  const [activeTab,    setActiveTab]    = useState<Tab>('General');
-  const [consentGiven, setConsentGiven] = useState(false);
-  const [isLoading,    setIsLoading]    = useState(false);
+  const [activeTab,       setActiveTab]       = useState<Tab>('General');
+  const [isLoading,       setIsLoading]       = useState(false);
+  const [showFullConsent, setShowFullConsent] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setActiveTab('General');
-      setConsentGiven(false);
       setIsLoading(false);
+      setShowFullConsent(false);
     }
   }, [visible]);
 
-  const handleDismiss = useCallback(() => {
-    if (!isLoading) onDismiss();
-  }, [isLoading, onDismiss]);
-
   const handleAccept = useCallback(async () => {
-    if (!consentGiven || isLoading) return;
+    if (isLoading) return;
     setIsLoading(true);
     try {
       await initialize();
@@ -411,7 +372,7 @@ export function EarningsConsentGate({
     } finally {
       setIsLoading(false);
     }
-  }, [consentGiven, isLoading, onDismiss]);
+  }, [isLoading, onDismiss]);
 
   const handleOpenSettings = useCallback(() => {
     if (isLoading) return;
@@ -428,9 +389,23 @@ export function EarningsConsentGate({
     }
   };
 
-  const consentLabel = (
+  const consentSummary = (
+    <Text style={[styles.checkboxLabelText, { color: colors.text }]} numberOfLines={1}>
+      By tapping Accept you agree to Mavin Player's Privacy Policy, Terms, and the Pawns
+      policies, and confirm you're 18+ and the account holder on this connection.{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => setShowFullConsent(true)}
+        accessibilityRole="link"
+      >
+        More
+      </Text>
+    </Text>
+  );
+
+  const consentFull = (
     <Text style={[styles.checkboxLabelText, { color: colors.text }]}>
-      By checking this box you confirm you have read and agree to Mavin Player's{' '}
+      By tapping Accept you confirm you have read and agree to Mavin Player's{' '}
       <Text style={[styles.link, { color: colors.gold }]} onPress={() => openUrl(URLS.appPrivacyPolicy)}>
         Privacy Policy
       </Text>
@@ -447,7 +422,14 @@ export function EarningsConsentGate({
         Acceptable Use Policy
       </Text>
       , and that you are at least 18 years of age and the primary account holder on the
-      internet connection used by this device.
+      internet connection used by this device.{' '}
+      <Text
+        style={[styles.link, { color: colors.gold }]}
+        onPress={() => setShowFullConsent(false)}
+        accessibilityRole="link"
+      >
+        Less
+      </Text>
     </Text>
   );
 
@@ -458,7 +440,6 @@ export function EarningsConsentGate({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={handleDismiss}
       statusBarTranslucent
     >
       <View style={[styles.overlay, { backgroundColor: isDark ? 'rgba(0,0,0,0.72)' : 'rgba(0,0,0,0.55)' }]}>
@@ -497,20 +478,6 @@ export function EarningsConsentGate({
                 </Text>
               </View>
             </View>
-            <TouchableOpacity
-              style={[
-                styles.closeBtn,
-                { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' },
-              ]}
-              onPress={handleDismiss}
-              accessibilityRole="button"
-              accessibilityLabel="Close"
-              disabled={isLoading}
-              hitSlop={12}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.closeBtnText, { color: colors.textSub }]}>✕</Text>
-            </TouchableOpacity>
           </View>
 
           {/* ── Tab bar ──────────────────────────────────────────────── */}
@@ -557,20 +524,14 @@ export function EarningsConsentGate({
           {/* ── Gold divider before footer ────────────────────────────── */}
           <View style={[styles.divider, { backgroundColor: colors.borderGold }]} />
 
-          {/* ── Footer — single checkbox only ────────────────────────── */}
+          {/* ── Footer — concise consent text with "More"/"Less" expander ── */}
           <View
             style={[
               styles.footer,
               { backgroundColor: colors.surfaceRaised },
             ]}
           >
-            <Checkbox
-              checked={consentGiven}
-              onPress={() => setConsentGiven(v => !v)}
-              label={consentLabel}
-              testID="consent-checkbox"
-              colors={colors}
-            />
+            {showFullConsent ? consentFull : consentSummary}
           </View>
 
           {/* ── Gold divider before action bar ───────────────────────── */}
@@ -604,27 +565,20 @@ export function EarningsConsentGate({
                 styles.acceptButton,
                 {
                   shadowColor:     isDark ? '#000' : colors.gold,
-                  backgroundColor: consentGiven && !isLoading
-                    ? colors.gold
-                    : dimmedGold,
+                  backgroundColor: !isLoading ? colors.gold : dimmedGold,
                 },
               ]}
               onPress={handleAccept}
               accessibilityRole="button"
               accessibilityLabel="Accept"
-              accessibilityState={{ disabled: !consentGiven || isLoading }}
-              disabled={!consentGiven || isLoading}
+              accessibilityState={{ disabled: isLoading }}
+              disabled={isLoading}
               activeOpacity={0.85}
             >
               {isLoading ? (
-                <ActivityIndicator color={colors.textInverse} size="small" />
+                <ActivityIndicator color={colors.text} size="small" />
               ) : (
-                <Text
-                  style={[
-                    styles.acceptText,
-                    { color: consentGiven ? colors.textInverse : colors.textMuted },
-                  ]}
-                >
+                <Text style={[styles.acceptText, { color: colors.text }]}>
                   Accept
                 </Text>
               )}
@@ -723,19 +677,6 @@ const styles = StyleSheet.create({
     fontSize:   12,
     lineHeight: 16,
   },
-  closeBtn: {
-    width:          32,
-    height:         32,
-    borderRadius:   16,
-    alignItems:     'center',
-    justifyContent: 'center',
-    marginLeft:     8,
-  },
-  closeBtnText: {
-    fontSize:   16,
-    fontWeight: '600',
-    lineHeight: 17,
-  },
 
   // ── Tab bar — fixed height, never shrinks
   tabBar: {
@@ -799,7 +740,7 @@ const styles = StyleSheet.create({
   emphasis: { fontWeight: '600' },
   link:     { textDecorationLine: 'underline' },
 
-  // ── Footer — main consent checkbox
+  // ── Footer — concise/expandable consent text
   footer: {
     paddingHorizontal: 20,
     paddingTop:        14,
@@ -851,34 +792,6 @@ const styles = StyleSheet.create({
     fontSize:   13,
     fontWeight: '600',
   },
-
-  // ── Checkbox
-  checkboxRow: {
-    flexDirection:  'row',
-    alignItems:     'flex-start',
-    gap:            10,
-  },
-  checkboxBox: {
-    width:          20,
-    height:         20,
-    borderRadius:   5,
-    borderWidth:    1.5,
-    alignItems:     'center',
-    justifyContent: 'center',
-    marginTop:      2,
-    flexShrink:     0,
-  },
-  checkboxTick: {
-    fontSize:   12,
-    fontWeight: '700',
-    lineHeight: 14,
-  },
-  checkboxLabel: {
-    flex:       1,
-    fontSize:   12,
-    lineHeight: 18,
-  },
-  checkboxLabelWrap: { flex: 1 },
 });
 
 export default EarningsConsentGate;
