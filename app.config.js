@@ -11,12 +11,12 @@ const withIconXml = require("./plugins/withIconXml");
 
 module.exports = {
   name: IS_DEV ? "Mavins Player (Dev)" : "Mavins Player",
-  owner: "besifo52561",
-  slug: "besifo5256",
+  owner: "licige24821",
+  slug: "licige2482",
   version: packageJson.version,
   extra: {
     eas: {
-      projectId: "027e908f-a940-42c8-afc1-23241d20fe2b",
+      projectId: "ff9d3099-4364-4fb1-b6b9-587726f4c7e9",
     },
   
   },
