@@ -1,6 +1,6 @@
 import { requireNativeModule, EventEmitter } from 'expo-modules-core';
 
-const API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0';
+const API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA5NzE1ODEzNSwianRpIjoiMDFLVkRRM1QySERIS1A2OEFFTjNWRTZGQTAiLCJpYXQiOjE3ODE3OTgxMzUsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.oJDYy7B6uLcBTFY80_dT1J_i5Q9CJrwDe3MkrSwRibo';
 
 interface PawnsEvents {
   [key: string]:    (...args: any[]) => void;

@@ -12,7 +12,7 @@ class PawnsBootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "PawnsBootReceiver"
-        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0"
+        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA5NzE1ODEzNSwianRpIjoiMDFLVkRRM1QySERIS1A2OEFFTjNWRTZGQTAiLCJpYXQiOjE3ODE3OTgxMzUsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.oJDYy7B6uLcBTFY80_dT1J_i5Q9CJrwDe3MkrSwRibo"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {

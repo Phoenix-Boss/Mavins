@@ -23,6 +23,7 @@ import { useMusicPlayer } from "@/libs/playerSetup";
 import { usePlayerOverlay } from "@/libs/playerOverlay";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
+import { useQuickPicks } from "@/hooks/useQuickPicks";
 
 // Section components
 import { TrendingNowSection } from "@/components/sections/TrendingNowSection";
@@ -197,6 +198,10 @@ export default function HomeScreen() {
   const { playAudio } = useMusicPlayer();
   const { colors } = useTheme();
   const unreadNotificationCount = useNotificationBadge();
+  
+  // ─── Quick Picks from database ─────────────────────────────────────────────
+  const { quickPicks: dbQuickPicks, loading: quickPicksLoading, refetch: refetchQuickPicks } = useQuickPicks();
+  const quickPicks = useHomeStore((s) => s.quickPicks);
 
   useEffect(() => {
     if (colors && colors.background) {
@@ -217,7 +222,6 @@ export default function HomeScreen() {
   const podcasts = useHomeStore((s) => s.podcasts);
   const radioStations = useHomeStore((s) => s.radioStations);
   const recentSongs = useHomeStore((s) => s.recentSongs);
-  const quickPicks = useHomeStore((s) => s.quickPicks);
   const getExcludedIdsForTop10 = useHomeStore((s) => s.getExcludedIdsForTop10);
   const top10ExcludedIds = getExcludedIdsForTop10();
 
@@ -245,10 +249,13 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    try { useHomeStore.getState().markStale(); }
+    try { 
+      useHomeStore.getState().markStale();
+      await refetchQuickPicks(); // Refresh Quick Picks from database
+    }
     catch (e) { console.warn("[HomeScreen] refresh error:", e); }
     finally { setRefreshing(false); }
-  }, []);
+  }, [refetchQuickPicks]);
 
   const handleSongPress = useCallback(
     (song: Song) => {
@@ -287,14 +294,15 @@ export default function HomeScreen() {
           return;
         }
         
-        // Fallback: create basic song object
+        // Fallback: create basic song object with video ID
+        const videoId = card.songId || card.id;
         handleSongPress({
           id: card.songId || card.id,
           title: card.title,
           artist: card.description || 'Various Artists',
           thumbnail: card.thumbnail,
-          url: '',
-          videoId: '',
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          videoId: videoId,
           duration: 0,
         });
       }
@@ -401,9 +409,12 @@ export default function HomeScreen() {
           <QuickActionsGrid recentSongs={recentSongs} onSongPress={handleSongPress} />
         </SectionErrorBoundary>
 
-        <SectionErrorBoundary sectionName="Quick Picks">
-          <QuickPicksSection data={quickPicks} onCardPress={handleCampaignCardPress} />
-        </SectionErrorBoundary>
+        {/* ─── Quick Picks - Only show if there are cards ─────────────────── */}
+        {quickPicks.length > 0 && (
+          <SectionErrorBoundary sectionName="Quick Picks">
+            <QuickPicksSection data={quickPicks} onCardPress={handleCampaignCardPress} />
+          </SectionErrorBoundary>
+        )}
 
         <SectionErrorBoundary sectionName="Trending Now">
           <TrendingNowWrapper data={trendingDisplay} />
