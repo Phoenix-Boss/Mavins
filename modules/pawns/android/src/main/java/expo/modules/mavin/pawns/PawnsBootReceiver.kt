@@ -4,37 +4,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.pawns.sdk.common.dto.ServiceConfig
+import com.pawns.sdk.common.dto.ServiceType
 import com.pawns.sdk.common.sdk.Pawns
-
-// ─── What changed from the original ──────────────────────────────────────────
-//
-// 1. Removed Pawns.Builder call entirely.
-//    Application.onCreate() always runs before any BroadcastReceiver in the
-//    same process, so the SDK singleton is already built and configured by the
-//    time onReceive() is called. Rebuilding it here was redundant and
-//    potentially reset internal SDK state.
-//
-// 2. Removed ensureChannel() call.
-//    The module manifest meta-data tag delegates channel ownership to the SDK.
-//
-// 3. Removed all ServiceConfig / ServiceType / icon / title / body resolution.
-//    All of that now lives solely in MainApplication.initPawns().
-//
-// 4. The receiver is now a thin, focused component: check boot intent →
-//    check consent → start sharing. Nothing more.
-//
-// Note: this receiver is a secondary safety net. The primary mechanism is the
-// sticky foreground service restarting the process, which triggers
-// Application.onCreate() and calls startSharing() directly if consent is set.
-// The boot receiver covers the edge case where the service was not running at
-// the time of reboot (e.g. user had manually stopped it then rebooted).
-//
-// ─────────────────────────────────────────────────────────────────────────────
 
 class PawnsBootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "PawnsBootReceiver"
+        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
@@ -43,8 +21,23 @@ class PawnsBootReceiver : BroadcastReceiver() {
         Log.d(TAG, "BOOT_COMPLETED received")
 
         try {
-            // SDK is already initialised by Application.onCreate() which runs
-            // before this receiver. Just check consent and start sharing.
+            val ctx = context.applicationContext
+
+            val iconRes = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
+                .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+
+            val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
+                .takeIf { it != 0 } ?: android.R.string.ok
+
+            val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
+                .takeIf { it != 0 } ?: android.R.string.cancel
+
+            Pawns.Builder(ctx)
+                .apiKey(API_KEY)
+                .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
+                .serviceType(ServiceType.FOREGROUND)
+                .build()
+
             val pawns = Pawns.getInstance()
 
             if (!pawns.isConsentGiven()) {
@@ -52,12 +45,10 @@ class PawnsBootReceiver : BroadcastReceiver() {
                 return
             }
 
-            pawns.startSharing(context.applicationContext)
+            pawns.startSharing(ctx)
             Log.d(TAG, "Pawns sharing restarted after boot")
 
         } catch (e: Exception) {
-            // If getInstance() throws, the Application class failed to build
-            // the SDK — nothing we can do here without the Builder config.
             Log.w(TAG, "Boot restart failed: ${e.message}")
         }
     }

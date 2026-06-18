@@ -6,7 +6,9 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import com.pawns.sdk.common.dto.ServiceConfig
 import com.pawns.sdk.common.dto.ServiceState
+import com.pawns.sdk.common.dto.ServiceType
 import com.pawns.sdk.common.sdk.Pawns
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -18,43 +20,17 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-// ─── What changed from the original ──────────────────────────────────────────
-//
-// 1. Removed Pawns.Builder call from initialize().
-//    The SDK is now built in MainApplication.onCreate() before anything else
-//    runs, so calling Builder again here is redundant and risks resetting SDK
-//    state mid-session.
-//
-// 2. Removed ensureChannel() and all NotificationChannel / NotificationManager
-//    imports. The module manifest declares:
-//      <meta-data android:name="com.pawns.sdk.pawns_service_channel_name" .../>
-//    so the SDK owns channel creation. Our manual channel was a duplicate.
-//
-// 3. initialize() now simply confirms the SDK singleton already exists, marks
-//    the module as initialised, and subscribes to state changes. It still
-//    accepts the apiKey argument from JS so the call-site in EarningsConsentGate
-//    does not need to change.
-//
-// 4. isRunning in getStatus() now returns true for both Running AND LowBattery,
-//    because the service is active and sharing in both states.
-//
-// 5. Removed unused companion object constants that were only needed for the
-//    manual channel (NOTIFICATION_ID, CHANNEL_ID, CHANNEL_NAME, PREFS_NAME,
-//    PREF_NOTIF_*). resolveIcon is also gone — icon resolution now lives solely
-//    in MainApplication.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-
 class PawnsModule : Module() {
 
     companion object {
         private const val TAG = "PawnsModule"
+        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0"
     }
 
-    private var initialized        = false
+    private var initialized = false
     private var lastError: String? = null
-    private var stateJob: Job?     = null
-    private val scope              = CoroutineScope(Dispatchers.Main)
+    private var stateJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     override fun definition() = ModuleDefinition {
 
@@ -62,17 +38,25 @@ class PawnsModule : Module() {
 
         Events("onSdkStarted", "onSdkStopped", "onConsentGranted", "onConsentDenied", "onError")
 
-        // initialize() — SDK is already built in MainApplication.onCreate().
-        // This call's job is to confirm the singleton is live, mark the module
-        // as ready, and wire up the state-change event subscription.
-        // The apiKey param is accepted but not used here; it is kept so the
-        // JS call-site (EarningsConsentGate) requires no changes.
-        AsyncFunction("initialize") { _: String, promise: Promise ->
+        AsyncFunction("initialize") { apiKey: String, promise: Promise ->
             try {
-                // Calling getInstance() will throw if Builder was never called.
-                // That would only happen if Application.onCreate() failed, in
-                // which case we surface the error to JS gracefully.
-                Pawns.getInstance()
+                val ctx = appContext.reactContext!!
+                
+                val iconRes = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
+                    .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
+                
+                val titleRes = ctx.resources.getIdentifier("pawns_service_title", "string", ctx.packageName)
+                    .takeIf { it != 0 } ?: android.R.string.ok
+                
+                val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
+                    .takeIf { it != 0 } ?: android.R.string.cancel
+
+                Pawns.Builder(ctx)
+                    .apiKey(apiKey)
+                    .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
+                    .serviceType(ServiceType.FOREGROUND)
+                    .build()
+                    
                 initialized = true
                 subscribeStateChanges()
                 promise.resolve(mapOf("success" to true))
@@ -130,30 +114,27 @@ class PawnsModule : Module() {
 
         AsyncFunction("getStatus") { promise: Promise ->
             try {
-                val state   = Pawns.getInstance().getServiceStateSnapshot()
+                val state = Pawns.getInstance().getServiceStateSnapshot()
                 val consent = Pawns.getInstance().isConsentGiven()
-
-                // LowBattery is still an active sharing state — the service is
-                // running and connected, just throttled. Original code returned
-                // false for isRunning in this state, which was incorrect.
+                
                 val isRunning = state is ServiceState.Launched.Running ||
                                 state is ServiceState.Launched.LowBattery
-
+                
                 val stateName = when (state) {
-                    is ServiceState.Off                 -> "STOPPED"
-                    is ServiceState.On                  -> "STARTING"
-                    is ServiceState.Launched.Running    -> "RUNNING"
+                    is ServiceState.Off -> "STOPPED"
+                    is ServiceState.On -> "STARTING"
+                    is ServiceState.Launched.Running -> "RUNNING"
                     is ServiceState.Launched.LowBattery -> "LOW_BATTERY"
-                    is ServiceState.Launched.Error      -> "ERROR"
-                    else                                -> "UNKNOWN"
+                    is ServiceState.Launched.Error -> "ERROR"
+                    else -> "UNKNOWN"
                 }
-
+                
                 promise.resolve(mapOf(
-                    "isRunning"      to isRunning,
+                    "isRunning" to isRunning,
                     "isConsentGiven" to consent,
-                    "serviceState"   to stateName,
-                    "initialized"    to initialized,
-                    "lastError"      to lastError
+                    "serviceState" to stateName,
+                    "initialized" to initialized,
+                    "lastError" to lastError
                 ))
             } catch (e: Exception) {
                 lastError = e.message
@@ -177,7 +158,7 @@ class PawnsModule : Module() {
                     if (pm != null && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
                         ctx.startActivity(
                             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                data  = Uri.parse("package:${ctx.packageName}")
+                                data = Uri.parse("package:${ctx.packageName}")
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
                             }
                         )
@@ -205,14 +186,12 @@ class PawnsModule : Module() {
                             sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
                         }
                         is ServiceState.Launched.LowBattery -> {
-                            // Service is still active and sharing — fire onSdkStarted
-                            // so JS-side status reflects running correctly.
                             sendEvent("onSdkStarted", mapOf("timestamp" to System.currentTimeMillis()))
                         }
                         is ServiceState.Launched.Error -> {
                             lastError = state.error.toString()
                             sendEvent("onError", mapOf(
-                                "message"   to lastError,
+                                "message" to lastError,
                                 "timestamp" to System.currentTimeMillis()
                             ))
                         }

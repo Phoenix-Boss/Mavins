@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useHomeStore, CampaignCard } from '@/store/home';
 import { supabase } from '@/libs/supabase';
 import MavinEngine from '@/modules/mavin-engine';
@@ -47,6 +48,71 @@ const shuffleArray = <T,>(array: T[]): T[] => {
   }
   return shuffled;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRENDING — daily shuffle (persisted locally, independent of the home store)
+//
+// The store previously exposed a `setTrendingWithDailyShuffle` action that no
+// longer exists, which crashed `fetchAllData` every run. Instead of depending
+// on a store action, the "shuffle once per calendar day" behavior is handled
+// right here: the order from today's first shuffle is cached in AsyncStorage
+// and reused for any later fetch that happens on the same day. New items that
+// weren't part of the cached order (e.g. freshly trending songs) are appended
+// to the end rather than being dropped.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TRENDING_SHUFFLE_DATE_KEY = '@mavin_trending_shuffle_date';
+const TRENDING_SHUFFLE_ORDER_KEY = '@mavin_trending_shuffle_order';
+
+const getTodayKey = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+};
+
+async function getDailyShuffledTrending(trending: any[]): Promise<any[]> {
+  const todayKey = getTodayKey();
+
+  try {
+    const [storedDate, storedOrderJson] = await Promise.all([
+      AsyncStorage.getItem(TRENDING_SHUFFLE_DATE_KEY),
+      AsyncStorage.getItem(TRENDING_SHUFFLE_ORDER_KEY),
+    ]);
+
+    if (storedDate === todayKey && storedOrderJson) {
+      const storedOrder: string[] = JSON.parse(storedOrderJson);
+      const byId = new Map(trending.map((item) => [item.id, item]));
+      const ordered: any[] = [];
+
+      for (const id of storedOrder) {
+        const item = byId.get(id);
+        if (item) {
+          ordered.push(item);
+          byId.delete(id);
+        }
+      }
+      ordered.push(...byId.values()); // newly trending items not seen in today's order
+
+      if (ordered.length > 0) {
+        console.log('📦 [HomePreloader] Trending: reusing today\'s shuffle order');
+        return ordered;
+      }
+    }
+  } catch (err) {
+    console.log('📦 [HomePreloader] Trending shuffle cache read failed, reshuffling:', err);
+  }
+
+  const shuffled = shuffleArray(trending);
+  try {
+    await AsyncStorage.multiSet([
+      [TRENDING_SHUFFLE_DATE_KEY, todayKey],
+      [TRENDING_SHUFFLE_ORDER_KEY, JSON.stringify(shuffled.map((item) => item.id))],
+    ]);
+  } catch (err) {
+    console.log('📦 [HomePreloader] Trending shuffle cache write failed:', err);
+  }
+  console.log('📦 [HomePreloader] Trending: shuffled fresh for today');
+  return shuffled;
+}
 
 const formatMavinStream = (item: any): any => ({
   id: extractVideoId(item.url) || item.url,
@@ -580,7 +646,6 @@ async function fetchQuickActions(): Promise<any[]> {
 export function HomePreloader() {
   const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
   const setAllData = useHomeStore((s) => s.setAllData);
-  const setTrendingWithDailyShuffle = useHomeStore((s) => s.setTrendingWithDailyShuffle);
   const setRecentSongs = useHomeStore((s) => s.setRecentSongs);
   const setQuickPicks = useHomeStore((s) => s.setQuickPicks);
   const setLoading = useHomeStore((s) => s.setLoading);
@@ -642,10 +707,13 @@ export function HomePreloader() {
         ]);
 
         // ─── 4. Prepare data for store ───
-        // NOTE: `trending` is intentionally NOT included here — it's applied
-        // separately via setTrendingWithDailyShuffle so it only shuffles
-        // once per calendar day instead of on every fetch.
+        // `trending` only reshuffles once per calendar day (cached locally in
+        // AsyncStorage) so the home screen doesn't visibly reorder on every
+        // fetch — see getDailyShuffledTrending above.
+        const dailyShuffledTrending = await getDailyShuffledTrending(trending);
+
         const storeData = {
+          trending: dailyShuffledTrending,
           biggestHits,
           peoplesChoice,
           mavinsBest,
@@ -658,7 +726,7 @@ export function HomePreloader() {
         };
 
         console.log('📦 [HomePreloader] Setting store data:', {
-          trending: trending.length,
+          trending: storeData.trending.length,
           biggestHits: storeData.biggestHits.length,
           peoplesChoice: storeData.peoplesChoice.length,
           mavinsBest: storeData.mavinsBest.length,
@@ -672,7 +740,6 @@ export function HomePreloader() {
           quickPicks: quickPicksCards.length,
         });
 
-        setTrendingWithDailyShuffle(trending);
         setAllData(storeData);
 
       } catch (error) {
@@ -684,7 +751,7 @@ export function HomePreloader() {
     };
 
     fetchAllData();
-  }, [hasAnyData, isDataFresh, hasAttemptedFetch, setAllData, setTrendingWithDailyShuffle, setRecentSongs, setQuickPicks, setLoading]);
+  }, [hasAnyData, isDataFresh, hasAttemptedFetch, setAllData, setRecentSongs, setQuickPicks, setLoading]);
 
   return null;
 }
