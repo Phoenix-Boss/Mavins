@@ -1,11 +1,11 @@
 // hooks/useNotificationPoller.ts
 import { useEffect, useCallback, useRef, useState } from "react";
 import { supabase } from "@/libs/supabase";
-import { 
-  getChannelInfo, 
-  getChannelTabItems, 
-  type StreamInfoItem, 
-  type InfoItem 
+import {
+  getChannelInfo,
+  getChannelTabItems,
+  type StreamInfoItem,
+  type InfoItem,
 } from "@/modules/mavin-engine";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -22,7 +22,11 @@ interface OfficialChannel {
 
 export function useNotificationPoller() {
   const isPolling = useRef(false);
-  const [lastPollResult, setLastPollResult] = useState<{ success: boolean; message: string; count: number } | null>(null);
+  const [lastPollResult, setLastPollResult] = useState<{
+    success: boolean;
+    message: string;
+    count: number;
+  } | null>(null);
 
   const pollChannels = useCallback(async (force = false) => {
     if (isPolling.current) {
@@ -34,7 +38,7 @@ export function useNotificationPoller() {
 
     try {
       console.log(`[Poller] 🚀 Starting notification poll... (force=${force})`);
-      
+
       // ─── Only check AsyncStorage if NOT forced ──────────────────────────
       if (!force) {
         const lastPoll = await AsyncStorage.getItem(LAST_POLL_KEY);
@@ -60,13 +64,21 @@ export function useNotificationPoller() {
 
       if (error) {
         console.error("[Poller] ❌ Supabase error fetching channels:", error);
-        setLastPollResult({ success: false, message: `DB Error: ${error.message}`, count: 0 });
+        setLastPollResult({
+          success: false,
+          message: `DB Error: ${error.message}`,
+          count: 0,
+        });
         return;
       }
 
       if (!channels || channels.length === 0) {
         console.warn("[Poller] ⚠️ No active channels found in database!");
-        setLastPollResult({ success: false, message: "No channels found", count: 0 });
+        setLastPollResult({
+          success: false,
+          message: "No channels found",
+          count: 0,
+        });
         return;
       }
 
@@ -74,8 +86,12 @@ export function useNotificationPoller() {
 
       // ─── Get last seen IDs from local storage ──────────────────────────
       const lastSeenRaw = await AsyncStorage.getItem("@mavin:last_seen_ids");
-      const lastSeenMap: Record<string, string> = lastSeenRaw ? JSON.parse(lastSeenRaw) : {};
-      console.log(`[Poller] 📖 Last seen map has ${Object.keys(lastSeenMap).length} entries`);
+      const lastSeenMap: Record<string, string> = lastSeenRaw
+        ? JSON.parse(lastSeenRaw)
+        : {};
+      console.log(
+        `[Poller] 📖 Last seen map has ${Object.keys(lastSeenMap).length} entries`,
+      );
 
       const newLastSeenMap = { ...lastSeenMap };
       let totalNew = 0;
@@ -86,83 +102,144 @@ export function useNotificationPoller() {
       for (const channel of channels) {
         try {
           totalChannelsProcessed++;
-          console.log(`\n[Poller] 🔍 [${totalChannelsProcessed}/${channels.length}]: ${channel.name}`);
+          console.log(
+            `\n[Poller] 🔍 [${totalChannelsProcessed}/${channels.length}]: ${channel.name}`,
+          );
           console.log(`[Poller] 🔗 URL: ${channel.channel_url}`);
 
           let streamItems: StreamInfoItem[] = [];
-          
+
           // ─── Try method 1: getChannelTabItems with "videos" tab ──────────
           try {
-            console.log(`[Poller] 📡 Fetching videos tab for ${channel.name}...`);
-            const tabResult = await getChannelTabItems(channel.channel_url, "videos", undefined, 0);
-            
-            if (tabResult.success && tabResult.items && tabResult.items.length > 0) {
+            console.log(
+              `[Poller] 📡 Fetching videos tab for ${channel.name}...`,
+            );
+            const tabResult = await getChannelTabItems(
+              channel.channel_url,
+              "videos",
+              undefined,
+              0,
+            );
+
+            if (
+              tabResult.success &&
+              tabResult.items &&
+              tabResult.items.length > 0
+            ) {
               const items = tabResult.items as InfoItem[];
-              streamItems = items.filter((item): item is StreamInfoItem => 
-                (item as any).type === 'stream' || 
-                (item as any).uploaderName !== undefined
+              streamItems = items.filter(
+                (item): item is StreamInfoItem =>
+                  (item as any).type === "stream" ||
+                  (item as any).uploaderName !== undefined,
               );
-              console.log(`[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via tab`);
+              console.log(
+                `[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via tab`,
+              );
             }
           } catch (tabErr: any) {
-            console.log(`[Poller] ⚠️ Tab fetch failed for ${channel.name}: ${tabErr?.message || 'unknown'}`);
+            console.log(
+              `[Poller] ⚠️ Tab fetch failed for ${channel.name}: ${tabErr?.message || "unknown"}`,
+            );
           }
 
           // ─── Try method 2: getChannelInfo and extract from tabs ──────────
           if (streamItems.length === 0) {
             try {
-              console.log(`[Poller] 📡 Fetching channel info for ${channel.name}...`);
+              console.log(
+                `[Poller] 📡 Fetching channel info for ${channel.name}...`,
+              );
               const channelInfo = await getChannelInfo(channel.channel_url, 0);
-              
-              if (channelInfo.success && channelInfo.tabs && channelInfo.tabs.length > 0) {
-                const videosTab = channelInfo.tabs.find(t => 
-                  t.name === 'videos' || 
-                  t.contentFilters.includes('videos')
+
+              if (
+                channelInfo.success &&
+                channelInfo.tabs &&
+                channelInfo.tabs.length > 0
+              ) {
+                const videosTab = channelInfo.tabs.find(
+                  (t) =>
+                    t.name === "videos" || t.contentFilters.includes("videos"),
                 );
-                
+
                 if (videosTab && videosTab.url) {
-                  console.log(`[Poller] 📡 Fetching videos from tab URL: ${videosTab.url}`);
-                  const tabResult = await getChannelTabItems(videosTab.url, "videos", undefined, 0);
-                  
-                  if (tabResult.success && tabResult.items && tabResult.items.length > 0) {
+                  console.log(
+                    `[Poller] 📡 Fetching videos from tab URL: ${videosTab.url}`,
+                  );
+                  const tabResult = await getChannelTabItems(
+                    videosTab.url,
+                    "videos",
+                    undefined,
+                    0,
+                  );
+
+                  if (
+                    tabResult.success &&
+                    tabResult.items &&
+                    tabResult.items.length > 0
+                  ) {
                     const items = tabResult.items as InfoItem[];
-                    streamItems = items.filter((item): item is StreamInfoItem => 
-                      (item as any).type === 'stream' || 
-                      (item as any).uploaderName !== undefined
+                    streamItems = items.filter(
+                      (item): item is StreamInfoItem =>
+                        (item as any).type === "stream" ||
+                        (item as any).uploaderName !== undefined,
                     );
-                    console.log(`[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via channel info`);
+                    console.log(
+                      `[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via channel info`,
+                    );
                   }
                 }
               }
             } catch (infoErr: any) {
-              console.log(`[Poller] ⚠️ Channel info failed for ${channel.name}: ${infoErr?.message || 'unknown'}`);
+              console.log(
+                `[Poller] ⚠️ Channel info failed for ${channel.name}: ${infoErr?.message || "unknown"}`,
+              );
             }
           }
 
           // ─── Try method 3: Use a search fallback ──────────────────────────
           if (streamItems.length === 0) {
             try {
-              console.log(`[Poller] 📡 Trying search fallback for ${channel.name}...`);
+              console.log(
+                `[Poller] 📡 Trying search fallback for ${channel.name}...`,
+              );
               const searchQuery = `${channel.name} official`;
-              const { search } = await import('@/modules/mavin-engine');
-              const searchResult = await search(searchQuery, 'videos', undefined, 0);
-              
-              if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
+              const { search } = await import("@/modules/mavin-engine");
+              const searchResult = await search(
+                searchQuery,
+                "videos",
+                undefined,
+                0,
+              );
+
+              if (
+                searchResult.success &&
+                searchResult.results &&
+                searchResult.results.length > 0
+              ) {
                 const items = searchResult.results as InfoItem[];
-                const channelItems = items.filter((item): item is StreamInfoItem => {
-                  const streamItem = item as StreamInfoItem;
-                  return (item as any).type === 'stream' && 
-                         streamItem.uploaderName && 
-                         streamItem.uploaderName.toLowerCase().includes(channel.name.toLowerCase());
-                });
-                
+                const channelItems = items.filter(
+                  (item): item is StreamInfoItem => {
+                    const streamItem = item as StreamInfoItem;
+                    return (
+                      (item as any).type === "stream" &&
+                      streamItem.uploaderName &&
+                      streamItem.uploaderName
+                        .toLowerCase()
+                        .includes(channel.name.toLowerCase())
+                    );
+                  },
+                );
+
                 if (channelItems.length > 0) {
                   streamItems = channelItems;
-                  console.log(`[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via search`);
+                  console.log(
+                    `[Poller] 📝 ${channel.name}: found ${streamItems.length} videos via search`,
+                  );
                 }
               }
             } catch (searchErr: any) {
-              console.log(`[Poller] ⚠️ Search fallback failed for ${channel.name}: ${searchErr?.message || 'unknown'}`);
+              console.log(
+                `[Poller] ⚠️ Search fallback failed for ${channel.name}: ${searchErr?.message || "unknown"}`,
+              );
             }
           }
 
@@ -182,7 +259,9 @@ export function useNotificationPoller() {
           });
 
           if (filteredItems.length === 0) {
-            console.log(`[Poller] 📭 ${channel.name}: no videos from last ${MAX_AGE_DAYS} days`);
+            console.log(
+              `[Poller] 📭 ${channel.name}: no videos from last ${MAX_AGE_DAYS} days`,
+            );
             continue;
           }
 
@@ -193,41 +272,54 @@ export function useNotificationPoller() {
             return dateB - dateA;
           });
 
-          console.log(`[Poller] 📝 ${channel.name}: ${sortedItems.length} videos from last ${MAX_AGE_DAYS} days`);
+          console.log(
+            `[Poller] 📝 ${channel.name}: ${sortedItems.length} videos from last ${MAX_AGE_DAYS} days`,
+          );
 
           const latestItem = sortedItems[0];
           const latestId = extractVideoId(latestItem.url);
-          
+
           console.log(`[Poller] 🎬 Latest: ${latestItem.name}`);
           console.log(`[Poller] 🆔 Latest ID: ${latestId}`);
-          console.log(`[Poller] 📅 Latest date: ${latestItem.textualUploadDate}`);
+          console.log(
+            `[Poller] 📅 Latest date: ${latestItem.textualUploadDate}`,
+          );
 
           if (!latestId) {
-            console.warn(`[Poller] ⚠️ ${channel.name}: could not extract video ID`);
+            console.warn(
+              `[Poller] ⚠️ ${channel.name}: could not extract video ID`,
+            );
             continue;
           }
 
           const previousId = lastSeenMap[channel.channel_url];
-          console.log(`[Poller] 🔄 previousId=${previousId || 'none'}`);
+          console.log(`[Poller] 🔄 previousId=${previousId || "none"}`);
 
           // ─── First time or force refresh ─────────────────────────────────
           if (!previousId || force) {
-            console.log(`[Poller] 🆕 ${channel.name}: ${previousId ? 'force refresh' : 'first time'}, backfilling up to 10 items...`);
+            console.log(
+              `[Poller] 🆕 ${channel.name}: ${previousId ? "force refresh" : "first time"}, backfilling up to 10 items...`,
+            );
             newLastSeenMap[channel.channel_url] = latestId;
-            
-            const itemsToBackfill = sortedItems.slice(0, Math.min(10, sortedItems.length));
+
+            const itemsToBackfill = sortedItems.slice(
+              0,
+              Math.min(10, sortedItems.length),
+            );
             let backfilled = 0;
-            
+
             for (const item of itemsToBackfill) {
               const vid = extractVideoId(item.url);
               if (!vid) continue;
               const inserted = await insertNotification(item, channel);
               if (inserted) backfilled++;
             }
-            
+
             if (backfilled > 0) {
               totalNew += backfilled;
-              console.log(`[Poller] ✅ ${channel.name}: backfilled ${backfilled} videos`);
+              console.log(
+                `[Poller] ✅ ${channel.name}: backfilled ${backfilled} videos`,
+              );
             }
             continue;
           }
@@ -235,7 +327,7 @@ export function useNotificationPoller() {
           // ─── Find items newer than previousId ────────────────────────────
           const newItems: StreamInfoItem[] = [];
           let foundPrevious = false;
-          
+
           for (const item of sortedItems) {
             const vid = extractVideoId(item.url);
             if (vid === previousId) {
@@ -248,28 +340,37 @@ export function useNotificationPoller() {
           }
 
           if (!foundPrevious && sortedItems.length > 0) {
-            console.log(`[Poller] ⚠️ ${channel.name}: previous ID not found, backfilling latest items...`);
+            console.log(
+              `[Poller] ⚠️ ${channel.name}: previous ID not found, backfilling latest items...`,
+            );
             newLastSeenMap[channel.channel_url] = latestId;
-            
-            const itemsToBackfill = sortedItems.slice(0, Math.min(10, sortedItems.length));
+
+            const itemsToBackfill = sortedItems.slice(
+              0,
+              Math.min(10, sortedItems.length),
+            );
             let backfilled = 0;
-            
+
             for (const item of itemsToBackfill) {
               const vid = extractVideoId(item.url);
               if (!vid) continue;
               const inserted = await insertNotification(item, channel);
               if (inserted) backfilled++;
             }
-            
+
             if (backfilled > 0) {
               totalNew += backfilled;
-              console.log(`[Poller] ✅ ${channel.name}: backfilled ${backfilled} videos`);
+              console.log(
+                `[Poller] ✅ ${channel.name}: backfilled ${backfilled} videos`,
+              );
             }
             continue;
           }
 
           if (newItems.length > 0) {
-            console.log(`[Poller] 🆕 ${channel.name}: ${newItems.length} new item(s) since last poll`);
+            console.log(
+              `[Poller] 🆕 ${channel.name}: ${newItems.length} new item(s) since last poll`,
+            );
             for (const item of newItems.reverse()) {
               const inserted = await insertNotification(item, channel);
               if (inserted) totalNew++;
@@ -279,7 +380,6 @@ export function useNotificationPoller() {
           }
 
           newLastSeenMap[channel.channel_url] = latestId;
-
         } catch (err: any) {
           console.error(`[Poller] ❌ ${channel.name} failed:`, err.message);
           channelsWithErrors++;
@@ -287,8 +387,11 @@ export function useNotificationPoller() {
       }
 
       // ─── Save state ─────────────────────────────────────────────────────
-      await AsyncStorage.setItem("@mavin:last_seen_ids", JSON.stringify(newLastSeenMap));
-      
+      await AsyncStorage.setItem(
+        "@mavin:last_seen_ids",
+        JSON.stringify(newLastSeenMap),
+      );
+
       // Only update the poll timestamp if not forced
       if (!force) {
         await AsyncStorage.setItem(LAST_POLL_KEY, Date.now().toString());
@@ -302,22 +405,30 @@ export function useNotificationPoller() {
       const { data: verify, error: verifyError } = await supabase
         .from("notifications")
         .select("count", { count: "exact", head: true });
-      
+
       if (verifyError) {
         console.error("[Poller] ❌ Failed to verify insert:", verifyError);
       } else {
-        console.log(`[Poller] 📊 Total notifications in database: ${verify?.count || 0}`);
+        console.log(
+          `[Poller] 📊 Total notifications in database: ${verify?.count || 0}`,
+        );
       }
-
     } catch (err: any) {
       console.error("[Poller] 💥 Fatal error:", err);
-      setLastPollResult({ success: false, message: `Fatal: ${err.message}`, count: 0 });
+      setLastPollResult({
+        success: false,
+        message: `Fatal: ${err.message}`,
+        count: 0,
+      });
     } finally {
       isPolling.current = false;
     }
   }, []);
 
-  const insertNotification = async (item: StreamInfoItem, channel: OfficialChannel): Promise<boolean> => {
+  const insertNotification = async (
+    item: StreamInfoItem,
+    channel: OfficialChannel,
+  ): Promise<boolean> => {
     const vid = extractVideoId(item.url);
     if (!vid) {
       console.warn(`[Poller] ⚠️ Could not extract video ID from: ${item.url}`);
@@ -340,7 +451,9 @@ export function useNotificationPoller() {
       // Get the best thumbnail
       let thumbnailUrl = item.thumbnails?.[0]?.url || null;
       if (item.thumbnails) {
-        const medium = item.thumbnails.find(t => t.resolutionLevel === 'MEDIUM' || t.resolutionLevel === 'HIGH');
+        const medium = item.thumbnails.find(
+          (t) => t.resolutionLevel === "MEDIUM" || t.resolutionLevel === "HIGH",
+        );
         if (medium) thumbnailUrl = medium.url;
       }
 
@@ -348,7 +461,7 @@ export function useNotificationPoller() {
 
       // ─── Parse the date string ──────────────────────────────────────────────
       let publishedDate = new Date();
-      
+
       if (item.textualUploadDate) {
         const parsedDate = parseDateString(item.textualUploadDate);
         if (parsedDate > 0) {
@@ -363,14 +476,21 @@ export function useNotificationPoller() {
 
       // Validate the date is within the last 3 months
       const now = Date.now();
-      if (isNaN(publishedDate.getTime()) || (now - publishedDate.getTime()) > MAX_AGE_MS) {
-        console.log(`[Poller] ⏭️ ${vid} is older than ${MAX_AGE_DAYS} days, skipping`);
+      if (
+        isNaN(publishedDate.getTime()) ||
+        now - publishedDate.getTime() > MAX_AGE_MS
+      ) {
+        console.log(
+          `[Poller] ⏭️ ${vid} is older than ${MAX_AGE_DAYS} days, skipping`,
+        );
         return true; // Skip old videos
       }
 
       console.log(`[Poller] 📝 Inserting: ${item.name} (${vid})`);
       console.log(`[Poller] 📝 Channel: ${channel.name}`);
-      console.log(`[Poller] 📝 Date: ${item.textualUploadDate} → ${publishedDate.toISOString()}`);
+      console.log(
+        `[Poller] 📝 Date: ${item.textualUploadDate} → ${publishedDate.toISOString()}`,
+      );
 
       const { error: insertError } = await supabase
         .from("notifications")
@@ -390,11 +510,105 @@ export function useNotificationPoller() {
         if (insertError.code === "23505") {
           return true;
         }
-        console.error(`[Poller] ❌ Insert failed for ${vid}:`, insertError.message);
+        console.error(
+          `[Poller] ❌ Insert failed for ${vid}:`,
+          insertError.message,
+        );
         return false;
       }
-      
-      console.log(`[Poller] ✅ Inserted: ${item.name?.substring(0, 40) || 'Untitled'}... (${vid})`);
+
+      console.log(
+        `[Poller] ✅ Inserted: ${item.name?.substring(0, 40) || "Untitled"}... (${vid})`,
+      );
+
+      // ─── ✅ STEP 6: Send push notification ──────────────────────────────────
+      // try {
+      //   const response = await fetch(
+      //     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/send-notification`,
+      //     {
+      //       method: "POST",
+      //       headers: {
+      //         Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+      //         "Content-Type": "application/json",
+      //       },
+      //       body: JSON.stringify({
+      //         video_id: vid,
+      //         title: item.name || "Untitled",
+      //         channel_name: channel.name,
+      //         thumbnail_url: thumbnailUrl,
+      //       }),
+      //     },
+      //   );
+
+      //   if (response.ok) {
+      //     const result = await response.json();
+      //     console.log(
+      //       `[Poller] 📤 Push sent: ${result.sent || 0} devices, ${result.failed || 0} failed`,
+      //     );
+      //   } else {
+      //     console.warn(`[Poller] ⚠️ Push send failed: ${response.status}`);
+      //   }
+      // } catch (pushError) {
+      //   // Don't fail the insert if push fails
+      //   console.error(`[Poller] ⚠️ Push send error for ${vid}:`, pushError);
+      // }
+
+      try {
+        const { count, error: countError } = await supabase
+          .from("push_tokens")
+          .select("*", { count: "exact", head: true });
+
+        if (countError) {
+          console.warn(
+            `[Poller] ⚠️ Failed to check push tokens count:`,
+            countError,
+          );
+        } else if (count === 0) {
+          console.log(
+            `[Poller] 📭 No push tokens registered, skipping push for ${vid}`,
+          );
+          return true;
+        }
+
+        // Only send if there are registered devices
+        if (count && count > 0) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+
+          const response = await fetch(
+            `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/send-notification`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                video_id: vid,
+                title: item.name || "Untitled",
+                channel_name: channel.name,
+                thumbnail_url: thumbnailUrl,
+              }),
+              signal: controller.signal,
+            },
+          );
+
+          clearTimeout(timeout);
+
+          if (response.ok) {
+            const result = await response.json();
+            console.log(
+              `[Poller] 📤 Push sent: ${result.sent || 0} devices, ${result.failed || 0} failed`,
+            );
+          } else {
+            console.warn(`[Poller] ⚠️ Push send failed: ${response.status}`);
+          }
+        }
+      } catch (pushError) {
+        // Don't fail the insert if push fails
+        console.error(`[Poller] ⚠️ Push send error for ${vid}:`, pushError);
+      }
+
       return true;
     } catch (err) {
       console.error(`[Poller] ❌ Insert exception for ${vid}:`, err);
@@ -417,59 +631,61 @@ export function useNotificationPoller() {
 
 function parseRelativeDate(relativeStr: string): Date | null {
   if (!relativeStr) return null;
-  
+
   const now = new Date();
   const lower = relativeStr.toLowerCase().trim();
-  
-  const match = lower.match(/(\d+)\s*(year|month|week|day|hour|minute|second)s?\s*ago/);
+
+  const match = lower.match(
+    /(\d+)\s*(year|month|week|day|hour|minute|second)s?\s*ago/,
+  );
   if (!match) return null;
-  
+
   const value = parseInt(match[1], 10);
   const unit = match[2];
-  
+
   const date = new Date(now);
   switch (unit) {
-    case 'year':
+    case "year":
       date.setFullYear(date.getFullYear() - value);
       break;
-    case 'month':
+    case "month":
       date.setMonth(date.getMonth() - value);
       break;
-    case 'week':
+    case "week":
       date.setDate(date.getDate() - value * 7);
       break;
-    case 'day':
+    case "day":
       date.setDate(date.getDate() - value);
       break;
-    case 'hour':
+    case "hour":
       date.setHours(date.getHours() - value);
       break;
-    case 'minute':
+    case "minute":
       date.setMinutes(date.getMinutes() - value);
       break;
-    case 'second':
+    case "second":
       date.setSeconds(date.getSeconds() - value);
       break;
     default:
       return null;
   }
-  
+
   return date;
 }
 
 function parseDateString(dateStr: string): number {
   if (!dateStr) return 0;
-  
+
   const isoDate = new Date(dateStr);
   if (!isNaN(isoDate.getTime())) {
     return isoDate.getTime();
   }
-  
+
   const relativeDate = parseRelativeDate(dateStr);
   if (relativeDate && !isNaN(relativeDate.getTime())) {
     return relativeDate.getTime();
   }
-  
+
   return 0;
 }
 
