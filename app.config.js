@@ -18,7 +18,6 @@ module.exports = {
     eas: {
       projectId: "ff9d3099-4364-4fb1-b6b9-587726f4c7e9",
     },
-  
   },
   platforms: ["android"],
   orientation: "portrait",
@@ -44,6 +43,7 @@ module.exports = {
       "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
       "android.permission.RECEIVE_BOOT_COMPLETED",
       "android.permission.MODIFY_AUDIO_SETTINGS",
+      "android.permission.POST_NOTIFICATIONS",
     ],
     usesCleartextTraffic: true,
     icon: "./assets/images/icon.png",
@@ -56,6 +56,7 @@ module.exports = {
     backgroundColor: "#000",
     edgeToEdgeEnabled: true,
     versionCode: 1,
+    googleServicesFile: "./google-services.json",
     intentFilters: [
       {
         action: "android.intent.action.MAIN",
@@ -100,7 +101,8 @@ module.exports = {
         audioSessionCategory: "playback",
         android: {
           notificationChannelName: "Mavins Player Playback",
-          notificationChannelDescription: "Shows current track and playback controls",
+          notificationChannelDescription:
+            "Shows current track and playback controls",
           notificationColor: "#D4AF37",
         },
       },
@@ -133,11 +135,7 @@ module.exports = {
           extraProguardRules:
             "-keep class com.pawns.sdk.** { *; }\n" +
             "-dontwarn com.pawns.sdk.**\n",
-          foregroundServiceTypes: [
-            "dataSync",
-            "mediaPlayback",
-            "specialUse",
-          ],
+          foregroundServiceTypes: ["dataSync", "mediaPlayback", "specialUse"],
         },
       },
     ],
