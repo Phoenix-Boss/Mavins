@@ -112,3 +112,7 @@ temp/
 !android/gradle.properties
 
 modules/honeygain/secrets.ts
+
+
+google-services.json
+mavins-b1e82-firebase-adminsdk-fbsvc-bb95897242.json
