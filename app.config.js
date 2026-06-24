@@ -3,6 +3,7 @@
 // FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
 // FIX 2: Removed expo-audio plugin (uninstalled — background audio handled by expo-media-control)
 // FIX 3: Removed extraMavenRepos jitpack — pawns SDK now bundled as local AAR in modules/pawns/android/libs/
+// UPDATE: Added deep link schemes for soundwave protocol
 
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
@@ -18,12 +19,11 @@ module.exports = {
     eas: {
       projectId: "ff9d3099-4364-4fb1-b6b9-587726f4c7e9",
     },
-  
   },
   platforms: ["android"],
   orientation: "portrait",
   icon: "./assets/images/icon.png",
-  scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
+  scheme: IS_DEV ? "mavins-player-dev" : "soundwave",
   userInterfaceStyle: "automatic",
 
   newArchEnabled: true,
@@ -61,14 +61,31 @@ module.exports = {
         action: "android.intent.action.MAIN",
         category: ["android.intent.category.LAUNCHER"],
       },
+      // Deep link intent filter for soundwave:// scheme
       {
         action: "android.intent.action.VIEW",
         autoVerify: true,
         data: [
           {
-            scheme: IS_DEV ? "mavins-player-dev" : "mavins-player",
-            host: "player",
-            pathPrefix: "/open",
+            scheme: "soundwave",
+            host: "play",
+            pathPrefix: "/",
+          },
+        ],
+        category: [
+          "android.intent.category.DEFAULT",
+          "android.intent.category.BROWSABLE",
+        ],
+      },
+      // Web URL intent filter for mavins.vercel.app/share links
+      {
+        action: "android.intent.action.VIEW",
+        autoVerify: true,
+        data: [
+          {
+            scheme: "https",
+            host: "mavins.vercel.app",
+            pathPrefix: "/share",
           },
         ],
         category: [

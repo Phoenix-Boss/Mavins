@@ -11,6 +11,8 @@
 // FIXED: Skip metadata updates when duration is 0 to prevent showing "0:00" on lock screen
 // FIXED: Wait for valid duration before pushing metadata to native
 // FIXED: Single source of truth from master player
+// FIXED: Use app icon (mavin.png) as default fallback artwork
+// FIXED: Show "Mavin Player" as default title and "Upcoming Artist" as default artist
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus, Image } from 'react-native';
@@ -23,8 +25,8 @@ import {
 
 import type { RepeatMode } from '@/libs/playerSetup';
 
-// Import fallback image for local tracks without artwork
-const FALLBACK_ICON = require('@/assets/images/icon.png');
+// Import app icon as default fallback
+const APP_ICON = require('@/assets/images/mavins.png');
 
 export interface SystemMediaControlsTrack {
   title: string;
@@ -66,6 +68,10 @@ const METADATA_DEBOUNCE_MS = 500;
 const MAX_METADATA_RETRIES = 5;
 const METADATA_RETRY_DELAY_MS = 1000;
 
+// Default values for lock screen
+const DEFAULT_TITLE = 'Mavin Player';
+const DEFAULT_ARTIST = 'Upcoming Artist';
+
 // Valid commands in expo-media-control
 const MEDIA_CAPABILITY_KEYS = [
   'PLAY',
@@ -96,10 +102,10 @@ let metadataRetryTimeout: ReturnType<typeof setTimeout> | null = null;
 function getFallbackArtworkUri(): string {
   if (!cachedFallbackUri) {
     try {
-      const resolved = Image.resolveAssetSource(FALLBACK_ICON);
+      const resolved = Image.resolveAssetSource(APP_ICON);
       cachedFallbackUri = resolved?.uri || '';
     } catch (error) {
-      console.warn('[MediaControls] Failed to resolve fallback icon:', error);
+      console.warn('[MediaControls] Failed to resolve app icon:', error);
       cachedFallbackUri = '';
     }
   }
@@ -160,6 +166,22 @@ function buildArtworkUri(track?: SystemMediaControlsTrack): string | undefined {
   return fallbackUri || undefined;
 }
 
+function getSafeTitle(track?: SystemMediaControlsTrack): string {
+  if (!track) return DEFAULT_TITLE;
+  if (track.title && track.title.trim().length > 0) {
+    return track.title.trim();
+  }
+  return DEFAULT_TITLE;
+}
+
+function getSafeArtist(track?: SystemMediaControlsTrack): string {
+  if (!track) return DEFAULT_ARTIST;
+  if (track.artist && track.artist.trim().length > 0) {
+    return track.artist.trim();
+  }
+  return DEFAULT_ARTIST;
+}
+
 function getNativeCapabilities(): {
   capabilities: Command[];
   compactCapabilities: Command[];
@@ -179,10 +201,12 @@ function generateMetadataHash(props: SystemMediaControlsProps): string {
   const activeDuration = safeDuration(props.duration, props.track?.duration);
   const activePosition = safePosition(props.position);
   const artworkUri = buildArtworkUri(props.track);
+  const title = getSafeTitle(props.track);
+  const artist = getSafeArtist(props.track);
   
   return JSON.stringify({
-    title: props.track?.title || '',
-    artist: props.track?.artist || '',
+    title,
+    artist,
     duration: activeDuration,
     elapsedTime: activePosition,
     isPlaying: props.isPlaying,
@@ -193,7 +217,6 @@ function generateMetadataHash(props: SystemMediaControlsProps): string {
 
 async function pushMetadataAndState(props: SystemMediaControlsProps): Promise<void> {
   if (!isMediaControlAvailable() || !isInitialized) return;
-  if (!props.track) return;
 
   const activeDuration = safeDuration(props.duration, props.track?.duration);
   
@@ -226,6 +249,8 @@ async function pushMetadataAndState(props: SystemMediaControlsProps): Promise<vo
   const elapsedTime = safePosition(props.position);
   const activePlaying = props.isPlaying;
   const artworkUri = buildArtworkUri(props.track);
+  const title = getSafeTitle(props.track);
+  const artist = getSafeArtist(props.track);
 
   // Generate hash to avoid duplicate updates
   const newHash = generateMetadataHash(props);
@@ -240,8 +265,8 @@ async function pushMetadataAndState(props: SystemMediaControlsProps): Promise<vo
   lastMetadataPushTime = now;
 
   console.log('[MediaControls] Pushing metadata to native:', {
-    title: props.track?.title,
-    artist: props.track?.artist,
+    title,
+    artist,
     duration: activeDuration,
     elapsedTime,
     isPlaying: activePlaying,
@@ -249,8 +274,8 @@ async function pushMetadataAndState(props: SystemMediaControlsProps): Promise<vo
 
   await safeMediaCall(async () => {
     await MediaControl.updateMetadata({
-      title: props.track?.title || 'Unknown Title',
-      artist: props.track?.artist || 'Unknown Artist',
+      title,
+      artist,
       duration: activeDuration,
       elapsedTime,
       ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
@@ -365,7 +390,7 @@ function startProgressInterval(): void {
   }
 
   progressInterval = setInterval(() => {
-    if (!isInitialized || !currentProps || !currentProps.track) return;
+    if (!isInitialized || !currentProps) return;
     
     const activeDuration = safeDuration(currentProps.duration, currentProps.track?.duration);
     // Skip progress updates if duration is still 0
@@ -450,7 +475,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
   // Duration sync effect - only push when duration becomes valid (>0)
   useEffect(() => {
-    if (!isInitialized || !props.track) return;
+    if (!isInitialized) return;
     
     const durationValue = safeDuration(props.duration, props.track?.duration);
     // Only push if we have a valid duration
@@ -461,7 +486,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
 
   // Full metadata push on relevant changes (only when duration is valid)
   useEffect(() => {
-    if (!isInitialized || !props.track) return;
+    if (!isInitialized) return;
     
     const activeDuration = safeDuration(props.duration, props.track?.duration);
     // Skip if duration is still 0 (not loaded yet)
@@ -482,7 +507,7 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState !== 'background') return;
-      if (!isInitialized || !props.track) return;
+      if (!isInitialized) return;
 
       const activeDuration = safeDuration(props.duration, props.track?.duration);
       // Skip if duration not loaded
@@ -491,6 +516,8 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
       const elapsedTime = safePosition(props.position);
       const activePlaying = props.isPlaying;
       const artworkUri = buildArtworkUri(props.track);
+      const title = getSafeTitle(props.track);
+      const artist = getSafeArtist(props.track);
 
       void safeMediaCall(async () => {
         await MediaControl.updatePlaybackState(
@@ -504,8 +531,8 @@ export function useSystemMediaControls(props: SystemMediaControlsProps): void {
         await MediaControl.updateMetadata({
           duration: activeDuration,
           elapsedTime,
-          title: props.track?.title || 'Unknown Title',
-          artist: props.track?.artist || 'Unknown Artist',
+          title,
+          artist,
           ...(artworkUri ? { artwork: { uri: artworkUri } } : {}),
         });
       });

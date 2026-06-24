@@ -294,12 +294,15 @@ export default function HomeScreen() {
           return;
         }
         
-        // Fallback: create basic song object with video ID
+        // Fallback: create basic song object with video ID.
+        // Use the normalised fields (songTitle / artistName) populated by
+        // useQuickPicks — never fall back to card.description, which is the
+        // raw YouTube description blob and is unsuitable as an artist label.
         const videoId = card.songId || card.id;
         handleSongPress({
           id: card.songId || card.id,
-          title: card.title,
-          artist: card.description || 'Various Artists',
+          title: card.songTitle || card.title,
+          artist: card.artistName || 'Various Artists',
           thumbnail: card.thumbnail,
           url: `https://www.youtube.com/watch?v=${videoId}`,
           videoId: videoId,

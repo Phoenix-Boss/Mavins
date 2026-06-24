@@ -4,6 +4,12 @@
 // Industry standard: Audio engine initializes once at app startup,
 // survives all React remounts via module-level singleton pattern.
 // Provider is now the outermost layer — nothing above it can remount it.
+//
+// ISSUE 2 FIX: DeviceManager initialized at app startup
+// Registers the real device in the device pool so campaign calculations
+// are device-aware from the moment the app launches.
+//
+// UPDATE: Deep link handling integrated with useDeepLink hook
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -82,6 +88,8 @@ import {
   PlayerOverlayProvider,
   usePlayerOverlay,
 } from '@/libs/playerOverlay';
+import deviceManager from '@/libs/DeviceManager';
+import useDeepLink from '@/hooks/useDeepLink';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANDROID LOG SUPPRESSION
@@ -156,6 +164,22 @@ const COLLAPSE_THRESHOLD = SCREEN_HEIGHT * 0.18;
 const COLLAPSE_VELOCITY = 750;
 
 const ICON_IMAGE = require('@/assets/images/icon.png');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEEP LINK HANDLER COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DeepLinkHandler() {
+  const { initialLinkProcessed } = useDeepLink();
+
+  useEffect(() => {
+    if (initialLinkProcessed) {
+      console.log('[DeepLinkHandler] Deep link handler initialized');
+    }
+  }, [initialLinkProcessed]);
+
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FULL PLAYER OVERLAY (Expanded Player Modal)
@@ -443,6 +467,59 @@ function PulsingLogoOverlay({ visible }: { visible: boolean }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DEVICE INITIALIZER COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DeviceInitializer() {
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    const initDevice = async () => {
+      try {
+        const deviceId = await deviceManager.getDeviceId();
+        const region = 'Global';
+        const success = await deviceManager.registerRealDevice(region);
+        
+        if (success) {
+          console.log(`📱 Device initialized at app startup: ${deviceId}`);
+          await deviceManager.updateDeviceStatus(deviceId, true);
+        }
+        
+        setInitialized(true);
+      } catch (err) {
+        console.error('[DeviceInitializer] Failed to initialize device:', err);
+        setInitialized(true);
+      }
+    };
+
+    initDevice();
+  }, []);
+
+  useEffect(() => {
+    const handleAppStateChange = async (nextAppState: string) => {
+      try {
+        const deviceId = await deviceManager.getDeviceId();
+        
+        if (nextAppState === 'active') {
+          await deviceManager.updateDeviceStatus(deviceId, true);
+          console.log(`📱 Device online: ${deviceId}`);
+        } else if (nextAppState === 'background') {
+          await deviceManager.updateDeviceStatus(deviceId, false);
+          console.log(`📱 Device offline: ${deviceId}`);
+        }
+      } catch (err) {
+        console.error('[DeviceInitializer] Failed to update device status:', err);
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, []);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // APP SHELL (Navigation Stack + UI)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -455,6 +532,12 @@ function AppShell({
 
   return (
     <View style={[styles.appShell, { backgroundColor: colors.background }]}>
+      {/* Device initializer - runs at app startup */}
+      <DeviceInitializer />
+
+      {/* Deep link handler */}
+      <DeepLinkHandler />
+
       {fontsLoaded && (
         <>
           <HomePreloader />
@@ -636,17 +719,6 @@ export default function RootLayout() {
     } catch (e) {
       console.warn('[Cache]', e);
     }
-  }, []);
-
-  // Deep link handling
-  useEffect(() => {
-    const handle = (url: string | null) => {
-      if (url?.startsWith('mavins-player')) console.log('[DeepLink]', url);
-    };
-
-    Linking.getInitialURL().then(handle);
-    const sub = Linking.addEventListener('url', ({ url }) => handle(url));
-    return () => sub.remove();
   }, []);
 
   return (

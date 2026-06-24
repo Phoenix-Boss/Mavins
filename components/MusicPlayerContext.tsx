@@ -110,6 +110,70 @@ export interface ResolvedTrack {
   isVideoOnly: boolean;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARE URL GENERATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface GenerateShareResponse {
+  success: boolean;
+  shareUrl: string;
+  shareId: string;
+  trackId: string;
+  title: string;
+  artist: string;
+  error?: string;
+}
+
+export async function generateShareUrl(
+  trackId: string,
+  userId: string,
+  title: string,
+  artist?: string,
+  thumbnail?: string,
+  taskId?: string
+): Promise<GenerateShareResponse> {
+  try {
+    const baseUrl = 'https://mavins.vercel.app';
+    
+    const response = await fetch(`${baseUrl}/api/share/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trackId,
+        userId,
+        title,
+        artist: artist || '',
+        thumbnail: thumbnail || '',
+        taskId: taskId || null,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to generate share URL: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('[MusicPlayer] Error generating share URL:', error);
+    return {
+      success: false,
+      shareUrl: '',
+      shareId: '',
+      trackId: '',
+      title: '',
+      artist: '',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
 const CONFIG = {
   STREAM_TTL_MS: 6 * 60 * 60 * 1000,
   MAX_EXTRAS_CACHE: 50,
@@ -165,6 +229,7 @@ interface PlaybackSession {
   videoPosition: number;
   videoDuration: number;
   videoIsPlaying: boolean;
+  currentUserId: string | null;
 }
 
 const session: PlaybackSession = {
@@ -194,6 +259,7 @@ const session: PlaybackSession = {
   videoPosition: 0,
   videoDuration: 0,
   videoIsPlaying: false,
+  currentUserId: null,
 };
 
 const sessionListeners = new Set<() => void>();
@@ -1339,6 +1405,14 @@ export interface MusicPlayerContextType {
   setVolume: (volume: number) => Promise<void>;
   setPreservePitch: (preserve: boolean) => Promise<void>;
   notifyVideoTrackFinished: () => Promise<void>;
+  // Share related
+  generateShareUrl: (
+    trackId: string,
+    title: string,
+    artist?: string,
+    thumbnail?: string,
+    taskId?: string
+  ) => Promise<GenerateShareResponse>;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -1866,6 +1940,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
   const videoPosition = session.videoPosition;
   const videoDuration = session.videoDuration;
   const videoIsPlaying = session.videoIsPlaying;
+  const currentUserId = session.currentUserId;
 
   const isPlaying = optimisticPlaying !== null ? optimisticPlaying : masterState.isPlaying;
   const isBuffering = masterState.isBuffering;
@@ -2015,6 +2090,51 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
       setSession('preservePitch', preserve);
       await savePreservePitch(preserve);
     } catch (e) { console.warn('[MusicPlayer] setPreservePitch error:', e); }
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SHARE URL GENERATION - Exposed via context
+  // ─────────────────────────────────────────────────────────────────────────────
+  const generateShareUrl = useCallback(async (
+    trackId: string,
+    title: string,
+    artist?: string,
+    thumbnail?: string,
+    taskId?: string
+  ): Promise<GenerateShareResponse> => {
+    const userId = session.currentUserId;
+    if (!userId) {
+      console.warn('[MusicPlayer] No user ID available for share generation');
+      return {
+        success: false,
+        shareUrl: '',
+        shareId: '',
+        trackId: '',
+        title: '',
+        artist: '',
+        error: 'User not authenticated',
+      };
+    }
+    return await generateShareUrl(trackId, userId, title, artist, thumbnail, taskId);
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Set current user ID when available
+  // ─────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    // This is a placeholder - you should set this from your auth system
+    // For example, when user logs in:
+    // setSession('currentUserId', user.id);
+    // For now, we'll use a mock or get from AsyncStorage
+    const loadUserId = async () => {
+      try {
+        const userId = await AsyncStorage.getItem('user_id');
+        if (userId) {
+          setSession('currentUserId', userId);
+        }
+      } catch {}
+    };
+    loadUserId();
   }, []);
 
   const playAudio = useCallback(
@@ -2488,6 +2608,7 @@ export const MusicPlayerProvider: React.FC<{ children: ReactNode }> = ({ childre
     setVolume,
     setPreservePitch,
     notifyVideoTrackFinished,
+    generateShareUrl,
   };
 
   return (

@@ -61,14 +61,18 @@ export interface EditorPick {
 
 export interface CampaignCard {
   id: string;
-  title: string;
-  description?: string;
+  title: string;       // raw DB title (may be full "Artist - Song Title" string)
+  description?: string; // raw DB description (may be full YouTube description blob)
   thumbnail: string;
   promoted: boolean;
   mavinSpecial: boolean;
   playCount: number;
   ctaUrl?: string;
   songId?: string;
+  // Normalized fields — populated by useQuickPicks at fetch time.
+  // Always prefer these over `title`/`description` for display and playback.
+  songTitle?: string;  // clean song title only, e.g. "Last Last"
+  artistName?: string; // clean artist/channel name, e.g. "Burna Boy"
 }
 
 interface HomeState {

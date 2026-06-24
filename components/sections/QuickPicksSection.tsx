@@ -1,12 +1,11 @@
 // components/sections/QuickPicksSection.tsx
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Animated,
-  AppState,
   ScrollView,
   useColorScheme,
 } from 'react-native';
@@ -51,24 +50,21 @@ function formatPlayCount(count: number): string {
 }
 
 function AnimatedCounter({
-  baseValue,
+  playCount,
   colors,
-  focusTick,
   isDark,
 }: {
-  baseValue: number;
+  playCount: number;
   colors: any;
-  focusTick: number;
   isDark: boolean;
 }) {
-  const targetValue   = baseValue + focusTick;
   const animatedValue = useRef(new Animated.Value(0)).current;
   const [displayValue, setDisplayValue] = useState(0);
 
   useEffect(() => {
     animatedValue.setValue(0);
     const anim = Animated.timing(animatedValue, {
-      toValue: targetValue,
+      toValue: playCount,
       duration: COUNTER_DURATION,
       useNativeDriver: false,
     });
@@ -80,7 +76,7 @@ function AnimatedCounter({
       animatedValue.removeListener(listener);
       anim.stop();
     };
-  }, [focusTick, targetValue]);
+  }, [playCount]);
 
   // Dark mode: number = white, "plays" = gold
   // Light mode: number = black, "plays" = orange
@@ -127,24 +123,11 @@ export function QuickPicksSection({ data, onCardPress }: QuickPicksSectionProps)
   const colorScheme   = useColorScheme();
   const isDark        = colorScheme === 'dark';
 
-  const [focusTick, setFocusTick] = useState(0);
-  const bumpTick = useCallback(() => setFocusTick((p) => p + 1), []);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') bumpTick();
-    });
-    return () => sub.remove();
-  }, [bumpTick]);
-
   const firstCard = data && data.length > 0 ? data[0] : null;
   if (!firstCard) return null;
 
-  // Use the actual artist field — NOT description (which holds "The hottest tracks...")
-  const artistDisplay =
-    firstCard.artist && firstCard.artist.trim().length > 0
-      ? firstCard.artist
-      : 'Upcoming Artist';
+  // Use the artist name from engine enrichment — clean and accurate
+  const artistDisplay = firstCard.artistName || '';
 
   return (
     <View style={styles.container}>
@@ -168,11 +151,13 @@ export function QuickPicksSection({ data, onCardPress }: QuickPicksSectionProps)
 
           <View style={styles.content}>
             <Text style={[styles.songTitle, { color: colors.text }]} numberOfLines={2}>
-              {firstCard.title}
+              {firstCard.songTitle || firstCard.title}
             </Text>
 
             {/* Artist pill — scrolls horizontally if name overflows */}
-            <ArtistPill artist={artistDisplay} colors={colors} />
+            {artistDisplay ? (
+              <ArtistPill artist={artistDisplay} colors={colors} />
+            ) : null}
           </View>
 
           {/* Promoted flame badge — top-left, small, stays inside card */}
@@ -195,13 +180,12 @@ export function QuickPicksSection({ data, onCardPress }: QuickPicksSectionProps)
           Anchored to bottom-right of cardWrapper using absolute positioning.
           The wrapper has explicit height=CARD_HEIGHT so `bottom` is reliable.
           Sits just inside the card's right edge so it overlaps the card visually
-          while the 30° rotation lets it lean outward naturally.
+          while the 5° rotation lets it lean outward naturally.
         */}
         <View style={styles.counterOuterWrapper} pointerEvents="none">
           <AnimatedCounter
-            baseValue={firstCard.playCount}
+            playCount={firstCard.playCount}
             colors={colors}
-            focusTick={focusTick}
             isDark={isDark}
           />
         </View>
@@ -290,7 +274,7 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
 
-  // 30° slant on the entire pill
+  // 5° slant on the entire pill
   counterWrapper: {
     alignSelf: 'flex-start',
     transform: [{ rotate: '5deg' }],

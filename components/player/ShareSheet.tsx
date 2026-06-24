@@ -3,7 +3,7 @@
 // Premium portrait-modal share sheet with cover art design
 // — Shows beautiful card with track artwork and metadata
 // — No video processing, no FFmpeg, no waveform extraction
-// — Shares only the track link URL to social platforms
+// — Shares custom Mavin share links with rich previews
 // — Clean, fast, and simple
 
 import React, {
@@ -25,6 +25,7 @@ import {
   Text,
   TouchableWithoutFeedback,
   View,
+  Alert,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { Image } from 'expo-image';
@@ -51,6 +52,8 @@ export interface ShareSheetProps {
     id?: string;
     duration?: number;
   };
+  userId?: string; // User ID for tracking shares
+  onShareGenerated?: (shareUrl: string) => void; // Callback when share URL is generated
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +150,49 @@ function normalizeSongTitle(title: string, artistName?: string): string {
   if (cleaned.length > 0) cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   
   return cleaned || 'Untitled';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARE URL GENERATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function generateShareUrl(
+  trackId: string,
+  userId: string,
+  title: string,
+  artist?: string,
+  thumbnail?: string,
+  taskId?: string
+): Promise<string> {
+  try {
+    const baseUrl = 'https://mavins.vercel.app';
+    
+    const response = await fetch(`${baseUrl}/api/share/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trackId,
+        userId,
+        title,
+        artist: artist || '',
+        thumbnail: thumbnail || '',
+        taskId: taskId || null,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to generate share URL: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.shareUrl;
+  } catch (error) {
+    console.error('[ShareSheet] Error generating share URL:', error);
+    // Fallback to YouTube URL
+    return `https://www.youtube.com/watch?v=${trackId}`;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,8 +616,10 @@ const innerCardStyles = StyleSheet.create({
 // MAIN EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function ShareSheet({ visible, onClose, track }: ShareSheetProps) {
+export default function ShareSheet({ visible, onClose, track, userId, onShareGenerated }: ShareSheetProps) {
   const insets = useSafeAreaInsets();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string>('');
 
   const animMap = useMemo(() => {
     const m = new Map<string, Animated.Value>();
@@ -599,6 +647,11 @@ export default function ShareSheet({ visible, onClose, track }: ShareSheetProps)
         Animated.spring(translateY, { toValue: 0, useNativeDriver: true, damping: 24, mass: 0.95, stiffness: 240 }),
         Animated.timing(backdropOp, { toValue: 1, duration: 200, useNativeDriver: true }),
       ]).start();
+      
+      // Generate share URL when sheet opens
+      if (!shareUrl && !isGenerating) {
+        generateShareUrlForTrack();
+      }
     } else {
       Animated.parallel([
         Animated.timing(translateY, { toValue: SCREEN_H, duration: SNAP_MS, useNativeDriver: true }),
@@ -617,27 +670,110 @@ export default function ShareSheet({ visible, onClose, track }: ShareSheetProps)
     setSelectedSwatch(key);
   }, [selectedSwatch, animMap]);
 
+  // ─── Generate share URL ──────────────────────────────────────────────────
+  const generateShareUrlForTrack = useCallback(async () => {
+    if (!track.id && !track.videoId) {
+      console.warn('[ShareSheet] No track ID available');
+      return;
+    }
+
+    if (!userId) {
+      console.warn('[ShareSheet] No user ID available');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const trackId = track.videoId || track.id || '';
+      const url = await generateShareUrl(
+        trackId,
+        userId,
+        track.title,
+        track.artist,
+        track.thumbnail
+      );
+      setShareUrl(url);
+      onShareGenerated?.(url);
+    } catch (error) {
+      console.error('[ShareSheet] Failed to generate share URL:', error);
+      // Fallback to YouTube
+      const fallbackUrl = track.videoId 
+        ? `https://www.youtube.com/watch?v=${track.videoId}`
+        : track.url || '';
+      setShareUrl(fallbackUrl);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [track, userId, onShareGenerated]);
+
   // ─── Share helpers ──────────────────────────────────────────────────────
   const displayArtist = extractAllArtists(track.title, track.artist);
   const displayTitle = normalizeSongTitle(track.title, displayArtist);
-  const shareUrl = track.videoId ? `https://www.youtube.com/watch?v=${track.videoId}` : (track.url ?? '');
-  const shareMsg = `🎵 ${displayTitle}${displayArtist ? ` · ${displayArtist}` : ''}\n\n${shareUrl}`;
+  
+  // Use custom share URL if generated, otherwise fallback to YouTube
+  const finalShareUrl = shareUrl || (track.videoId ? `https://www.youtube.com/watch?v=${track.videoId}` : track.url || '');
+  
+  // Format: "Listen to [Song Title] 🎵" with URL embedded
+  const shareText = `Listen to ${displayTitle} 🎵`;
+  const shareMessage = `${shareText}\n\n${finalShareUrl}`;
 
-  const handleCopy = useCallback(() => { 
-    triggerHaptic(); 
-    Clipboard.setString(shareUrl); 
-    setCopyToast(false); 
-    setTimeout(() => setCopyToast(true), 10); 
-  }, [shareUrl]);
+  const handleCopy = useCallback(async () => {
+    triggerHaptic();
+    
+    if (isGenerating) {
+      Alert.alert('Generating link...', 'Please wait while we prepare your share link.');
+      return;
+    }
+
+    if (!finalShareUrl) {
+      Alert.alert('Error', 'Unable to generate share link. Please try again.');
+      return;
+    }
+
+    try {
+      // On iOS, set both the text and URL in the clipboard
+      // On Android, set the full message with URL
+      if (Platform.OS === 'ios') {
+        // iOS can store both text and URL separately
+        Clipboard.setString(shareText);
+        // Also store URL separately for iOS rich previews
+        // Note: iOS automatically detects URLs in clipboard text
+      } else {
+        // Android: set the full message with URL
+        Clipboard.setString(shareMessage);
+      }
+      
+      setCopyToast(false);
+      setTimeout(() => setCopyToast(true), 10);
+    } catch (error) {
+      console.error('[ShareSheet] Copy error:', error);
+      Alert.alert('Error', 'Failed to copy link. Please try again.');
+    }
+  }, [isGenerating, finalShareUrl, shareText, shareMessage]);
 
   const handleShare = useCallback(async (platform?: string) => {
     triggerHaptic();
 
+    if (isGenerating) {
+      Alert.alert('Generating link...', 'Please wait while we prepare your share link.');
+      return;
+    }
+
+    if (!finalShareUrl) {
+      Alert.alert('Error', 'Unable to generate share link. Please try again.');
+      return;
+    }
+
+    // Different platforms handle messages differently
+    const platformMessage = platform === 'instagram' 
+      ? `${shareText}` // Instagram doesn't support clickable URLs in posts
+      : shareMessage;
+
     if (platform) {
       const shareOptions: any = {
         title: displayTitle,
-        message: shareMsg,
-        url: shareUrl,
+        message: platformMessage,
+        url: finalShareUrl,
       };
 
       switch (platform) {
@@ -673,22 +809,64 @@ export default function ShareSheet({ visible, onClose, track }: ShareSheetProps)
         }
       }
     } else {
-      // More - generic share
-      Share.share({ 
-        title: displayTitle, 
-        message: Platform.OS === 'android' ? shareMsg : `🎵 ${displayTitle}`, 
-        url: Platform.OS === 'ios' ? shareUrl : undefined 
-      });
+      // More - generic share using React Native Share
+      try {
+        await Share.share({ 
+          title: displayTitle, 
+          message: Platform.OS === 'android' ? shareMessage : shareText,
+          url: Platform.OS === 'ios' ? finalShareUrl : undefined,
+        });
+      } catch (error) {
+        console.error('[ShareSheet] Generic share failed:', error);
+      }
     }
-  }, [displayTitle, shareMsg, shareUrl]);
+  }, [isGenerating, finalShareUrl, shareText, shareMessage, displayTitle]);
 
   const TARGETS = [
-    { key: 'cp', label: 'Copy', bg: 'rgba(255,255,255,0.08)', border: true, icon: <Ionicons name="copy-outline" size={moderateScale(19)} color="#fff" />, onPress: handleCopy },
-    { key: 'wa', label: 'WhatsApp', bg: '#25D366', icon: <MaterialCommunityIcons name="whatsapp" size={moderateScale(21)} color="#fff" />, onPress: () => handleShare('whatsapp') },
-    { key: 'tg', label: 'Telegram', bg: '#2AABEE', icon: <MaterialCommunityIcons name="send" size={moderateScale(19)} color="#fff" />, onPress: () => handleShare('telegram') },
-    { key: 'x', label: 'X', bg: '#000000', icon: <MaterialCommunityIcons name="twitter" size={moderateScale(20)} color="#fff" />, onPress: () => handleShare('x') },
-    { key: 'ig', label: 'Instagram', bg: '#C13584', icon: <MaterialCommunityIcons name="instagram" size={moderateScale(21)} color="#fff" />, onPress: () => handleShare('instagram') },
-    { key: 'mo', label: 'More', bg: 'rgba(255,255,255,0.08)', border: true, icon: <Ionicons name="ellipsis-horizontal" size={moderateScale(19)} color="#fff" />, onPress: () => handleShare() },
+    { 
+      key: 'cp', 
+      label: 'Copy', 
+      bg: 'rgba(255,255,255,0.08)', 
+      border: true, 
+      icon: <Ionicons name="copy-outline" size={moderateScale(19)} color="#fff" />, 
+      onPress: handleCopy 
+    },
+    { 
+      key: 'wa', 
+      label: 'WhatsApp', 
+      bg: '#25D366', 
+      icon: <MaterialCommunityIcons name="whatsapp" size={moderateScale(21)} color="#fff" />, 
+      onPress: () => handleShare('whatsapp') 
+    },
+    { 
+      key: 'tg', 
+      label: 'Telegram', 
+      bg: '#2AABEE', 
+      icon: <MaterialCommunityIcons name="send" size={moderateScale(19)} color="#fff" />, 
+      onPress: () => handleShare('telegram') 
+    },
+    { 
+      key: 'x', 
+      label: 'X', 
+      bg: '#000000', 
+      icon: <MaterialCommunityIcons name="twitter" size={moderateScale(20)} color="#fff" />, 
+      onPress: () => handleShare('x') 
+    },
+    { 
+      key: 'ig', 
+      label: 'Instagram', 
+      bg: '#C13584', 
+      icon: <MaterialCommunityIcons name="instagram" size={moderateScale(21)} color="#fff" />, 
+      onPress: () => handleShare('instagram') 
+    },
+    { 
+      key: 'mo', 
+      label: 'More', 
+      bg: 'rgba(255,255,255,0.08)', 
+      border: true, 
+      icon: <Ionicons name="ellipsis-horizontal" size={moderateScale(19)} color="#fff" />, 
+      onPress: () => handleShare() 
+    },
   ];
 
   // ─── Render ──────────────────────────────────────────────────────────────
@@ -722,6 +900,7 @@ export default function ShareSheet({ visible, onClose, track }: ShareSheetProps)
               key={t.key}
               label={t.label}
               onPress={t.onPress}
+              disabled={isGenerating}
               icon={<IconCircle bg={t.bg} border={(t as any).border}>{t.icon}</IconCircle>}
             />
           ))}

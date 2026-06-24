@@ -1608,10 +1608,16 @@ function PlayerContentInner({
     setShowShareSheet(true);
   }, [displayTrack]);
 
+  // FIX: Use icon.png as the universal fallback cover art for any track —
+  // streaming or local — whose thumbnail is null, undefined, or an empty string.
+  // The guard checks both type (must be string) AND truthiness (non-empty) so
+  // that a track returning thumbnail: null, thumbnail: undefined, or
+  // thumbnail: "" from either MavinEngine or the local library scanner all
+  // correctly fall through to the bundled asset.
   const artworkSource =
-    typeof displayTrack?.thumbnail === 'string' && displayTrack.thumbnail
+    typeof displayTrack?.thumbnail === 'string' && displayTrack.thumbnail.trim() !== ''
       ? { uri: displayTrack.thumbnail }
-      : require('@/assets/images/mavins.png');
+      : require('@/assets/images/icon.png');
 
   const getRepeatIcon = () => {
     if (repeatMode === 'off') return 'repeat-off';
