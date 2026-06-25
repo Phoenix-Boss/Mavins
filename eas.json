@@ -9,15 +9,13 @@
       "distribution": "internal",
       "env": {
         "GOOGLE_SERVICES_JSON": "$GOOGLE_SERVICES_JSON"
-      },
-      "prebuild": "echo $GOOGLE_SERVICES_JSON | base64 -d > google-services.json"
+      }
     },
     "preview": {
       "distribution": "internal",
       "env": {
         "GOOGLE_SERVICES_JSON": "$GOOGLE_SERVICES_JSON"
-      },
-      "prebuild": "echo $GOOGLE_SERVICES_JSON | base64 -d > google-services.json"
+      }
     },
     "production": {
       "autoIncrement": true,
@@ -26,8 +24,7 @@
       },
       "env": {
         "GOOGLE_SERVICES_JSON": "$GOOGLE_SERVICES_JSON"
-      },
-      "prebuild": "echo $GOOGLE_SERVICES_JSON | base64 -d > google-services.json"
+      }
     }
   },
   "submit": {
