@@ -53,7 +53,7 @@ import { useFonts } from 'expo-font';
 import { Stack, useRootNavigationState, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { Image } from 'expo-image';
-
+import * as Notifications from "expo-notifications";
 import { initializeLibrary } from '@/store/library';
 import {
   MusicPlayerProvider,
@@ -63,6 +63,7 @@ import {
   type GestureContextValue,
 } from '@/libs/playerSetup';
 import { LyricsProvider, LyricsFetcher } from '@/hooks/useLyricsContext';
+import useNotificationClickHandler from '@/hooks/useNotificationClickHandler';
 import { GlobalUIStateProvider } from '@/contexts/GlobalUIStateContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AlertProvider } from '@/contexts/AlertContext';
@@ -90,6 +91,8 @@ import {
 } from '@/libs/playerOverlay';
 import deviceManager from '@/libs/DeviceManager';
 import useDeepLink from '@/hooks/useDeepLink';
+import { registerForPushNotifications } from "@/services/notificationRegistration";
+import { NotificationToast } from "@/components/NotificationToast";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANDROID LOG SUPPRESSION
@@ -337,6 +340,8 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
 function PlayerOverlayWrapper({ children }: { children: React.ReactNode }) {
   const { playerMode, expandPlayer, collapsePlayer, showPlayer } = usePlayerOverlay();
   const { setPlayerOverlayRefs, currentTrack } = useMusicPlayer();
+
+useNotificationClickHandler(expandPlayer);
 
   // Register overlay functions with MusicPlayerContext
   useEffect(() => {
@@ -628,13 +633,17 @@ function StableProviders({
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
-    SpaceMono: require('@/assets/fonts/SpaceMono-Regular.ttf'),
-    Meriva: require('@/assets/fonts/Meriva.ttf'),
+    SpaceMono: require("@/assets/fonts/SpaceMono-Regular.ttf"),
+    Meriva: require("@/assets/fonts/Meriva.ttf"),
   });
 
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
+
+  // ─── Foreground notification toast state ──────────────────────────────
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastData, setToastData] = useState({ title: "", body: "" });
 
   const navigationState = useRootNavigationState();
   const router = useRouter();
@@ -657,9 +666,9 @@ export default function RootLayout() {
         await initLocalDatabase();
         await initAllCaches();
         await runMaintenance();
-        console.log('[RootLayout] Local music system initialized');
+        console.log("[RootLayout] Local music system initialized");
       } catch (error) {
-        console.error('[RootLayout] Failed to initialize local music:', error);
+        console.error("[RootLayout] Failed to initialize local music:", error);
       }
     };
 
@@ -673,7 +682,7 @@ export default function RootLayout() {
         if (should) setShowConsent(true);
       })
       .catch((err) => {
-        console.warn('[RootLayout] checkAndShowConsent failed:', err);
+        console.warn("[RootLayout] checkAndShowConsent failed:", err);
       });
   }, []);
 
@@ -689,8 +698,7 @@ export default function RootLayout() {
       gestureBlockedSV.value =
         sliderActiveRef.current || buttonActiveRef.current;
     },
-    isGestureBlocked: () =>
-      sliderActiveRef.current || buttonActiveRef.current,
+    isGestureBlocked: () => sliderActiveRef.current || buttonActiveRef.current,
     gestureBlockedSV,
   }).current;
 
@@ -713,12 +721,72 @@ export default function RootLayout() {
 
   // Initialize library and cache systems
   useEffect(() => {
-    initializeLibrary().catch((e) => console.warn('[Library]', e));
+    initializeLibrary().catch((e) => console.warn("[Library]", e));
     try {
       initCache({ startBackgroundJobs: true });
     } catch (e) {
-      console.warn('[Cache]', e);
+      console.warn("[Cache]", e);
     }
+  }, []);
+
+  // Deep link handling
+  useEffect(() => {
+    const handle = (url: string | null) => {
+      if (url?.startsWith("mavins-player")) console.log("[DeepLink]", url);
+    };
+
+    Linking.getInitialURL().then(handle);
+    const sub = Linking.addEventListener("url", ({ url }) => handle(url));
+    return () => sub.remove();
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────
+  // STEP 4: Push Notification Setup
+  // ─────────────────────────────────────────────────────────────
+
+  // Register for push notifications once app is ready
+  useEffect(() => {
+    let isMounted = true;
+
+    const setupPush = async () => {
+      if (!isMounted) return;
+      try {
+        const token = await registerForPushNotifications();
+        if (token) {
+          console.log("[Push] ✅ Registered successfully");
+        }
+      } catch (error) {
+        console.warn("[Push] ❌ Registration failed:", error);
+      }
+    };
+
+    if (appReady) {
+      setupPush();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [appReady]);
+
+  // Handle foreground notifications
+  useEffect(() => {
+    const subscription = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        const { title, body } = notification.request.content;
+        console.log("[Push] 📱 Foreground notification:", title, body);
+
+        setToastData({
+          title: title || "New Notification",
+          body: body || "",
+        });
+        setToastVisible(true);
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   return (
@@ -730,6 +798,17 @@ export default function RootLayout() {
             fontsLoaded={fontsLoaded ?? false}
             appReady={appReady}
           />
+          {/* ✅ Foreground notification toast */}
+          <NotificationToast
+            visible={toastVisible}
+            title={toastData.title}
+            body={toastData.body}
+            onDismiss={() => setToastVisible(false)}
+            onPress={() => {
+              // Optionally navigate to notifications modal
+              router.push("/(modals)/notifications");
+            }}
+          />
         </GestureHandlerRootView>
 
         <EarningsConsentGate
@@ -738,8 +817,8 @@ export default function RootLayout() {
           onOpenSettings={() => {
             triggerHaptic();
             router.push({
-              pathname: '/(player)/settings',
-              params: { scrollTo: 'privacy' }
+              pathname: "/(player)/settings",
+              params: { scrollTo: "privacy" },
             });
           }}
         />
