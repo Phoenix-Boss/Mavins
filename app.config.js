@@ -53,7 +53,7 @@ module.exports = {
     backgroundColor: "#000",
     edgeToEdgeEnabled: true,
     versionCode: 1,
-    googleServicesFile: "./google-services.json",
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
     intentFilters: [
       {
         action: "android.intent.action.MAIN",
