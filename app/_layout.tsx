@@ -10,7 +10,6 @@
 // are device-aware from the moment the app launches.
 //
 // UPDATE: Deep link handling integrated with useDeepLink hook
-// UPDATE: Accessibility gate integrated with expo-pilot
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -29,11 +28,11 @@ import {
   configureReanimatedLogger,
   ReanimatedLogLevel,
   useSharedValue,
+  runOnJS,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ReAnimated, {
   withSpring,
-  runOnJS,
   interpolate,
   Extrapolation,
   useAnimatedStyle,
@@ -70,7 +69,6 @@ import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AlertProvider } from '@/contexts/AlertContext';
 import { UpdateModal } from '@/components/UpdateModal';
 import { MessageModal } from '@/components/MessageModal';
-import PremiumBanner from '@/components/ads/banner/premium';
 import { HomePreloader } from '@/components/HomePreloader';
 import { SearchPreloader } from '@/components/SearchPreloader';
 import { queryClient } from '@/libs/supabase';
@@ -94,11 +92,8 @@ import deviceManager from '@/libs/DeviceManager';
 import useDeepLink from '@/hooks/useDeepLink';
 import { registerForPushNotifications } from "@/services/notificationRegistration";
 import { NotificationToast } from "@/components/NotificationToast";
-import { AccessibilityGateModal } from '@/components/AccessibilityGateModal';
 import { CONSENT_STORAGE_KEY } from '@/components/EarningsConsentGate';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AccessibilityInfo } from 'react-native';
-import { PilotService } from '@/services/PilotService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANDROID LOG SUPPRESSION
@@ -186,55 +181,6 @@ function DeepLinkHandler() {
       console.log('[DeepLinkHandler] Deep link handler initialized');
     }
   }, [initialLinkProcessed]);
-
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ACCESSIBILITY MONITOR
-// ─────────────────────────────────────────────────────────────────────────────
-
-function AccessibilityMonitor() {
-  const [isAccessibilityEnabled, setIsAccessibilityEnabled] = useState(false);
-  const pilotService = PilotService.getInstance();
-
-  useEffect(() => {
-    const checkAccessibility = async () => {
-      try {
-        const enabled = await AccessibilityInfo.isAccessibilityServiceEnabled();
-        setIsAccessibilityEnabled(enabled);
-        
-        if (enabled) {
-          // Initialize Pilot if accessibility is enabled
-          const initialized = await pilotService.isInitialized();
-          if (!initialized) {
-            await pilotService.initialize();
-          }
-        }
-      } catch (error) {
-        console.error('[AccessibilityMonitor] Failed to check status:', error);
-      }
-    };
-
-    checkAccessibility();
-
-    // Listen for accessibility service changes
-    const subscription = AccessibilityInfo.addEventListener(
-      'accessibilityServiceChanged',
-      async (enabled) => {
-        setIsAccessibilityEnabled(enabled);
-        
-        if (enabled) {
-          const initialized = await pilotService.isInitialized();
-          if (!initialized) {
-            await pilotService.initialize();
-          }
-        }
-      }
-    );
-
-    return () => subscription.remove();
-  }, []);
 
   return null;
 }
@@ -598,9 +544,6 @@ function AppShell({
       {/* Deep link handler */}
       <DeepLinkHandler />
 
-      {/* Accessibility Monitor - checks and initializes Pilot */}
-      <AccessibilityMonitor />
-
       {fontsLoaded && (
         <>
           <HomePreloader />
@@ -698,9 +641,6 @@ export default function RootLayout() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const [showConsent, setShowConsent] = useState(false);
-  const [showAccessibilityGate, setShowAccessibilityGate] = useState(false);
-  const [consentDecision, setConsentDecision] = useState<string | null>(null);
-  const [pilotServiceReady, setPilotServiceReady] = useState(false);
 
   // ─── Foreground notification toast state ──────────────────────────────
   const [toastVisible, setToastVisible] = useState(false);
@@ -720,34 +660,8 @@ export default function RootLayout() {
     showOnBackground: false,
   });
 
-  const pilotService = PilotService.getInstance();
+  // ─── INITIALIZE LOCAL MUSIC ─────────────────────────────────────────────
 
-  // Initialize Pilot service on app start
-  useEffect(() => {
-    const initPilotService = async () => {
-      try {
-        const initialized = await pilotService.isInitialized();
-        if (initialized) {
-          setPilotServiceReady(true);
-          console.log('[PilotService] Already initialized');
-        } else {
-          // Check if accessibility is enabled
-          const enabled = await AccessibilityInfo.isAccessibilityServiceEnabled();
-          if (enabled) {
-            const success = await pilotService.initialize();
-            setPilotServiceReady(success);
-            console.log('[PilotService] Initialized:', success);
-          }
-        }
-      } catch (error) {
-        console.error('[PilotService] Init error:', error);
-      }
-    };
-
-    initPilotService();
-  }, []);
-
-  // Initialize local music database and caches on mount
   useEffect(() => {
     const initLocalMusic = async () => {
       try {
@@ -763,7 +677,8 @@ export default function RootLayout() {
     void initLocalMusic();
   }, []);
 
-  // Check whether the consent modal should be shown on first launch
+  // ─── CHECK CONSENT ──────────────────────────────────────────────────────
+
   useEffect(() => {
     checkAndShowConsent()
       .then((should) => {
@@ -774,58 +689,8 @@ export default function RootLayout() {
       });
   }, []);
 
-  // Check consent and accessibility status when app is ready
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        // Check if user has consented
-        const consent = await AsyncStorage.getItem(CONSENT_STORAGE_KEY);
-        setConsentDecision(consent);
+  // ─── GESTURE CONTEXT ─────────────────────────────────────────────────────
 
-        // Check if accessibility has been enabled
-        const enabled = await AsyncStorage.getItem('@mavin_accessibility_enabled');
-        const accessibilityEnabled = await AccessibilityInfo.isAccessibilityServiceEnabled();
-
-        // If consented but accessibility not enabled, show the gate
-        if (consent === 'accepted' && !accessibilityEnabled && enabled !== 'true') {
-          // Wait a moment for app to load fully
-          setTimeout(() => {
-            setShowAccessibilityGate(true);
-          }, 1500);
-        } else if (consent === 'accepted' && accessibilityEnabled) {
-          // Accessibility is already enabled, initialize Pilot
-          const initialized = await pilotService.isInitialized();
-          if (!initialized) {
-            await pilotService.initialize();
-          }
-          setPilotServiceReady(true);
-          await AsyncStorage.setItem('@mavin_accessibility_enabled', 'true');
-        }
-      } catch (error) {
-        console.error('[RootLayout] Failed to check status:', error);
-      }
-    };
-
-    if (appReady) {
-      checkStatus();
-    }
-  }, [appReady, pilotService]);
-
-  // Handle accessibility gate completion
-  const handleAccessibilityComplete = async () => {
-    try {
-      await AsyncStorage.setItem('@mavin_accessibility_enabled', 'true');
-      // Initialize Pilot service
-      const success = await pilotService.initialize();
-      setPilotServiceReady(success);
-      setShowAccessibilityGate(false);
-      console.log('[RootLayout] Accessibility gate completed, Pilot ready:', success);
-    } catch (error) {
-      console.error('[RootLayout] Failed to complete accessibility setup:', error);
-    }
-  };
-
-  // Gesture context — stable ref, never changes
   const gestureContextValue = useRef({
     setSliderActive: (v: boolean) => {
       sliderActiveRef.current = v;
@@ -841,24 +706,31 @@ export default function RootLayout() {
     gestureBlockedSV,
   }).current;
 
-  // Track navigation readiness
+  // ─── NAVIGATION READINESS ───────────────────────────────────────────────
+
   useEffect(() => {
     if (navigationState?.key && !navReady) setNavReady(true);
   }, [navigationState?.key, navReady]);
 
-  // Hide splash screen when fonts load
+  // ─── HIDE SPLASH SCREEN ─────────────────────────────────────────────────
+
   useEffect(() => {
     if (fontsLoaded || fontError) {
       SplashScreen.hideAsync().catch(console.warn);
     }
   }, [fontsLoaded, fontError]);
 
-  // App is ready when navigation and fonts are ready
+  // ─── APP READY ───────────────────────────────────────────────────────────
+
   useEffect(() => {
-    if (navReady && !appReady) setAppReady(true);
+    if (navReady && !appReady) {
+      console.log('[RootLayout] App is ready');
+      setAppReady(true);
+    }
   }, [navReady, appReady]);
 
-  // Initialize library and cache systems
+  // ─── INITIALIZE LIBRARY AND CACHE ──────────────────────────────────────
+
   useEffect(() => {
     initializeLibrary().catch((e) => console.warn("[Library]", e));
     try {
@@ -868,7 +740,8 @@ export default function RootLayout() {
     }
   }, []);
 
-  // Deep link handling
+  // ─── DEEP LINK HANDLING ─────────────────────────────────────────────────
+
   useEffect(() => {
     const handle = (url: string | null) => {
       if (url?.startsWith("mavins-player")) console.log("[DeepLink]", url);
@@ -879,11 +752,8 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Push Notification Setup
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── PUSH NOTIFICATION SETUP ────────────────────────────────────────────
 
-  // Register for push notifications once app is ready
   useEffect(() => {
     let isMounted = true;
 
@@ -908,7 +778,8 @@ export default function RootLayout() {
     };
   }, [appReady]);
 
-  // Handle foreground notifications
+  // ─── FOREGROUND NOTIFICATIONS ──────────────────────────────────────────
+
   useEffect(() => {
     const subscription = Notifications.addNotificationReceivedListener(
       (notification) => {
@@ -928,6 +799,8 @@ export default function RootLayout() {
     };
   }, []);
 
+  // ─── RENDER ──────────────────────────────────────────────────────────────
+
   return (
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -946,11 +819,6 @@ export default function RootLayout() {
             onPress={() => {
               router.push("/(modals)/notifications");
             }}
-          />
-          {/* Accessibility Gate Modal - shown after consent */}
-          <AccessibilityGateModal 
-            visible={showAccessibilityGate} 
-            onComplete={handleAccessibilityComplete} 
           />
         </GestureHandlerRootView>
 

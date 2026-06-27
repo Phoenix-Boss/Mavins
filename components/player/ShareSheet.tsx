@@ -677,17 +677,13 @@ export default function ShareSheet({ visible, onClose, track, userId, onShareGen
       return;
     }
 
-    if (!userId) {
-      console.warn('[ShareSheet] No user ID available');
-      return;
-    }
-
     setIsGenerating(true);
     try {
       const trackId = track.videoId || track.id || '';
+      const effectiveUserId = userId || 'anonymous';
       const url = await generateShareUrl(
         trackId,
-        userId,
+        effectiveUserId,
         track.title,
         track.artist,
         track.thumbnail

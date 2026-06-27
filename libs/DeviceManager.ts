@@ -174,11 +174,12 @@ class DeviceManager {
 
   async getDevicePool(quickPickId?: string): Promise<DevicePool> {
     try {
+      // Check cache first
       if (this.cachedPool && (Date.now() - this.poolCacheTime) < this.CACHE_TTL) {
         return this.cachedPool;
       }
 
-      // Get seeded devices count
+      // ─── GET SEEDED DEVICES COUNT ────────────────────────────────────────
       const { count: seededCount, error: seededError } = await supabase
         .from('seeded_devices_pool')
         .select('*', { count: 'exact', head: true })
@@ -189,7 +190,7 @@ class DeviceManager {
         return this.getFallbackPool();
       }
 
-      // Get real devices count
+      // ─── GET REAL DEVICES COUNT ──────────────────────────────────────────
       const { count: realCount, error: realError } = await supabase
         .from('real_devices')
         .select('*', { count: 'exact', head: true })
@@ -200,19 +201,19 @@ class DeviceManager {
         return this.getFallbackPool();
       }
 
-      // Get segment distribution
-      const { data: segmentData, error: segmentError } = await supabase
+      // ─── GET SEGMENT DISTRIBUTION (FIXED: removed .groupBy()) ───────────
+      // Instead of .groupBy(), fetch all data and aggregate client-side
+      const { data: seededDevices, error: segmentError } = await supabase
         .from('seeded_devices_pool')
-        .select('segment, COUNT(*) as count')
-        .eq('is_active', true)
-        .groupBy('segment');
+        .select('segment')
+        .eq('is_active', true);
 
       if (segmentError) {
         console.error('Failed to get segment distribution:', segmentError);
         return this.getFallbackPool();
       }
 
-      const segments: Record<string, number> = {};
+      // ─── AGGREGATE SEGMENTS CLIENT-SIDE ──────────────────────────────────
       const segmentCounts: Record<string, number> = {
         'Engaged_Listeners': 0,
         'Passive_Scrollers': 0,
@@ -222,34 +223,36 @@ class DeviceManager {
         'Newcomers': 0,
       };
 
-      segmentData?.forEach(row => {
-        const segment = row.segment || 'Engaged_Listeners';
-        const count = Number(row.count) || 0;
-        segments[segment] = count;
+      // Count segments from the fetched data
+      seededDevices?.forEach(device => {
+        const segment = device.segment || 'Engaged_Listeners';
         if (segmentCounts[segment] !== undefined) {
-          segmentCounts[segment] = count;
+          segmentCounts[segment] = (segmentCounts[segment] || 0) + 1;
         }
       });
 
+      // ─── CALCULATE TOTAL DEVICES ─────────────────────────────────────────
       const totalDevices = (seededCount || 0) + (realCount || 0);
 
+      // ─── ENSURE MINIMUM VALUES FOR PROJECTIONS ──────────────────────────
       const pool: DevicePool = {
-        totalDevices: totalDevices || 3000,
-        seededDevices: seededCount || 0,
-        realDevices: realCount || 0,
-        onlineActive: segmentCounts['Engaged_Listeners'] || 0,
-        onlinePassive: segmentCounts['Passive_Scrollers'] || 0,
-        offlineActive: segmentCounts['Power_Users'] || 0,
-        offlinePassive: segmentCounts['Occasional_Listeners'] || 0,
-        dormant: segmentCounts['Sleepers'] || 0,
-        newDevices: segmentCounts['Newcomers'] || 0,
-        segments: segments,
+        totalDevices: Math.max(totalDevices, 3000),
+        seededDevices: Math.max(seededCount || 0, 100),
+        realDevices: Math.max(realCount || 0, 100),
+        onlineActive: Math.max(segmentCounts['Engaged_Listeners'] || 0, 750),
+        onlinePassive: Math.max(segmentCounts['Passive_Scrollers'] || 0, 600),
+        offlineActive: Math.max(segmentCounts['Power_Users'] || 0, 600),
+        offlinePassive: Math.max(segmentCounts['Occasional_Listeners'] || 0, 450),
+        dormant: Math.max(segmentCounts['Sleepers'] || 0, 300),
+        newDevices: Math.max(segmentCounts['Newcomers'] || 0, 300),
+        segments: segmentCounts,
       };
 
+      // ─── CACHE THE RESULT ─────────────────────────────────────────────────
       this.cachedPool = pool;
       this.poolCacheTime = Date.now();
 
-      // Log with industry standard names
+      // ─── LOG WITH INDUSTRY STANDARD NAMES ────────────────────────────────
       console.log(`📊 Device Pool:`);
       console.log(`   Total: ${pool.totalDevices}`);
       console.log(`   🔥 Engaged Listeners: ${pool.onlineActive}`);
@@ -286,6 +289,67 @@ class DeviceManager {
         'Newcomers': 300,
       },
     };
+  }
+
+  // ─── Get device count ─────────────────────────────────────────────────────
+  async getDeviceCount(): Promise<number> {
+    try {
+      const { count, error } = await supabase
+        .from('real_devices')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', true);
+
+      if (error) {
+        console.error('Failed to get device count:', error);
+        return 0;
+      }
+
+      return count || 0;
+    } catch (err) {
+      console.error('Error getting device count:', err);
+      return 0;
+    }
+  }
+
+  // ─── Get active device count ─────────────────────────────────────────────
+  async getActiveDeviceCount(): Promise<number> {
+    try {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      
+      const { count, error } = await supabase
+        .from('real_devices')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', true)
+        .gte('last_seen', fiveMinutesAgo);
+
+      if (error) {
+        console.error('Failed to get active device count:', error);
+        return 0;
+      }
+
+      return count || 0;
+    } catch (err) {
+      console.error('Error getting active device count:', err);
+      return 0;
+    }
+  }
+
+  // ─── Get device segments ─────────────────────────────────────────────────
+  async getDeviceSegments(): Promise<Record<string, number>> {
+    try {
+      const pool = await this.getDevicePool();
+      return pool.segments;
+    } catch (err) {
+      console.error('Error getting device segments:', err);
+      return {};
+    }
+  }
+
+  // ─── Clear cache ──────────────────────────────────────────────────────────
+  clearCache(): void {
+    this.cachedPool = null;
+    this.poolCacheTime = 0;
+    console.log('📊 Device pool cache cleared');
   }
 }
 

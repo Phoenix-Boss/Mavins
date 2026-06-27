@@ -63,6 +63,7 @@ interface QuickPickRow {
   campaign_history?: any;
   created_at: string;
   updated_at: string;
+  songs?: SongRow;
 }
 
 interface CampaignProjection {
@@ -195,7 +196,7 @@ class CampaignManager {
     return shuffled;
   }
 
-  // ─── Campaign status checks ──────────────────────────────────────────────
+  // ─── Campaign status checks (FIXED) ──────────────────────────────────────
 
   isCampaignActive(card: QuickPickRow): boolean {
     if (!card.campaign_active) return false;
@@ -203,12 +204,29 @@ class CampaignManager {
     if (card.phase_completed) return false;
     
     const now = new Date();
-    const startDate = card.phase_start_date ? new Date(card.phase_start_date) : null;
-    const endDate = card.phase_end_date ? new Date(card.phase_end_date) : null;
     
-    if (startDate && now < startDate) return false;
-    if (endDate && now > endDate) return false;
+    // First check phase dates (if they exist)
+    const phaseStartDate = card.phase_start_date ? new Date(card.phase_start_date) : null;
+    const phaseEndDate = card.phase_end_date ? new Date(card.phase_end_date) : null;
     
+    // If phase dates exist, use them
+    if (phaseStartDate && phaseEndDate) {
+      if (now < phaseStartDate) return false;
+      if (now > phaseEndDate) return false;
+      return true;
+    }
+    
+    // Fallback: check campaign dates (if phase dates don't exist)
+    const campaignStartDate = card.campaign_start_date ? new Date(card.campaign_start_date) : null;
+    const campaignEndDate = card.campaign_end_date ? new Date(card.campaign_end_date) : null;
+    
+    if (campaignStartDate && campaignEndDate) {
+      if (now < campaignStartDate) return false;
+      if (now > campaignEndDate) return false;
+      return true;
+    }
+    
+    // If no dates are set, consider it active
     return true;
   }
 
@@ -224,30 +242,67 @@ class CampaignManager {
     return cards.find(card => card.is_default === true) || null;
   }
 
-  // ─── Time calculations ──────────────────────────────────────────────────
+  // ─── Time calculations (FIXED) ──────────────────────────────────────────
 
   getPhaseElapsedSeconds(card: QuickPickRow): number {
-    if (!card.phase_start_date) return 0;
-    const startDate = new Date(card.phase_start_date);
-    const now = new Date();
-    const diffTime = now.getTime() - startDate.getTime();
-    return Math.max(0, Math.ceil(diffTime / 1000));
+    // Check phase_start_date first
+    if (card.phase_start_date) {
+      const startDate = new Date(card.phase_start_date);
+      const now = new Date();
+      const diffTime = now.getTime() - startDate.getTime();
+      return Math.max(0, Math.ceil(diffTime / 1000));
+    }
+    
+    // Fallback: use campaign_start_date
+    if (card.campaign_start_date) {
+      const startDate = new Date(card.campaign_start_date);
+      const now = new Date();
+      const diffTime = now.getTime() - startDate.getTime();
+      return Math.max(0, Math.ceil(diffTime / 1000));
+    }
+    
+    return 0;
   }
 
   getPhaseTotalDurationSeconds(card: QuickPickRow): number {
-    if (!card.phase_start_date || !card.phase_end_date) return 0;
-    const startDate = new Date(card.phase_start_date);
-    const endDate = new Date(card.phase_end_date);
-    const diffTime = endDate.getTime() - startDate.getTime();
-    return Math.max(1, Math.ceil(diffTime / 1000));
+    // Check phase dates first
+    if (card.phase_start_date && card.phase_end_date) {
+      const startDate = new Date(card.phase_start_date);
+      const endDate = new Date(card.phase_end_date);
+      const diffTime = endDate.getTime() - startDate.getTime();
+      return Math.max(1, Math.ceil(diffTime / 1000));
+    }
+    
+    // Fallback: use campaign dates
+    if (card.campaign_start_date && card.campaign_end_date) {
+      const startDate = new Date(card.campaign_start_date);
+      const endDate = new Date(card.campaign_end_date);
+      const diffTime = endDate.getTime() - startDate.getTime();
+      return Math.max(1, Math.ceil(diffTime / 1000));
+    }
+    
+    // If no dates, use default (5 days)
+    return 5 * 24 * 60 * 60;
   }
 
   getPhaseSecondsRemaining(card: QuickPickRow): number {
-    if (!card.phase_end_date) return 0;
-    const endDate = new Date(card.phase_end_date);
-    const now = new Date();
-    const diffTime = endDate.getTime() - now.getTime();
-    return Math.max(0, Math.ceil(diffTime / 1000));
+    // Check phase_end_date first
+    if (card.phase_end_date) {
+      const endDate = new Date(card.phase_end_date);
+      const now = new Date();
+      const diffTime = endDate.getTime() - now.getTime();
+      return Math.max(0, Math.ceil(diffTime / 1000));
+    }
+    
+    // Fallback: use campaign_end_date
+    if (card.campaign_end_date) {
+      const endDate = new Date(card.campaign_end_date);
+      const now = new Date();
+      const diffTime = endDate.getTime() - now.getTime();
+      return Math.max(0, Math.ceil(diffTime / 1000));
+    }
+    
+    return 0;
   }
 
   getPhaseDaysRemaining(card: QuickPickRow): number {
@@ -419,6 +474,7 @@ class CampaignManager {
         return null;
       }
 
+      // ─── DEVICE POOL (3,000+ USERS) ─────────────────────────────────────
       const devicePool = await deviceManager.getDevicePool(card.id);
       
       const totalDevices = devicePool.totalDevices || 3000;
@@ -433,6 +489,18 @@ class CampaignManager {
       const newcomers = devicePool.newDevices || 0;
       const segmentDistribution = devicePool.segments || {};
 
+      console.log(`📱 [CampaignManager] Device Pool:`);
+      console.log(`   Total Devices: ${totalDevices}`);
+      console.log(`   Seeded Devices: ${seededDevices}`);
+      console.log(`   Real Devices: ${realDevices}`);
+      console.log(`   🔥 Engaged Listeners: ${engagedListeners}`);
+      console.log(`   👀 Passive Scrollers: ${passiveScrollers}`);
+      console.log(`   📱 Power Users: ${powerUsers}`);
+      console.log(`   💤 Occasional Listeners: ${occasionalListeners}`);
+      console.log(`   🌙 Sleepers: ${sleepers}`);
+      console.log(`   🌟 Newcomers: ${newcomers}`);
+
+      // ─── CALCULATE CAMPAIGN FACTOR ──────────────────────────────────────
       const durationFactor = Math.min(1, totalMinutes / 1440);
       const tierMultiplier = selectedTier.base_multiplier || 1.0;
       const geographyMultiplier = 1.0;
@@ -445,14 +513,7 @@ class CampaignManager {
       const aggressiveTarget = dynamicTarget.aggressiveTarget;
       const playsPerDevice = Math.round((aggressiveTarget / activeParticipants) * 10) / 10;
 
-      console.log(`📊 [CampaignManager] Device Allocation with Dynamic Ratios:`);
-      console.log(`   Total Devices (Seeded + Real): ${totalDevices}`);
-      console.log(`   🔥 Engaged Listeners: ${engagedListeners} (${((engagedListeners/totalDevices)*100).toFixed(1)}%)`);
-      console.log(`   👀 Passive Scrollers: ${passiveScrollers} (${((passiveScrollers/totalDevices)*100).toFixed(1)}%)`);
-      console.log(`   📱 Power Users: ${powerUsers} (${((powerUsers/totalDevices)*100).toFixed(1)}%)`);
-      console.log(`   💤 Occasional Listeners: ${occasionalListeners} (${((occasionalListeners/totalDevices)*100).toFixed(1)}%)`);
-      console.log(`   🌙 Sleepers: ${sleepers} (${((sleepers/totalDevices)*100).toFixed(1)}%)`);
-      console.log(`   🌟 Newcomers: ${newcomers} (${((newcomers/totalDevices)*100).toFixed(1)}%)`);
+      console.log(`📊 [CampaignManager] Campaign Allocation:`);
       console.log(`   Campaign Factor: ${campaignFactor.toFixed(4)}`);
       console.log(`   Allocated Devices: ${allocatedDevices}`);
       console.log(`   Active Participants: ${activeParticipants}`);
@@ -938,11 +999,7 @@ async function upsertSongFromEngine(
   }
 }
 
-// ─── Seed or add view count to play count (Layer 1) ────────────────────────
-// FIXED: Now adds view count to current play_count if play_count < viewCount
-
-// ─── Seed or add view count to play count (Layer 1) ────────────────────────
-// FIXED: Always check view count condition, even if hasSeededMap is true
+// ─── Seed or add view count to play count (Layer 1) with phase accumulation ───
 
 async function seedOrAddPlayCountFromSongsTable(
   cardId: string, 
@@ -952,10 +1009,10 @@ async function seedOrAddPlayCountFromSongsTable(
   try {
     console.log(`🌱 [useQuickPicks] Checking play count for card ${cardId} from song ${songId}`);
     
-    // 1. Get current play_count from database
+    // 1. Get current play_count and accumulated plays from database
     const { data: quickPick, error: qpError } = await supabase
       .from('quick_picks')
-      .select('play_count, total_accumulated_plays, original_play_count')
+      .select('play_count, total_accumulated_plays, original_play_count, campaign_phase, campaign_history')
       .eq('id', cardId)
       .maybeSingle();
 
@@ -970,7 +1027,13 @@ async function seedOrAddPlayCountFromSongsTable(
     }
 
     const currentPlayCount = quickPick.play_count || 0;
-    console.log(`📊 [useQuickPicks] Current play_count for card ${cardId}: ${currentPlayCount}`);
+    const totalAccumulated = quickPick.total_accumulated_plays || 0;
+    const currentPhase = quickPick.campaign_phase || 1;
+    const campaignHistory = quickPick.campaign_history || [];
+    
+    console.log(`📊 [useQuickPicks] Current play_count: ${currentPlayCount}`);
+    console.log(`📊 [useQuickPicks] Total accumulated: ${totalAccumulated}`);
+    console.log(`📊 [useQuickPicks] Current phase: ${currentPhase}`);
 
     // 2. Get YouTube view count from songs table
     const { data: song, error: songError } = await supabase
@@ -990,7 +1053,7 @@ async function seedOrAddPlayCountFromSongsTable(
     }
 
     const viewCount = song.youtube_view_count || 0;
-    console.log(`📊 [useQuickPicks] YouTube view count for song: ${viewCount}`);
+    console.log(`📊 [useQuickPicks] YouTube view count: ${viewCount}`);
 
     if (viewCount === 0) {
       console.log(`⚠️ [useQuickPicks] View count is 0, keeping current: ${currentPlayCount}`);
@@ -998,10 +1061,9 @@ async function seedOrAddPlayCountFromSongsTable(
       return currentPlayCount;
     }
 
-    // ─── ALWAYS check if we need to add the view count ──────────────────────
-    // This runs even if hasSeededMap is already true
+    // ─── PHASE ACCUMULATION LOGIC ──────────────────────────────────────────
 
-    // CASE 1: play_count is 0 - seed with YouTube view count
+    // CASE 1: First time ever (play_count = 0)
     if (currentPlayCount === 0) {
       console.log(`📊 [useQuickPicks] First time seeding, setting play_count to ${viewCount}`);
       
@@ -1025,11 +1087,48 @@ async function seedOrAddPlayCountFromSongsTable(
       return viewCount;
     }
 
-    // CASE 2: play_count > 0 AND play_count < viewCount - ADD view count to current
-    // This handles the case where foreground increments happened before view count was available
-    if (currentPlayCount > 0 && currentPlayCount < viewCount) {
+    // CASE 2: Phase 2+ (accumulate previous phase data)
+    // Check if we're in a new phase (phase > 1) and need to add view count to accumulated
+    if (currentPhase > 1) {
+      console.log(`📊 [useQuickPicks] Phase ${currentPhase} - checking for accumulation`);
+      
+      // Check if this phase has already been seeded
+      const phaseSeeded = hasSeededMap.get(`${cardId}_phase_${currentPhase}`) || false;
+      
+      if (!phaseSeeded) {
+        // Get total from previous phases
+        const previousTotal = totalAccumulated || currentPlayCount;
+        const newTotal = previousTotal + viewCount;
+        
+        console.log(`📊 [useQuickPicks] Phase ${currentPhase} seeding: ${previousTotal} + ${viewCount} = ${newTotal}`);
+        
+        const { error } = await supabase
+          .from('quick_picks')
+          .update({
+            play_count: newTotal,
+            total_accumulated_plays: newTotal,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', cardId);
+
+        if (error) {
+          console.error(`[useQuickPicks] Error updating play_count for ${cardId}:`, error);
+          return currentPlayCount;
+        }
+
+        hasSeededMap.set(`${cardId}_phase_${currentPhase}`, true);
+        console.log(`✅ [useQuickPicks] Phase ${currentPhase} accumulated: ${newTotal} (${previousTotal} + ${viewCount})`);
+        return newTotal;
+      } else {
+        console.log(`✅ [useQuickPicks] Phase ${currentPhase} already seeded, keeping: ${currentPlayCount}`);
+        return currentPlayCount;
+      }
+    }
+
+    // CASE 3: Phase 1 - normal seeding
+    if (currentPlayCount < viewCount) {
       const newCount = currentPlayCount + viewCount;
-      console.log(`📊 [useQuickPicks] Adding view count (${viewCount}) to current play_count (${currentPlayCount}) = ${newCount}`);
+      console.log(`📊 [useQuickPicks] Adding view count (${viewCount}) to current (${currentPlayCount}) = ${newCount}`);
       
       const { error } = await supabase
         .from('quick_picks')
@@ -1046,12 +1145,12 @@ async function seedOrAddPlayCountFromSongsTable(
       }
 
       hasSeededMap.set(cardId, true);
-      console.log(`✅ [useQuickPicks] Updated card ${cardId} play_count to ${newCount} (${currentPlayCount} + ${viewCount})`);
+      console.log(`✅ [useQuickPicks] Updated card ${cardId} play_count to ${newCount}`);
       return newCount;
     }
 
-    // CASE 3: play_count > 0 AND play_count >= viewCount - KEEP current
-    console.log(`✅ [useQuickPicks] Card play_count (${currentPlayCount}) is >= viewCount (${viewCount}), keeping current`);
+    // CASE 4: play_count >= viewCount - keep current
+    console.log(`✅ [useQuickPicks] Keeping current: ${currentPlayCount}`);
     hasSeededMap.set(cardId, true);
     return currentPlayCount;
   } catch (err) {

@@ -1,4 +1,4 @@
-// app/(player)/index.tsx - Home Screen
+// app/(player)/index.tsx - Home Screen (UPDATED - Quick Actions removed)
 import React, { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import {
   View,
@@ -42,8 +42,6 @@ import { QuickPicksSection } from "@/components/sections/QuickPicksSection";
 const { width } = Dimensions.get("window");
 const GRID_SIZE = (width - 48) / 3;
 
-// ─── Helper ───────────────────────────────────────────────────────────────────
-
 // ─── Section Error Boundary ───────────────────────────────────────────────────
 
 class SectionErrorBoundary extends React.Component<
@@ -54,76 +52,6 @@ class SectionErrorBoundary extends React.Component<
   static getDerivedStateFromError() { return { hasError: true }; }
   componentDidCatch(error: Error) { console.error(`❌ [${this.props.sectionName}]`, error); }
   render() { if (this.state.hasError) return null; return this.props.children; }
-}
-
-// ─── Quick Actions - SINGLE CARD ONLY (No slideshow, no pagination) ───────────
-
-interface QuickActionsGridProps {
-  recentSongs: Song[];
-  onSongPress: (song: Song) => void;
-}
-
-function QuickActionsGrid({ recentSongs, onSongPress }: QuickActionsGridProps) {
-  const router = useRouter();
-  const { colors } = useTheme();
-
-  // Take ONLY the FIRST song - NO slideshow, NO multiple cards
-  const firstSong = recentSongs.length > 0 ? recentSongs[0] : null;
-
-  // Don't show section if no recent songs
-  if (!firstSong) return null;
-
-  const handleClearAll = () => {
-    triggerHaptic();
-    useHomeStore.getState().clearRecentSongs();
-  };
-
-  const handleSeeAll = () => {
-    triggerHaptic();
-    router.push("/(player)/library/recent");
-  };
-
-  return (
-    <View style={styles.quickActionsContainer}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionTitleContainer}>
-          <Ionicons name="time-outline" size={20} color={colors.gold} />
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
-        </View>
-        <View style={styles.sectionActions}>
-          <TouchableOpacity onPress={handleClearAll} style={styles.headerButton}>
-            <Text style={[styles.headerButtonText, { color: colors.textSub }]}>Clear</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleSeeAll}>
-            <Text style={[styles.seeAllText, { color: colors.gold }]}>See All</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* SINGLE CARD - No FlatList, No horizontal scroll, No pagination */}
-      <TouchableOpacity
-        style={[styles.singleQuickActionCard, { backgroundColor: colors.surfaceRaised }]}
-        onPress={() => onSongPress(firstSong)}
-        activeOpacity={0.7}
-      >
-        <Image
-          source={{ uri: firstSong.thumbnail }}
-          style={[styles.singleQuickActionImage, { backgroundColor: colors.surface }]}
-          contentFit="cover"
-          transition={150}
-        />
-        <View style={styles.singleQuickActionInfo}>
-          <Text style={[styles.singleQuickActionTitle, { color: colors.text }]} numberOfLines={1}>
-            {firstSong.title}
-          </Text>
-          <Text style={[styles.singleQuickActionArtist, { color: colors.textSub }]} numberOfLines={1}>
-            {firstSong.artist}
-          </Text>
-        </View>
-        <Ionicons name="play-circle" size={32} color={colors.gold} style={styles.singleQuickActionPlay} />
-      </TouchableOpacity>
-    </View>
-  );
 }
 
 // ─── Section Wrappers ─────────────────────────────────────────────────────────
@@ -221,7 +149,6 @@ export default function HomeScreen() {
   const channels = useHomeStore((s) => s.channels);
   const podcasts = useHomeStore((s) => s.podcasts);
   const radioStations = useHomeStore((s) => s.radioStations);
-  const recentSongs = useHomeStore((s) => s.recentSongs);
   const getExcludedIdsForTop10 = useHomeStore((s) => s.getExcludedIdsForTop10);
   const top10ExcludedIds = getExcludedIdsForTop10();
 
@@ -408,11 +335,8 @@ export default function HomeScreen() {
         }
         contentContainerStyle={styles.scrollContent}
       >
-        <SectionErrorBoundary sectionName="Quick Actions">
-          <QuickActionsGrid recentSongs={recentSongs} onSongPress={handleSongPress} />
-        </SectionErrorBoundary>
-
-        {/* ─── Quick Picks - Only show if there are cards ─────────────────── */}
+        {/* ─── QUICK PICKS / CAMPAIGN CARD ─────────────────────────────────── */}
+        {/* Quick Actions REMOVED - Campaign card shows first */}
         {quickPicks.length > 0 && (
           <SectionErrorBoundary sectionName="Quick Picks">
             <QuickPicksSection data={quickPicks} onCardPress={handleCampaignCardPress} />
@@ -516,60 +440,4 @@ const styles = StyleSheet.create({
   },
   scrollContent: { paddingHorizontal: 16 },
   bottomSpacing: { height: 140 },
-
-  // ── Quick Actions Section (Single Card - NO slideshow) ──
-  quickActionsContainer: { marginVertical: 16 },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-    paddingHorizontal: 4,
-  },
-  sectionTitleContainer: { flexDirection: "row", alignItems: "center", gap: 8 },
-  sectionTitle: { fontSize: 18, fontWeight: "700" },
-  sectionActions: { flexDirection: "row", alignItems: "center", gap: 16 },
-  headerButton: { paddingHorizontal: 12, paddingVertical: 4 },
-  headerButtonText: { fontSize: 13, fontWeight: "500" },
-  seeAllText: { fontSize: 13, fontWeight: "600" },
-
-  // SINGLE CARD STYLES (No grid, no FlatList, no pagination)
-  singleQuickActionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    padding: 12,
-    marginHorizontal: 4,
-  },
-  singleQuickActionImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 10,
-  },
-  singleQuickActionInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  singleQuickActionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  singleQuickActionArtist: {
-    fontSize: 13,
-  },
-  singleQuickActionPlay: {
-    marginLeft: 8,
-  },
-
-  // Legacy styles (kept for other sections that may use them)
-  gridPage: { width: width - 32 },
-  gridRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
-  gridCell: { width: GRID_SIZE },
-  gridItem: { alignItems: "center" },
-  gridImage: { width: GRID_SIZE, height: GRID_SIZE, borderRadius: 12 },
-  gridTitle: { fontSize: 12, fontWeight: "600", marginTop: 6, textAlign: "center", width: GRID_SIZE },
-  gridArtist: { fontSize: 10, textAlign: "center", width: GRID_SIZE },
-  pageIndicators: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 12, gap: 8 },
-  pageIndicator: { width: 6, height: 6, borderRadius: 3 },
 });

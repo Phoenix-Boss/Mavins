@@ -1,5 +1,6 @@
+// components/TabBarIcon.tsx
 /**
- * TabBarIcon — Futuristic custom SVG icons for the 3-tab navigation.
+ * TabBarIcon — Futuristic custom SVG icons for the 4-tab navigation.
  *
  * Design language: dark luxury futurism — adapts to system theme.
  *   Active state   → gold filled glyph + soft gold radial glow ring
@@ -9,6 +10,7 @@
  * LIGHT → dark goldenrod (#B8860B) glyphs on sky blue
  *
  *   home     → stylised house with angled roof ridge + centre dot
+ *   search   → magnifying glass with handle and inner dot
  *   library  → three stacked horizontal bars with a vinyl disc inset
  *   settings → hexagonal gear with hollow centre
  */
@@ -121,6 +123,69 @@ export function HomeIcon({ focused, size = 26 }: TabIconProps) {
 
           {/* Centre apex dot */}
           <Circle cx="13" cy="12.5" r={focused ? 1.4 : 1.1} fill={color} />
+        </Svg>
+      )}
+    </AnimatedIcon>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SearchIcon
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function SearchIcon({ focused, size = 26 }: TabIconProps) {
+  const { colors, isDark } = useTheme();
+
+  const gold      = colors.gold;
+  const goldGlow  = isDark ? "#FFD700" : "#D4A017";
+  const inactive  = colors.tabBarInactive;
+  const color     = focused ? gold    : inactive;
+  const strokeW   = focused ? 1.6     : 1.4;
+  const glowId    = "searchGlow";
+
+  return (
+    <AnimatedIcon focused={focused}>
+      {() => (
+        <Svg width={size} height={size} viewBox="0 0 26 26">
+          {focused && (
+            <Defs>
+              <RadialGradient id={glowId} cx="50%" cy="50%" r="50%">
+                <Stop offset="0%"   stopColor={goldGlow} stopOpacity="0.28" />
+                <Stop offset="100%" stopColor={goldGlow} stopOpacity="0"    />
+              </RadialGradient>
+            </Defs>
+          )}
+
+          {focused && (
+            <Circle cx="13" cy="13" r="12" fill={`url(#${glowId})`} />
+          )}
+
+          {/* Magnifying glass body */}
+          <Circle
+            cx="13.5"
+            cy="13.5"
+            r="5.5"
+            fill={focused ? gold + "18" : "none"}
+            stroke={color}
+            strokeWidth={strokeW}
+          />
+
+          {/* Magnifying glass handle */}
+          <Path
+            d="M18 18 L23 23"
+            stroke={color}
+            strokeWidth={strokeW + 0.4}
+            strokeLinecap="round"
+          />
+
+          {/* Small decorative dot inside */}
+          <Circle
+            cx="13.5"
+            cy="13.5"
+            r={focused ? 1.2 : 0.8}
+            fill={color}
+            opacity={focused ? 1 : 0.4}
+          />
         </Svg>
       )}
     </AnimatedIcon>
