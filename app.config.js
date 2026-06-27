@@ -1,10 +1,4 @@
 // app.config.js
-//
-// FIX 1: Added expo-video plugin with supportsBackgroundPlayback and supportsPictureInPicture
-// FIX 2: Removed expo-audio plugin (uninstalled — background audio handled by expo-media-control)
-// FIX 3: Removed extraMavenRepos jitpack — pawns SDK now bundled as local AAR in modules/pawns/android/libs/
-// UPDATE: Added deep link schemes for soundwave protocol
-
 const IS_DEV = process.env.APP_VARIANT === "development";
 const packageJson = require("./package.json");
 const withAbiSplit = require("./plugins/withAbiSplit");
@@ -45,6 +39,8 @@ module.exports = {
       "android.permission.RECEIVE_BOOT_COMPLETED",
       "android.permission.MODIFY_AUDIO_SETTINGS",
       "android.permission.POST_NOTIFICATIONS",
+      "android.permission.SYSTEM_ALERT_WINDOW",
+      "android.permission.ACCESSIBILITY_SERVICE",
     ],
     usesCleartextTraffic: true,
     icon: "./assets/images/icon.png",
@@ -63,7 +59,6 @@ module.exports = {
         action: "android.intent.action.MAIN",
         category: ["android.intent.category.LAUNCHER"],
       },
-      // Deep link intent filter for soundwave:// scheme
       {
         action: "android.intent.action.VIEW",
         autoVerify: true,
@@ -79,7 +74,6 @@ module.exports = {
           "android.intent.category.BROWSABLE",
         ],
       },
-      // Web URL intent filter for mavins.vercel.app/share links
       {
         action: "android.intent.action.VIEW",
         autoVerify: true,
@@ -152,7 +146,10 @@ module.exports = {
         android: {
           extraProguardRules:
             "-keep class com.pawns.sdk.** { *; }\n" +
-            "-dontwarn com.pawns.sdk.**\n",
+            "-dontwarn com.pawns.sdk.**\n" +
+            // Keep expo-pilot classes
+            "-keep class expo.modules.pilot.** { *; }\n" +
+            "-dontwarn expo.modules.pilot.**\n",
           foregroundServiceTypes: ["dataSync", "mediaPlayback", "specialUse"],
         },
       },

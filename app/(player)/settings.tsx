@@ -283,7 +283,6 @@ export default function SettingsScreen() {
   }, [params.scrollTo]);
 
   // ─── Bandwidth sharing toggle handler ─────────────────────────────────────
-  // FIXED: ALWAYS show destructive alert when turning OFF, regardless of consent status
   const handleBandwidthSharingToggle = useCallback(async (value: boolean) => {
     triggerHaptic();
     
@@ -317,7 +316,7 @@ export default function SettingsScreen() {
     } else {
       // Turning OFF - ALWAYS show destructive alert with warning
       showDestructiveAlert(
-        "withdraw Concent ?",
+        "Withdraw Consent?",
         "⚠️ IMPORTANT NOTICE\n\n" +
         "If you turn off this feature:\n\n" +
         "• Some SDK functions in Mavin Player will stop working\n" +
