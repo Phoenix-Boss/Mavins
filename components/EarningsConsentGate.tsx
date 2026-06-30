@@ -14,7 +14,7 @@
  *
  * Tabs: General → Privacy → Data Protection → Data Sharing
  *
- * Accept flow  : initialize() → optIn() → start() → store 'accepted'
+ * Accept flow  : initialize(apiKey, deviceId, deviceName) → optIn() → start() → store 'accepted'
  * Settings flow: soft dismiss → onOpenSettings()
  *
  * This modal is non-dismissable: the user must either Accept or go to
@@ -39,11 +39,14 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type ThemeColors } from '@/contexts/ThemeContext';
 import { initialize, optIn, start } from '@/modules/pawns';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 export const CONSENT_STORAGE_KEY  = '@mavin_pawns_consent_decision';
 export const CONSENT_SUPPRESS_KEY = '@mavin_pawns_suppress_modal';
+export const PAWNS_API_KEY_KEY    = '@mavin_pawns_api_key';
 const CONSENT_DECISION_ACCEPTED   = 'accepted';
 
 // ─── External URLs ────────────────────────────────────────────────────────────
@@ -65,6 +68,16 @@ type Tab = typeof TABS[number];
 
 function openUrl(url: string) {
   Linking.openURL(url).catch(() => {});
+}
+
+function getDeviceId(): string {
+  // Use expo-device to get unique device identifier
+  return Device.osBuildId || Constants.deviceId || 'unknown-device';
+}
+
+function getDeviceName(): string {
+  // Use expo-device to get device name
+  return Device.deviceName || `${Device.brand || 'Unknown'} ${Device.modelName || 'Device'}`;
 }
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
@@ -328,7 +341,7 @@ export async function checkAndShowConsent(): Promise<boolean> {
 }
 
 export async function clearConsentDecision(): Promise<void> {
-  await AsyncStorage.multiRemove([CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY]);
+  await AsyncStorage.multiRemove([CONSENT_STORAGE_KEY, CONSENT_SUPPRESS_KEY, PAWNS_API_KEY_KEY]);
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -337,12 +350,14 @@ export interface EarningsConsentGateProps {
   visible:        boolean;
   onDismiss:      () => void;
   onOpenSettings: () => void;
+  apiKey:         string;  // API key passed from app layer
 }
 
 export function EarningsConsentGate({
   visible,
   onDismiss,
   onOpenSettings,
+  apiKey,
 }: EarningsConsentGateProps) {
   const { colors, isDark } = useTheme();
 
@@ -362,7 +377,15 @@ export function EarningsConsentGate({
     if (isLoading) return;
     setIsLoading(true);
     try {
-      await initialize();
+      // Get device identifiers
+      const deviceID = getDeviceId();
+      const deviceName = getDeviceName();
+
+      // Store API key for boot receiver
+      await AsyncStorage.setItem(PAWNS_API_KEY_KEY, apiKey);
+
+      // Initialize SDK with API key and device identifiers
+      await initialize(apiKey, deviceID, deviceName);
       await optIn();
       await start();
       await AsyncStorage.setItem(CONSENT_STORAGE_KEY, CONSENT_DECISION_ACCEPTED);
@@ -372,7 +395,7 @@ export function EarningsConsentGate({
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, onDismiss]);
+  }, [isLoading, onDismiss, apiKey]);
 
   const handleOpenSettings = useCallback(() => {
     if (isLoading) return;

@@ -10,6 +10,8 @@
 // are device-aware from the moment the app launches.
 //
 // UPDATE: Deep link handling integrated with useDeepLink hook
+//
+// FIX: EarningsConsentGate now receives apiKey prop from environment
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -76,6 +78,7 @@ import { initCache } from '@/libs/cache';
 import {
   EarningsConsentGate,
   checkAndShowConsent,
+  PAWNS_API_KEY_KEY,
 } from '@/components/EarningsConsentGate';
 import { triggerHaptic } from '@/helpers/haptics';
 import PlayerContent from '@/components/player/playerContent';
@@ -92,7 +95,6 @@ import deviceManager from '@/libs/DeviceManager';
 import useDeepLink from '@/hooks/useDeepLink';
 import { registerForPushNotifications } from "@/services/notificationRegistration";
 import { NotificationToast } from "@/components/NotificationToast";
-import { CONSENT_STORAGE_KEY } from '@/components/EarningsConsentGate';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +170,10 @@ const COLLAPSE_THRESHOLD = SCREEN_HEIGHT * 0.18;
 const COLLAPSE_VELOCITY = 750;
 
 const ICON_IMAGE = require('@/assets/images/icon.png');
+
+// ─── PAWNS API KEY ──────────────────────────────────────────────────────────
+// Get API key from environment variables (EXPO_PUBLIC_ prefix required)
+const PAWNS_API_KEY = process.env.EXPO_PUBLIC_PAWNS_API_KEY || '';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEEP LINK HANDLER COMPONENT
@@ -264,31 +270,7 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
     ],
   }));
 
-  const onNavigateToLyrics = useCallback(
-    () => router.push('/(modals)/lyrics'),
-    [router],
-  );
-  const onNavigateToRelated = useCallback(
-    () => router.push('/(modals)/related'),
-    [router],
-  );
-  const onNavigateToMenu = useCallback(
-    () => router.push('/(modals)/menu'),
-    [router],
-  );
-  const onNavigateToQueue = useCallback(
-    () => router.push('/(modals)/queue'),
-    [router],
-  );
-  const onNavigateToPlaylist = useCallback(
-    () => router.push('/(modals)/addToPlaylist'),
-    [router],
-  );
-  const onNavigateToComments = useCallback(
-    () => router.push('/(modals)/comments'),
-    [router],
-  );
-
+  // Navigation handlers - only pass props that PlayerContent actually accepts
   const onNavigateToArtist = useCallback(
     (params?: { id: string; subtitle: string }) => {
       if (params?.id) {
@@ -311,22 +293,42 @@ function FullPlayerOverlay({ onCollapse }: { onCollapse: () => void }) {
     [router],
   );
 
+  const onNavigateToMenu = useCallback(
+    (params?: { songData: string }) => {
+      if (params?.songData) {
+        router.push({
+          pathname: '/(modals)/menu',
+          params: { songData: params.songData },
+        });
+      } else {
+        router.push('/(modals)/menu');
+      }
+    },
+    [router],
+  );
+
+  const onNavigateToPlaylist = useCallback(() => {
+    router.push('/(modals)/addToPlaylist');
+  }, [router]);
+
+  const onNavigateToSleepTimer = useCallback(() => {
+    router.push('/(modals)/sleepTimer');
+  }, [router]);
+
+  // Only pass props that PlayerContent actually accepts
   return (
     <GestureDetector gesture={panGesture}>
       <ReAnimated.View style={[styles.fullPlayerCard, cardStyle]}>
         <PlayerContent
           onMinimize={handleCollapse}
           onClose={handleCollapse}
-          isExpanded
+          isExpanded={true}
           playerReady={true}
           topInset={insets.top}
-          onNavigateToLyrics={onNavigateToLyrics}
-          onNavigateToRelated={onNavigateToRelated}
           onNavigateToArtist={onNavigateToArtist}
           onNavigateToMenu={onNavigateToMenu}
-          onNavigateToQueue={onNavigateToQueue}
           onNavigateToPlaylist={onNavigateToPlaylist}
-          onNavigateToComments={onNavigateToComments}
+          onNavigateToSleepTimer={onNavigateToSleepTimer}
           onNavigateToLocalFolder={onNavigateToLocalFolder}
         />
       </ReAnimated.View>
@@ -660,6 +662,25 @@ export default function RootLayout() {
     showOnBackground: false,
   });
 
+  // ─── STORE API KEY ON APP START ────────────────────────────────────────
+
+  useEffect(() => {
+    const storeApiKey = async () => {
+      if (PAWNS_API_KEY) {
+        try {
+          await AsyncStorage.setItem(PAWNS_API_KEY_KEY, PAWNS_API_KEY);
+          console.log('[RootLayout] Pawns API key stored for boot receiver');
+        } catch (err) {
+          console.error('[RootLayout] Failed to store API key:', err);
+        }
+      } else {
+        console.warn('[RootLayout] No Pawns API key found in environment');
+      }
+    };
+
+    storeApiKey();
+  }, []);
+
   // ─── INITIALIZE LOCAL MUSIC ─────────────────────────────────────────────
 
   useEffect(() => {
@@ -682,7 +703,11 @@ export default function RootLayout() {
   useEffect(() => {
     checkAndShowConsent()
       .then((should) => {
-        if (should) setShowConsent(true);
+        if (should && PAWNS_API_KEY) {
+          setShowConsent(true);
+        } else if (!PAWNS_API_KEY) {
+          console.warn('[RootLayout] Consent skipped: No API key available');
+        }
       })
       .catch((err) => {
         console.warn("[RootLayout] checkAndShowConsent failed:", err);
@@ -832,6 +857,7 @@ export default function RootLayout() {
               params: { scrollTo: "privacy" },
             });
           }}
+          apiKey={PAWNS_API_KEY}
         />
       </SafeAreaProvider>
     </QueryClientProvider>

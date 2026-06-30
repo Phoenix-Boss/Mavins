@@ -3,6 +3,7 @@ package expo.modules.mavin.pawns
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.util.Log
 import com.pawns.sdk.common.dto.ServiceConfig
 import com.pawns.sdk.common.dto.ServiceType
@@ -12,7 +13,10 @@ class PawnsBootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "PawnsBootReceiver"
-        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA5NzE1ODEzNSwianRpIjoiMDFLVkRRM1QySERIS1A2OEFFTjNWRTZGQTAiLCJpYXQiOjE3ODE3OTgxMzUsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.oJDYy7B6uLcBTFY80_dT1J_i5Q9CJrwDe3MkrSwRibo"
+        private const val PREFS_NAME = "pawns_prefs"
+        private const val KEY_API_KEY = "api_key"
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_DEVICE_NAME = "device_name"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
@@ -23,6 +27,21 @@ class PawnsBootReceiver : BroadcastReceiver() {
         try {
             val ctx = context.applicationContext
 
+            // ─── RETRIEVE STORED CREDENTIALS ───────────────────────────────────
+            val prefs: SharedPreferences = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val apiKey = prefs.getString(KEY_API_KEY, null)
+            val deviceId = prefs.getString(KEY_DEVICE_ID, null)
+            val deviceName = prefs.getString(KEY_DEVICE_NAME, null)
+
+            // ─── VALIDATE: Don't start without proper config ──────────────────
+            if (apiKey.isNullOrEmpty() || deviceId.isNullOrEmpty()) {
+                Log.w(TAG, "No stored API key or device ID — skipping boot restart")
+                return
+            }
+
+            Log.d(TAG, "Retrieved credentials - Device: $deviceId, Name: $deviceName")
+
+            // ─── RESOURCE IDs ──────────────────────────────────────────────────
             val iconRes = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
                 .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
 
@@ -32,24 +51,33 @@ class PawnsBootReceiver : BroadcastReceiver() {
             val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
                 .takeIf { it != 0 } ?: android.R.string.cancel
 
+            // ─── BUILD SDK WITH STORED CREDENTIALS ────────────────────────────
             Pawns.Builder(ctx)
-                .apiKey(API_KEY)
-                .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
+                .apiKey(apiKey)
+                .deviceId(deviceId)      // Pass deviceID per integration guide
+                .deviceName(deviceName ?: "Android Device")  // Pass deviceName per integration guide
+                .serviceConfig(ServiceConfig(
+                    title = titleRes,
+                    body = bodyRes,
+                    smallIcon = iconRes
+                ))
                 .serviceType(ServiceType.FOREGROUND)
                 .build()
 
             val pawns = Pawns.getInstance()
 
+            // ─── CHECK CONSENT BEFORE STARTING ───────────────────────────────
             if (!pawns.isConsentGiven()) {
                 Log.d(TAG, "No consent — skipping boot restart")
                 return
             }
 
+            // ─── START SHARING ─────────────────────────────────────────────────
             pawns.startSharing(ctx)
-            Log.d(TAG, "Pawns sharing restarted after boot")
+            Log.d(TAG, "✅ Pawns sharing restarted after boot for device: $deviceId")
 
         } catch (e: Exception) {
-            Log.w(TAG, "Boot restart failed: ${e.message}")
+            Log.e(TAG, "❌ Boot restart failed: ${e.message}", e)
         }
     }
 }

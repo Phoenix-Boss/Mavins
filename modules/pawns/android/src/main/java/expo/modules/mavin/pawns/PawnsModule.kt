@@ -24,7 +24,10 @@ class PawnsModule : Module() {
 
     companion object {
         private const val TAG = "PawnsModule"
-        private const val API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZGsiOnRydWUsImV4cCI6MjA4NzQ1MTMwNywianRpIjoiMDFLSkNEWVhYRFNZMTNTRUNDNkZFSlpERjEiLCJpYXQiOjE3NzIwOTEzMDcsInN1YiI6IjAxS0hCOFJaTk41SzIzVjU0VFdXMjZQS1I3In0.aOLBU8O1n_wHDne6VUOijQLHZuM5-EYTj05Sh9TgmQ0"
+        private const val PREFS_NAME = "pawns_prefs"
+        private const val KEY_API_KEY = "api_key"
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_DEVICE_NAME = "device_name"
     }
 
     private var initialized = false
@@ -38,10 +41,28 @@ class PawnsModule : Module() {
 
         Events("onSdkStarted", "onSdkStopped", "onConsentGranted", "onConsentDenied", "onError")
 
-        AsyncFunction("initialize") { apiKey: String, promise: Promise ->
+        // ─── INITIALIZE ──────────────────────────────────────────────────────────
+        // Per integration guide: Initialize(deviceID, deviceName)
+        // Updated to accept apiKey, deviceID, and deviceName
+        AsyncFunction("initialize") { 
+            apiKey: String, 
+            deviceID: String, 
+            deviceName: String, 
+            promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
                 
+                // ─── STORE CREDENTIALS FOR BOOT RECEIVER ──────────────────────
+                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().apply {
+                    putString(KEY_API_KEY, apiKey)
+                    putString(KEY_DEVICE_ID, deviceID)
+                    putString(KEY_DEVICE_NAME, deviceName)
+                    apply()
+                }
+                Log.d(TAG, "Credentials stored - Device: $deviceID, Name: $deviceName")
+                
+                // ─── RESOURCE IDs ───────────────────────────────────────────────
                 val iconRes = ctx.resources.getIdentifier("ic_stat_mavin", "drawable", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.drawable.ic_dialog_info
                 
@@ -51,71 +72,95 @@ class PawnsModule : Module() {
                 val bodyRes = ctx.resources.getIdentifier("pawns_service_body", "string", ctx.packageName)
                     .takeIf { it != 0 } ?: android.R.string.cancel
 
+                // ─── BUILD SDK ───────────────────────────────────────────────────
+                // Per integration guide: Pass deviceID and deviceName
                 Pawns.Builder(ctx)
                     .apiKey(apiKey)
-                    .serviceConfig(ServiceConfig(title = titleRes, body = bodyRes, smallIcon = iconRes))
+                    .deviceId(deviceID)
+                    .deviceName(deviceName)
+                    .serviceConfig(ServiceConfig(
+                        title = titleRes,
+                        body = bodyRes,
+                        smallIcon = iconRes
+                    ))
                     .serviceType(ServiceType.FOREGROUND)
                     .build()
                     
                 initialized = true
                 subscribeStateChanges()
                 promise.resolve(mapOf("success" to true))
+                
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "Initialization failed: ${e.message}", e)
                 promise.reject("INIT_ERROR", e.message ?: "SDK not initialised", e)
             }
         }
 
+        // ─── START ──────────────────────────────────────────────────────────────
         AsyncFunction("start") { promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
                 Pawns.getInstance().startSharing(ctx)
+                Log.d(TAG, "Sharing started")
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "Start failed: ${e.message}", e)
                 promise.reject("START_ERROR", e.message ?: "error", e)
             }
         }
 
+        // ─── STOP ───────────────────────────────────────────────────────────────
         AsyncFunction("stop") { promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
                 Pawns.getInstance().stopSharing(ctx)
+                Log.d(TAG, "Sharing stopped")
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "Stop failed: ${e.message}", e)
                 promise.reject("STOP_ERROR", e.message ?: "error", e)
             }
         }
 
+        // ─── OPT IN ─────────────────────────────────────────────────────────────
         AsyncFunction("optIn") { promise: Promise ->
             try {
                 Pawns.getInstance().setConsentGiven(true)
                 sendEvent("onConsentGranted", mapOf("timestamp" to System.currentTimeMillis()))
+                Log.d(TAG, "Consent granted")
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "OptIn failed: ${e.message}", e)
                 promise.reject("OPTIN_ERROR", e.message ?: "error", e)
             }
         }
 
+        // ─── OPT OUT ────────────────────────────────────────────────────────────
         AsyncFunction("optOut") { promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
                 Pawns.getInstance().stopSharing(ctx)
                 Pawns.getInstance().setConsentGiven(false)
                 sendEvent("onConsentDenied", mapOf("timestamp" to System.currentTimeMillis()))
+                Log.d(TAG, "Consent denied")
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "OptOut failed: ${e.message}", e)
                 promise.reject("OPTOUT_ERROR", e.message ?: "error", e)
             }
         }
 
+        // ─── GET STATUS ─────────────────────────────────────────────────────────
         AsyncFunction("getStatus") { promise: Promise ->
             try {
-                val state = Pawns.getInstance().getServiceStateSnapshot()
-                val consent = Pawns.getInstance().isConsentGiven()
+                val pawns = Pawns.getInstance()
+                val state = pawns.getServiceStateSnapshot()
+                val consent = pawns.isConsentGiven()
                 
                 val isRunning = state is ServiceState.Launched.Running ||
                                 state is ServiceState.Launched.LowBattery
@@ -138,18 +183,24 @@ class PawnsModule : Module() {
                 ))
             } catch (e: Exception) {
                 lastError = e.message
+                Log.e(TAG, "GetStatus failed: ${e.message}", e)
                 promise.reject("STATUS_ERROR", e.message ?: "error", e)
             }
         }
 
+        // ─── GET LAST ERROR ────────────────────────────────────────────────────
         AsyncFunction("getLastError") { promise: Promise ->
             promise.resolve(lastError)
         }
 
+        // ─── CONFIGURE ─────────────────────────────────────────────────────────
+        // Note: This is a no-op as per the integration guide's pattern.
+        // If configuration is needed, implement here.
         AsyncFunction("configure") { _: Map<String, Any>?, promise: Promise ->
             promise.resolve(mapOf("success" to true))
         }
 
+        // ─── REQUEST BATTERY OPTIMISATION ─────────────────────────────────────
         AsyncFunction("requestBatteryOptimisation") { promise: Promise ->
             try {
                 val ctx = appContext.reactContext!!
@@ -166,6 +217,7 @@ class PawnsModule : Module() {
                 }
                 promise.resolve(mapOf("success" to true))
             } catch (e: Exception) {
+                Log.e(TAG, "Battery optimisation request failed: ${e.message}", e)
                 promise.reject("BATTERY_ERROR", e.message ?: "error", e)
             }
         }
@@ -173,9 +225,12 @@ class PawnsModule : Module() {
         OnDestroy {
             stateJob?.cancel()
             scope.cancel()
+            Log.d(TAG, "Module destroyed")
         }
     }
 
+    // ─── SUBSCRIBE TO STATE CHANGES ─────────────────────────────────────────
+    // Matches the callback pattern from the integration guide
     private fun subscribeStateChanges() {
         stateJob?.cancel()
         stateJob = scope.launch {
