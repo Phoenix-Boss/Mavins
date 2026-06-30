@@ -76,7 +76,7 @@ class PawnsModule : Module() {
                 // Per integration guide: Pass deviceID and deviceName
                 Pawns.Builder(ctx)
                     .apiKey(apiKey)
-                    .deviceId(deviceID)
+                    .deviceID(deviceID)
                     .deviceName(deviceName)
                     .serviceConfig(ServiceConfig(
                         title = titleRes,

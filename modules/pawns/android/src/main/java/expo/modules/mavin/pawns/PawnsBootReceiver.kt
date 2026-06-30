@@ -54,7 +54,7 @@ class PawnsBootReceiver : BroadcastReceiver() {
             // ─── BUILD SDK WITH STORED CREDENTIALS ────────────────────────────
             Pawns.Builder(ctx)
                 .apiKey(apiKey)
-                .deviceId(deviceId)      // Pass deviceID per integration guide
+                .deviceID(deviceId)      // Pass deviceID per integration guide
                 .deviceName(deviceName ?: "Android Device")  // Pass deviceName per integration guide
                 .serviceConfig(ServiceConfig(
                     title = titleRes,
