@@ -73,11 +73,14 @@ class PawnsModule : Module() {
                     .takeIf { it != 0 } ?: android.R.string.cancel
 
                 // ─── BUILD SDK ───────────────────────────────────────────────────
-                // Per integration guide: Pass deviceID and deviceName
+                // NOTE: Pawns SDK (v1.8.1) Builder has no deviceId/deviceName
+                // methods — confirmed by decompiling Pawns$Builder.class.
+                // The SDK generates and persists its own device UUID
+                // internally. deviceID/deviceName are still accepted as JS
+                // params (kept for API compatibility / future SDK versions)
+                // but are not passed to the builder.
                 Pawns.Builder(ctx)
                     .apiKey(apiKey)
-                    .deviceID(deviceID)
-                    .deviceName(deviceName)
                     .serviceConfig(ServiceConfig(
                         title = titleRes,
                         body = bodyRes,

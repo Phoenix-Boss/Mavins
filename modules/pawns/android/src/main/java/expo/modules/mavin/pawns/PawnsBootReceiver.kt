@@ -52,10 +52,12 @@ class PawnsBootReceiver : BroadcastReceiver() {
                 .takeIf { it != 0 } ?: android.R.string.cancel
 
             // ─── BUILD SDK WITH STORED CREDENTIALS ────────────────────────────
+            // NOTE: the Pawns SDK (v1.8.1) has no deviceId/deviceName builder
+            // methods — it generates and persists its own device UUID
+            // internally (see DeviceIdHelper in the SDK). deviceId/deviceName
+            // are still read above for our own prefs validation/logging only.
             Pawns.Builder(ctx)
                 .apiKey(apiKey)
-                .deviceID(deviceId)      // Pass deviceID per integration guide
-                .deviceName(deviceName ?: "Android Device")  // Pass deviceName per integration guide
                 .serviceConfig(ServiceConfig(
                     title = titleRes,
                     body = bodyRes,
